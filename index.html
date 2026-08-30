@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Windows 95 3D Dungeon Escape [v1 Video & v2 Texture Edition]</title>
+  <title>Windows 95 3D Dungeon Escape</title>
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
   <style>
+    * {
+      font-family: "Comic Sans MS", "Comic Sans", cursive, sans-serif !important;
+    }
+    .hidden {
+      display: none !important;
+    }
     .win95-box {
       background: #c0c0c0;
       border-top: 2px solid #ffffff;
@@ -28,7 +34,6 @@
       border-right: 2px solid #808080;
       border-bottom: 2px solid #808080;
       box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
-      font-family: 'MS Sans Serif', Tahoma, sans-serif;
       font-weight: bold;
       cursor: pointer;
       user-select: none;
@@ -50,10 +55,9 @@
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
       color: white;
-      font-family: 'MS Sans Serif', Tahoma, sans-serif;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: bold;
-      padding: 3px 6px;
+      padding: 4px 8px;
     }
     .win95-input {
       border-top: 2px solid #808080;
@@ -64,7 +68,17 @@
       background: #ffffff;
       color: #000000;
       padding: 4px 8px;
-      font-family: 'MS Sans Serif', Tahoma, monospace;
+      outline: none;
+    }
+    .madlib-input {
+      background: #ffffff;
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+      color: #000080;
+      padding: 4px 10px;
       outline: none;
     }
     .win95-prog-chunk {
@@ -74,78 +88,221 @@
       margin-right: 2px;
       display: inline-block;
     }
+        canvas, video, img {
+      image-rendering: -moz-crisp-edges !important;
+      image-rendering: -webkit-crisp-edges !important;
+      image-rendering: pixelated !important;
+      image-rendering: crisp-edges !important;
+    }
+    :fullscreen {
+      background-color: #008080 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      overflow: hidden !important;
+      padding: 12px !important;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: 6px;
+      box-sizing: border-box;
+    }
+        /* Dynamic Adaptive Window Sizes */
+    #appContainer.mode-setup {
+      max-width: 780px !important;
+      width: 95% !important;
+      height: auto !important;
+      margin: auto !important;
+      box-shadow: 0 15px 35px rgba(0,0,0,0.4) !important;
+    }
+    #appContainer.mode-progress {
+      max-width: 460px !important;
+      width: 90% !important;
+      height: auto !important;
+      margin: auto !important;
+      box-shadow: 0 15px 35px rgba(0,0,0,0.4) !important;
+    }
+    #appContainer.mode-game {
+      width: auto !important;
+      max-width: 96vw !important;
+      height: auto !important;
+      max-height: 94vh !important;
+      margin: auto !important;
+      display: inline-flex !important;
+      flex-direction: column !important;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.6) !important;
+    }
+    .game-layout-flex {
+      display: flex !important;
+      flex-direction: row !important;
+      gap: 6px !important;
+      align-items: stretch !important;
+    }
+    .viewport-col-flex {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 4px !important;
+    }
+    .viewport-frame {
+      width: 640px !important;
+      height: 480px !important;
+      max-width: calc(90vw - 230px) !important;
+      max-height: calc(85vh - 80px) !important;
+      aspect-ratio: 4 / 3 !important;
+      position: relative !important;
+      overflow: hidden !important;
+      background: #000 !important;
+    }
+    .sidebar-col-flex {
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+      width: 200px !important;
+      flex-shrink: 0 !important;
+      gap: 6px !important;
+    }
+    #screenGame:not(.hidden) {
+      flex: 1 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      min-height: 0 !important;
+      height: 100% !important;
+      padding: 4px !important;
+    }
+    #screenGame > .grid {
+      flex: 1 !important;
+      height: 100% !important;
+      min-height: 0 !important;
+    }
+    #screenSetup:not(.hidden) {
+      flex: 1 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+      max-width: 850px !important;
+      margin: auto !important;
+      width: 100% !important;
+    }
+    #screenProgress:not(.hidden) {
+      flex: 1 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      margin: auto !important;
+      width: 100% !important;
+    }
+    .viewport-column {
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100% !important;
+      min-height: 0 !important;
+    }
+    .viewport-box {
+      flex: 1 !important;
+      height: 100% !important;
+      min-height: 0 !important;
+      position: relative !important;
+    }
+    :fullscreen #screenGame:not(.hidden) {
+      display: flex !important;
+      flex-direction: column !important;
+      flex: 1 !important;
+    }
+    :fullscreen #screenSetup:not(.hidden) {
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+      margin: auto !important;
+      width: 100% !important;
+      max-width: 800px !important;
+    }
+    :fullscreen #screenProgress:not(.hidden) {
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      margin: auto !important;
+      width: 100% !important;
+    }
   </style>
 </head>
-<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
-  <div class="max-w-3xl mx-auto win95-box p-1 text-black font-mono">
+<body class="bg-transparent text-[var(--foreground)] antialiased select-none">
+  <div id="appContainer" class="win95-box p-1 text-black mode-setup">
     
     <!-- Title Bar -->
     <div class="win95-title flex items-center justify-between mb-2">
       <div class="flex items-center gap-2">
         <span class="text-yellow-300">🏰</span>
-        <span>Windows 95 3D Dungeon Escape [Dual Mode Edition]</span>
+        <span>Windows 95 3D Dungeon Escape</span>
       </div>
       <div class="flex gap-1 text-xs">
-        <button class="win95-btn px-1.5 py-0.5 text-black">_</button>
-        <button class="win95-btn px-1.5 py-0.5 text-black">□</button>
-        <button class="win95-btn px-1.5 py-0.5 text-black">✕</button>
+        <button id="btnMaximize" class="win95-btn px-2 py-0.5 text-black hover:bg-slate-300" title="Toggle Fullscreen">□</button>
+        <button id="btnClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" title="New Dungeon / Close">✕</button>
       </div>
     </div>
 
     <!-- SCREEN 1: Questionnaire / Dungeon Setup -->
-    <div id="screenSetup" class="p-4 flex flex-col gap-4">
+    <div id="screenSetup" class="p-3 flex flex-col gap-3">
       <div class="win95-box p-4 flex flex-col gap-3">
         <div class="flex items-center gap-3">
-          <span class="text-3xl">🧙‍♂️</span>
+          <span class="text-4xl">🧙‍♂️</span>
           <div>
-            <h2 class="font-bold text-sm font-sans text-slate-900">Dungeon Creation Wizard</h2>
-            <p class="text-xs text-slate-700 font-sans">Choose your engine mode and customize the dungeon walls below.</p>
+            <h2 class="font-bold text-base text-slate-900">Dungeon Creation Wizard</h2>
+            <p class="text-xs text-slate-700">Fill in the blank to build your custom 3D dungeon world.</p>
           </div>
         </div>
 
         <hr class="border-t border-gray-400 border-b border-white my-1">
 
-        <!-- Mode Dropdown Selector -->
-        <div class="flex flex-col gap-1">
-          <label class="text-xs font-bold font-sans text-slate-800">
-            Select Engine Version:
-          </label>
-          <select id="modeSelect" class="win95-input w-full text-xs font-sans font-bold cursor-pointer">
-            <option value="v3_flux" selected>⚡ v3 FLUX.1 [schnell] (T5-XXL 1024p Textures + 3D Engine - Recommended)</option>
-            <option value="v2_texture">v2 texture (MiniMax H3 Material Texture + 3D Engine)</option>
-            <option value="v1_video">v1 video (8 Pre-Rendered 1.5s FMV Video Clips)</option>
-          </select>
-          <div id="modeDesc" class="text-[10px] text-blue-900 font-sans mt-0.5">
-            <strong>v3 FLUX.1 [schnell]:</strong> Uses T5-XXL language understanding to generate authentic 1024x1024 textures without hallucinated objects.
+        <!-- Authentic Mad Libs Style Prompt Input -->
+        <div class="win95-box p-4 bg-[#faf9f5] border-2 border-slate-400 mt-1">
+          <div class="text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
+            <span class="font-bold">The dungeon looks like</span>
+            
+            <div class="inline-flex flex-col items-center flex-1 min-w-[220px] max-w-md">
+              <input 
+                type="text" 
+                id="wallPromptInput" 
+                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors"
+                value="Windows 95" 
+                placeholder="fill in style..."
+              />
+              <span class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
+                STYLE
+              </span>
+            </div>
+            
+            <span class="text-xl font-bold">.</span>
+          </div>
+
+          <!-- Quick Presets -->
+          <div class="flex gap-2 mt-4 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
+            <span class="text-xs text-slate-600 font-bold">Quick ideas:</span>
+            <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Windows 95">🧱 Windows 95</button>
+            <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Cyber Neon">⚡ Cyber Neon</button>
+            <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Mossy Stone">🏰 Mossy Stone</button>
+            <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Candy Cane">🍭 Candy Cane</button>
           </div>
         </div>
 
-        <!-- Question Prompt -->
-        <div class="flex flex-col gap-1.5 mt-2">
-          <label class="text-xs font-bold font-sans text-slate-800">
-            The walls of the dungeon look like:
-          </label>
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-slate-600 font-sans font-bold">"</span>
-            <input 
-              type="text" 
-              id="wallPromptInput" 
-              class="win95-input w-full text-xs font-sans font-bold" 
-              value="Windows 95" 
-              placeholder="e.g. Windows 95 / Cyber Neon / Mossy Stone / Candy Cane"
-            />
-            <span class="text-xs text-slate-600 font-sans font-bold">"</span>
-          </div>
-          <div class="flex gap-1.5 mt-1 flex-wrap">
-            <span class="text-[10px] text-slate-500 font-sans">Quick presets:</span>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Windows 95">🧱 Windows 95</button>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Cyber Neon">⚡ Cyber Neon</button>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Mossy Stone">🏰 Mossy Stone</button>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Candy Cane">🍭 Candy Cane</button>
-          </div>
-        </div>
+        <!-- Footer Buttons: Settings Gear + Create Button -->
+        <div class="flex justify-between items-center mt-2">
+          <button id="btnSettings" class="win95-btn px-3 py-2 text-sm text-black flex items-center gap-1.5 hover:bg-slate-300" title="Engine Version Settings">
+            <span>⚙️</span>
+            <span>Engine Options</span>
+          </button>
 
-        <div class="flex justify-end mt-3">
           <button id="btnCreate" class="win95-btn px-6 py-2 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200">
             <span>✨</span>
             <span>CREATE</span>
@@ -154,28 +311,63 @@
       </div>
     </div>
 
+    <!-- ENGINE SETTINGS MODAL DIALOG -->
+    <div id="modalSettings" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-md p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <div class="flex items-center gap-1.5">
+            <span>⚙️</span>
+            <span>Engine Configuration</span>
+          </div>
+          <button id="btnCloseSettings" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-3 flex flex-col gap-3">
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800">
+              Select Engine Mode:
+            </label>
+            <select id="modeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+              <option value="v3_flux" selected>⚡ v3 FLUX.1 [schnell] (3-Surface Generation: Walls, Ceiling, Floor - Recommended)</option>
+              <option value="v2_texture">v2 texture (MiniMax H3 Material Texture + 3D Engine)</option>
+              <option value="v1_video">v1 video (8 Pre-Rendered 1.5s FMV Video Clips)</option>
+            </select>
+            <div id="modeDesc" class="text-[11px] text-blue-900 mt-1">
+              <strong>v3 FLUX.1 [schnell]:</strong> Generates matching Walls, Ceiling, and Floor textures in a single 10s pass.
+            </div>
+          </div>
+
+          <div class="flex justify-end mt-2">
+            <button id="btnSaveSettings" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- SCREEN 2: Pre-Generation Progress Screen -->
     <div id="screenProgress" class="p-6 flex flex-col items-center justify-center gap-4 hidden">
       <div class="win95-box p-5 w-full max-w-md flex flex-col gap-3">
         <div class="flex items-center justify-between">
-          <span class="font-bold text-xs font-sans flex items-center gap-2">
+          <span class="font-bold text-xs flex items-center gap-2">
             <span class="animate-spin">⏳</span>
             <span>Generating Dungeon Assets...</span>
           </span>
-          <span id="progTimer" class="font-mono text-xs font-bold text-blue-800">0.0s</span>
+          <span id="progTimer" class="text-xs font-bold text-blue-800">0.0s</span>
         </div>
 
         <div class="win95-inset h-5 p-0.5 flex items-center overflow-hidden bg-slate-900">
           <div id="progBarChunks" class="h-full flex items-center w-0 transition-all duration-300"></div>
         </div>
 
-        <div class="flex justify-between items-center text-[11px] font-sans text-slate-700">
+        <div class="flex justify-between items-center text-xs text-slate-700">
           <span id="progStatusText">Initializing generator...</span>
           <strong id="progPercentText">0%</strong>
         </div>
 
-        <div id="progSubText" class="text-[10px] text-slate-500 font-sans text-center mt-1 border-t border-slate-300 pt-2">
-          Generating with ComfyUI MiniMax H3.
+        <div id="progSubText" class="text-[11px] text-slate-600 text-center mt-1 border-t border-slate-300 pt-2">
+          Generating with ComfyUI.
         </div>
       </div>
     </div>
@@ -185,10 +377,10 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
         
         <!-- Viewport Column (2 cols wide) -->
-        <div class="md:col-span-2 flex flex-col gap-2">
-          <div class="win95-inset relative aspect-[4/3] flex items-center justify-center overflow-hidden bg-black">
+        <div class="md:col-span-2 viewport-column gap-2">
+          <div class="win95-inset relative aspect-[4/3] viewport-box flex items-center justify-center overflow-hidden bg-black">
             
-            <!-- v2 3D Canvas Viewport -->
+            <!-- v2 / v3 3D Canvas Viewport -->
             <canvas id="viewportCanvas" width="320" height="240" class="w-full h-full object-contain image-rendering-pixelated"></canvas>
 
             <!-- v1 FMV Video Player Element -->
@@ -196,64 +388,56 @@
               <source id="videoSource" src="" type="video/mp4">
             </video>
 
-            <!-- Dynamic HUD Overlay -->
-            <div class="absolute top-2 left-2 bg-black/80 text-green-400 font-mono text-xs px-2.5 py-1.5 rounded border border-green-500/40">
-              SPOT: <span id="hudSpot" class="font-bold text-yellow-300">1</span> | FACING: <span id="hudFacing" class="font-bold text-yellow-300">EAST</span>
-            </div>
+
 
             <!-- Wall Bump / Alert Banner -->
-            <div id="bumpBanner" class="absolute inset-x-0 bottom-4 mx-auto w-max bg-red-700/90 text-white font-mono text-xs px-3 py-1 rounded shadow-lg border border-red-400 hidden animate-bounce">
+            <div id="bumpBanner" class="absolute inset-x-0 bottom-4 mx-auto w-max bg-red-700/90 text-white text-xs px-3 py-1 rounded shadow-lg border border-red-400 hidden animate-bounce">
               🚫 SOLID WALL DIRECTLY AHEAD
             </div>
           </div>
 
           <!-- Status Bar -->
-          <div class="win95-box p-1 text-xs flex justify-between items-center text-slate-800 font-sans">
-            <span>Location: <strong id="statusPos">Spot 1 [1] (Facing EAST)</strong></span>
-            <span>Engine: <strong id="statusEngine" class="text-blue-800">v2 texture</strong></span>
+          <div class="win95-box p-1.5 text-xs flex justify-between items-center text-slate-800">
+            <span>Location: <strong id="statusPos">Spot 1 (Facing EAST)</strong></span>
+            <span class="text-slate-500 text-[11px]">Use W/A/S/D or Arrow Keys</span>
           </div>
         </div>
 
         <!-- Controls & 3-Space Minimap Column (1 col wide) -->
-        <div class="flex flex-col gap-3">
+        <div class="flex flex-col justify-between gap-2 h-full">
           
           <!-- 3-Space Minimap -->
-          <div class="win95-box p-2">
-            <div class="text-xs font-bold font-sans mb-1 text-slate-700">3-SPACE DUNGEON MAP:</div>
+          <div class="win95-box p-2 flex flex-col justify-center">
+            <div class="text-xs font-bold mb-1 text-slate-700">3-SPACE DUNGEON MAP:</div>
             <div class="win95-inset p-2 flex items-center justify-center bg-zinc-900">
               <canvas id="minimapCanvas" width="180" height="70" class="w-full h-auto"></canvas>
             </div>
-            <div class="text-[10px] text-slate-600 mt-1 font-sans text-center">
+            <div class="text-[11px] text-slate-600 mt-1 text-center">
               Corridor Layout: [ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]
             </div>
           </div>
 
           <!-- Directional D-Pad Controls -->
-          <div class="win95-box p-2 flex flex-col items-center">
-            <div class="text-xs font-bold font-sans mb-2 text-slate-700">CONTROLS:</div>
+          <div class="win95-box p-3 flex-1 flex flex-col items-center justify-center">
+            <div class="text-xs font-bold mb-2 text-slate-700">CONTROLS:</div>
             
-            <div class="grid grid-cols-3 gap-1.5 w-36">
+            <div class="grid grid-cols-3 gap-2 w-40 my-auto">
               <div></div>
-              <button id="btnUp" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Move Forward (W / Up)">
+              <button id="btnUp" class="win95-btn py-2 text-center text-lg flex items-center justify-center" title="Move Forward (W / Up)">
                 ▲
               </button>
               <div></div>
               
-              <button id="btnLeft" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Rotate Left 90° (A / Left)">
+              <button id="btnLeft" class="win95-btn py-2 text-center text-lg flex items-center justify-center" title="Rotate Left 90° (A / Left)">
                 ◀
               </button>
-              <button id="btnDown" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Move Backward (S / Down)">
+              <button id="btnDown" class="win95-btn py-2 text-center text-lg flex items-center justify-center" title="Move Backward (S / Down)">
                 ▼
               </button>
-              <button id="btnRight" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Rotate Right 90° (D / Right)">
+              <button id="btnRight" class="win95-btn py-2 text-center text-lg flex items-center justify-center" title="Rotate Right 90° (D / Right)">
                 ▶
               </button>
             </div>
-
-            <button id="btnNewDungeon" class="win95-btn mt-3 w-full py-1 text-xs font-sans flex items-center justify-center gap-1">
-              <span>🔄</span>
-              <span>Create New Dungeon</span>
-            </button>
           </div>
 
         </div>
@@ -265,16 +449,21 @@
   <script>
     const SERVER_URL = "http://127.0.0.1:5555";
 
-    // Screens
+    // Screens & Modals
     const screenSetup = document.getElementById('screenSetup');
     const screenProgress = document.getElementById('screenProgress');
     const screenGame = document.getElementById('screenGame');
+    const modalSettings = document.getElementById('modalSettings');
 
     // UI Elements
     const modeSelect = document.getElementById('modeSelect');
     const modeDesc = document.getElementById('modeDesc');
     const wallPromptInput = document.getElementById('wallPromptInput');
     const btnCreate = document.getElementById('btnCreate');
+    const btnSettings = document.getElementById('btnSettings');
+    const btnCloseSettings = document.getElementById('btnCloseSettings');
+    const btnSaveSettings = document.getElementById('btnSaveSettings');
+
     const progBarChunks = document.getElementById('progBarChunks');
     const progStatusText = document.getElementById('progStatusText');
     const progPercentText = document.getElementById('progPercentText');
@@ -286,19 +475,66 @@
     const hudSpot = document.getElementById('hudSpot');
     const hudFacing = document.getElementById('hudFacing');
     const statusPos = document.getElementById('statusPos');
-    const statusEngine = document.getElementById('statusEngine');
     const bumpBanner = document.getElementById('bumpBanner');
 
     const btnUp = document.getElementById('btnUp');
     const btnDown = document.getElementById('btnDown');
     const btnLeft = document.getElementById('btnLeft');
     const btnRight = document.getElementById('btnRight');
-    const btnNewDungeon = document.getElementById('btnNewDungeon');
+    const btnMaximize = document.getElementById('btnMaximize');
+    const btnClose = document.getElementById('btnClose');
+    const appContainer = document.getElementById('appContainer');
     const allButtons = [btnUp, btnDown, btnLeft, btnRight];
+
+    // Settings Modal
+    btnSettings.addEventListener('click', () => {
+      modalSettings.classList.remove('hidden');
+    });
+    btnCloseSettings.addEventListener('click', () => {
+      modalSettings.classList.add('hidden');
+    });
+    btnSaveSettings.addEventListener('click', () => {
+      modalSettings.classList.add('hidden');
+    });
+
+    // Fullscreen Toggle
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          console.warn("Fullscreen request error:", err);
+        });
+        btnMaximize.textContent = "❐";
+      } else {
+        document.exitFullscreen().catch(err => {
+          console.warn("Exit fullscreen error:", err);
+        });
+        btnMaximize.textContent = "□";
+      }
+    }
+
+    btnMaximize.addEventListener('click', toggleFullscreen);
+
+    document.addEventListener('fullscreenchange', () => {
+      btnMaximize.textContent = document.fullscreenElement ? "❐" : "□";
+    });
+
+    // Close / New Dungeon (X Button)
+    btnClose.addEventListener('click', () => {
+      if (!screenGame.classList.contains('hidden')) {
+        const conf = confirm("Would you like to create a new dungeon?");
+        if (conf) {
+          screenGame.classList.add('hidden');
+          screenSetup.classList.remove('hidden');
+          appContainer.className = 'win95-box p-1 text-black mode-setup';
+        }
+      } else {
+        screenSetup.classList.remove('hidden');
+      }
+    });
 
     modeSelect.addEventListener('change', () => {
       if (modeSelect.value === 'v3_flux') {
-        modeDesc.innerHTML = '<strong>v3 FLUX.1 [schnell]:</strong> Uses T5-XXL language understanding to generate authentic 1024x1024 textures without hallucinated objects.';
+        modeDesc.innerHTML = '<strong>v3 FLUX.1 [schnell]:</strong> Generates matching Walls, Ceiling, and Floor textures in a single 10s pass.';
       } else if (modeSelect.value === 'v1_video') {
         modeDesc.innerHTML = '<strong>v1 video:</strong> Pre-generates 8 frame-chained 1.5s AI video clips + ffmpeg native reverse clips (~1.5-2 mins creation).';
       } else {
@@ -358,6 +594,7 @@
 
     const mcanvas = document.getElementById('minimapCanvas');
     const mctx = mcanvas.getContext('2d');
+    mctx.imageSmoothingEnabled = false;
 
     function drawMinimap() {
       mctx.fillStyle = '#111827';
@@ -389,7 +626,7 @@
         mctx.strokeRect(px, py, size, size);
 
         mctx.fillStyle = isCurrent ? '#fef08a' : '#94a3b8';
-        mctx.font = 'bold 13px sans-serif';
+        mctx.font = 'bold 13px "Comic Sans MS", cursive, sans-serif';
         mctx.textAlign = 'center';
         mctx.textBaseline = 'middle';
         mctx.fillText(spotNum, px + size / 2, py + size / 2);
@@ -417,8 +654,8 @@
     function updateHUD() {
       const spot = player.gridX;
       const dirName = DIRS[player.dirIndex];
-      hudSpot.textContent = spot;
-      hudFacing.textContent = dirName;
+      if (hudSpot) hudSpot.textContent = spot;
+      if (hudFacing) hudFacing.textContent = dirName;
 
       let viewDesc = 'Hallway';
       if (dirName === 'NORTH' || dirName === 'SOUTH') viewDesc = 'Side Wall';
@@ -426,7 +663,6 @@
       else if (spot === 3 && dirName === 'EAST') viewDesc = 'End Wall';
 
       statusPos.textContent = `Spot ${spot} (Facing ${dirName} - ${viewDesc})`;
-      statusEngine.textContent = activeMode === 'v3_flux' ? 'v3 SDXL-Lightning' : (activeMode === 'v1_video' ? 'v1 video (1.5s Clips)' : 'v2 texture');
       drawMinimap();
     }
 
@@ -437,9 +673,10 @@
     }
 
     // ==============================================================
-    // v2 3D Raycaster Engine (1.0s Speed, Level Horizon)
+    // 3D Raycaster Engine
     // ==============================================================
     const ctx = viewportCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = false;
     const screenWidth = viewportCanvas.width;
     const screenHeight = viewportCanvas.height;
     const imgData = ctx.createImageData(screenWidth, screenHeight);
@@ -451,10 +688,10 @@
     let floorTexture = null;
 
     function buildDefaultTextures() {
-      // 1. Default Chunky Red Brick Wall
+      // 1. Default Red Brick Wall
       const cv = document.createElement('canvas');
       cv.width = cv.height = TEX_SIZE;
-      const c = cv.getContext('2d');
+      const c = cv.getContext('2d'); c.imageSmoothingEnabled = false;
       c.fillStyle = '#b91c1c';
       c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       c.strokeStyle = '#f8fafc';
@@ -471,7 +708,7 @@
       }
       wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
 
-      // 2. Authentic Windows 95 Acoustic Mineral Tile Ceiling
+      // 2. Default Acoustic Mineral Tile Ceiling
       const cvC = document.createElement('canvas');
       cvC.width = cvC.height = TEX_SIZE;
       const cC = cvC.getContext('2d');
@@ -490,10 +727,10 @@
       cC.strokeRect(0, 0, TEX_SIZE / 2, TEX_SIZE / 2);
       cC.strokeRect(TEX_SIZE / 2, 0, TEX_SIZE / 2, TEX_SIZE / 2);
       cC.strokeRect(0, TEX_SIZE / 2, TEX_SIZE / 2, TEX_SIZE / 2);
-      cC.strokeRect(TEX_SIZE / 2, TEX_SIZE / 2, TEX_SIZE / 2, TEX_SIZE / 2);
+      cC.strokeRect(TEX_SIZE / 2, 0, TEX_SIZE / 2, TEX_SIZE / 2);
       ceilingTexture = cC.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
 
-      // 3. Authentic Windows 95 Rich Woodgrain Floor
+      // 3. Default Woodgrain Floor
       const cvF = document.createElement('canvas');
       cvF.width = cvF.height = TEX_SIZE;
       const cF = cvF.getContext('2d');
@@ -536,7 +773,7 @@
         imgW.onload = () => {
           const cv = document.createElement('canvas');
           cv.width = cv.height = TEX_SIZE;
-          const c = cv.getContext('2d');
+          const c = cv.getContext('2d'); c.imageSmoothingEnabled = false;
           c.drawImage(imgW, 0, 0, TEX_SIZE, TEX_SIZE);
           wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
           checkDone();
@@ -549,7 +786,7 @@
         imgC.onload = () => {
           const cv = document.createElement('canvas');
           cv.width = cv.height = TEX_SIZE;
-          const c = cv.getContext('2d');
+          const c = cv.getContext('2d'); c.imageSmoothingEnabled = false;
           c.drawImage(imgC, 0, 0, TEX_SIZE, TEX_SIZE);
           ceilingTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
           checkDone();
@@ -562,7 +799,7 @@
         imgF.onload = () => {
           const cv = document.createElement('canvas');
           cv.width = cv.height = TEX_SIZE;
-          const c = cv.getContext('2d');
+          const c = cv.getContext('2d'); c.imageSmoothingEnabled = false;
           c.drawImage(imgF, 0, 0, TEX_SIZE, TEX_SIZE);
           floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
           checkDone();
@@ -726,7 +963,7 @@
       const startY = player.posY;
       const startAngle = player.angle;
       const animStart = performance.now();
-      const DURATION = 350; // 1.0s
+      const DURATION = 350;
 
       function step(now) {
         const elapsed = now - animStart;
@@ -755,7 +992,7 @@
     }
 
     // ==============================================================
-    // v1 Video Player Engine (8 Pre-Rendered Clips)
+    // v1 Video Player Engine
     // ==============================================================
     function getViewV1(spot, dir) {
       if (dir === 'NORTH' || dir === 'SOUTH') return 'WALL_SIDE';
@@ -795,7 +1032,7 @@
     }
 
     // ==============================================================
-    // Unified Movement Handlers
+    // Movement Handlers
     // ==============================================================
     function moveForward() {
       if (player.isAnimating) return;
@@ -814,7 +1051,6 @@
           else showBumpMessage(`FACING SIDE WALL (${DIRS[player.dirIndex]})`);
         }
       } else {
-        // v1 video mode
         const facing = DIRS[player.dirIndex];
         if (facing === 'EAST') {
           if (player.gridX === 1) playV1Clip('1_to_2_east', 2, 'EAST');
@@ -845,7 +1081,6 @@
           showBumpMessage(`CANNOT MOVE BACKWARD`);
         }
       } else {
-        // v1 video mode
         const facing = DIRS[player.dirIndex];
         if (facing === 'EAST') {
           if (player.gridX === 3) playV1Clip('2_to_3_east_reverse', 2, 'EAST');
@@ -911,11 +1146,6 @@
     btnLeft.addEventListener('click', rotateLeft);
     btnRight.addEventListener('click', rotateRight);
 
-    btnNewDungeon.addEventListener('click', () => {
-      screenGame.classList.add('hidden');
-      screenSetup.classList.remove('hidden');
-    });
-
     window.addEventListener('keydown', (e) => {
       if (screenGame.classList.contains('hidden') || player.isAnimating) return;
 
@@ -938,16 +1168,17 @@
     // CREATE Flow
     // ==============================================================
     btnCreate.addEventListener('click', async () => {
-      const wallStyle = wallPromptInput.value.trim() || "classic Windows 95 red brick walls with white mortar";
+      const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       activeMode = modeSelect.value;
 
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
+      appContainer.className = 'win95-box p-1 text-black mode-progress';
 
       if (activeMode === 'v1_video') {
         progSubText.textContent = 'Generating 8 frame-chained 1.5s AI video clips with MiniMax H3 (~1.5-2 mins)...';
       } else {
-        progSubText.textContent = 'Generating AI material texture in 1.0s with MiniMax H3 (~10 seconds)...';
+        progSubText.textContent = 'Generating Wall, Ceiling, and Floor textures with FLUX.1 [schnell] (~10s)...';
       }
 
       const startTime = Date.now();
@@ -1016,6 +1247,7 @@
 
               screenProgress.classList.add('hidden');
               screenGame.classList.remove('hidden');
+              appContainer.className = 'win95-box p-1 text-black mode-game';
               if (activeMode !== 'v1_video') render3D();
               updateHUD();
             } else if (p.error) {
@@ -1024,6 +1256,7 @@
               alert("Error: " + p.error);
               screenProgress.classList.add('hidden');
               screenSetup.classList.remove('hidden');
+              appContainer.className = 'win95-box p-1 text-black mode-setup';
             }
           } catch(err) {
             console.error('Progress poll error:', err);
@@ -1032,7 +1265,7 @@
 
       } catch (err) {
         clearInterval(timerInterval);
-        alert('Server communication error. Make sure dungeon_server.py is running!');
+        alert('Server communication error. Make sure server.py is running!');
         screenProgress.classList.add('hidden');
         screenSetup.classList.remove('hidden');
       }
