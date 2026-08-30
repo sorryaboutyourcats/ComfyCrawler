@@ -111,12 +111,12 @@
             Select Engine Version:
           </label>
           <select id="modeSelect" class="win95-input w-full text-xs font-sans font-bold cursor-pointer">
-            <option value="v3_sdxl" selected>⚡ v3 SDXL-Lightning (1024x1024 Instant Texture + 3D Engine - Recommended)</option>
+            <option value="v3_flux" selected>⚡ v3 FLUX.1 [schnell] (T5-XXL 1024p Textures + 3D Engine - Recommended)</option>
             <option value="v2_texture">v2 texture (MiniMax H3 Material Texture + 3D Engine)</option>
             <option value="v1_video">v1 video (8 Pre-Rendered 1.5s FMV Video Clips)</option>
           </select>
           <div id="modeDesc" class="text-[10px] text-blue-900 font-sans mt-0.5">
-            <strong>v3 SDXL-Lightning:</strong> Generates crisp 1024x1024 AI textures in ~1.5s and renders with snappy 1.0s zero-slant 3D raycaster.
+            <strong>v3 FLUX.1 [schnell]:</strong> Uses T5-XXL language understanding to generate authentic 1024x1024 textures without hallucinated objects.
           </div>
         </div>
 
@@ -131,17 +131,17 @@
               type="text" 
               id="wallPromptInput" 
               class="win95-input w-full text-xs font-sans font-bold" 
-              value="classic Windows 95 red brick walls with white mortar and textured stone" 
-              placeholder="e.g. glowing blue cyber circuits / ancient mossy green stone / candy cane gingerbread"
+              value="Windows 95" 
+              placeholder="e.g. Windows 95 / Cyber Neon / Mossy Stone / Candy Cane"
             />
             <span class="text-xs text-slate-600 font-sans font-bold">"</span>
           </div>
           <div class="flex gap-1.5 mt-1 flex-wrap">
             <span class="text-[10px] text-slate-500 font-sans">Quick presets:</span>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="classic Windows 95 red brick walls with white mortar">🧱 Win95 Brick</button>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="retro windows 98 wallpaper with yellow carpet">💻 Win98 Yellow</button>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="futuristic glowing neon cyan sci-fi cybernetic panel walls">⚡ Cyber Neon</button>
-            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="ancient mossy weathered stone dungeon blocks with flickering torches">🏰 Mossy Stone</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Windows 95">🧱 Windows 95</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Cyber Neon">⚡ Cyber Neon</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Mossy Stone">🏰 Mossy Stone</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-2 py-0.5 border border-slate-400 rounded preset-btn font-sans font-bold" data-val="Candy Cane">🍭 Candy Cane</button>
           </div>
         </div>
 
@@ -297,8 +297,8 @@
     const allButtons = [btnUp, btnDown, btnLeft, btnRight];
 
     modeSelect.addEventListener('change', () => {
-      if (modeSelect.value === 'v3_sdxl') {
-        modeDesc.innerHTML = '<strong>v3 SDXL-Lightning:</strong> Generates crisp 1024x1024 AI textures in ~1.5s and renders with snappy 1.0s zero-slant 3D raycaster.';
+      if (modeSelect.value === 'v3_flux') {
+        modeDesc.innerHTML = '<strong>v3 FLUX.1 [schnell]:</strong> Uses T5-XXL language understanding to generate authentic 1024x1024 textures without hallucinated objects.';
       } else if (modeSelect.value === 'v1_video') {
         modeDesc.innerHTML = '<strong>v1 video:</strong> Pre-generates 8 frame-chained 1.5s AI video clips + ffmpeg native reverse clips (~1.5-2 mins creation).';
       } else {
@@ -315,7 +315,7 @@
     // ==============================================================
     // Shared State & Minimap
     // ==============================================================
-    let activeMode = "v3_sdxl";
+    let activeMode = "v3_flux";
     let v1Clips = {};
 
     const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
@@ -426,7 +426,7 @@
       else if (spot === 3 && dirName === 'EAST') viewDesc = 'End Wall';
 
       statusPos.textContent = `Spot ${spot} (Facing ${dirName} - ${viewDesc})`;
-      statusEngine.textContent = activeMode === 'v3_sdxl' ? 'v3 SDXL-Lightning' : (activeMode === 'v1_video' ? 'v1 video (1.5s Clips)' : 'v2 texture');
+      statusEngine.textContent = activeMode === 'v3_flux' ? 'v3 SDXL-Lightning' : (activeMode === 'v1_video' ? 'v1 video (1.5s Clips)' : 'v2 texture');
       drawMinimap();
     }
 
@@ -445,51 +445,130 @@
     const imgData = ctx.createImageData(screenWidth, screenHeight);
     const buffer = imgData.data;
 
-    const TEX_SIZE = 64;
+    const TEX_SIZE = 256;
     let wallTexture = null;
     let ceilingTexture = null;
     let floorTexture = null;
 
     function buildDefaultTextures() {
+      // 1. Default Chunky Red Brick Wall
       const cv = document.createElement('canvas');
       cv.width = cv.height = TEX_SIZE;
       const c = cv.getContext('2d');
-      c.fillStyle = '#dc2626';
+      c.fillStyle = '#b91c1c';
       c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       c.strokeStyle = '#f8fafc';
-      c.lineWidth = 2;
-      for (let r = 0; r < 4; r++) {
-        const y = r * 16;
-        c.strokeRect(0, y, TEX_SIZE, 16);
-        const off = (r % 2 === 0) ? 0 : 16;
-        c.strokeRect(off, y, 32, 16);
+      c.lineWidth = 6;
+      const rows = 4;
+      const rowHeight = TEX_SIZE / rows;
+      for (let r = 0; r < rows; r++) {
+        const y = r * rowHeight;
+        c.strokeRect(0, y, TEX_SIZE, rowHeight);
+        const off = (r % 2 === 0) ? 0 : TEX_SIZE / 4;
+        for (let x = -TEX_SIZE / 2; x < TEX_SIZE * 1.5; x += TEX_SIZE / 2) {
+          c.strokeRect(x + off, y, TEX_SIZE / 2, rowHeight);
+        }
       }
       wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
 
-      c.fillStyle = '#94a3b8';
-      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
-      c.strokeStyle = '#475569';
-      c.strokeRect(0, 0, TEX_SIZE, TEX_SIZE);
-      ceilingTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      // 2. Authentic Windows 95 Acoustic Mineral Tile Ceiling
+      const cvC = document.createElement('canvas');
+      cvC.width = cvC.height = TEX_SIZE;
+      const cC = cvC.getContext('2d');
+      cC.fillStyle = '#d1d5db';
+      cC.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      for (let i = 0; i < 2000; i++) {
+        const sx = Math.floor(Math.random() * TEX_SIZE);
+        const sy = Math.floor(Math.random() * TEX_SIZE);
+        const shade = Math.floor(100 + Math.random() * 80);
+        cC.fillStyle = `rgb(${shade},${shade},${shade})`;
+        cC.fillRect(sx, sy, 2, 2);
+      }
+      cC.strokeStyle = '#6b7280';
+      cC.lineWidth = 4;
+      cC.strokeRect(0, 0, TEX_SIZE, TEX_SIZE);
+      cC.strokeRect(0, 0, TEX_SIZE / 2, TEX_SIZE / 2);
+      cC.strokeRect(TEX_SIZE / 2, 0, TEX_SIZE / 2, TEX_SIZE / 2);
+      cC.strokeRect(0, TEX_SIZE / 2, TEX_SIZE / 2, TEX_SIZE / 2);
+      cC.strokeRect(TEX_SIZE / 2, TEX_SIZE / 2, TEX_SIZE / 2, TEX_SIZE / 2);
+      ceilingTexture = cC.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
 
-      c.fillStyle = '#ca8a04';
-      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
-      floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      // 3. Authentic Windows 95 Rich Woodgrain Floor
+      const cvF = document.createElement('canvas');
+      cvF.width = cvF.height = TEX_SIZE;
+      const cF = cvF.getContext('2d');
+      cF.fillStyle = '#b45309';
+      cF.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      for (let y = 0; y < TEX_SIZE; y++) {
+        const noise = (Math.random() - 0.5) * 35;
+        const r = Math.min(255, Math.max(0, 185 + noise));
+        const g = Math.min(255, Math.max(0, 115 + noise * 0.6));
+        const b = Math.min(255, Math.max(0, 40 + noise * 0.3));
+        cF.fillStyle = `rgb(${r},${g},${b})`;
+        cF.fillRect(0, y, TEX_SIZE, 1);
+      }
+      cF.strokeStyle = '#78350f';
+      cF.lineWidth = 2;
+      for (let y = 0; y < TEX_SIZE; y += 32) {
+        cF.strokeRect(0, y, TEX_SIZE, 32);
+      }
+      for (let x = 0; x < TEX_SIZE; x += 64) {
+        cF.strokeRect(x, 0, 64, TEX_SIZE);
+      }
+      floorTexture = cF.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
     buildDefaultTextures();
 
-    function loadAiTexture(dataUri) {
-      if (!dataUri) return;
-      const img = new Image();
-      img.onload = () => {
-        const cv = document.createElement('canvas');
-        cv.width = cv.height = TEX_SIZE;
-        const c = cv.getContext('2d');
-        c.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
-        wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
-        if (activeMode === 'v2_texture') render3D();
-      };
-      img.src = dataUri;
+    function loadAiTextures(wallUri, ceilUri, floorUri) {
+      let loaded = 0;
+      const total = (ceilUri && floorUri) ? 3 : 1;
+
+      function checkDone() {
+        loaded++;
+        if (loaded >= total && activeMode !== 'v1_video') {
+          render3D();
+          drawMinimap();
+        }
+      }
+
+      if (wallUri) {
+        const imgW = new Image();
+        imgW.onload = () => {
+          const cv = document.createElement('canvas');
+          cv.width = cv.height = TEX_SIZE;
+          const c = cv.getContext('2d');
+          c.drawImage(imgW, 0, 0, TEX_SIZE, TEX_SIZE);
+          wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+          checkDone();
+        };
+        imgW.src = wallUri;
+      }
+
+      if (ceilUri) {
+        const imgC = new Image();
+        imgC.onload = () => {
+          const cv = document.createElement('canvas');
+          cv.width = cv.height = TEX_SIZE;
+          const c = cv.getContext('2d');
+          c.drawImage(imgC, 0, 0, TEX_SIZE, TEX_SIZE);
+          ceilingTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+          checkDone();
+        };
+        imgC.src = ceilUri;
+      }
+
+      if (floorUri) {
+        const imgF = new Image();
+        imgF.onload = () => {
+          const cv = document.createElement('canvas');
+          cv.width = cv.height = TEX_SIZE;
+          const c = cv.getContext('2d');
+          c.drawImage(imgF, 0, 0, TEX_SIZE, TEX_SIZE);
+          floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+          checkDone();
+        };
+        imgF.src = floorUri;
+      }
     }
 
     function render3D() {
@@ -612,7 +691,7 @@
 
         const wallData = wallTexture.data;
         const sideShade = side === 1 ? 0.75 : 1.0;
-        const distShade = Math.max(0.35, Math.min(1.0, 1.0 - (perpWallDist * 0.12)));
+        const distShade = 1.0 / (1.0 + perpWallDist * 0.45);
         const finalShade = sideShade * distShade;
 
         const step = TEX_SIZE / lineHeight;
@@ -647,7 +726,7 @@
       const startY = player.posY;
       const startAngle = player.angle;
       const animStart = performance.now();
-      const DURATION = 1000; // 1.0s
+      const DURATION = 350; // 1.0s
 
       function step(now) {
         const elapsed = now - animStart;
@@ -721,7 +800,7 @@
     function moveForward() {
       if (player.isAnimating) return;
 
-      if (activeMode === 'v2_texture') {
+      if (activeMode !== 'v1_video') {
         const vec = DIR_VECS[player.dirIndex];
         const nextX = player.gridX + vec.dx;
         const nextY = player.gridY + vec.dy;
@@ -754,7 +833,7 @@
     function moveBackward() {
       if (player.isAnimating) return;
 
-      if (activeMode === 'v2_texture') {
+      if (activeMode !== 'v1_video') {
         const vec = DIR_VECS[player.dirIndex];
         const nextX = player.gridX - vec.dx;
         const nextY = player.gridY - vec.dy;
@@ -785,7 +864,7 @@
     function rotateLeft() {
       if (player.isAnimating) return;
 
-      if (activeMode === 'v2_texture') {
+      if (activeMode !== 'v1_video') {
         player.dirIndex = (player.dirIndex + 3) % 4;
         animate3D(player.posX, player.posY, player.angle - Math.PI / 2);
       } else {
@@ -807,7 +886,7 @@
     function rotateRight() {
       if (player.isAnimating) return;
 
-      if (activeMode === 'v2_texture') {
+      if (activeMode !== 'v1_video') {
         player.dirIndex = (player.dirIndex + 1) % 4;
         animate3D(player.posX, player.posY, player.angle + Math.PI / 2);
       } else {
@@ -927,14 +1006,17 @@
                 viewportCanvas.classList.remove('hidden');
                 gameVideo.classList.add('hidden');
 
-                if (p.completed_bundle.texture_image) {
-                  loadAiTexture(p.completed_bundle.texture_image);
-                }
+                const b = p.completed_bundle;
+                loadAiTextures(
+                  b.wall_texture || b.texture_image,
+                  b.ceiling_texture,
+                  b.floor_texture
+                );
               }
 
               screenProgress.classList.add('hidden');
               screenGame.classList.remove('hidden');
-              if (activeMode === 'v2_texture') render3D();
+              if (activeMode !== 'v1_video') render3D();
               updateHUD();
             } else if (p.error) {
               clearInterval(pollInterval);

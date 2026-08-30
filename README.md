@@ -1,21 +1,22 @@
 # 🏰 ComfyCrawler
 
-> **A nostalgic Windows 95 style 3D dungeon crawler powered by ComfyUI, MiniMax H3, and RTX Video Super Resolution.**
+> **A nostalgic Windows 95 style 3D dungeon crawler powered by ComfyUI, FLUX.1 [schnell], MiniMax H3, and RTX Video Super Resolution.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**ComfyCrawler** turns natural language descriptions into interactive, walkable 3D escape rooms with the iconic Windows 95 3D Maze Screensaver aesthetic.
+**ComfyCrawler** turns natural language descriptions into interactive, walkable 3D escape rooms with the authentic Windows 95 3D Maze Screensaver aesthetic.
 
 ---
 
 ## ✨ Features
 
-* 🧙‍♂️ **Prompt-Driven Dungeons**: Type any visual theme (*e.g., "classic Windows 95 red brick with white mortar", "futuristic glowing cyan cyber panels", "ancient mossy stone"*) and watch the world generate before your eyes.
-* ⚡ **Dual Engine Modes**:
-  * **`v2 texture` (1.0s Fast 3D Engine)**: Synthesizes high-resolution AI textures in ~10 seconds with snappy 1.0-second level-horizon 3D raycaster exploration (zero slant, in-place 90° turns).
+* 🧙‍♂️ **Prompt-Driven Dungeons**: Type any visual theme (*e.g., "Windows 95", "Cyber Neon", "Mossy Stone", "Candy Cane"*) and watch the world generate before your eyes with automated retro prompt enhancement.
+* ⚡ **Triple Engine Modes**:
+  * **`v3 FLUX.1 [schnell]` (Recommended)**: Powered by Google's T5-XXL language model + 12B parameter Flow Matching DiT. Generates a matching 3-surface texture set (**Walls, Ceiling, and Floor**) in a single pass with snappy **350ms** retro movement and zero hallucinations.
+  * **`v2 texture`**: Synthesizes high-res material textures with MiniMax H3 in a 3D raycaster.
   * **`v1 video` (Pre-Rendered FMV Clips)**: Generates 8 frame-chained 1.5s AI video clips with native reverse playback using MiniMax H3 diffusion.
-* 🖥️ **Authentic Windows 95 UI**: Classic beveled grey window styling, dynamic 3-space minimap (`[ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]`), D-pad controls, and real-time progress bar.
+* 🖥️ **Authentic Windows 95 UI**: Classic beveled grey window styling, dynamic 3-space minimap (`[ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]`), D-pad controls, and real-time progress HUD.
 * 🚀 **Hardware Accelerated**: RTX Video Super Resolution (2x Ultra) + SageAttention integration for ultra-fast generation.
 
 ---
@@ -34,7 +35,7 @@
 ## 🛠️ Quickstart
 
 ### Prerequisites
-1. [ComfyUI](https://github.com/comfyanonymous/ComfyUI) running locally on port `8188` with MiniMax H3 model support.
+1. [ComfyUI](https://github.com/comfyanonymous/ComfyUI) running locally on port `8188` with `flux1-schnell-fp8.safetensors` in `models/checkpoints/`.
 2. Python 3.10+ installed.
 
 ### Installation

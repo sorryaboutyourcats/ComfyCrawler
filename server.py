@@ -1,8 +1,8 @@
 """
 ComfyCrawler - Server & Engine
-A retro Windows 95 style 3D dungeon escape game powered by ComfyUI, SDXL-Lightning, and MiniMax H3.
+A retro Windows 95 style 3D dungeon escape game powered by ComfyUI, FLUX.1 [schnell], and MiniMax H3.
 Supports:
-- v3 sdxl (Default): 4-step instantaneous 1024x1024 SDXL-Lightning textures in ~1.5s + level 3D engine.
+- v3 flux (Default): FLUX.1 [schnell] 4-step DiT with T5-XXL generating all 3 surfaces (Wall, Ceiling, Floor) + level 3D engine.
 - v2 texture: MiniMax H3 material texture synthesizer.
 - v1 video: 8 frame-chained 1.5s AI video clips with native reverse playback.
 """
@@ -49,68 +49,70 @@ gen_progress = {
     "error": None
 }
 
-def generate_sdxl_lightning_texture(wall_style):
-    """Generate instantaneous 1024x1024 texture with SDXL-Lightning 4-step checkpoint."""
-    prefix = f"sdxl_tex_{int(time.time()*1000)}"
+def get_surface_prompts(wall_style):
+    """Automatically enhance and stylize short user inputs into vibrant, retro 90s textures for all 3 surfaces."""
+    ui = wall_style.strip().lower()
+    
+    if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
+        wall_p = "Authentic Windows 95 3D maze screensaver wall texture, large chunky bold crimson red bricks with thick stark white mortar lines, clean repeating seamless 2D pattern, vibrant high saturation retro 90s low-poly CGI, flat straight-on view."
+        ceil_p = "Authentic Windows 95 acoustic drop ceiling tile texture, speckled mineral fiber surface with grey metal grid panel seams, flat straight-on view, retro 90s computer graphics."
+        floor_p = "Authentic Windows 95 golden amber woodgrain parquet floor texture, warm rich wood planks with wood grain striations and seams, flat straight-on view, retro 90s CGI."
+    
+    elif any(k in ui for k in ['cyber', 'neon', 'cyberpunk', 'matrix', 'sci-fi', 'circuits']):
+        wall_p = "Retro 90s CGI sci-fi texture of glowing cyan and electric purple neon circuit panels, dark metal cyber grid, vibrant high saturation, clean repeating seamless 2D surface pattern, bold contrast, flat straight-on orthographic view."
+        ceil_p = "Retro 90s CGI sci-fi ceiling texture, dark steel metal plates with glowing neon conduit cables and vent grates, flat straight-on view, vibrant saturated cyan accents."
+        floor_p = "Retro 90s CGI cybernetic floor texture, dark hexagonal metal grid tiles with pulsing illuminated neon seam lines, flat straight-on view."
+    
+    elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient']):
+        wall_p = "Retro 90s CGI dungeon wall texture, weathered grey castle stone blocks with vibrant lush green moss patches in cracks, clean repeating seamless 2D pattern, high saturation, sharp lighting, flat straight-on orthographic view."
+        ceil_p = "Retro 90s CGI dungeon ceiling texture, rough ancient dark stone vault slabs with green moss patches, flat straight-on view."
+        floor_p = "Retro 90s CGI dungeon floor texture, uneven weathered grey flagstone cobblestones with dirt seams, flat straight-on view."
+    
+    elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake']):
+        wall_p = "Retro 90s CGI candy wall texture, vibrant red and white peppermint candy cane stripes and gingerbread cookie pattern with white royal icing, bold saturated colors, seamless repeating 2D surface pattern, flat straight-on view."
+        ceil_p = "Retro 90s CGI candy ceiling texture, fluffy pastel pink cotton candy and marshmallow cloud pattern with rainbow sprinkles, flat straight-on view."
+        floor_p = "Retro 90s CGI candy floor texture, rich chocolate cookie crumb tiles with glazed caramel syrup seams, flat straight-on view."
+    
+    else:
+        wall_p = f"Retro 90s CGI gaming texture of {wall_style} walls, vibrant bold saturated colors, high-contrast clean repeating seamless 2D surface pattern, authentic 1995 computer graphics aesthetic, flat straight-on orthographic view."
+        ceil_p = f"Retro 90s CGI gaming ceiling texture matching {wall_style}, clean repeating seamless 2D surface pattern, flat straight-on view."
+        floor_p = f"Retro 90s CGI gaming floor ground texture matching {wall_style}, clean repeating seamless 2D surface pattern, flat straight-on view."
+    
+    return wall_p, ceil_p, floor_p
+
+
+def generate_flux_trio_textures(wall_style):
+    """Generate all 3 textures (Wall, Ceiling, Floor) in a single unified FLUX.1 pass."""
+    prefix_w = f"trio_w_{int(time.time()*1000)}"
+    prefix_c = f"trio_c_{int(time.time()*1000)}"
+    prefix_f = f"trio_f_{int(time.time()*1000)}"
+    
+    wall_p, ceil_p, floor_p = get_surface_prompts(wall_style)
     
     prompt_payload = {
-        "1": {
-            "inputs": {
-                "ckpt_name": "sdxl_lightning_4step.safetensors"
-            },
-            "class_type": "CheckpointLoaderSimple"
-        },
-        "2": {
-            "inputs": {
-                "width": 1024,
-                "height": 1024,
-                "batch_size": 1
-            },
-            "class_type": "EmptyLatentImage"
-        },
-        "3": {
-            "inputs": {
-                "text": f"Windows 95 3D maze screensaver retro aesthetic, {wall_style}, seamless repeating texture pattern, sharp 90s CGI computer graphics lighting, flat direct front view, level horizon.",
-                "clip": ["1", 1]
-            },
-            "class_type": "CLIPTextEncode"
-        },
-        "4": {
-            "inputs": {
-                "text": "blurry, distorted, low quality, diagonal, slanted, curved, fisheye, vignette, watermark, text",
-                "clip": ["1", 1]
-            },
-            "class_type": "CLIPTextEncode"
-        },
-        "5": {
-            "inputs": {
-                "seed": random.randint(1, 1000000000),
-                "steps": 4,
-                "cfg": 1.5,
-                "sampler_name": "euler",
-                "scheduler": "sgm_uniform",
-                "denoise": 1.0,
-                "model": ["1", 0],
-                "positive": ["3", 0],
-                "negative": ["4", 0],
-                "latent_image": ["2", 0]
-            },
-            "class_type": "KSampler"
-        },
-        "6": {
-            "inputs": {
-                "samples": ["5", 0],
-                "vae": ["1", 2]
-            },
-            "class_type": "VAEDecode"
-        },
-        "7": {
-            "inputs": {
-                "filename_prefix": prefix,
-                "images": ["6", 0]
-            },
-            "class_type": "SaveImage"
-        }
+        "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+        "neg": {"inputs": {"text": "", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        
+        # Wall
+        "w_lat": {"inputs": {"width": 512, "height": 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "w_pos": {"inputs": {"text": wall_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "w_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["w_pos", 0], "negative": ["neg", 0], "latent_image": ["w_lat", 0]}, "class_type": "KSampler"},
+        "w_dec": {"inputs": {"samples": ["w_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+        "w_save": {"inputs": {"filename_prefix": prefix_w, "images": ["w_dec", 0]}, "class_type": "SaveImage"},
+        
+        # Ceiling
+        "c_lat": {"inputs": {"width": 512, "height": 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "c_pos": {"inputs": {"text": ceil_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "c_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["c_pos", 0], "negative": ["neg", 0], "latent_image": ["c_lat", 0]}, "class_type": "KSampler"},
+        "c_dec": {"inputs": {"samples": ["c_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+        "c_save": {"inputs": {"filename_prefix": prefix_c, "images": ["c_dec", 0]}, "class_type": "SaveImage"},
+        
+        # Floor
+        "f_lat": {"inputs": {"width": 512, "height": 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "f_pos": {"inputs": {"text": floor_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "f_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["f_pos", 0], "negative": ["neg", 0], "latent_image": ["f_lat", 0]}, "class_type": "KSampler"},
+        "f_dec": {"inputs": {"samples": ["f_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+        "f_save": {"inputs": {"filename_prefix": prefix_f, "images": ["f_dec", 0]}, "class_type": "SaveImage"}
     }
 
     data = json.dumps({"prompt": prompt_payload}).encode("utf-8")
@@ -120,28 +122,79 @@ def generate_sdxl_lightning_texture(wall_style):
         prompt_id = res_json["prompt_id"]
 
     start_time = time.time()
-    while time.time() - start_time < 60:
-        time.sleep(0.05)
+    while time.time() - start_time < 90:
+        time.sleep(0.1)
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
             hist_data = json.loads(h_resp.read().decode("utf-8"))
             if prompt_id in hist_data:
                 outputs = hist_data[prompt_id].get("outputs", {})
-                if "7" in outputs:
-                    imgs = outputs["7"].get("images", [])
-                    if imgs:
-                        fname = imgs[0]["filename"]
-                        subf = imgs[0].get("subfolder", "")
-                        full_path = os.path.join(COMFY_OUTPUT_DIR, subf, fname)
-                        if os.path.exists(full_path):
-                            return full_path
-    raise TimeoutError("SDXL-Lightning generation timed out.")
+                if "w_save" in outputs and "c_save" in outputs and "f_save" in outputs:
+                    w_img = outputs["w_save"]["images"][0]["filename"]
+                    c_img = outputs["c_save"]["images"][0]["filename"]
+                    f_img = outputs["f_save"]["images"][0]["filename"]
+                    
+                    w_sub = outputs["w_save"]["images"][0].get("subfolder", "")
+                    c_sub = outputs["c_save"]["images"][0].get("subfolder", "")
+                    f_sub = outputs["f_save"]["images"][0].get("subfolder", "")
+                    
+                    w_path = os.path.join(COMFY_OUTPUT_DIR, w_sub, w_img)
+                    c_path = os.path.join(COMFY_OUTPUT_DIR, c_sub, c_img)
+                    f_path = os.path.join(COMFY_OUTPUT_DIR, f_sub, f_img)
+                    
+                    return w_path, c_path, f_path
+                    
+    raise TimeoutError("FLUX.1 Trio generation timed out.")
+
+
+def run_batch_v3_flux(wall_style):
+    """v3 FLUX.1 [schnell] mode: 4-step DiT generating Wall, Ceiling, and Floor textures."""
+    global gen_progress
+    gen_progress["is_generating"] = True
+    gen_progress["completed_bundle"] = None
+    gen_progress["error"] = None
+    gen_progress["current_step"] = 0
+    gen_progress["total_steps"] = 2
+
+    try:
+        gen_progress["current_step"] = 1
+        gen_progress["status_message"] = "Synthesizing Wall, Ceiling & Floor with FLUX.1 [schnell]..."
+        gen_progress["percent"] = 50
+        print(f"[FLUX.1] Generating full 3-surface textures for '{wall_style}'")
+
+        w_path, c_path, f_path = generate_flux_trio_textures(wall_style)
+
+        gen_progress["current_step"] = 2
+        gen_progress["status_message"] = "Mapping 3D Dungeon Environment..."
+        gen_progress["percent"] = 90
+
+        with open(w_path, "rb") as tf:
+            w_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+        with open(c_path, "rb") as tf:
+            c_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+        with open(f_path, "rb") as tf:
+            f_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+
+        gen_progress["percent"] = 100
+        gen_progress["status_message"] = "FLUX.1 3D Dungeon Ready!"
+        gen_progress["completed_bundle"] = {
+            "mode": "v3_flux",
+            "wall_style": wall_style,
+            "wall_texture": w_b64,
+            "ceiling_texture": c_b64,
+            "floor_texture": f_b64
+        }
+        print("[FLUX.1] All 3 textures complete and packaged!")
+
+    except Exception as e:
+        print(f"[FLUX.1 Error] {e}")
+        gen_progress["error"] = str(e)
+    finally:
+        gen_progress["is_generating"] = False
 
 
 def generate_video_comfy(prompt_text, initial_image_path=None, duration=1.5, steps=8, fps=16):
-    """Submit generation job to local ComfyUI instance with optional first_frame anchoring."""
     prefix = f"crawler_{int(time.time()*1000)}"
-    
     prompt_payload = {
         "105:6": {"inputs": {"unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"}, "class_type": "UNETLoader"},
         "105:119": {"inputs": {"sage_attention": "sageattn_qk_int8_pv_fp16_cuda", "allow_compile": False, "model": ["105:6", 0]}, "class_type": "PathchSageAttentionKJ"},
@@ -163,7 +216,6 @@ def generate_video_comfy(prompt_text, initial_image_path=None, duration=1.5, ste
         "105:91": {"inputs": {"fps": float(fps), "bit_depth": 8, "color_space": "sRGB", "images": ["105:120", 0], "audio": ["105:23", 0]}, "class_type": "CreateVideo"},
         "92": {"inputs": {"filename_prefix": f"video/{prefix}", "format": "auto", "format.codec": "auto", "video": ["105:91", 0]}, "class_type": "SaveVideo"}
     }
-
     if initial_image_path and os.path.exists(initial_image_path):
         input_img_name = f"anchor_{int(time.time()*1000)}.png"
         shutil.copy2(initial_image_path, os.path.join(COMFY_INPUT_DIR, input_img_name))
@@ -195,48 +247,7 @@ def generate_video_comfy(prompt_text, initial_image_path=None, duration=1.5, ste
     raise TimeoutError("ComfyUI generation timed out.")
 
 
-def run_batch_v3_sdxl(wall_style):
-    """v3 SDXL-Lightning mode: ~1.5s instantaneous 1024x1024 texture generation."""
-    global gen_progress
-    gen_progress["is_generating"] = True
-    gen_progress["completed_bundle"] = None
-    gen_progress["error"] = None
-    gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 2
-
-    try:
-        gen_progress["current_step"] = 1
-        gen_progress["status_message"] = "Generating 1024x1024 Texture with SDXL-Lightning (4 steps)..."
-        gen_progress["percent"] = 50
-        print(f"[SDXL-Lightning] Generating texture for '{wall_style}'")
-
-        img_path = generate_sdxl_lightning_texture(wall_style)
-
-        gen_progress["current_step"] = 2
-        gen_progress["status_message"] = "Mapping AI Texture to 3D Dungeon..."
-        gen_progress["percent"] = 90
-
-        with open(img_path, "rb") as tf:
-            tex_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
-
-        gen_progress["percent"] = 100
-        gen_progress["status_message"] = "v3 Dungeon Ready!"
-        gen_progress["completed_bundle"] = {
-            "mode": "v3_sdxl",
-            "wall_style": wall_style,
-            "texture_image": tex_b64
-        }
-        print("[SDXL-Lightning] Texture generation complete and packaged!")
-
-    except Exception as e:
-        print(f"[SDXL-Lightning Error] {e}")
-        gen_progress["error"] = str(e)
-    finally:
-        gen_progress["is_generating"] = False
-
-
 def run_batch_v2_texture(wall_style):
-    """v2 texture mode: 1.0s MiniMax H3 material texture synthesizer."""
     global gen_progress
     gen_progress["is_generating"] = True
     gen_progress["completed_bundle"] = None
@@ -277,7 +288,7 @@ def run_batch_v2_texture(wall_style):
         gen_progress["completed_bundle"] = {
             "mode": "v2_texture",
             "wall_style": wall_style,
-            "texture_image": tex_b64
+            "wall_texture": tex_b64
         }
 
     except Exception as e:
@@ -301,7 +312,6 @@ def create_reverse_video(input_video_path, output_video_path):
 
 
 def run_batch_v1_video(wall_style):
-    """v1 video mode: 8 frame-chained 1.5s AI video clips + ffmpeg reverse clips."""
     global gen_progress
     gen_progress["is_generating"] = True
     gen_progress["completed_bundle"] = None
@@ -348,7 +358,6 @@ def run_batch_v1_video(wall_style):
         with open(v1_rev, "rb") as vf:
             clips_data["1_to_2_east_reverse"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # 2 -> 3
         gen_progress["current_step"] = 2
         gen_progress["status_message"] = "Clip 2/8: Forward Spot 2 -> Spot 3..."
         gen_progress["percent"] = 25
@@ -366,7 +375,6 @@ def run_batch_v1_video(wall_style):
         with open(v2_rev, "rb") as vf:
             clips_data["2_to_3_east_reverse"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # Turn Left Wall
         gen_progress["current_step"] = 3
         gen_progress["status_message"] = "Clip 3/8: 90° Turn LEFT to Side Wall..."
         gen_progress["percent"] = 38
@@ -379,7 +387,6 @@ def run_batch_v1_video(wall_style):
         with open(v3_dst, "rb") as vf:
             clips_data["turn_corridor_to_wall_left"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # Turn Right Wall
         gen_progress["current_step"] = 4
         gen_progress["status_message"] = "Clip 4/8: 90° Turn RIGHT to Side Wall..."
         gen_progress["percent"] = 50
@@ -392,7 +399,6 @@ def run_batch_v1_video(wall_style):
         with open(v4_dst, "rb") as vf:
             clips_data["turn_corridor_to_wall_right"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # Turn Left Corridor
         gen_progress["current_step"] = 5
         gen_progress["status_message"] = "Clip 5/8: 90° Turn LEFT to Corridor..."
         gen_progress["percent"] = 62
@@ -404,7 +410,6 @@ def run_batch_v1_video(wall_style):
         with open(v5_dst, "rb") as vf:
             clips_data["turn_wall_to_corridor_left"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # Turn Right Corridor
         gen_progress["current_step"] = 6
         gen_progress["status_message"] = "Clip 6/8: 90° Turn RIGHT to Corridor..."
         gen_progress["percent"] = 75
@@ -416,7 +421,6 @@ def run_batch_v1_video(wall_style):
         with open(v6_dst, "rb") as vf:
             clips_data["turn_wall_to_corridor_right"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # Corner Left
         gen_progress["current_step"] = 7
         gen_progress["status_message"] = "Clip 7/8: 90° Corner Turn LEFT..."
         gen_progress["percent"] = 87
@@ -428,7 +432,6 @@ def run_batch_v1_video(wall_style):
         with open(v7_dst, "rb") as vf:
             clips_data["turn_wall_to_wall_left"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
 
-        # Corner Right
         gen_progress["current_step"] = 8
         gen_progress["status_message"] = "Clip 8/8: 90° Corner Turn RIGHT..."
         gen_progress["percent"] = 97
@@ -486,8 +489,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers["Content-Length"])
             body = self.rfile.read(content_length).decode("utf-8")
             data = json.loads(body)
-            wall_style = data.get("wall_style", "classic Windows 95 red brick walls with white mortar")
-            mode = data.get("mode", "v3_sdxl")
+            wall_style = data.get("wall_style", "Windows 95")
+            mode = data.get("mode", "v3_flux")
 
             if not gen_progress["is_generating"]:
                 if mode == "v1_video":
@@ -495,7 +498,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 elif mode == "v2_texture":
                     t = threading.Thread(target=run_batch_v2_texture, args=(wall_style,), daemon=True)
                 else:
-                    t = threading.Thread(target=run_batch_v3_sdxl, args=(wall_style,), daemon=True)
+                    t = threading.Thread(target=run_batch_v3_flux, args=(wall_style,), daemon=True)
                 t.start()
 
             self.send_response(200)
@@ -513,7 +516,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_server():
-    print(f"Starting ComfyCrawler Server on http://127.0.0.1:{PORT}...")
+    print(f"Starting ComfyCrawler Trio Server on http://127.0.0.1:{PORT}...")
     with socketserver.TCPServer(("", PORT), DungeonHTTPRequestHandler) as httpd:
         httpd.serve_forever()
 
