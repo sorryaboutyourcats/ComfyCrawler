@@ -111,11 +111,12 @@
             Select Engine Version:
           </label>
           <select id="modeSelect" class="win95-input w-full text-xs font-sans font-bold cursor-pointer">
-            <option value="v1_video">v1 video (8 Pre-Rendered 1.5s AI Video Clips)</option>
-            <option value="v2_texture" selected>v2 texture (1.0s Fast AI Texture + 3D Engine)</option>
+            <option value="v3_sdxl" selected>⚡ v3 SDXL-Lightning (1024x1024 Instant Texture + 3D Engine - Recommended)</option>
+            <option value="v2_texture">v2 texture (MiniMax H3 Material Texture + 3D Engine)</option>
+            <option value="v1_video">v1 video (8 Pre-Rendered 1.5s FMV Video Clips)</option>
           </select>
           <div id="modeDesc" class="text-[10px] text-blue-900 font-sans mt-0.5">
-            <strong>v2 texture:</strong> Generates 1 high-res AI material texture in ~10s and renders with snappy 1.0s zero-slant 3D camera transitions.
+            <strong>v3 SDXL-Lightning:</strong> Generates crisp 1024x1024 AI textures in ~1.5s and renders with snappy 1.0s zero-slant 3D raycaster.
           </div>
         </div>
 
@@ -296,10 +297,12 @@
     const allButtons = [btnUp, btnDown, btnLeft, btnRight];
 
     modeSelect.addEventListener('change', () => {
-      if (modeSelect.value === 'v1_video') {
+      if (modeSelect.value === 'v3_sdxl') {
+        modeDesc.innerHTML = '<strong>v3 SDXL-Lightning:</strong> Generates crisp 1024x1024 AI textures in ~1.5s and renders with snappy 1.0s zero-slant 3D raycaster.';
+      } else if (modeSelect.value === 'v1_video') {
         modeDesc.innerHTML = '<strong>v1 video:</strong> Pre-generates 8 frame-chained 1.5s AI video clips + ffmpeg native reverse clips (~1.5-2 mins creation).';
       } else {
-        modeDesc.innerHTML = '<strong>v2 texture:</strong> Generates 1 high-res AI material texture in ~10s and renders with snappy 1.0s zero-slant 3D camera transitions.';
+        modeDesc.innerHTML = '<strong>v2 texture:</strong> Generates 1 AI material texture with MiniMax H3 and renders with 3D engine.';
       }
     });
 
@@ -312,7 +315,7 @@
     // ==============================================================
     // Shared State & Minimap
     // ==============================================================
-    let activeMode = "v2_texture";
+    let activeMode = "v3_sdxl";
     let v1Clips = {};
 
     const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
@@ -423,7 +426,7 @@
       else if (spot === 3 && dirName === 'EAST') viewDesc = 'End Wall';
 
       statusPos.textContent = `Spot ${spot} (Facing ${dirName} - ${viewDesc})`;
-      statusEngine.textContent = activeMode === 'v1_video' ? 'v1 video (1.5s Clips)' : 'v2 texture (1.0s 3D)';
+      statusEngine.textContent = activeMode === 'v3_sdxl' ? 'v3 SDXL-Lightning' : (activeMode === 'v1_video' ? 'v1 video (1.5s Clips)' : 'v2 texture');
       drawMinimap();
     }
 
