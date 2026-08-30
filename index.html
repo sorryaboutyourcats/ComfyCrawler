@@ -2,11 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Windows 95 3D Dungeon Escape</title>
+  <title>ComfyCrawler</title>
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
   <style>
     * {
       font-family: "Comic Sans MS", "Comic Sans", cursive, sans-serif !important;
+      box-sizing: border-box !important;
     }
     html, body {
       width: 100%;
@@ -22,7 +23,6 @@
       justify-content: center;
       align-items: center;
       padding: 12px;
-      box-sizing: border-box;
     }
     .hidden {
       display: none !important;
@@ -53,15 +53,17 @@
       font-weight: bold;
       cursor: pointer;
       user-select: none;
+      touch-action: manipulation;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
-    .win95-btn:active:not(:disabled) {
+    .win95-btn:active {
       border-top: 2px solid #808080;
       border-left: 2px solid #808080;
       border-right: 2px solid #ffffff;
       border-bottom: 2px solid #ffffff;
       box-shadow: inset 1px 1px #0a0a0a;
-      padding-top: 2px;
-      padding-left: 2px;
     }
     .win95-btn:disabled {
       color: #808080;
@@ -93,14 +95,25 @@
       margin-right: 2px;
       display: inline-block;
     }
-    canvas, video, img {
+    canvas, video, img, svg {
       image-rendering: -moz-crisp-edges !important;
       image-rendering: -webkit-crisp-edges !important;
       image-rendering: pixelated !important;
       image-rendering: crisp-edges !important;
     }
 
-    /* Adaptive Window Modes */
+    @keyframes win95-rotate {
+      0% { transform: rotate(0deg); }
+      25% { transform: rotate(180deg); }
+      50% { transform: rotate(180deg); }
+      75% { transform: rotate(360deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .animate-hourglass {
+      display: inline-block;
+      animation: win95-rotate 2s infinite ease-in-out;
+    }
+
     #appContainer.mode-setup {
       width: 95% !important;
       max-width: 760px !important;
@@ -126,18 +139,6 @@
       box-shadow: 0 25px 60px rgba(0,0,0,0.6) !important;
     }
 
-    /* 4:3 Aspect-Locked Layout */
-    .game-layout {
-      display: flex !important;
-      flex-direction: row !important;
-      gap: 8px !important;
-      align-items: stretch !important;
-    }
-    .viewport-wrapper {
-      display: flex !important;
-      flex-direction: column !important;
-      gap: 4px !important;
-    }
     :fullscreen {
       background-color: #008080 !important;
       display: flex !important;
@@ -148,6 +149,18 @@
       overflow: hidden !important;
       padding: 16px !important;
       box-sizing: border-box !important;
+    }
+
+    .game-layout {
+      display: flex !important;
+      flex-direction: row !important;
+      gap: 6px !important;
+      align-items: stretch !important;
+    }
+    .viewport-wrapper {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 4px !important;
     }
     .viewport-frame {
       height: clamp(260px, calc(100vh - 160px), calc((100vw - 270px) * 0.75)) !important;
@@ -166,11 +179,27 @@
       display: flex !important;
       flex-direction: column !important;
       justify-content: space-between !important;
-      width: 195px !important;
-      min-width: 195px !important;
+      width: 200px !important;
+      min-width: 200px !important;
+      max-width: 200px !important;
       flex-shrink: 0 !important;
       gap: 4px !important;
       box-sizing: border-box !important;
+    }
+
+    .dpad-btn {
+      width: 44px !important;
+      height: 44px !important;
+      min-width: 44px !important;
+      min-height: 44px !important;
+      max-width: 44px !important;
+      max-height: 44px !important;
+      padding: 0 !important;
+      margin: 0 auto !important;
+      font-size: 18px !important;
+      line-height: 1 !important;
+      box-sizing: border-box !important;
+      flex-shrink: 0 !important;
     }
   </style>
 </head>
@@ -180,19 +209,35 @@
     <!-- Title Bar -->
     <div class="win95-title flex items-center justify-between mb-2 flex-shrink-0">
       <div class="flex items-center gap-2">
-        <span class="text-yellow-300">🏰</span>
-        <span>Windows 95 3D Dungeon Escape</span>
+        <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <rect width="16" height="16" fill="#000080"/>
+      <rect x="1" y="1" width="14" height="14" fill="#008080"/>
+      <rect x="3" y="3" width="10" height="10" fill="#b91c1c"/>
+      <rect x="5" y="5" width="6" height="6" fill="#d97706"/>
+      <rect x="7" y="7" width="2" height="2" fill="#fef08a"/>
+      <path d="M1 1L5 5M15 1L11 5M1 15L5 11M15 15L11 11" stroke="#ffffff" stroke-width="1"/>
+    </svg>
+        <span>ComfyCrawler</span>
       </div>
-      <div class="flex gap-1 text-xs">
+      <div id="titleButtons" class="flex gap-1 text-xs">
         <button id="btnMaximize" class="win95-btn px-2 py-0.5 text-black hover:bg-slate-300" title="Toggle Fullscreen">□</button>
         <button id="btnClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" title="New Dungeon / Close">✕</button>
       </div>
     </div>
 
-    <!-- SCREEN 1: Questionnaire / Dungeon Setup (Compact Win95 Wizard) -->
+    <!-- SCREEN 1: Questionnaire / Dungeon Setup -->
     <div id="screenSetup" class="p-3 flex flex-col gap-3">
       <div class="flex items-center gap-3">
-        <span class="text-4xl">🧙‍♂️</span>
+        <svg class="w-10 h-10 inline-block" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <path d="M16 2L6 26H26L16 2Z" fill="#1e3a8a"/>
+      <path d="M16 2L26 26H22L16 6L10 26H6L16 2Z" fill="#3b82f6"/>
+      <ellipse cx="16" cy="26" rx="12" ry="3" fill="#1d4ed8"/>
+      <ellipse cx="16" cy="26" rx="10" ry="2" fill="#60a5fa"/>
+      <polygon points="16,8 17,11 20,11 17.5,13 18.5,16 16,14 13.5,16 14.5,13 12,11 15,11" fill="#fde047"/>
+      <polygon points="12,18 12.7,20 15,20 13.2,21.5 14,23.5 12,22 10,23.5 10.8,21.5 9,20 11.3,20" fill="#fde047"/>
+      <line x1="20" y1="8" x2="30" y2="28" stroke="#ffffff" stroke-width="2"/>
+      <polygon points="20,8 19,5 22,6 23,3 24,6 27,5 25,8 27,10 24,10 23,13 22,10 19,10" fill="#facc15"/>
+    </svg>
         <div>
           <h2 class="font-bold text-base text-slate-900">Dungeon Creation Wizard</h2>
           <p class="text-xs text-slate-700">Fill in the blank to build your custom 3D dungeon world.</p>
@@ -211,7 +256,7 @@
               type="text" 
               id="wallPromptInput" 
               class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors"
-              value="Windows 95" 
+              value="" 
               placeholder="fill in style..."
             />
             <span class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
@@ -225,39 +270,117 @@
         <!-- Quick Presets -->
         <div class="flex gap-2 mt-4 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
           <span class="text-xs text-slate-600 font-bold">Quick ideas:</span>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Windows 95">🧱 Windows 95</button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Cyber Neon">⚡ Cyber Neon</button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Mossy Stone">🏰 Mossy Stone</button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn" data-val="Candy Cane">🍭 Candy Cane</button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Windows 95">
+            <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <rect x="2" y="2" width="5" height="5" fill="#ef4444"/>
+      <rect x="8" y="2" width="5" height="5" fill="#22c55e"/>
+      <rect x="2" y="8" width="5" height="5" fill="#3b82f6"/>
+      <rect x="8" y="8" width="5" height="5" fill="#eab308"/>
+      <rect x="14" y="3" width="1" height="1" fill="#22c55e"/>
+      <rect x="14" y="9" width="1" height="1" fill="#eab308"/>
+      <rect x="1" y="4" width="1" height="1" fill="#ef4444"/>
+      <rect x="1" y="10" width="1" height="1" fill="#3b82f6"/>
+    </svg> <span>Windows 95</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Deep Forest">
+            <span>🌲</span> <span>Deep Forest</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Cyber Neon">
+            <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <polygon points="9,1 3,9 8,9 7,15 13,7 8,7" fill="#facc15" stroke="#000000" stroke-width="0.5"/>
+    </svg> <span>Cyber Neon</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Mossy Stone">
+            <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <rect x="2" y="5" width="12" height="9" fill="#71717a"/>
+      <rect x="2" y="2" width="3" height="3" fill="#71717a"/>
+      <rect x="6.5" y="2" width="3" height="3" fill="#71717a"/>
+      <rect x="11" y="2" width="3" height="3" fill="#71717a"/>
+      <rect x="6" y="9" width="4" height="5" fill="#18181b"/>
+      <rect x="4" y="6" width="2" height="2" fill="#fef08a"/>
+      <rect x="10" y="6" width="2" height="2" fill="#fef08a"/>
+    </svg> <span>Mossy Stone</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Candy Cane">
+            <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <circle cx="8" cy="8" r="6" fill="#ec4899"/>
+      <path d="M4 8C4 5.79 5.79 4 8 4M8 12C10.21 12 12 10.21 12 8" stroke="#ffffff" stroke-width="1.5"/>
+      <rect x="1" y="7" width="2" height="2" fill="#ec4899"/>
+      <rect x="13" y="7" width="2" height="2" fill="#ec4899"/>
+    </svg> <span>Candy Cane</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="tacos">
+            <span>🌮</span> <span>tacos</span>
+          </button>
         </div>
       </div>
 
-      <!-- Footer Buttons: Settings Gear + Create Button -->
+      <!-- Footer Buttons: Options + Create Button -->
       <div class="flex justify-between items-center mt-1">
-        <button id="btnSettings" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Engine Version Settings">
-          <span>⚙️</span>
-          <span>Engine Options</span>
+        <button id="btnSettings" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Dungeon & Engine Configuration">
+          <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <rect x="6" y="1" width="4" height="14" fill="#475569"/>
+      <rect x="1" y="6" width="14" height="4" fill="#475569"/>
+      <rect x="3" y="3" width="10" height="10" fill="#64748b"/>
+      <circle cx="8" cy="8" r="4" fill="#94a3b8"/>
+      <circle cx="8" cy="8" r="2" fill="#0f172a"/>
+    </svg>
+          <span>Options</span>
         </button>
 
         <button id="btnCreate" class="win95-btn px-6 py-1.5 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200">
-          <span>✨</span>
+          <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <polygon points="8,1 9,4 12,4 10,6 11,9 8,7 5,9 6,6 4,4 7,4" fill="#eab308"/>
+      <line x1="8" y1="8" x2="14" y2="14" stroke="#000000" stroke-width="2"/>
+      <line x1="8" y1="8" x2="14" y2="14" stroke="#ffffff" stroke-width="1"/>
+    </svg>
           <span>CREATE</span>
         </button>
       </div>
     </div>
 
-    <!-- ENGINE SETTINGS MODAL DIALOG -->
+    <!-- CONFIGURATION & OPTIONS MODAL DIALOG -->
     <div id="modalSettings" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
       <div class="win95-box w-full max-w-md p-1 shadow-2xl">
         <div class="win95-title flex items-center justify-between mb-2">
           <div class="flex items-center gap-1.5">
-            <span>⚙️</span>
-            <span>Engine Configuration</span>
+            <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <rect x="6" y="1" width="4" height="14" fill="#475569"/>
+      <rect x="1" y="6" width="14" height="4" fill="#475569"/>
+      <rect x="3" y="3" width="10" height="10" fill="#64748b"/>
+      <circle cx="8" cy="8" r="4" fill="#94a3b8"/>
+      <circle cx="8" cy="8" r="2" fill="#0f172a"/>
+    </svg>
+            <span>Options & 3DMaze Configuration</span>
           </div>
           <button id="btnCloseSettings" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
         </div>
 
-        <div class="p-3 flex flex-col gap-3">
+        <div class="p-3 flex flex-col gap-4">
+          <div class="win95-box p-3 bg-slate-100 flex flex-col gap-2">
+            <div class="flex justify-between items-center">
+              <label class="text-xs font-bold text-slate-800">
+                Amount of Grids / Maze Size:
+              </label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="gridCountInput" min="10" max="100" value="10" class="win95-input w-16 text-center text-xs font-bold" />
+                <span class="text-xs text-slate-600 font-bold">Grids</span>
+              </div>
+            </div>
+            
+            <input type="range" id="gridCountSlider" min="10" max="100" value="10" class="w-full cursor-pointer accent-blue-800" />
+            
+            <div class="flex justify-between text-[10px] text-slate-500 font-bold">
+              <span>10 (Classic)</span>
+              <span>30 (Medium)</span>
+              <span>60 (Large)</span>
+              <span>100 (Epic 3DMaze)</span>
+            </div>
+            <div id="gridDesc" class="text-[11px] text-blue-900 font-bold mt-0.5">
+              Classic 3DMaze: 10 grid passages with glowing lantern illumination and Exit.
+            </div>
+          </div>
+
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800">
               Select Engine Mode:
@@ -285,7 +408,15 @@
     <div id="screenProgress" class="p-5 flex flex-col gap-3 hidden">
       <div class="flex items-center justify-between">
         <span class="font-bold text-xs flex items-center gap-2">
-          <span class="animate-spin">⏳</span>
+          <span class="animate-hourglass"><svg class="w-6 h-6 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <rect x="2" y="1" width="12" height="2" fill="#854d0e"/>
+      <rect x="2" y="13" width="12" height="2" fill="#854d0e"/>
+      <path d="M4 3L8 7L12 3V4L9 7.5L12 11V12H4V11L7 7.5L4 4V3Z" fill="#38bdf8" opacity="0.6"/>
+      <polygon points="5,4 11,4 8,7" fill="#facc15"/>
+      <rect x="7.5" y="7" width="1" height="3" fill="#facc15"/>
+      <polygon points="5,12 11,12 8,9" fill="#facc15"/>
+      <path d="M3 2H13M3 14H13" stroke="#000000" stroke-width="1"/>
+    </svg></span>
           <span>Generating Dungeon Assets...</span>
         </span>
         <span id="progTimer" class="text-xs font-bold text-blue-800">0.0s</span>
@@ -296,7 +427,7 @@
       </div>
 
       <div class="flex justify-between items-center text-xs text-slate-700">
-        <span id="progStatusText">Initializing generator...</span>
+        <span id="progStatusText" class="truncate max-w-[280px]">Initializing generator...</span>
         <strong id="progPercentText">0%</strong>
       </div>
 
@@ -305,7 +436,7 @@
       </div>
     </div>
 
-    <!-- SCREEN 3: Instant Interactive Game Play Screen (4:3 Aspect-Locked, Zero Black Bars) -->
+    <!-- SCREEN 3: Instant Interactive Game Play Screen -->
     <div id="screenGame" class="p-1 hidden box-border">
       <div class="game-layout items-stretch">
         
@@ -313,59 +444,79 @@
         <div class="viewport-wrapper flex-1 min-w-0 justify-between">
           <div class="win95-inset viewport-frame flex items-center justify-center">
             
-            <!-- 3D Canvas Viewport (100% edge-to-edge fill in 4:3 frame) -->
             <canvas id="viewportCanvas" width="320" height="240"></canvas>
 
-            <!-- FMV Video Player Element -->
             <video id="gameVideo" playsinline class="w-full h-full object-cover image-rendering-pixelated hidden">
               <source id="videoSource" src="" type="video/mp4">
             </video>
 
-            <!-- Wall Bump / Alert Banner -->
-            <div id="bumpBanner" class="absolute inset-x-0 bottom-4 mx-auto w-max bg-red-700/90 text-white text-xs px-3 py-1 rounded shadow-lg border border-red-400 hidden animate-bounce">
-              🚫 SOLID WALL DIRECTLY AHEAD
+            <div id="bumpBanner" class="absolute inset-x-0 bottom-4 mx-auto w-max bg-red-700/95 text-white text-xs px-3 py-1.5 rounded shadow-lg border border-red-300 hidden animate-bounce flex items-center gap-1.5 z-20">
+              <svg class="w-4 h-4 inline-block" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <circle cx="8" cy="8" r="7" fill="#dc2626"/>
+      <path d="M5 5L11 11M11 5L5 11" stroke="#ffffff" stroke-width="2"/>
+    </svg>
+              <span id="bumpText">SOLID WALL DIRECTLY AHEAD</span>
             </div>
+
+            <div id="victoryModal" class="absolute inset-0 bg-black/60 z-30 flex items-center justify-center p-4 hidden">
+              <div class="win95-box p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-yellow-400">
+                <svg class="w-8 h-8 inline-block" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="image-rendering: pixelated;">
+      <path d="M6 6H26V14C26 19.5 21.5 24 16 24C10.5 24 6 19.5 6 14V6Z" fill="#facc15"/>
+      <path d="M4 8H6V14H4C2.9 14 2 13.1 2 12V10C2 8.9 2.9 8 4 8Z" fill="#eab308"/>
+      <path d="M26 8H28C29.1 8 30 8.9 30 10V12C30 13.1 29.1 14 28 14H26V8Z" fill="#eab308"/>
+      <rect x="14" y="24" width="4" height="4" fill="#ca8a04"/>
+      <rect x="10" y="28" width="12" height="3" fill="#78350f"/>
+    </svg>
+                <h3 class="font-black text-sm text-yellow-900">DUNGEON ESCAPED!</h3>
+                <p class="text-xs text-slate-800">You reached the Exit Sign and conquered the 3DMaze!</p>
+                <div class="text-[11px] font-bold text-blue-900 bg-blue-100 px-3 py-1 rounded w-full">
+                  Steps taken: <span id="winMovesCount">0</span>
+                </div>
+                <button id="btnPlayAgain" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full mt-1">
+                  ✨ Create New Dungeon
+                </button>
+              </div>
+            </div>
+
           </div>
 
-          <!-- Single-Line Status Bar -->
           <div class="win95-box px-2 py-1 text-xs flex justify-between items-center text-slate-800 flex-shrink-0 overflow-hidden box-border h-7">
-            <span class="truncate pr-1">Location: <strong id="statusPos">Spot 1 (Facing EAST - Hallway)</strong></span>
+            <span class="truncate pr-1">Location: <strong id="statusPos">Spot (1, 1) [Facing EAST]</strong></span>
             <span class="text-slate-500 text-[10px] whitespace-nowrap flex-shrink-0">W/A/S/D / Arrows</span>
           </div>
         </div>
 
-        <!-- Controls & 3-Space Minimap Column (Snug & Aligned) -->
+        <!-- Controls & True Fog-of-War Minimap Column -->
         <div class="sidebar-wrapper justify-between">
           
-          <!-- 3-Space Minimap -->
           <div class="win95-box p-1.5 flex flex-col justify-center flex-shrink-0">
-            <div class="text-[11px] font-bold mb-1 text-slate-700">3-SPACE DUNGEON MAP:</div>
-            <div class="win95-inset p-1 flex items-center justify-center bg-zinc-900">
-              <canvas id="minimapCanvas" width="180" height="65" class="w-full h-auto"></canvas>
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-[11px] font-bold text-slate-700">3DMAZE MAP:</span>
+              <span id="mapProgressBadge" class="text-[10px] text-blue-900 font-bold bg-blue-100 px-1.5 py-0.2 rounded">1/10</span>
             </div>
-            <div class="text-[9px] text-slate-600 mt-1 text-center font-bold">
-              [ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]
+            <div class="win95-inset p-1 flex items-center justify-center bg-black overflow-hidden relative">
+              <canvas id="minimapCanvas" width="180" height="105" class="w-full h-auto"></canvas>
             </div>
           </div>
 
-          <!-- Directional D-Pad Controls -->
-          <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px]">
-            <div class="text-[11px] font-bold mb-1.5 text-slate-700">CONTROLS:</div>
+          <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[140px] flex-shrink-0">
+            <div class="text-[11px] font-bold mb-2 text-slate-700 select-none text-center w-full">CONTROLS:</div>
             
-            <div class="grid grid-cols-3 gap-1.5 w-32 my-auto">
+            <!-- Strict Fixed 44x44 D-Pad Grid -->
+            <div class="grid grid-cols-3 gap-2 w-36 my-auto justify-items-center">
               <div></div>
-              <button id="btnUp" class="win95-btn py-1.5 text-center text-base flex items-center justify-center" title="Move Forward (W / Up)">
+              <button id="btnUp" class="win95-btn dpad-btn" title="Move Forward (W / Up)">
                 ▲
               </button>
               <div></div>
               
-              <button id="btnLeft" class="win95-btn py-1.5 text-center text-base flex items-center justify-center" title="Rotate Left 90° (A / Left)">
+              <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">
                 ◀
               </button>
-              <button id="btnDown" class="win95-btn py-1.5 text-center text-base flex items-center justify-center" title="Move Backward (S / Down)">
+              <button id="btnDown" class="win95-btn dpad-btn" title="Move Backward (S / Down)">
                 ▼
               </button>
-              <button id="btnRight" class="win95-btn py-1.5 text-center text-base flex items-center justify-center" title="Rotate Right 90° (D / Right)">
+              <button id="btnRight" class="win95-btn dpad-btn" title="Rotate Right 90° (D / Right)">
                 ▶
               </button>
             </div>
@@ -380,16 +531,20 @@
   <script>
     const SERVER_URL = "http://127.0.0.1:5555";
 
-    // Screens & Modals
     const appContainer = document.getElementById('appContainer');
     const screenSetup = document.getElementById('screenSetup');
     const screenProgress = document.getElementById('screenProgress');
     const screenGame = document.getElementById('screenGame');
     const modalSettings = document.getElementById('modalSettings');
+    const victoryModal = document.getElementById('victoryModal');
+    const btnPlayAgain = document.getElementById('btnPlayAgain');
+    const winMovesCount = document.getElementById('winMovesCount');
 
-    // UI Elements
     const modeSelect = document.getElementById('modeSelect');
     const modeDesc = document.getElementById('modeDesc');
+    const gridCountInput = document.getElementById('gridCountInput');
+    const gridCountSlider = document.getElementById('gridCountSlider');
+    const gridDesc = document.getElementById('gridDesc');
     const wallPromptInput = document.getElementById('wallPromptInput');
     const btnCreate = document.getElementById('btnCreate');
     const btnSettings = document.getElementById('btnSettings');
@@ -406,61 +561,66 @@
     const gameVideo = document.getElementById('gameVideo');
     const statusPos = document.getElementById('statusPos');
     const bumpBanner = document.getElementById('bumpBanner');
+    const bumpText = document.getElementById('bumpText');
+    const mapProgressBadge = document.getElementById('mapProgressBadge');
 
+    const titleButtons = document.getElementById('titleButtons');
     const btnUp = document.getElementById('btnUp');
     const btnDown = document.getElementById('btnDown');
     const btnLeft = document.getElementById('btnLeft');
     const btnRight = document.getElementById('btnRight');
     const btnMaximize = document.getElementById('btnMaximize');
     const btnClose = document.getElementById('btnClose');
-    const allButtons = [btnUp, btnDown, btnLeft, btnRight];
 
-    // Settings Modal
-    btnSettings.addEventListener('click', () => {
-      modalSettings.classList.remove('hidden');
-    });
-    btnCloseSettings.addEventListener('click', () => {
-      modalSettings.classList.add('hidden');
-    });
-    btnSaveSettings.addEventListener('click', () => {
-      modalSettings.classList.add('hidden');
-    });
+    function updateGridText(val) {
+      const v = Math.max(10, Math.min(100, parseInt(val) || 10));
+      gridCountInput.value = v;
+      gridCountSlider.value = v;
+      if (v <= 15) gridDesc.textContent = `Classic 3DMaze: ${v} grid passages with glowing lantern illumination and Exit.`;
+      else if (v <= 35) gridDesc.textContent = `Medium 3DMaze: ${v} passages with branching corridors and glowing lanterns.`;
+      else if (v <= 70) gridDesc.textContent = `Large 3DMaze Labyrinth: ${v} complex winding passages with distant Exit.`;
+      else gridDesc.textContent = `Epic 3DMaze Challenge: ${v} massive interconnected passages!`;
+    }
 
-    // Fullscreen Toggle
+    gridCountInput.addEventListener('input', (e) => updateGridText(e.target.value));
+    gridCountSlider.addEventListener('input', (e) => updateGridText(e.target.value));
+
+    btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
+    btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+    btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+
     function toggleFullscreen() {
       if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(err => {
-          console.warn("Fullscreen request error:", err);
-        });
+        document.documentElement.requestFullscreen().catch(err => console.warn(err));
         btnMaximize.textContent = "❐";
       } else {
-        document.exitFullscreen().catch(err => {
-          console.warn("Exit fullscreen error:", err);
-        });
+        document.exitFullscreen().catch(err => console.warn(err));
         btnMaximize.textContent = "□";
       }
     }
 
     btnMaximize.addEventListener('click', toggleFullscreen);
-
     document.addEventListener('fullscreenchange', () => {
       btnMaximize.textContent = document.fullscreenElement ? "❐" : "□";
     });
 
-    // Close / New Dungeon (X Button)
+    function openSetupScreen() {
+      screenGame.classList.add('hidden');
+      victoryModal.classList.add('hidden');
+      screenSetup.classList.remove('hidden');
+      if (titleButtons) titleButtons.classList.remove('hidden');
+      appContainer.className = 'win95-box p-1 text-black mode-setup';
+    }
+
     btnClose.addEventListener('click', () => {
       if (!screenGame.classList.contains('hidden')) {
-        const conf = confirm("Would you like to create a new dungeon?");
-        if (conf) {
-          screenGame.classList.add('hidden');
-          screenSetup.classList.remove('hidden');
-          appContainer.className = 'win95-box p-1 text-black mode-setup';
-        }
+        if (confirm("Would you like to create a new dungeon?")) openSetupScreen();
       } else {
-        screenSetup.classList.remove('hidden');
-        appContainer.className = 'win95-box p-1 text-black mode-setup';
+        openSetupScreen();
       }
     });
+
+    btnPlayAgain.addEventListener('click', openSetupScreen);
 
     modeSelect.addEventListener('change', () => {
       if (modeSelect.value === 'v3_flux') {
@@ -479,10 +639,12 @@
     });
 
     // ==============================================================
-    // Shared State & Minimap
+    // Authentic 3DMaze Generator + Hallway-Facing Spawn Angle
     // ==============================================================
     let activeMode = "v3_flux";
     let v1Clips = {};
+    let totalMoves = 0;
+    let currentThemeName = "Windows 95";
 
     const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
     const DIR_VECS = [
@@ -492,18 +654,19 @@
       { dx: -1, dy: 0 }
     ];
 
-    const MAP_WIDTH = 5;
-    const MAP_HEIGHT = 3;
-    const MAP = [
-      [1, 1, 1, 1, 1],
-      [1, 0, 0, 0, 1], // (1,1)->1, (2,1)->2, (3,1)->3
-      [1, 1, 1, 1, 1]
-    ];
+    let MAP_WIDTH = 7;
+    let MAP_HEIGHT = 7;
+    let MAP = [];
+    let lanternList = [];
+    let passagesList = [];
+    let startRoom = { x: 1, y: 1 };
+    let exitRoom = { x: 5, y: 5 };
+    let visitedTiles = new Set();
 
     const player = {
-      gridX: 1, // Spot 1
+      gridX: 1,
       gridY: 1,
-      dirIndex: 1, // EAST
+      dirIndex: 1,
       posX: 1.5,
       posY: 1.5,
       angle: 0,
@@ -512,6 +675,8 @@
       targetAngle: 0,
       isAnimating: false
     };
+
+    let queuedAction = null;
 
     function dirToAngle(dIdx) {
       switch(dIdx) {
@@ -522,86 +687,405 @@
       }
     }
 
+    function generateAuthentic3DMaze(numGrids = 10) {
+      numGrids = Math.max(10, Math.min(100, numGrids));
+
+      let cellCols = Math.max(3, Math.ceil(Math.sqrt(numGrids / 1.5)));
+      let cellRows = Math.max(3, Math.ceil(numGrids / cellCols / 1.5));
+
+      MAP_WIDTH = cellCols * 2 + 1;
+      MAP_HEIGHT = cellRows * 2 + 1;
+
+      MAP = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(1));
+      lanternList = [];
+
+      const visitedCells = Array(cellRows).fill(0).map(() => Array(cellCols).fill(false));
+      const stack = [];
+      const startCell = { r: 0, c: 0 };
+      visitedCells[0][0] = true;
+      MAP[1][1] = 0;
+      stack.push(startCell);
+
+      let maxDist = 0;
+      let furthestCell = { r: 0, c: 0 };
+      const distances = Array(cellRows).fill(0).map(() => Array(cellCols).fill(0));
+
+      while (stack.length > 0) {
+        const current = stack[stack.length - 1];
+        const neighbors = [];
+
+        const deltas = [
+          { dr: -1, dc: 0 },
+          { dr: 1, dc: 0 },
+          { dr: 0, dc: -1 },
+          { dr: 0, dc: 1 }
+        ];
+
+        for (const d of deltas) {
+          const nr = current.r + d.dr;
+          const nc = current.c + d.dc;
+          if (nr >= 0 && nr < cellRows && nc >= 0 && nc < cellCols && !visitedCells[nr][nc]) {
+            neighbors.push({ r: nr, c: nc, dr: d.dr, dc: d.dc });
+          }
+        }
+
+        if (neighbors.length > 0) {
+          const next = neighbors[Math.floor(Math.random() * neighbors.length)];
+          const wallY = current.r * 2 + 1 + next.dr;
+          const wallX = current.c * 2 + 1 + next.dc;
+          const nextY = next.r * 2 + 1;
+          const nextX = next.c * 2 + 1;
+
+          MAP[wallY][wallX] = 0;
+          MAP[nextY][nextX] = 0;
+
+          visitedCells[next.r][next.c] = true;
+          distances[next.r][next.c] = distances[current.r][current.c] + 1;
+
+          if (distances[next.r][next.c] > maxDist) {
+            maxDist = distances[next.r][next.c];
+            furthestCell = { r: next.r, c: next.c };
+          }
+
+          stack.push({ r: next.r, c: next.c });
+        } else {
+          stack.pop();
+        }
+      }
+
+      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+        for (let x = 1; x < MAP_WIDTH - 1; x++) {
+          if (MAP[y][x] === 1) {
+            const hasAdjacentFloor = (MAP[y-1][x] === 0 || MAP[y+1][x] === 0 || MAP[y][x-1] === 0 || MAP[y][x+1] === 0);
+            if (hasAdjacentFloor && (x + y) % 3 === 0) {
+              MAP[y][x] = 2;
+              lanternList.push({ x, y });
+            }
+          }
+        }
+      }
+
+      passagesList = [];
+      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+        for (let x = 1; x < MAP_WIDTH - 1; x++) {
+          if (MAP[y][x] === 0) {
+            passagesList.push({ x, y });
+          }
+        }
+      }
+
+      startRoom = { x: 1, y: 1 };
+      exitRoom = { x: furthestCell.c * 2 + 1, y: furthestCell.r * 2 + 1 };
+
+      let spawnDir = 1;
+      if (MAP[1] && MAP[1][2] === 0) spawnDir = 1;
+      else if (MAP[2] && MAP[2][1] === 0) spawnDir = 2;
+      else if (MAP[1] && MAP[1][0] === 0) spawnDir = 3;
+      else if (MAP[0] && MAP[0][1] === 0) spawnDir = 0;
+
+      player.gridX = startRoom.x;
+      player.gridY = startRoom.y;
+      player.dirIndex = spawnDir;
+      player.posX = startRoom.x + 0.5;
+      player.posY = startRoom.y + 0.5;
+      player.angle = dirToAngle(spawnDir);
+      player.targetX = player.posX;
+      player.targetY = player.posY;
+      player.targetAngle = player.angle;
+
+      visitedTiles.clear();
+      visitedTiles.add(`${startRoom.x},${startRoom.y}`);
+      totalMoves = 0;
+      queuedAction = null;
+    }
+
     const mcanvas = document.getElementById('minimapCanvas');
     const mctx = mcanvas.getContext('2d');
     mctx.imageSmoothingEnabled = false;
 
     function drawMinimap() {
-      mctx.fillStyle = '#111827';
+      mctx.fillStyle = '#000000';
       mctx.fillRect(0, 0, mcanvas.width, mcanvas.height);
 
-      const size = 36;
-      const offsetX = 24;
-      const offsetY = 16;
-      const spacing = 18;
+      if (passagesList.length === 0) return;
 
-      [1, 2, 3].forEach((spotNum, idx) => {
-        const px = offsetX + idx * (size + spacing);
-        const py = offsetY;
-        const isCurrent = (spotNum === player.gridX);
+      visitedTiles.add(`${player.gridX},${player.gridY}`);
+      mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
 
-        if (idx < 2) {
-          mctx.strokeStyle = '#475569';
-          mctx.lineWidth = 4;
-          mctx.beginPath();
-          mctx.moveTo(px + size, py + size / 2);
-          mctx.lineTo(px + size + spacing, py + size / 2);
-          mctx.stroke();
+      const tileSize = passagesList.length > 50 ? 14 : (passagesList.length > 25 ? 18 : 22);
+      const centerX = mcanvas.width / 2;
+      const centerY = mcanvas.height / 2;
+
+      const offsetX = centerX - player.posX * tileSize;
+      const offsetY = centerY - player.posY * tileSize;
+
+      visitedTiles.forEach(vKey => {
+        const [vx, vy] = vKey.split(',').map(Number);
+        const rx = offsetX + vx * tileSize;
+        const ry = offsetY + vy * tileSize;
+
+        const isCurrent = (vx === player.gridX && vy === player.gridY);
+        const isExit = (vx === exitRoom.x && vy === exitRoom.y);
+
+        mctx.fillStyle = isCurrent ? '#16a34a' : (isExit ? '#eab308' : '#2563eb');
+        mctx.fillRect(rx, ry, tileSize, tileSize);
+
+        if (isExit) {
+          mctx.fillStyle = '#000000';
+          mctx.font = `bold ${Math.max(8, tileSize - 6)}px sans-serif`;
+          mctx.textAlign = 'center';
+          mctx.textBaseline = 'middle';
+          mctx.fillText('★', rx + tileSize / 2, ry + tileSize / 2);
         }
 
-        mctx.fillStyle = isCurrent ? '#15803d' : '#1e293b';
-        mctx.fillRect(px, py, size, size);
-        mctx.strokeStyle = isCurrent ? '#22c55e' : '#475569';
-        mctx.lineWidth = isCurrent ? 2 : 1;
-        mctx.strokeRect(px, py, size, size);
+        const adj = [
+          { x: vx, y: vy - 1 },
+          { x: vx, y: vy + 1 },
+          { x: vx - 1, y: vy },
+          { x: vx + 1, y: vy }
+        ];
 
-        mctx.fillStyle = isCurrent ? '#fef08a' : '#94a3b8';
-        mctx.font = 'bold 13px "Comic Sans MS", cursive, sans-serif';
-        mctx.textAlign = 'center';
-        mctx.textBaseline = 'middle';
-        mctx.fillText(spotNum, px + size / 2, py + size / 2);
-
-        if (isCurrent) {
-          const cx = px + size / 2;
-          const cy = py + size / 2;
-
-          mctx.save();
-          mctx.translate(cx, cy);
-          mctx.rotate(player.angle);
-          mctx.fillStyle = '#ef4444';
-          mctx.beginPath();
-          mctx.moveTo(11, 0);
-          mctx.lineTo(-5, -5);
-          mctx.lineTo(-2, 0);
-          mctx.lineTo(-5, 5);
-          mctx.closePath();
-          mctx.fill();
-          mctx.restore();
-        }
+        adj.forEach(w => {
+          if (w.x >= 0 && w.x < MAP_WIDTH && w.y >= 0 && w.y < MAP_HEIGHT && MAP[w.y][w.x] >= 1) {
+            const wx = offsetX + w.x * tileSize;
+            const wy = offsetY + w.y * tileSize;
+            mctx.fillStyle = '#334155';
+            mctx.fillRect(wx, wy, tileSize, tileSize);
+            mctx.strokeStyle = '#475569';
+            mctx.lineWidth = 0.5;
+            mctx.strokeRect(wx, wy, tileSize, tileSize);
+          }
+        });
       });
+
+      const px = offsetX + player.posX * tileSize;
+      const py = offsetY + player.posY * tileSize;
+
+      mctx.save();
+      mctx.translate(px, py);
+      mctx.rotate(player.angle);
+      mctx.fillStyle = '#ef4444';
+      mctx.strokeStyle = '#ffffff';
+      mctx.lineWidth = 1;
+      mctx.beginPath();
+      mctx.moveTo(8, 0);
+      mctx.lineTo(-5, -4);
+      mctx.lineTo(-2, 0);
+      mctx.lineTo(-5, 4);
+      mctx.closePath();
+      mctx.fill();
+      mctx.stroke();
+      mctx.restore();
     }
 
     function updateHUD() {
-      const spot = player.gridX;
       const dirName = DIRS[player.dirIndex];
+      const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
+      const isStart = (player.gridX === startRoom.x && player.gridY === startRoom.y);
 
-      let viewDesc = 'Hallway';
-      if (dirName === 'NORTH' || dirName === 'SOUTH') viewDesc = 'Side Wall';
-      else if (spot === 1 && dirName === 'WEST') viewDesc = 'Start Wall';
-      else if (spot === 3 && dirName === 'EAST') viewDesc = 'End Wall';
+      let roomTag = "Corridor";
+      if (isStart) roomTag = "Start Corner";
+      if (isExit) roomTag = "⭐ EXIT CORNER";
 
-      statusPos.textContent = `Spot ${spot} (Facing ${dirName} - ${viewDesc})`;
+      statusPos.textContent = "(" + player.gridX + ", " + player.gridY + ") [Facing " + dirName + "] - " + roomTag;
       drawMinimap();
+
+      if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
+        winMovesCount.textContent = totalMoves;
+        victoryModal.classList.remove('hidden');
+      }
     }
 
     function showBumpMessage(msg = "SOLID WALL DIRECTLY AHEAD") {
-      bumpBanner.textContent = "🚫 " + msg;
+      if (bumpText) bumpText.textContent = msg;
       bumpBanner.classList.remove('hidden');
-      setTimeout(() => bumpBanner.classList.add('hidden'), 1200);
+      setTimeout(() => bumpBanner.classList.add('hidden'), 1000);
     }
 
     // ==============================================================
-    // 3D Raycaster Engine
+    // Comprehensive Style-Adaptive "END" Billboard Generator
+    // Supports: Taco, Pizza, Burger, Win95, Forest, Cat, Ladies,
+    // Cyber, Candy, Castle, and Any Custom Prompt Wall Medallion!
+    // ==============================================================
+    let exitSignTexture = null;
+
+    function buildDynamicExitSignTexture(styleName = "Windows 95", sourceWallImageData = null) {
+      const cv = document.createElement('canvas');
+      cv.width = 256;
+      cv.height = 140;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      c.fillStyle = 'rgba(235, 235, 235, 0.42)';
+      c.fillRect(10, 10, 236, 120);
+
+      c.strokeStyle = 'rgba(30, 30, 30, 0.85)';
+      c.lineWidth = 3;
+      c.strokeRect(10, 10, 236, 120);
+
+      const s = (styleName || '').toLowerCase().trim();
+
+      // 1. Tacos / Burrito / Mexican Food
+      if (s.includes('taco') || s.includes('tacos') || s.includes('burrito') || s.includes('mexican')) {
+        // Golden folded crispy taco shell
+        c.fillStyle = '#f59e0b';
+        c.beginPath();
+        c.arc(60, 72, 28, Math.PI, 0, false);
+        c.closePath();
+        c.fill();
+        c.strokeStyle = '#b45309';
+        c.lineWidth = 3;
+        c.stroke();
+
+        // Seasoned beef filling
+        c.fillStyle = '#78350f';
+        c.beginPath();
+        c.arc(60, 72, 22, Math.PI, 0, false);
+        c.closePath();
+        c.fill();
+
+        // Shredded lettuce & cheese
+        c.fillStyle = '#22c55e';
+        c.fillRect(44, 60, 6, 8); c.fillRect(56, 56, 7, 9); c.fillRect(68, 60, 6, 8);
+        c.fillStyle = '#fde047';
+        c.fillRect(50, 58, 4, 7); c.fillRect(62, 57, 5, 8);
+
+        // Diced red tomatoes
+        c.fillStyle = '#dc2626';
+        c.fillRect(46, 64, 5, 5); c.fillRect(58, 62, 5, 5); c.fillRect(70, 65, 5, 5);
+
+      // 2. Windows 95 Authentic 4-Color Wave Logo
+      } else if (s.includes('windows') || s.includes('95') || s.includes('98') || s.includes('microsoft') || s.includes('win95') || s === '') {
+        c.fillStyle = '#dc2626';
+        c.beginPath(); c.moveTo(40, 40); c.bezierCurveTo(50, 36, 56, 42, 64, 38); c.lineTo(64, 62); c.bezierCurveTo(56, 66, 50, 60, 40, 64); c.closePath(); c.fill();
+
+        c.fillStyle = '#16a34a';
+        c.beginPath(); c.moveTo(68, 38); c.bezierCurveTo(76, 34, 82, 40, 90, 36); c.lineTo(90, 60); c.bezierCurveTo(82, 64, 76, 58, 68, 62); c.closePath(); c.fill();
+
+        c.fillStyle = '#2563eb';
+        c.beginPath(); c.moveTo(40, 68); c.bezierCurveTo(50, 64, 56, 70, 64, 66); c.lineTo(64, 90); c.bezierCurveTo(56, 94, 50, 88, 40, 92); c.closePath(); c.fill();
+
+        c.fillStyle = '#d97706';
+        c.beginPath(); c.moveTo(68, 66); c.bezierCurveTo(76, 62, 82, 68, 90, 64); c.lineTo(90, 88); c.bezierCurveTo(82, 92, 76, 86, 68, 90); c.closePath(); c.fill();
+
+        c.strokeStyle = 'rgba(0,0,0,0.85)';
+        c.lineWidth = 3;
+        c.beginPath(); c.moveTo(66, 36); c.lineTo(66, 92); c.stroke();
+        c.beginPath(); c.moveTo(38, 65); c.lineTo(92, 63); c.stroke();
+
+        c.fillStyle = '#000000';
+        c.fillRect(32, 44, 4, 4); c.fillRect(26, 48, 3, 3); c.fillRect(20, 52, 3, 3);
+        c.fillRect(34, 74, 4, 4); c.fillRect(28, 78, 3, 3); c.fillRect(22, 82, 3, 3);
+
+      // 3. Forest / Nature / Tree
+      } else if (s.includes('forest') || s.includes('nature') || s.includes('tree') || s.includes('wood') || s.includes('jungle')) {
+        c.fillStyle = '#15803d';
+        c.beginPath();
+        c.moveTo(60, 34); c.lineTo(40, 68); c.lineTo(48, 68);
+        c.lineTo(36, 92); c.lineTo(84, 92); c.lineTo(72, 68);
+        c.lineTo(80, 68); c.closePath(); c.fill();
+        c.fillStyle = '#78350f'; c.fillRect(55, 92, 10, 14);
+        c.strokeStyle = '#052e16'; c.lineWidth = 2; c.stroke();
+
+      // 4. Person / Women / Ladies / Crowd
+      } else if (s.includes('person') || s.includes('people') || s.includes('man') || s.includes('woman') || s.includes('ladies') || s.includes('lady') || s.includes('girl')) {
+        c.fillStyle = '#fed7aa';
+        c.beginPath(); c.arc(60, 52, 16, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#000000'; c.lineWidth = 2; c.stroke();
+
+        c.fillStyle = s.includes('ladies') || s.includes('lady') || s.includes('girl') ? '#ec4899' : '#78350f';
+        c.beginPath(); c.arc(60, 48, 16, Math.PI, Math.PI * 2); c.fill();
+        c.stroke();
+
+        c.fillStyle = '#0f172a';
+        c.fillRect(54, 50, 3, 3); c.fillRect(64, 50, 3, 3);
+        c.strokeStyle = '#991b1b'; c.lineWidth = 1.5;
+        c.beginPath(); c.arc(60, 57, 5, 0.2, Math.PI - 0.2); c.stroke();
+
+        c.fillStyle = s.includes('ladies') || s.includes('lady') || s.includes('girl') ? '#db2777' : '#2563eb';
+        c.beginPath(); c.moveTo(38, 98); c.quadraticCurveTo(60, 70, 82, 98); c.closePath(); c.fill();
+        c.strokeStyle = '#000000'; c.lineWidth = 2; c.stroke();
+
+      // 5. Cat / Dog / Animals
+      } else if (s.includes('cat') || s.includes('dog') || s.includes('animal') || s.includes('kitten')) {
+        c.fillStyle = '#fb923c';
+        c.beginPath(); c.arc(60, 68, 22, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#000000'; c.lineWidth = 2; c.stroke();
+        c.fillStyle = '#f97316';
+        c.beginPath(); c.moveTo(42, 54); c.lineTo(44, 34); c.lineTo(56, 48); c.closePath(); c.fill(); c.stroke();
+        c.beginPath(); c.moveTo(78, 54); c.lineTo(76, 34); c.lineTo(64, 48); c.closePath(); c.fill(); c.stroke();
+        c.fillStyle = '#22c55e';
+        c.beginPath(); c.arc(52, 65, 4, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.arc(68, 65, 4, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#000000';
+        c.fillRect(52, 63, 2, 4); c.fillRect(68, 63, 2, 4);
+        c.fillStyle = '#ec4899'; c.fillRect(58, 72, 4, 3);
+
+      // 6. Candy / Sweet / Peppermint
+      } else if (s.includes('candy') || s.includes('cane') || s.includes('sweet') || s.includes('peppermint')) {
+        c.fillStyle = 'rgba(236, 72, 153, 0.95)';
+        c.beginPath(); c.arc(58, 70, 26, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#ffffff'; c.lineWidth = 6;
+        c.beginPath(); c.arc(58, 70, 14, 0, Math.PI); c.stroke();
+        c.beginPath(); c.arc(58, 70, 7, Math.PI, Math.PI * 2); c.stroke();
+        c.strokeStyle = '#831843'; c.lineWidth = 2;
+        c.beginPath(); c.arc(58, 70, 26, 0, Math.PI * 2); c.stroke();
+
+      // 7. Cyber / Neon / Tech
+      } else if (s.includes('cyber') || s.includes('neon') || s.includes('tech') || s.includes('matrix')) {
+        c.fillStyle = '#06b6d4';
+        c.beginPath();
+        c.moveTo(64, 35); c.lineTo(38, 72); c.lineTo(56, 72);
+        c.lineTo(48, 105); c.lineTo(80, 62); c.lineTo(62, 62);
+        c.closePath(); c.fill();
+        c.strokeStyle = '#e0f2fe'; c.lineWidth = 2.5; c.stroke();
+
+      // 8. Custom Prompt Wall Texture Medallion (Guaranteed style icon for ANY custom prompt)
+      } else if (sourceWallImageData) {
+        // Crop central portion of wall texture into a round gold medallion
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = sourceWallImageData.width;
+        tempCanvas.height = sourceWallImageData.height;
+        const tc = tempCanvas.getContext('2d');
+        tc.putImageData(sourceWallImageData, 0, 0);
+
+        c.save();
+        c.beginPath();
+        c.arc(60, 70, 26, 0, Math.PI * 2);
+        c.clip();
+        c.drawImage(tempCanvas, 32, 32, 192, 192, 34, 44, 52, 52);
+        c.restore();
+
+        c.strokeStyle = '#f59e0b';
+        c.lineWidth = 4;
+        c.beginPath();
+        c.arc(60, 70, 26, 0, Math.PI * 2);
+        c.stroke();
+        c.strokeStyle = '#78350f';
+        c.lineWidth = 1.5;
+        c.stroke();
+
+      // 9. Generic Portal Gate
+      } else {
+        c.fillStyle = '#3b82f6';
+        c.beginPath(); c.arc(60, 70, 24, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#93c5fd'; c.lineWidth = 3; c.stroke();
+        c.fillStyle = '#ffffff';
+        c.beginPath(); c.arc(60, 70, 12, 0, Math.PI * 2); c.fill();
+      }
+
+      // Classic "End" Text
+      c.font = 'bold 54px "Comic Sans MS", cursive, sans-serif';
+      c.fillStyle = 'rgba(0,0,0,0.35)';
+      c.fillText('End', 114, 88);
+      c.fillStyle = '#111827';
+      c.fillText('End', 110, 84);
+
+      exitSignTexture = c.getImageData(0, 0, 256, 140);
+    }
+
+    // ==============================================================
+    // Thematic Style-Adaptive Lantern Wall Synthesizer
     // ==============================================================
     const ctx = viewportCanvas.getContext('2d', { willReadFrequently: true });
     ctx.imageSmoothingEnabled = false;
@@ -609,49 +1093,319 @@
     const screenHeight = viewportCanvas.height;
     const imgData = ctx.createImageData(screenWidth, screenHeight);
     const buffer = imgData.data;
+    const zBuffer = new Float32Array(screenWidth);
 
     const TEX_SIZE = 256;
     let wallTexture = null;
+    let wallLanternTexture = null;
     let ceilingTexture = null;
     let floorTexture = null;
 
-    function buildDefaultTextures() {
-      // 1. Default Red Brick Wall
+    function buildLanternWallFromBase(baseWallImageData, styleName = "Windows 95") {
       const cv = document.createElement('canvas');
       cv.width = cv.height = TEX_SIZE;
       const c = cv.getContext('2d');
       c.imageSmoothingEnabled = false;
-      c.fillStyle = '#b91c1c';
+
+      c.putImageData(baseWallImageData, 0, 0);
+
+      const s = (styleName || '').toLowerCase().trim();
+
+      let glowColor1 = 'rgba(255, 220, 90, 0.75)';
+      let glowColor2 = 'rgba(245, 158, 11, 0.35)';
+
+      if (s.includes('spider') || s.includes('batman') || s.includes('superhero')) {
+        glowColor1 = 'rgba(239, 68, 68, 0.85)';
+        glowColor2 = 'rgba(59, 130, 246, 0.35)';
+      } else if (s.includes('creepy') || s.includes('horror') || s.includes('spooky') || s.includes('gothic') || s.includes('dark')) {
+        glowColor1 = 'rgba(34, 197, 94, 0.85)';
+        glowColor2 = 'rgba(220, 38, 38, 0.4)';
+      } else if (s.includes('space') || s.includes('star') || s.includes('galaxy') || s.includes('universe') || s.includes('planet')) {
+        glowColor1 = 'rgba(139, 92, 246, 0.85)';
+        glowColor2 = 'rgba(56, 189, 248, 0.4)';
+      } else if (s.includes('cyber') || s.includes('neon')) {
+        glowColor1 = 'rgba(6, 182, 212, 0.85)';
+        glowColor2 = 'rgba(59, 130, 246, 0.35)';
+      } else if (s.includes('candy')) {
+        glowColor1 = 'rgba(244, 114, 182, 0.8)';
+        glowColor2 = 'rgba(236, 72, 153, 0.35)';
+      } else if (s.includes('forest') || s.includes('tree') || s.includes('nature') || s.includes('wood')) {
+        glowColor1 = 'rgba(163, 230, 53, 0.8)';
+        glowColor2 = 'rgba(234, 179, 8, 0.35)';
+      }
+
+      // Radial Wall Glow
+      const radGrad = c.createRadialGradient(128, 95, 10, 128, 95, 115);
+      radGrad.addColorStop(0, glowColor1);
+      radGrad.addColorStop(0.5, glowColor2);
+      radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      c.fillStyle = radGrad;
+      c.fillRect(18, 0, 220, 220);
+
+      // 1. Spider-Man / Superhero Mask Lantern
+      if (s.includes('spider') || s.includes('superhero')) {
+        c.fillStyle = '#18181b'; c.fillRect(122, 114, 12, 28);
+        c.strokeStyle = '#000000'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 118); c.lineTo(128, 70); c.stroke();
+
+        // Red Mask
+        c.fillStyle = '#dc2626';
+        c.beginPath();
+        c.ellipse(128, 86, 18, 22, 0, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = '#000000'; c.lineWidth = 2.5; c.stroke();
+
+        // Black Web lines on mask
+        c.beginPath();
+        c.moveTo(128, 64); c.lineTo(128, 108);
+        c.moveTo(110, 86); c.lineTo(146, 86);
+        c.moveTo(116, 72); c.lineTo(140, 100);
+        c.moveTo(140, 72); c.lineTo(116, 100);
+        c.stroke();
+
+        // Glowing White Eyes with black border
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.moveTo(118, 78); c.lineTo(126, 84); c.lineTo(116, 88); c.closePath();
+        c.fill(); c.stroke();
+        c.beginPath();
+        c.moveTo(138, 78); c.lineTo(130, 84); c.lineTo(140, 88); c.closePath();
+        c.fill(); c.stroke();
+
+      // 2. Creepy / Horror / Haunted Skull Sconce
+      } else if (s.includes('creepy') || s.includes('horror') || s.includes('spooky') || s.includes('gothic') || s.includes('dark')) {
+        c.fillStyle = '#18181b'; c.fillRect(122, 114, 12, 28);
+        c.strokeStyle = '#27272a'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 118); c.lineTo(128, 70); c.stroke();
+
+        // Weathered Bone Skull
+        c.fillStyle = '#e2e8f0';
+        c.beginPath(); c.arc(128, 80, 16, 0, Math.PI * 2); c.fill();
+        c.fillRect(120, 88, 16, 12);
+        c.strokeStyle = '#0f172a'; c.lineWidth = 2; c.stroke();
+
+        // Glowing Eerie Green Eyes
+        c.fillStyle = '#22c55e';
+        c.beginPath(); c.arc(122, 80, 4, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.arc(134, 80, 4, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#ffffff';
+        c.fillRect(122, 79, 2, 2); c.fillRect(134, 79, 2, 2);
+
+        // Skull Teeth
+        c.fillStyle = '#0f172a';
+        c.fillRect(124, 94, 2, 6); c.fillRect(128, 94, 2, 6); c.fillRect(132, 94, 2, 6);
+
+      // 3. Forest / Nature Carved Firefly Lantern
+      } else if (s.includes('forest') || s.includes('nature') || s.includes('tree') || s.includes('wood')) {
+        c.fillStyle = '#78350f'; c.fillRect(122, 114, 12, 28);
+        c.strokeStyle = '#451a03'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 118); c.lineTo(128, 68); c.stroke();
+
+        c.fillStyle = 'rgba(250, 204, 21, 0.95)';
+        c.beginPath(); c.arc(128, 86, 18, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#78350f'; c.lineWidth = 3; c.stroke();
+
+        c.fillStyle = '#15803d';
+        c.beginPath(); c.moveTo(112, 68); c.lineTo(144, 68); c.lineTo(128, 54); c.closePath(); c.fill();
+
+      // 4. Cat / Animal Glowing Lantern
+      } else if (s.includes('cat') || s.includes('dog') || s.includes('animal') || s.includes('kitten')) {
+        c.fillStyle = '#18181b'; c.fillRect(122, 116, 12, 28);
+        c.fillStyle = '#f97316';
+        c.beginPath(); c.arc(128, 86, 22, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#000000'; c.lineWidth = 3; c.stroke();
+
+        c.fillStyle = '#ea580c';
+        c.beginPath(); c.moveTo(110, 72); c.lineTo(112, 54); c.lineTo(122, 68); c.closePath(); c.fill(); c.stroke();
+        c.beginPath(); c.moveTo(146, 72); c.lineTo(144, 54); c.lineTo(134, 68); c.closePath(); c.fill(); c.stroke();
+
+        c.fillStyle = '#facc15';
+        c.beginPath(); c.arc(120, 84, 5, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.arc(136, 84, 5, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#000000';
+        c.fillRect(120, 82, 2, 5); c.fillRect(136, 82, 2, 5);
+
+      // 5. People / Characters Cameo Portrait Sconce
+      } else if (s.includes('person') || s.includes('people') || s.includes('ladies') || s.includes('crowd') || s.includes('man') || s.includes('woman')) {
+        c.fillStyle = '#ca8a04'; c.fillRect(122, 114, 12, 30);
+        c.strokeStyle = '#eab308'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 120); c.lineTo(128, 68); c.stroke();
+
+        c.fillStyle = 'rgba(254, 240, 138, 0.95)';
+        c.beginPath(); c.ellipse(128, 86, 18, 24, 0, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#ca8a04'; c.lineWidth = 3; c.stroke();
+
+        c.fillStyle = '#ca8a04';
+        c.beginPath(); c.moveTo(114, 66); c.lineTo(142, 66); c.lineTo(128, 54); c.closePath(); c.fill();
+
+        c.fillStyle = '#1e293b';
+        c.beginPath(); c.arc(128, 80, 6, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.moveTo(120, 96); c.quadraticCurveTo(128, 88, 136, 96); c.closePath(); c.fill();
+
+      // 6. Candy / Sweet Peppermint Swirl Sconce
+      } else if (s.includes('candy') || s.includes('sweet') || s.includes('peppermint')) {
+        c.fillStyle = '#be185d'; c.fillRect(124, 116, 8, 28);
+        c.strokeStyle = '#ffffff'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 120); c.lineTo(128, 70); c.stroke();
+
+        c.fillStyle = 'rgba(244, 63, 94, 0.95)';
+        c.beginPath(); c.arc(128, 86, 20, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#ffffff'; c.lineWidth = 5;
+        c.beginPath(); c.arc(128, 86, 11, 0, Math.PI); c.stroke();
+        c.beginPath(); c.arc(128, 86, 5, Math.PI, Math.PI * 2); c.stroke();
+
+      // 7. Space / Galaxy Hologram Planet
+      } else if (s.includes('space') || s.includes('star') || s.includes('galaxy') || s.includes('universe') || s.includes('planet') || s.includes('sci-fi')) {
+        c.fillStyle = '#0f172a'; c.fillRect(122, 110, 12, 30);
+        c.fillStyle = '#38bdf8'; c.fillRect(124, 110, 8, 4);
+
+        c.fillStyle = 'rgba(139, 92, 246, 0.9)';
+        c.beginPath(); c.arc(128, 86, 14, 0, Math.PI * 2); c.fill();
+        
+        c.strokeStyle = 'rgba(56, 189, 248, 0.95)'; c.lineWidth = 3;
+        c.beginPath(); c.ellipse(128, 86, 22, 6, Math.PI/8, 0, Math.PI*2); c.stroke();
+
+      // 8. Cyber / Neon Node
+      } else if (s.includes('cyber') || s.includes('neon') || s.includes('tech') || s.includes('matrix')) {
+        c.fillStyle = '#0f172a'; c.fillRect(122, 115, 12, 28);
+        c.fillStyle = 'rgba(6, 182, 212, 0.9)';
+        c.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i * Math.PI) / 3;
+          const hx = 128 + Math.cos(a) * 22;
+          const hy = 86 + Math.sin(a) * 22;
+          if (i === 0) c.moveTo(hx, hy); else c.lineTo(hx, hy);
+        }
+        c.closePath(); c.fill();
+        c.strokeStyle = '#e0f2fe'; c.lineWidth = 3; c.stroke();
+        c.fillStyle = '#ffffff';
+        c.beginPath(); c.arc(128, 86, 8, 0, Math.PI * 2); c.fill();
+
+      // 9. Windows 95 Authentic 4-Color Cube Sconce
+      } else if (s.includes('windows') || s.includes('95') || s.includes('win95') || s === '') {
+        c.fillStyle = '#18181b'; c.fillRect(122, 112, 12, 30);
+        c.strokeStyle = '#000000'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 115); c.lineTo(128, 70); c.stroke();
+
+        c.fillStyle = '#27272a';
+        c.beginPath(); c.moveTo(108, 70); c.lineTo(148, 70); c.lineTo(128, 54); c.closePath(); c.fill();
+
+        c.fillStyle = '#ef4444'; c.fillRect(112, 72, 14, 14);
+        c.fillStyle = '#22c55e'; c.fillRect(130, 72, 14, 14);
+        c.fillStyle = '#3b82f6'; c.fillRect(112, 90, 14, 14);
+        c.fillStyle = '#eab308'; c.fillRect(130, 90, 14, 14);
+
+        c.strokeStyle = '#09090b'; c.lineWidth = 3;
+        c.strokeRect(112, 72, 32, 32);
+        c.beginPath(); c.moveTo(127, 72); c.lineTo(127, 104); c.stroke();
+        c.beginPath(); c.moveTo(112, 87); c.lineTo(144, 87); c.stroke();
+
+        c.fillStyle = '#27272a';
+        c.beginPath(); c.moveTo(118, 104); c.lineTo(138, 104); c.lineTo(128, 116); c.closePath(); c.fill();
+
+      // 10. Universal Custom Theme Medieval Wall Torch
+      } else {
+        c.fillStyle = '#18181b'; c.fillRect(122, 108, 12, 34);
+        c.fillStyle = '#3f3f46'; c.fillRect(124, 110, 8, 30);
+        c.strokeStyle = '#18181b'; c.lineWidth = 5;
+        c.beginPath(); c.moveTo(128, 120); c.lineTo(128, 75); c.stroke();
+
+        c.fillStyle = '#27272a';
+        c.beginPath(); c.moveTo(112, 75); c.lineTo(144, 75); c.lineTo(128, 60); c.closePath(); c.fill();
+        c.strokeStyle = '#09090b'; c.lineWidth = 2; c.stroke();
+
+        c.fillStyle = 'rgba(254, 240, 138, 0.9)';
+        c.fillRect(116, 75, 24, 30);
+        c.strokeStyle = '#18181b'; c.lineWidth = 2; c.strokeRect(116, 75, 24, 30);
+
+        c.fillStyle = '#f59e0b';
+        c.beginPath(); c.arc(128, 90, 6, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#ffffff';
+        c.beginPath(); c.arc(128, 89, 3, 0, Math.PI * 2); c.fill();
+      }
+
+      wallLanternTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+    }
+
+    // ==============================================================
+    // 1:1 Pixel-Perfect Authentic Windows 95 3DMaze ScreenSaver
+    // Textures (Wall, Ceiling, Floor) Matching Attachment 2 Exactly
+    // ==============================================================
+    function buildDefaultTextures() {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      // 1. Windows 95 Chunky Crimson Red Brick Wall with Thick White Mortar (Attachment 2)
+      c.fillStyle = '#ffffff';
       c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
-      c.strokeStyle = '#f8fafc';
-      c.lineWidth = 6;
+
       const rows = 4;
       const rowHeight = TEX_SIZE / rows;
+      const mortar = 8;
+
       for (let r = 0; r < rows; r++) {
-        const y = r * rowHeight;
-        c.strokeRect(0, y, TEX_SIZE, rowHeight);
+        const y = r * rowHeight + mortar / 2;
+        const h = rowHeight - mortar;
         const off = (r % 2 === 0) ? 0 : TEX_SIZE / 4;
+
         for (let x = -TEX_SIZE / 2; x < TEX_SIZE * 1.5; x += TEX_SIZE / 2) {
-          c.strokeRect(x + off, y, TEX_SIZE / 2, rowHeight);
+          const bx = x + off + mortar / 2;
+          const bw = TEX_SIZE / 2 - mortar;
+
+          // Red Brick Base
+          c.fillStyle = '#9e1414';
+          c.fillRect(bx, y, bw, h);
+
+          // Brick texture & stipple noise
+          for (let py = 0; py < h; py += 2) {
+            for (let px = 0; px < bw; px += 2) {
+              const n = (Math.sin(px * 12.3 + py * 7.1) + Math.cos(px * 3.7 + py * 11.2)) * 0.5;
+              const shade = Math.floor(140 + n * 35);
+              c.fillStyle = `rgb(${shade}, ${Math.floor(shade * 0.12)}, ${Math.floor(shade * 0.12)})`;
+              c.fillRect(bx + px, y + py, 2, 2);
+            }
+          }
+
+          // Dark inner shadow & light top bevel
+          c.fillStyle = '#5c0b0b';
+          c.fillRect(bx, y + h - 3, bw, 3);
+          c.fillRect(bx + bw - 3, y, 3, h);
+          c.fillStyle = '#c52a2a';
+          c.fillRect(bx, y, bw, 3);
+          c.fillRect(bx, y, 3, h);
         }
       }
       wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      buildLanternWallFromBase(wallTexture, "Windows 95");
 
-      // 2. Default Acoustic Mineral Tile Ceiling
+      // 2. Windows 95 Bright Acoustic Drop Ceiling (Attachment 2)
       const cvC = document.createElement('canvas');
       cvC.width = cvC.height = TEX_SIZE;
       const cC = cvC.getContext('2d');
       cC.imageSmoothingEnabled = false;
-      cC.fillStyle = '#d1d5db';
+
+      cC.fillStyle = '#e2e8f0';
       cC.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
-      for (let i = 0; i < 2000; i++) {
+
+      // High-contrast 90s mineral fiber stipple noise
+      for (let i = 0; i < 4500; i++) {
         const sx = Math.floor(Math.random() * TEX_SIZE);
         const sy = Math.floor(Math.random() * TEX_SIZE);
-        const shade = Math.floor(100 + Math.random() * 80);
+        const shade = Math.floor(160 + Math.random() * 85);
         cC.fillStyle = `rgb(${shade},${shade},${shade})`;
         cC.fillRect(sx, sy, 2, 2);
       }
-      cC.strokeStyle = '#6b7280';
+      for (let i = 0; i < 1200; i++) {
+        const sx = Math.floor(Math.random() * TEX_SIZE);
+        const sy = Math.floor(Math.random() * TEX_SIZE);
+        cC.fillStyle = '#94a3b8';
+        cC.fillRect(sx, sy, 2, 2);
+      }
+
+      // Metal grid seams
+      cC.strokeStyle = '#64748b';
       cC.lineWidth = 4;
       cC.strokeRect(0, 0, TEX_SIZE, TEX_SIZE);
       cC.strokeRect(0, 0, TEX_SIZE / 2, TEX_SIZE / 2);
@@ -660,40 +1414,52 @@
       cC.strokeRect(TEX_SIZE / 2, 0, TEX_SIZE / 2, TEX_SIZE / 2);
       ceilingTexture = cC.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
 
-      // 3. Default Woodgrain Floor
+      // 3. Windows 95 Golden Honey Tan Wood Parquet Floor (Attachment 2)
       const cvF = document.createElement('canvas');
       cvF.width = cvF.height = TEX_SIZE;
       const cF = cvF.getContext('2d');
       cF.imageSmoothingEnabled = false;
-      cF.fillStyle = '#b45309';
+
+      cF.fillStyle = '#c27e2c';
       cF.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+
+      // Fine-grained woodgrain stipple lines
       for (let y = 0; y < TEX_SIZE; y++) {
-        const noise = (Math.random() - 0.5) * 35;
-        const r = Math.min(255, Math.max(0, 185 + noise));
-        const g = Math.min(255, Math.max(0, 115 + noise * 0.6));
-        const b = Math.min(255, Math.max(0, 40 + noise * 0.3));
-        cF.fillStyle = `rgb(${r},${g},${b})`;
-        cF.fillRect(0, y, TEX_SIZE, 1);
-      }
-      cF.strokeStyle = '#78350f';
-      cF.lineWidth = 2;
-      for (let y = 0; y < TEX_SIZE; y += 32) {
-        cF.strokeRect(0, y, TEX_SIZE, 32);
-      }
-      for (let x = 0; x < TEX_SIZE; x += 64) {
-        cF.strokeRect(x, 0, 64, TEX_SIZE);
+        for (let x = 0; x < TEX_SIZE; x += 2) {
+          const woodNoise = (Math.sin(y * 0.4 + Math.sin(x * 0.15) * 4) + Math.cos(x * 0.2)) * 0.5;
+          const r = Math.min(255, Math.max(0, 195 + woodNoise * 35));
+          const g = Math.min(255, Math.max(0, 130 + woodNoise * 25));
+          const b = Math.min(255, Math.max(0, 50 + woodNoise * 15));
+          cF.fillStyle = `rgb(${Math.floor(r)},${Math.floor(g)},${Math.floor(b)})`;
+          cF.fillRect(x, y, 2, 1);
+        }
       }
       floorTexture = cF.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
     buildDefaultTextures();
 
-    function loadAiTextures(wallUri, ceilUri, floorUri) {
+    // ==============================================================
+    // Photoshop Offset-and-Center-Blend Seamless Texture Processor
+    // (Zero Mirroring, Zero Boundary Discontinuity)
+    // ==============================================================
+        function imageToTexture(img) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      c.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
+      return c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+    }
+
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95") {
       let loaded = 0;
       const total = (ceilUri && floorUri) ? 3 : 1;
 
       function checkDone() {
         loaded++;
         if (loaded >= total && activeMode !== 'v1_video') {
+          buildLanternWallFromBase(wallTexture, styleName);
+          buildDynamicExitSignTexture(styleName, wallTexture);
           render3D();
           drawMinimap();
         }
@@ -702,12 +1468,7 @@
       if (wallUri) {
         const imgW = new Image();
         imgW.onload = () => {
-          const cv = document.createElement('canvas');
-          cv.width = cv.height = TEX_SIZE;
-          const c = cv.getContext('2d');
-          c.imageSmoothingEnabled = false;
-          c.drawImage(imgW, 0, 0, TEX_SIZE, TEX_SIZE);
-          wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+          wallTexture = imageToTexture(imgW);
           checkDone();
         };
         imgW.src = wallUri;
@@ -716,12 +1477,7 @@
       if (ceilUri) {
         const imgC = new Image();
         imgC.onload = () => {
-          const cv = document.createElement('canvas');
-          cv.width = cv.height = TEX_SIZE;
-          const c = cv.getContext('2d');
-          c.imageSmoothingEnabled = false;
-          c.drawImage(imgC, 0, 0, TEX_SIZE, TEX_SIZE);
-          ceilingTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+          ceilingTexture = imageToTexture(imgC);
           checkDone();
         };
         imgC.src = ceilUri;
@@ -730,12 +1486,7 @@
       if (floorUri) {
         const imgF = new Image();
         imgF.onload = () => {
-          const cv = document.createElement('canvas');
-          cv.width = cv.height = TEX_SIZE;
-          const c = cv.getContext('2d');
-          c.imageSmoothingEnabled = false;
-          c.drawImage(imgF, 0, 0, TEX_SIZE, TEX_SIZE);
-          floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+          floorTexture = imageToTexture(imgF);
           checkDone();
         };
         imgF.src = floorUri;
@@ -775,16 +1526,31 @@
           const tx = Math.floor((floorX - Math.floor(floorX)) * TEX_SIZE) & (TEX_SIZE - 1);
           const ty = Math.floor((floorY - Math.floor(floorY)) * TEX_SIZE) & (TEX_SIZE - 1);
 
+          let lanternLight = 0;
+          for (let li = 0; li < lanternList.length; li++) {
+            const lx = lanternList[li].x + 0.5;
+            const ly = lanternList[li].y + 0.5;
+            const d = Math.hypot(floorX - lx, floorY - ly);
+            if (d < 2.8) {
+              lanternLight += (1.0 - d / 2.8) * 0.65;
+            }
+          }
+
           floorX += stepX;
           floorY += stepY;
 
           const tIdx = (ty * TEX_SIZE + tx) * 4;
           const pIdx = (y * screenWidth + x) * 4;
-          const shade = Math.max(0.35, Math.min(1.0, 1.0 - (rowDist * 0.15)));
+          const baseShade = Math.max(0.35, Math.min(1.0, 1.0 - (rowDist * 0.15)));
+          const finalShade = Math.min(1.0, baseShade + lanternLight);
 
-          buffer[pIdx] = texData[tIdx] * shade;
-          buffer[pIdx + 1] = texData[tIdx + 1] * shade;
-          buffer[pIdx + 2] = texData[tIdx + 2] * shade;
+          const warmR = Math.min(255, texData[tIdx] * finalShade + (lanternLight * 25));
+          const warmG = Math.min(255, texData[tIdx + 1] * finalShade + (lanternLight * 15));
+          const warmB = Math.min(255, texData[tIdx + 2] * finalShade);
+
+          buffer[pIdx] = warmR;
+          buffer[pIdx + 1] = warmG;
+          buffer[pIdx + 2] = warmB;
           buffer[pIdx + 3] = 255;
         }
       }
@@ -836,13 +1602,14 @@
             hit = 1;
             break;
           }
-          if (MAP[mapY][mapX] > 0) hit = 1;
+          if (MAP[mapY][mapX] > 0) hit = MAP[mapY][mapX];
         }
 
         if (side === 0) perpWallDist = (mapX - posX + (1 - stepX) / 2) / rayDirX;
         else perpWallDist = (mapY - posY + (1 - stepY) / 2) / rayDirY;
 
         perpWallDist = Math.max(0.1, perpWallDist);
+        zBuffer[x] = perpWallDist;
 
         const lineHeight = Math.floor(screenHeight / perpWallDist);
         let drawStart = Math.floor(-lineHeight / 2 + screenHeight / 2);
@@ -860,10 +1627,26 @@
         if (side === 0 && rayDirX > 0) texX = TEX_SIZE - texX - 1;
         if (side === 1 && rayDirY < 0) texX = TEX_SIZE - texX - 1;
 
-        const wallData = wallTexture.data;
-        const sideShade = side === 1 ? 0.75 : 1.0;
-        const distShade = 1.0 / (1.0 + perpWallDist * 0.45);
-        const finalShade = sideShade * distShade;
+        const wallTexToUse = (hit === 2 && wallLanternTexture) ? wallLanternTexture : wallTexture;
+        const wallData = wallTexToUse.data;
+
+        let wallLanternLight = 0;
+        const wallWorldX = side === 0 ? mapX : (posX + perpWallDist * rayDirX);
+        const wallWorldY = side === 1 ? mapY : (posY + perpWallDist * rayDirY);
+
+        for (let li = 0; li < lanternList.length; li++) {
+          const lx = lanternList[li].x + 0.5;
+          const ly = lanternList[li].y + 0.5;
+          const d = Math.hypot(wallWorldX - lx, wallWorldY - ly);
+          if (d < 3.2) {
+            wallLanternLight += (1.0 - d / 3.2) * 0.75;
+          }
+        }
+
+        const sideShade = side === 1 ? 0.82 : 1.0;
+        const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
+        const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
+        const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
 
         const step = TEX_SIZE / lineHeight;
         let texPos = (clampedStart - screenHeight / 2 + lineHeight / 2) * step;
@@ -875,10 +1658,62 @@
           const tIdx = (texY * TEX_SIZE + texX) * 4;
           const pIdx = (y * screenWidth + x) * 4;
 
-          buffer[pIdx] = wallData[tIdx] * finalShade;
-          buffer[pIdx + 1] = wallData[tIdx + 1] * finalShade;
-          buffer[pIdx + 2] = wallData[tIdx + 2] * finalShade;
+          const warmR = Math.min(255, wallData[tIdx] * finalShade + (wallLanternLight * 35));
+          const warmG = Math.min(255, wallData[tIdx + 1] * finalShade + (wallLanternLight * 20));
+          const warmB = Math.min(255, wallData[tIdx + 2] * finalShade);
+
+          buffer[pIdx] = warmR;
+          buffer[pIdx + 1] = warmG;
+          buffer[pIdx + 2] = warmB;
           buffer[pIdx + 3] = 255;
+        }
+      }
+
+      // Translucent 3D "END" Billboard Sprite
+      if (exitSignTexture) {
+        const spriteX = (exitRoom.x + 0.5) - posX;
+        const spriteY = (exitRoom.y + 0.5) - posY;
+
+        const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+        const transformX = invDet * (dirY * spriteX - dirX * spriteY);
+        const transformY = invDet * (-planeY * spriteX + planeX * spriteY);
+
+        if (transformY > 0.1) {
+          const spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
+          const spriteHeight = Math.abs(Math.floor((screenHeight / transformY) * 0.55));
+          const spriteWidth = Math.floor(spriteHeight * 1.5);
+
+          const drawStartY = Math.max(0, Math.floor(-spriteHeight / 2 + screenHeight / 2));
+          const drawEndY = Math.min(screenHeight - 1, Math.floor(spriteHeight / 2 + screenHeight / 2));
+          const drawStartX = Math.max(0, Math.floor(-spriteWidth / 2 + spriteScreenX));
+          const drawEndX = Math.min(screenWidth - 1, Math.floor(spriteWidth / 2 + spriteScreenX));
+
+          const signData = exitSignTexture.data;
+          const signW = 256;
+          const signH = 140;
+
+          for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
+            const texX = Math.floor(((stripe - (-spriteWidth / 2 + spriteScreenX)) * signW) / spriteWidth);
+
+            if (transformY > 0 && stripe >= 0 && stripe < screenWidth && transformY < zBuffer[stripe]) {
+              for (let y = drawStartY; y < drawEndY; y++) {
+                const d = (y - (-spriteHeight / 2 + screenHeight / 2)) * signH;
+                const texY = Math.floor(d / spriteHeight);
+
+                if (texX >= 0 && texX < signW && texY >= 0 && texY < signH) {
+                  const sIdx = (texY * signW + texX) * 4;
+                  const alpha = signData[sIdx + 3] / 255;
+
+                  if (alpha > 0.05) {
+                    const pIdx = (y * screenWidth + stripe) * 4;
+                    buffer[pIdx] = Math.floor(buffer[pIdx] * (1 - alpha) + signData[sIdx] * alpha);
+                    buffer[pIdx + 1] = Math.floor(buffer[pIdx + 1] * (1 - alpha) + signData[sIdx + 1] * alpha);
+                    buffer[pIdx + 2] = Math.floor(buffer[pIdx + 2] * (1 - alpha) + signData[sIdx + 2] * alpha);
+                  }
+                }
+              }
+            }
+          }
         }
       }
 
@@ -891,13 +1726,12 @@
 
     function animate3D(targetX, targetY, targetAngle) {
       player.isAnimating = true;
-      allButtons.forEach(b => b.disabled = true);
 
       const startX = player.posX;
       const startY = player.posY;
       const startAngle = player.angle;
       const animStart = performance.now();
-      const DURATION = 350;
+      const DURATION = 160;
 
       function step(now) {
         const elapsed = now - animStart;
@@ -918,58 +1752,26 @@
           player.posY = targetY;
           player.angle = targetAngle;
           player.isAnimating = false;
-          allButtons.forEach(b => b.disabled = false);
           updateHUD();
+
+          if (queuedAction) {
+            const next = queuedAction;
+            queuedAction = null;
+            if (next === 'UP') moveForward();
+            else if (next === 'DOWN') moveBackward();
+            else if (next === 'LEFT') rotateLeft();
+            else if (next === 'RIGHT') rotateRight();
+          }
         }
       }
       requestAnimationFrame(step);
     }
 
-    // ==============================================================
-    // v1 Video Player Engine
-    // ==============================================================
-    function getViewV1(spot, dir) {
-      if (dir === 'NORTH' || dir === 'SOUTH') return 'WALL_SIDE';
-      if (spot === 1 && dir === 'WEST') return 'WALL_START';
-      if (spot === 3 && dir === 'EAST') return 'WALL_END';
-      return 'CORRIDOR';
-    }
-
-    function playV1Clip(clipKey, nextSpot, nextDir) {
-      const clipData = v1Clips[clipKey];
-      if (!clipData) {
-        console.warn('Clip missing:', clipKey);
-        player.gridX = nextSpot;
-        player.dirIndex = DIRS.indexOf(nextDir);
-        player.angle = dirToAngle(player.dirIndex);
-        updateHUD();
+    function moveForward() {
+      if (player.isAnimating) {
+        queuedAction = 'UP';
         return;
       }
-
-      player.isAnimating = true;
-      allButtons.forEach(b => b.disabled = true);
-
-      gameVideo.src = clipData;
-      gameVideo.load();
-      gameVideo.currentTime = 0;
-      gameVideo.play();
-      gameVideo.onended = () => {
-        player.gridX = nextSpot;
-        player.dirIndex = DIRS.indexOf(nextDir);
-        player.angle = dirToAngle(player.dirIndex);
-        player.posX = player.gridX + 0.5;
-        player.posY = 1.5;
-        player.isAnimating = false;
-        allButtons.forEach(b => b.disabled = false);
-        updateHUD();
-      };
-    }
-
-    // ==============================================================
-    // Movement Handlers
-    // ==============================================================
-    function moveForward() {
-      if (player.isAnimating) return;
 
       if (activeMode !== 'v1_video') {
         const vec = DIR_VECS[player.dirIndex];
@@ -978,30 +1780,20 @@
 
         if (MAP[nextY] && MAP[nextY][nextX] === 0) {
           player.gridX = nextX;
+          player.gridY = nextY;
+          totalMoves++;
           animate3D(nextX + 0.5, nextY + 0.5, player.angle);
         } else {
-          if (player.dirIndex === 1 && player.gridX === 3) showBumpMessage("DEAD END - SOLID WALL AT SPOT 3");
-          else if (player.dirIndex === 3 && player.gridX === 1) showBumpMessage("DEAD END - START WALL AT SPOT 1");
-          else showBumpMessage(`FACING SIDE WALL (${DIRS[player.dirIndex]})`);
-        }
-      } else {
-        const facing = DIRS[player.dirIndex];
-        if (facing === 'EAST') {
-          if (player.gridX === 1) playV1Clip('1_to_2_east', 2, 'EAST');
-          else if (player.gridX === 2) playV1Clip('2_to_3_east', 3, 'EAST');
-          else showBumpMessage("DEAD END - SOLID WALL AT SPOT 3");
-        } else if (facing === 'WEST') {
-          if (player.gridX === 3) playV1Clip('2_to_3_east_reverse', 2, 'WEST');
-          else if (player.gridX === 2) playV1Clip('1_to_2_east_reverse', 1, 'WEST');
-          else showBumpMessage("DEAD END - START WALL AT SPOT 1");
-        } else {
-          showBumpMessage(`FACING SIDE WALL (${facing})`);
+          showBumpMessage(`SOLID WALL DIRECTLY AHEAD`);
         }
       }
     }
 
     function moveBackward() {
-      if (player.isAnimating) return;
+      if (player.isAnimating) {
+        queuedAction = 'DOWN';
+        return;
+      }
 
       if (activeMode !== 'v1_video') {
         const vec = DIR_VECS[player.dirIndex];
@@ -1010,78 +1802,46 @@
 
         if (MAP[nextY] && MAP[nextY][nextX] === 0) {
           player.gridX = nextX;
+          player.gridY = nextY;
+          totalMoves++;
           animate3D(nextX + 0.5, nextY + 0.5, player.angle);
         } else {
           showBumpMessage(`CANNOT MOVE BACKWARD`);
-        }
-      } else {
-        const facing = DIRS[player.dirIndex];
-        if (facing === 'EAST') {
-          if (player.gridX === 3) playV1Clip('2_to_3_east_reverse', 2, 'EAST');
-          else if (player.gridX === 2) playV1Clip('1_to_2_east_reverse', 1, 'EAST');
-          else showBumpMessage("BACKED AGAINST START WALL");
-        } else if (facing === 'WEST') {
-          if (player.gridX === 1) playV1Clip('1_to_2_east', 2, 'WEST');
-          else if (player.gridX === 2) playV1Clip('2_to_3_east', 3, 'WEST');
-          else showBumpMessage("BACKED AGAINST END WALL");
-        } else {
-          showBumpMessage(`FACING SIDE WALL (${facing})`);
         }
       }
     }
 
     function rotateLeft() {
-      if (player.isAnimating) return;
+      if (player.isAnimating) {
+        queuedAction = 'LEFT';
+        return;
+      }
 
       if (activeMode !== 'v1_video') {
         player.dirIndex = (player.dirIndex + 3) % 4;
         animate3D(player.posX, player.posY, player.angle - Math.PI / 2);
-      } else {
-        const curDir = DIRS[player.dirIndex];
-        const newDir = DIRS[(player.dirIndex + 3) % 4];
-        const vFrom = getViewV1(player.gridX, curDir);
-        const vTo = getViewV1(player.gridX, newDir);
-
-        if (!vFrom.startsWith('WALL') && vTo.startsWith('WALL')) {
-          playV1Clip('turn_corridor_to_wall_left', player.gridX, newDir);
-        } else if (vFrom.startsWith('WALL') && !vTo.startsWith('WALL')) {
-          playV1Clip('turn_wall_to_corridor_left', player.gridX, newDir);
-        } else {
-          playV1Clip('turn_wall_to_wall_left', player.gridX, newDir);
-        }
       }
     }
 
     function rotateRight() {
-      if (player.isAnimating) return;
+      if (player.isAnimating) {
+        queuedAction = 'RIGHT';
+        return;
+      }
 
       if (activeMode !== 'v1_video') {
         player.dirIndex = (player.dirIndex + 1) % 4;
         animate3D(player.posX, player.posY, player.angle + Math.PI / 2);
-      } else {
-        const curDir = DIRS[player.dirIndex];
-        const newDir = DIRS[(player.dirIndex + 1) % 4];
-        const vFrom = getViewV1(player.gridX, curDir);
-        const vTo = getViewV1(player.gridX, newDir);
-
-        if (!vFrom.startsWith('WALL') && vTo.startsWith('WALL')) {
-          playV1Clip('turn_corridor_to_wall_right', player.gridX, newDir);
-        } else if (vFrom.startsWith('WALL') && !vTo.startsWith('WALL')) {
-          playV1Clip('turn_wall_to_corridor_right', player.gridX, newDir);
-        } else {
-          playV1Clip('turn_wall_to_wall_right', player.gridX, newDir);
-        }
       }
     }
 
-    // Button Listeners
-    btnUp.addEventListener('click', moveForward);
-    btnDown.addEventListener('click', moveBackward);
-    btnLeft.addEventListener('click', rotateLeft);
-    btnRight.addEventListener('click', rotateRight);
+    btnUp.addEventListener('pointerdown', (e) => { e.preventDefault(); moveForward(); });
+    btnDown.addEventListener('pointerdown', (e) => { e.preventDefault(); moveBackward(); });
+    btnLeft.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateLeft(); });
+    btnRight.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateRight(); });
 
     window.addEventListener('keydown', (e) => {
-      if (screenGame.classList.contains('hidden') || player.isAnimating) return;
+      if (screenGame.classList.contains('hidden')) return;
 
       if (['ArrowUp', 'KeyW'].includes(e.code)) {
         e.preventDefault();
@@ -1098,22 +1858,21 @@
       }
     });
 
-    // ==============================================================
-    // CREATE Flow
-    // ==============================================================
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
+      currentThemeName = wallStyle;
       activeMode = modeSelect.value;
+      const numGrids = Math.max(10, Math.min(100, parseInt(gridCountInput.value) || 10));
 
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
+      if (titleButtons) titleButtons.classList.add('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
-      if (activeMode === 'v1_video') {
-        progSubText.textContent = 'Generating 8 frame-chained 1.5s AI video clips with MiniMax H3 (~1.5-2 mins)...';
-      } else {
-        progSubText.textContent = 'Generating Wall, Ceiling, and Floor textures with FLUX.1 [schnell] (~10s)...';
-      }
+      progSubText.textContent = `Generating ${numGrids}-grid authentic 3DMaze with FLUX.1 [schnell] (~10s)...`;
+
+      generateAuthentic3DMaze(numGrids);
+      buildDynamicExitSignTexture(wallStyle, wallTexture);
 
       const startTime = Date.now();
       progTimer.textContent = "0.0s";
@@ -1148,17 +1907,6 @@
               clearInterval(pollInterval);
               clearInterval(timerInterval);
 
-              // Reset to Spot 1 Facing East
-              player.gridX = 1;
-              player.gridY = 1;
-              player.dirIndex = 1;
-              player.posX = 1.5;
-              player.posY = 1.5;
-              player.angle = 0;
-              player.targetX = 1.5;
-              player.targetY = 1.5;
-              player.targetAngle = 0;
-
               if (activeMode === 'v1_video') {
                 v1Clips = p.completed_bundle.clips;
                 viewportCanvas.classList.add('hidden');
@@ -1175,12 +1923,14 @@
                 loadAiTextures(
                   b.wall_texture || b.texture_image,
                   b.ceiling_texture,
-                  b.floor_texture
+                  b.floor_texture,
+                  wallStyle
                 );
               }
 
               screenProgress.classList.add('hidden');
               screenGame.classList.remove('hidden');
+              if (titleButtons) titleButtons.classList.remove('hidden');
               appContainer.className = 'win95-box p-1 text-black mode-game';
               if (activeMode !== 'v1_video') render3D();
               updateHUD();
@@ -1190,6 +1940,7 @@
               alert("Error: " + p.error);
               screenProgress.classList.add('hidden');
               screenSetup.classList.remove('hidden');
+              if (titleButtons) titleButtons.classList.remove('hidden');
               appContainer.className = 'win95-box p-1 text-black mode-setup';
             }
           } catch(err) {
@@ -1202,10 +1953,13 @@
         alert('Server communication error. Make sure server.py is running!');
         screenProgress.classList.add('hidden');
         screenSetup.classList.remove('hidden');
+        if (titleButtons) titleButtons.classList.remove('hidden');
         appContainer.className = 'win95-box p-1 text-black mode-setup';
       }
     });
 
+    generateAuthentic3DMaze(10);
+    buildDynamicExitSignTexture("Windows 95", wallTexture);
     render3D();
     updateHUD();
   </script>

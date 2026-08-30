@@ -1,13 +1,12 @@
 """
 ComfyCrawler - Server & Engine
 A retro Windows 95 style 3D dungeon escape game powered by ComfyUI, FLUX.1 [schnell], and MiniMax H3.
-Supports:
-- v3 flux (Default): FLUX.1 [schnell] 4-step DiT with T5-XXL generating all 3 surfaces (Wall, Ceiling, Floor) + level 3D engine.
-- v2 texture: MiniMax H3 material texture synthesizer.
-- v1 video: 8 frame-chained 1.5s AI video clips with native reverse playback.
 """
 
+from PIL import Image
+import numpy as np
 import sys
+import re
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -49,34 +48,144 @@ gen_progress = {
     "error": None
 }
 
+
+def make_seamless_4way(img_path, blend_pixels=12):
+    """
+    Clean Narrow-Rim Seamless Blending:
+    Only blends a tiny 12-pixel margin (~4% outer rim),
+    keeping 92%+ of the image 100% sharp and crisp with ZERO central ghosting,
+    while ensuring the boundary (x=0 vs x=w-1, y=0 vs y=h-1) connects with 0.0 discontinuity.
+    """
+    try:
+        img = Image.open(img_path).convert("RGBA")
+        w, h = img.size
+        
+        # Crop 8px margin to strip any outer border artifacts
+        margin = 8
+        img_cropped = img.crop((margin, margin, w - margin, h - margin)).resize((w, h), Image.Resampling.LANCZOS)
+        arr = np.array(img_cropped).astype(np.float32)
+        res = arr.copy()
+        
+        bw = min(blend_pixels, w // 4)
+        bh = min(blend_pixels, h // 4)
+        
+        # 1. Horizontal Narrow-Rim Blend
+        for x in range(bw):
+            t = x / bw
+            alpha = t * t * (3 - 2 * t)
+            
+            v_left = arr[:, x, :]
+            v_right = arr[:, w - 1 - x, :]
+            mid = 0.5 * (v_left + v_right)
+            
+            res[:, x, :] = v_left * alpha + mid * (1.0 - alpha)
+            res[:, w - 1 - x, :] = v_right * alpha + mid * (1.0 - alpha)
+            
+        # 2. Vertical Narrow-Rim Blend
+        for y in range(bh):
+            t = y / bh
+            alpha = t * t * (3 - 2 * t)
+            
+            v_top = res[y, :, :]
+            v_bot = res[h - 1 - y, :, :]
+            mid = 0.5 * (v_top + v_bot)
+            
+            res[y, :, :] = v_top * alpha + mid * (1.0 - alpha)
+            res[h - 1 - y, :, :] = v_bot * alpha + mid * (1.0 - alpha)
+            
+        res_img = Image.fromarray(np.clip(res, 0, 255).astype(np.uint8))
+        res_img.save(img_path, format="PNG")
+        print(f"[Seamless] Clean narrow-rim blend applied to {os.path.basename(img_path)}")
+    except Exception as e:
+        print(f"[Seamless Error] {e}")
+
+
+def match_word(pattern, text):
+    """Accurate word-boundary matching so 'spider-man' or 'creepy' are never hijacked by 'man'."""
+    return bool(re.search(r'' + pattern + r'', text, re.IGNORECASE))
+
+
 def get_surface_prompts(wall_style):
-    """Automatically enhance and stylize short user inputs into vibrant, retro 90s textures for all 3 surfaces."""
+    """Generate authentic, flat, isotropic surface textures for Walls, Ceiling, and Floor."""
     ui = wall_style.strip().lower()
     
-    if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
-        wall_p = "Authentic Windows 95 3D maze screensaver wall texture, large chunky bold crimson red bricks with thick stark white mortar lines, clean repeating seamless 2D pattern, vibrant high saturation retro 90s low-poly CGI, flat straight-on view."
-        ceil_p = "Authentic Windows 95 acoustic drop ceiling tile texture, speckled mineral fiber surface with grey metal grid panel seams, flat straight-on view, retro 90s computer graphics."
-        floor_p = "Authentic Windows 95 golden amber woodgrain parquet floor texture, warm rich wood planks with wood grain striations and seams, flat straight-on view, retro 90s CGI."
+    # 1. Spider-Man / Superheroes
+    if any(k in ui for k in ['spider-man', 'spiderman', 'spider man', 'spider', 'superhero', 'batman', 'superman', 'iron man', 'marvel', 'dc']):
+        wall_p = f"A flat 2D game texture map of {wall_style} iconic superhero suit costume texture with bold red and dark blue mesh fabric, black webbing grid pattern, and superhero insignia, close-up flat orthographic front view, retro 90s comic book video game wall texture, zero horizon, zero sky, zero perspective, pure flat vertical material."
+        ceil_p = "A flat 2D game texture map of dark steel ceiling with glowing cyan and blue comic grid panels, directly overhead 90 degree top-down view."
+        floor_p = "A flat 2D game texture map of dark city rooftop asphalt with bold red spider-web line tiles, directly 90 degree bird's-eye top-down view, uniform flat floor material, zero horizon, pure flat ground terrain."
+
+    # 2. Creepy / Horror / Haunted
+    elif any(k in ui for k in ['creepy', 'horror', 'haunted', 'spooky', 'scary', 'gothic', 'dark', 'evil', 'bloody']):
+        wall_p = f"A flat 2D game texture map of dark weathered haunted dungeon stone wall with creeping black vines, ancient occult glyphs, and eerie glowing eyes peering from dark cracks, close-up flat orthographic front view, retro 90s horror video game wall texture, zero horizon, zero sky, pure flat vertical material."
+        ceil_p = "A flat 2D game texture map of ancient cracked dark stone ceiling covered with hanging black cobwebs, directly overhead 90 degree view."
+        floor_p = "A flat 2D game texture map of cracked dark tombstone flagstones with glowing eerie green slime in the cracks, directly 90 degree bird's-eye top-down view, uniform flat floor material, zero horizon, pure flat ground terrain."
+
+    # 3. Space / Galaxy / Stars (NEW)
+    elif any(k in ui for k in ['space', 'star', 'galaxy', 'universe', 'cosmos', 'moon', 'planet', 'alien', 'sci-fi', 'spaceship']):
+        wall_p = "A flat 2D game texture map of a sci-fi spaceship window looking out into deep black space filled with bright glowing stars, galaxies, and purple nebulas, thick metal window frame borders, retro 90s video game wall texture, zero horizon, pure vertical material."
+        ceil_p = "A flat 2D game texture map of a dark sci-fi spaceship ceiling with glowing blue and white light panels, directly overhead 90 degree view."
+        floor_p = "A flat 2D game texture map of dark metal spaceship deck floor grating with glowing cyan lights, directly 90 degree bird's-eye top-down view, flat terrain texture."
+
+    # 4. Windows 95
+    elif any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
+        wall_p = "Authentic Windows 95 3D maze screensaver wall texture, bold chunky crimson red bricks with thick stark white mortar lines, flat straight-on orthographic view, seamless repeating 2D pattern, retro 90s low-poly CGI, bright uniform lighting, zero shadows, no borders."
+        ceil_p = "Authentic Windows 95 acoustic drop ceiling tile texture, bright white and speckled grey mineral fiber surface with clean metal grid seams, flat straight-on view, seamless repeating 2D pattern, retro 90s computer graphics."
+        floor_p = "Authentic Windows 95 parquet wood floor texture, seamless repeating golden honey oak wood tiles with subtle woodgrain, directly 90 degree top-down view, uniform flat lighting, zero shadows, zero perspective, perfectly repeating 2D floor pattern."
     
-    elif any(k in ui for k in ['cyber', 'neon', 'cyberpunk', 'matrix', 'sci-fi', 'circuits']):
-        wall_p = "Retro 90s CGI sci-fi texture of glowing cyan and electric purple neon circuit panels, dark metal cyber grid, vibrant high saturation, clean repeating seamless 2D surface pattern, bold contrast, flat straight-on orthographic view."
-        ceil_p = "Retro 90s CGI sci-fi ceiling texture, dark steel metal plates with glowing neon conduit cables and vent grates, flat straight-on view, vibrant saturated cyan accents."
-        floor_p = "Retro 90s CGI cybernetic floor texture, dark hexagonal metal grid tiles with pulsing illuminated neon seam lines, flat straight-on view."
+    # 5. Forest / Nature / Jungle
+    elif any(k in ui for k in ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']):
+        wall_p = "A flat 2D game texture map of rough mossy tree bark and vertical redwood trunk surface, close-up flat orthographic front view, retro 90s video game wall texture, zero horizon, zero sky, zero perspective, pure flat vertical material."
+        ceil_p = "A flat 2D game texture map of dense fine-grained green leafy foliage and pine canopy, directly 90 degree overhead view looking straight up, seamless tileable canopy, zero trunks."
+        floor_p = "A flat 2D game texture map of dense fine-grained mossy ground cover, uniform rich dark earth covered evenly with seamless small green moss patches and tiny pine needles, fine-grained isotropic texture, directly 90 degree bird's-eye top-down view, uniform repeating ground surface, zero large focal objects, zero trees, zero sky, zero horizon, zero perspective, flat albedo terrain map."
+
+    # 6. Tacos / Mexican / Food
+    elif any(k in ui for k in ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']):
+        wall_p = "A flat 2D wallpaper texture of crispy golden corn taco shells filled with seasoned meat, diced tomatoes, lettuce, and shredded cheese, colorful repeating 90s video game graphic pattern, flat 2D orthographic view, no room, no borders."
+        ceil_p = "A flat 2D acoustic drop ceiling texture with warm golden corn tortilla grid panels, directly overhead 90 degree top-down view."
+        floor_p = "A flat 2D game texture map of toasted warm corn meal and golden crushed tortilla chip crumbs ground terrain, directly 90 degree bird's-eye top-down view, uniform flat ground material, zero large objects, pure flat terrain."
+
+    # 7. Women / Ladies (Exact word boundaries)
+    elif match_word('ladies', ui) or match_word('lady', ui) or match_word('women', ui) or match_word('woman', ui) or match_word('girls', ui) or match_word('girl', ui):
+        wall_p = "A flat 2D pop-art wallpaper texture filled with dense repeating colorful comic book character portraits and faces of women, colorful 90s video game graphic collage, flat 2D repeating pattern, bright saturated colors, no text, no magazines, no room, no borders, clean repeating wallpaper."
+        ceil_p = "A flat 2D drop ceiling tile texture with purple and gold geometric grid lines, directly overhead 90 degree top-down view, clean repeating square tiles."
+        floor_p = "A flat 2D game texture map of magenta and purple checkered velvet carpet floor tiles with gold diamond geometric pattern, directly 90 degree bird's-eye top-down view, clean flat floor material, zero people on floor, zero standing figures, zero horizon, pure flat floor texture."
     
-    elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient']):
-        wall_p = "Retro 90s CGI dungeon wall texture, weathered grey castle stone blocks with vibrant lush green moss patches in cracks, clean repeating seamless 2D pattern, high saturation, sharp lighting, flat straight-on orthographic view."
-        ceil_p = "Retro 90s CGI dungeon ceiling texture, rough ancient dark stone vault slabs with green moss patches, flat straight-on view."
-        floor_p = "Retro 90s CGI dungeon floor texture, uneven weathered grey flagstone cobblestones with dirt seams, flat straight-on view."
+    # 8. People / Characters (Exact word boundaries)
+    elif match_word('people', ui) or match_word('person', ui) or match_word('crowd', ui) or match_word('characters', ui) or match_word('men', ui) or match_word('man', ui) or match_word('guys', ui):
+        wall_p = "Retro 90s video game wallpaper texture filled with a dense crowd of colorful illustrated comic book character portraits and faces, vibrant pop-art character collage, flat 2D repeating pattern, bright saturated colors, no text, no room, no borders."
+        ceil_p = "Retro 90s gaming acoustic drop ceiling tile texture with blue and white grid panels, flat overhead view."
+        floor_p = "Retro 90s video game floor texture, rich navy blue and cobalt checkered carpet floor tiles with gold seams, directly 90 degree top-down view, clean flat floor material, zero people on floor."
+
+    # 9. Cyber / Neon
+    elif any(k in ui for k in ['cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
+        wall_p = "A flat 2D texture map of dark metal cyber panels with glowing cyan and electric purple neon circuit conduits, flat orthographic front view, zero perspective."
+        ceil_p = "A flat 2D texture map of dark steel ceiling plates with illuminated cyan neon grates, directly overhead 90 degree view."
+        floor_p = "A flat 2D texture map of dark hexagonal metal floor tiles with pulsing cyan neon seams, directly 90 degree bird's-eye top-down view, zero horizon, zero perspective, pure flat floor material."
     
-    elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake']):
-        wall_p = "Retro 90s CGI candy wall texture, vibrant red and white peppermint candy cane stripes and gingerbread cookie pattern with white royal icing, bold saturated colors, seamless repeating 2D surface pattern, flat straight-on view."
-        ceil_p = "Retro 90s CGI candy ceiling texture, fluffy pastel pink cotton candy and marshmallow cloud pattern with rainbow sprinkles, flat straight-on view."
-        floor_p = "Retro 90s CGI candy floor texture, rich chocolate cookie crumb tiles with glazed caramel syrup seams, flat straight-on view."
+    # 10. Moss / Castle / Stone
+    elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
+        wall_p = "A flat 2D texture map of weathered grey dungeon castle stone blocks with green moss in mortar cracks, flat orthographic front view, zero perspective."
+        ceil_p = "A flat 2D texture map of ancient dark stone ceiling slabs with green moss patches, directly overhead 90 degree view."
+        floor_p = "A flat 2D texture map of weathered grey cobblestone flagstones with dirt seams, directly 90 degree bird's-eye top-down view, zero walls, zero sky, zero horizon, pure flat ground texture."
     
+    # 11. Candy / Sweets
+    elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']):
+        wall_p = "A flat 2D wallpaper texture of red and white peppermint candy cane stripes and gingerbread cookie pattern with white icing, bold saturated colors, flat straight-on view, zero perspective."
+        ceil_p = "A flat 2D texture of pastel pink cotton candy and marshmallow clouds with rainbow sprinkles, directly overhead 90 degree view."
+        floor_p = "A flat 2D texture map of dark chocolate cookie crumb ground tiles with caramel glaze seams, directly 90 degree bird's-eye top-down view, zero horizon, pure flat ground material."
+    
+    # 12. Cats / Animals
+    elif any(k in ui for k in ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']):
+        wall_p = f"Retro 90s video game wallpaper texture filled with a dense crowd of colorful illustrated cute {wall_style} faces, vibrant colorful pop-art pattern, flat 2D repeating wallpaper, no text, no room, no borders."
+        ceil_p = f"Retro 90s acoustic ceiling tiles with subtle cream and white paw print motifs, directly overhead 90 degree view."
+        floor_p = f"Retro 90s warm honey oak wood parquet floor tiles with subtle cute paw prints, directly 90 degree bird's-eye top-down view, uniform flat lighting, zero 3D figures on floor."
+
+    # 13. Universal Custom Style Handler (Fixed Ceiling!)
     else:
-        wall_p = f"Retro 90s CGI gaming texture of {wall_style} walls, vibrant bold saturated colors, high-contrast clean repeating seamless 2D surface pattern, authentic 1995 computer graphics aesthetic, flat straight-on orthographic view."
-        ceil_p = f"Retro 90s CGI gaming ceiling texture matching {wall_style}, clean repeating seamless 2D surface pattern, flat straight-on view."
-        floor_p = f"Retro 90s CGI gaming floor ground texture matching {wall_style}, clean repeating seamless 2D surface pattern, flat straight-on view."
+        wall_p = f"A flat 2D vertical wall surface texture of {wall_style}, close-up flat orthographic front view, vibrant retro 90s video game wallpaper material, zero horizon, zero sky, zero landscape, pure flat vertical wall material."
+        ceil_p = f"A flat 2D overhead sky canopy or ceiling texture themed after {wall_style}, clean flat 90 degree top-down overhead view, zero walls, zero ground, zero horizon, pure tileable overhead material."
+        floor_p = f"A flat 2D top-down fine-grained ground terrain floor texture themed after {wall_style}, close-up flat 90 degree bird's-eye view of the ground surface, uniform macro ground material, zero large focal objects, zero standing trees, zero people, zero horizon, zero sky, pure flat ground terrain material."
     
     return wall_p, ceil_p, floor_p
 
@@ -88,6 +197,7 @@ def generate_flux_trio_textures(wall_style):
     prefix_f = f"trio_f_{int(time.time()*1000)}"
     
     wall_p, ceil_p, floor_p = get_surface_prompts(wall_style)
+    print(f"[FLUX Prompts]\n Wall: {wall_p}\n Ceil: {ceil_p}\n Floor: {floor_p}")
     
     prompt_payload = {
         "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
@@ -142,6 +252,9 @@ def generate_flux_trio_textures(wall_style):
                     c_path = os.path.join(COMFY_OUTPUT_DIR, c_sub, c_img)
                     f_path = os.path.join(COMFY_OUTPUT_DIR, f_sub, f_img)
                     
+                    make_seamless_4way(w_path, blend_pixels=12)
+                    make_seamless_4way(c_path, blend_pixels=12)
+                    make_seamless_4way(f_path, blend_pixels=12)
                     return w_path, c_path, f_path
                     
     raise TimeoutError("FLUX.1 Trio generation timed out.")
@@ -193,272 +306,6 @@ def run_batch_v3_flux(wall_style):
         gen_progress["is_generating"] = False
 
 
-def generate_video_comfy(prompt_text, initial_image_path=None, duration=1.5, steps=8, fps=16):
-    prefix = f"crawler_{int(time.time()*1000)}"
-    prompt_payload = {
-        "105:6": {"inputs": {"unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"}, "class_type": "UNETLoader"},
-        "105:119": {"inputs": {"sage_attention": "sageattn_qk_int8_pv_fp16_cuda", "allow_compile": False, "model": ["105:6", 0]}, "class_type": "PathchSageAttentionKJ"},
-        "105:13": {"inputs": {"clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "type": "minimax", "device": "default"}, "class_type": "CLIPLoader"},
-        "105:11": {"inputs": {"vae_name": "minimax_h3_video_vae_fp16.safetensors"}, "class_type": "VAELoader"},
-        "105:24": {"inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}, "class_type": "VAELoader"},
-        "105:15": {"inputs": {"noise_seed": random.randint(1, 1000000000000)}, "class_type": "RandomNoise"},
-        "105:17": {"inputs": {"sampler_name": "res_multistep"}, "class_type": "KSamplerSelect"},
-        "105:9": {"inputs": {"scheduler": "simple", "steps": steps, "denoise": 1.0, "model": ["105:6", 0]}, "class_type": "BasicScheduler"},
-        "105:111": {"inputs": {"value": duration}, "class_type": "PrimitiveFloat"},
-        "105:107": {"inputs": {"expression": f"max(5, round(a * {fps})) + (5 - (max(5, round(a * {fps})) % 17)) % 17", "values.a": ["105:111", 0]}, "class_type": "ComfyMathExpression"},
-        "115": {"inputs": {"aspect_ratio": "4:3 (Standard)", "megapixels": 0.1, "multiple": 32}, "class_type": "ResolutionSelector"},
-        "105:104": {"inputs": {"prompt": prompt_text, "clip": ["105:13", 0], "vae": ["105:11", 0], "width": ["115", 0], "height": ["115", 1], "length": ["105:107", 1]}, "class_type": "MiniMaxH3ImageToVideo"},
-        "105:16": {"inputs": {"model": ["105:119", 0], "conditioning": ["105:104", 0]}, "class_type": "BasicGuider"},
-        "105:14": {"inputs": {"noise": ["105:15", 0], "guider": ["105:16", 0], "sampler": ["105:17", 0], "sigmas": ["105:9", 0], "latent_image": ["105:104", 1]}, "class_type": "SamplerCustomAdvanced"},
-        "105:10": {"inputs": {"samples": ["105:14", 0], "vae": ["105:11", 0]}, "class_type": "VAEDecode"},
-        "105:23": {"inputs": {"samples": ["105:14", 0], "vae": ["105:24", 0]}, "class_type": "VAEDecodeAudio"},
-        "105:120": {"inputs": {"images": ["105:10", 0], "resize_type": "scale by multiplier", "resize_type.scale": 2.0, "quality": "ULTRA"}, "class_type": "RTXVideoSuperResolution"},
-        "105:91": {"inputs": {"fps": float(fps), "bit_depth": 8, "color_space": "sRGB", "images": ["105:120", 0], "audio": ["105:23", 0]}, "class_type": "CreateVideo"},
-        "92": {"inputs": {"filename_prefix": f"video/{prefix}", "format": "auto", "format.codec": "auto", "video": ["105:91", 0]}, "class_type": "SaveVideo"}
-    }
-    if initial_image_path and os.path.exists(initial_image_path):
-        input_img_name = f"anchor_{int(time.time()*1000)}.png"
-        shutil.copy2(initial_image_path, os.path.join(COMFY_INPUT_DIR, input_img_name))
-        prompt_payload["load_img"] = {"inputs": {"image": input_img_name}, "class_type": "LoadImage"}
-        prompt_payload["105:104"]["inputs"]["first_frame"] = ["load_img", 0]
-
-    data = json.dumps({"prompt": prompt_payload}).encode("utf-8")
-    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req) as resp:
-        res_json = json.loads(resp.read().decode("utf-8"))
-        prompt_id = res_json["prompt_id"]
-
-    start_time = time.time()
-    while time.time() - start_time < 300:
-        time.sleep(0.6)
-        hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
-        with urllib.request.urlopen(hist_req) as h_resp:
-            hist_data = json.loads(h_resp.read().decode("utf-8"))
-            if prompt_id in hist_data:
-                outputs = hist_data[prompt_id].get("outputs", {})
-                if "92" in outputs:
-                    imgs = outputs["92"].get("images", [])
-                    if imgs:
-                        fname = imgs[0]["filename"]
-                        subf = imgs[0].get("subfolder", "video")
-                        full_path = os.path.join(COMFY_OUTPUT_DIR, subf, fname)
-                        if os.path.exists(full_path):
-                            return full_path
-    raise TimeoutError("ComfyUI generation timed out.")
-
-
-def run_batch_v2_texture(wall_style):
-    global gen_progress
-    gen_progress["is_generating"] = True
-    gen_progress["completed_bundle"] = None
-    gen_progress["error"] = None
-    gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 2
-
-    session_id = f"v2_{int(time.time())}"
-    session_dir = os.path.join(SESSIONS_DIR, session_id)
-    os.makedirs(session_dir, exist_ok=True)
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-    try:
-        gen_progress["current_step"] = 1
-        gen_progress["status_message"] = "Synthesizing Material Texture with MiniMax H3..."
-        gen_progress["percent"] = 40
-
-        prompt = f"Windows 95 3D maze screensaver retro aesthetic, close-up texture view of {wall_style}, clean repeating pattern, textured stone ceiling above, yellow carpet floor below, sharp retro 90s CGI lighting, level perspective."
-        video_path = generate_video_comfy(prompt_text=prompt, initial_image_path=None, duration=1.0, steps=8, fps=16)
-        
-        target_video = os.path.join(session_dir, "style_material.mp4")
-        shutil.copy2(video_path, target_video)
-
-        gen_progress["current_step"] = 2
-        gen_progress["status_message"] = "Extracting High-Res Texture Frames..."
-        gen_progress["percent"] = 80
-
-        tex_png = os.path.join(session_dir, "wall_texture.png")
-        subprocess.run([ffmpeg_exe, "-y", "-i", target_video, "-vframes", "1", tex_png], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        tex_b64 = ""
-        if os.path.exists(tex_png):
-            with open(tex_png, "rb") as tf:
-                tex_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
-
-        gen_progress["percent"] = 100
-        gen_progress["status_message"] = "v2 Texture Ready!"
-        gen_progress["completed_bundle"] = {
-            "mode": "v2_texture",
-            "wall_style": wall_style,
-            "wall_texture": tex_b64
-        }
-
-    except Exception as e:
-        print(f"[v2 Error] {e}")
-        gen_progress["error"] = str(e)
-    finally:
-        gen_progress["is_generating"] = False
-
-
-def extract_frame(video_path, output_png_path, is_end_frame=True):
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    if is_end_frame:
-        subprocess.run([ffmpeg_exe, "-y", "-sseof", "-0.08", "-i", video_path, "-vframes", "1", output_png_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        subprocess.run([ffmpeg_exe, "-y", "-i", video_path, "-vframes", "1", output_png_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def create_reverse_video(input_video_path, output_video_path):
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    subprocess.run([ffmpeg_exe, "-y", "-i", input_video_path, "-vf", "reverse", output_video_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def run_batch_v1_video(wall_style):
-    global gen_progress
-    gen_progress["is_generating"] = True
-    gen_progress["completed_bundle"] = None
-    gen_progress["error"] = None
-    gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 8
-
-    session_id = f"v1_{int(time.time())}"
-    session_dir = os.path.join(SESSIONS_DIR, session_id)
-    os.makedirs(session_dir, exist_ok=True)
-
-    base_style = f"Windows 95 3D maze screensaver retro aesthetic, {wall_style}, textured ceiling, matching floor, 90s low-poly CGI computer graphics look, sharp lighting, steady camera."
-
-    clips_data = {}
-    initial_image_b64 = ""
-
-    frame_spot1_east = os.path.join(session_dir, "frame_spot1_east.png")
-    frame_spot2_east = os.path.join(session_dir, "frame_spot2_east.png")
-    frame_spot3_deadend = os.path.join(session_dir, "frame_spot3_deadend.png")
-    frame_wall_left = os.path.join(session_dir, "frame_wall_left.png")
-    frame_wall_right = os.path.join(session_dir, "frame_wall_right.png")
-
-    try:
-        gen_progress["current_step"] = 1
-        gen_progress["status_message"] = "Clip 1/8: Forward Spot 1 -> Spot 2..."
-        gen_progress["percent"] = 12
-        p1 = f"First-person POV camera moving forward smoothly down the center of the straight hallway from spot 1 to spot 2. {base_style}"
-        v1 = generate_video_comfy(prompt_text=p1, initial_image_path=None, duration=1.5, steps=8, fps=16)
-        v1_dst = os.path.join(session_dir, "1_to_2_east.mp4")
-        shutil.copy2(v1, v1_dst)
-
-        extract_frame(v1_dst, frame_spot1_east, is_end_frame=False)
-        extract_frame(v1_dst, frame_spot2_east, is_end_frame=True)
-
-        if os.path.exists(frame_spot1_east):
-            with open(frame_spot1_east, "rb") as sf:
-                initial_image_b64 = f"data:image/png;base64,{base64.b64encode(sf.read()).decode('utf-8')}"
-
-        v1_rev = os.path.join(session_dir, "1_to_2_east_reverse.mp4")
-        create_reverse_video(v1_dst, v1_rev)
-
-        with open(v1_dst, "rb") as vf:
-            clips_data["1_to_2_east"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-        with open(v1_rev, "rb") as vf:
-            clips_data["1_to_2_east_reverse"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 2
-        gen_progress["status_message"] = "Clip 2/8: Forward Spot 2 -> Spot 3..."
-        gen_progress["percent"] = 25
-        p2 = f"First-person POV camera moving forward down the hallway from spot 2 and stopping directly in front of the flat solid dead-end wall at spot 3. {base_style}"
-        v2 = generate_video_comfy(prompt_text=p2, initial_image_path=frame_spot2_east, duration=1.5, steps=8, fps=16)
-        v2_dst = os.path.join(session_dir, "2_to_3_east.mp4")
-        shutil.copy2(v2, v2_dst)
-        extract_frame(v2_dst, frame_spot3_deadend, is_end_frame=True)
-
-        v2_rev = os.path.join(session_dir, "2_to_3_east_reverse.mp4")
-        create_reverse_video(v2_dst, v2_rev)
-
-        with open(v2_dst, "rb") as vf:
-            clips_data["2_to_3_east"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-        with open(v2_rev, "rb") as vf:
-            clips_data["2_to_3_east_reverse"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 3
-        gen_progress["status_message"] = "Clip 3/8: 90° Turn LEFT to Side Wall..."
-        gen_progress["percent"] = 38
-        p3 = f"First-person POV camera smoothly rotating 90 degrees to the left in place to face flat directly against the solid close side wall. {base_style}"
-        v3 = generate_video_comfy(prompt_text=p3, initial_image_path=frame_spot2_east, duration=1.5, steps=8, fps=16)
-        v3_dst = os.path.join(session_dir, "turn_corridor_to_wall_left.mp4")
-        shutil.copy2(v3, v3_dst)
-        extract_frame(v3_dst, frame_wall_left, is_end_frame=True)
-
-        with open(v3_dst, "rb") as vf:
-            clips_data["turn_corridor_to_wall_left"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 4
-        gen_progress["status_message"] = "Clip 4/8: 90° Turn RIGHT to Side Wall..."
-        gen_progress["percent"] = 50
-        p4 = f"First-person POV camera smoothly rotating 90 degrees to the right in place to face flat directly against the solid close side wall. {base_style}"
-        v4 = generate_video_comfy(prompt_text=p4, initial_image_path=frame_spot2_east, duration=1.5, steps=8, fps=16)
-        v4_dst = os.path.join(session_dir, "turn_corridor_to_wall_right.mp4")
-        shutil.copy2(v4, v4_dst)
-        extract_frame(v4_dst, frame_wall_right, is_end_frame=True)
-
-        with open(v4_dst, "rb") as vf:
-            clips_data["turn_corridor_to_wall_right"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 5
-        gen_progress["status_message"] = "Clip 5/8: 90° Turn LEFT to Corridor..."
-        gen_progress["percent"] = 62
-        p5 = f"First-person POV camera smoothly rotating 90 degrees to the left in place to reveal the open straight corridor. {base_style}"
-        v5 = generate_video_comfy(prompt_text=p5, initial_image_path=frame_wall_right, duration=1.5, steps=8, fps=16)
-        v5_dst = os.path.join(session_dir, "turn_wall_to_corridor_left.mp4")
-        shutil.copy2(v5, v5_dst)
-
-        with open(v5_dst, "rb") as vf:
-            clips_data["turn_wall_to_corridor_left"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 6
-        gen_progress["status_message"] = "Clip 6/8: 90° Turn RIGHT to Corridor..."
-        gen_progress["percent"] = 75
-        p6 = f"First-person POV camera smoothly rotating 90 degrees to the right in place to reveal the open straight corridor. {base_style}"
-        v6 = generate_video_comfy(prompt_text=p6, initial_image_path=frame_wall_left, duration=1.5, steps=8, fps=16)
-        v6_dst = os.path.join(session_dir, "turn_wall_to_corridor_right.mp4")
-        shutil.copy2(v6, v6_dst)
-
-        with open(v6_dst, "rb") as vf:
-            clips_data["turn_wall_to_corridor_right"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 7
-        gen_progress["status_message"] = "Clip 7/8: 90° Corner Turn LEFT..."
-        gen_progress["percent"] = 87
-        p7 = f"First-person POV camera smoothly rotating 90 degrees to the left in a corner between two solid walls. {base_style}"
-        v7 = generate_video_comfy(prompt_text=p7, initial_image_path=frame_wall_right, duration=1.5, steps=8, fps=16)
-        v7_dst = os.path.join(session_dir, "turn_wall_to_wall_left.mp4")
-        shutil.copy2(v7, v7_dst)
-
-        with open(v7_dst, "rb") as vf:
-            clips_data["turn_wall_to_wall_left"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["current_step"] = 8
-        gen_progress["status_message"] = "Clip 8/8: 90° Corner Turn RIGHT..."
-        gen_progress["percent"] = 97
-        p8 = f"First-person POV camera smoothly rotating 90 degrees to the right in a corner between two solid walls. {base_style}"
-        v8 = generate_video_comfy(prompt_text=p8, initial_image_path=frame_wall_left, duration=1.5, steps=8, fps=16)
-        v8_dst = os.path.join(session_dir, "turn_wall_to_wall_right.mp4")
-        shutil.copy2(v8, v8_dst)
-
-        with open(v8_dst, "rb") as vf:
-            clips_data["turn_wall_to_wall_right"] = f"data:video/mp4;base64,{base64.b64encode(vf.read()).decode('utf-8')}"
-
-        gen_progress["percent"] = 100
-        gen_progress["status_message"] = "v1 Video Generation Complete!"
-        gen_progress["completed_bundle"] = {
-            "mode": "v1_video",
-            "wall_style": wall_style,
-            "clips": clips_data,
-            "initial_image": initial_image_b64
-        }
-
-    except Exception as e:
-        print(f"[v1 Error] {e}")
-        gen_progress["error"] = str(e)
-    finally:
-        gen_progress["is_generating"] = False
-
-
 class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/progress":
@@ -493,12 +340,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             mode = data.get("mode", "v3_flux")
 
             if not gen_progress["is_generating"]:
-                if mode == "v1_video":
-                    t = threading.Thread(target=run_batch_v1_video, args=(wall_style,), daemon=True)
-                elif mode == "v2_texture":
-                    t = threading.Thread(target=run_batch_v2_texture, args=(wall_style,), daemon=True)
-                else:
-                    t = threading.Thread(target=run_batch_v3_flux, args=(wall_style,), daemon=True)
+                t = threading.Thread(target=run_batch_v3_flux, args=(wall_style,), daemon=True)
                 t.start()
 
             self.send_response(200)
