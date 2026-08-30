@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Windows 95 3D Dungeon Escape [v1 Video & v2 Texture Edition]</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    .win95-box {
+      background: #c0c0c0;
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+      box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+    }
+    .win95-inset {
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+      background: #000;
+    }
+    .win95-btn {
+      background: #c0c0c0;
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+      box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+      font-family: 'MS Sans Serif', Tahoma, sans-serif;
+      font-weight: bold;
+      cursor: pointer;
+      user-select: none;
+    }
+    .win95-btn:active:not(:disabled) {
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+      padding-top: 2px;
+      padding-left: 2px;
+    }
+    .win95-btn:disabled {
+      color: #808080;
+      text-shadow: 1px 1px 0 #ffffff;
+      cursor: not-allowed;
+    }
+    .win95-title {
+      background: linear-gradient(90deg, #000080, #1084d0);
+      color: white;
+      font-family: 'MS Sans Serif', Tahoma, sans-serif;
+      font-size: 13px;
+      font-weight: bold;
+      padding: 3px 6px;
+    }
+    .win95-input {
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+      background: #ffffff;
+      color: #000000;
+      padding: 4px 8px;
+      font-family: 'MS Sans Serif', Tahoma, monospace;
+      outline: none;
+    }
+    .win95-prog-chunk {
+      background: #000080;
+      width: 10px;
+      height: 100%;
+      margin-right: 2px;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="max-w-3xl mx-auto win95-box p-1 text-black font-mono">
+    
+    <!-- Title Bar -->
+    <div class="win95-title flex items-center justify-between mb-2">
+      <div class="flex items-center gap-2">
+        <span class="text-yellow-300">🏰</span>
+        <span>Windows 95 3D Dungeon Escape [Dual Mode Edition]</span>
+      </div>
+      <div class="flex gap-1 text-xs">
+        <button class="win95-btn px-1.5 py-0.5 text-black">_</button>
+        <button class="win95-btn px-1.5 py-0.5 text-black">□</button>
+        <button class="win95-btn px-1.5 py-0.5 text-black">✕</button>
+      </div>
+    </div>
+
+    <!-- SCREEN 1: Questionnaire / Dungeon Setup -->
+    <div id="screenSetup" class="p-4 flex flex-col gap-4">
+      <div class="win95-box p-4 flex flex-col gap-3">
+        <div class="flex items-center gap-3">
+          <span class="text-3xl">🧙‍♂️</span>
+          <div>
+            <h2 class="font-bold text-sm font-sans text-slate-900">Dungeon Creation Wizard</h2>
+            <p class="text-xs text-slate-700 font-sans">Choose your engine mode and customize the dungeon walls below.</p>
+          </div>
+        </div>
+
+        <hr class="border-t border-gray-400 border-b border-white my-1">
+
+        <!-- Mode Dropdown Selector -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-bold font-sans text-slate-800">
+            Select Engine Version:
+          </label>
+          <select id="modeSelect" class="win95-input w-full text-xs font-sans font-bold cursor-pointer">
+            <option value="v1_video">v1 video (8 Pre-Rendered 1.5s AI Video Clips)</option>
+            <option value="v2_texture" selected>v2 texture (1.0s Fast AI Texture + 3D Engine)</option>
+          </select>
+          <div id="modeDesc" class="text-[10px] text-blue-900 font-sans mt-0.5">
+            <strong>v2 texture:</strong> Generates 1 high-res AI material texture in ~10s and renders with snappy 1.0s zero-slant 3D camera transitions.
+          </div>
+        </div>
+
+        <!-- Question Prompt -->
+        <div class="flex flex-col gap-1.5 mt-2">
+          <label class="text-xs font-bold font-sans text-slate-800">
+            The walls of the dungeon look like:
+          </label>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-600 font-sans font-bold">"</span>
+            <input 
+              type="text" 
+              id="wallPromptInput" 
+              class="win95-input w-full text-xs font-sans font-bold" 
+              value="classic Windows 95 red brick walls with white mortar and textured stone" 
+              placeholder="e.g. glowing blue cyber circuits / ancient mossy green stone / candy cane gingerbread"
+            />
+            <span class="text-xs text-slate-600 font-sans font-bold">"</span>
+          </div>
+          <div class="flex gap-1.5 mt-1 flex-wrap">
+            <span class="text-[10px] text-slate-500 font-sans">Quick presets:</span>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="classic Windows 95 red brick walls with white mortar">🧱 Win95 Brick</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="retro windows 98 wallpaper with yellow carpet">💻 Win98 Yellow</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="futuristic glowing neon cyan sci-fi cybernetic panel walls">⚡ Cyber Neon</button>
+            <button class="text-[10px] bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 border border-slate-400 rounded preset-btn font-sans" data-val="ancient mossy weathered stone dungeon blocks with flickering torches">🏰 Mossy Stone</button>
+          </div>
+        </div>
+
+        <div class="flex justify-end mt-3">
+          <button id="btnCreate" class="win95-btn px-6 py-2 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200">
+            <span>✨</span>
+            <span>CREATE</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN 2: Pre-Generation Progress Screen -->
+    <div id="screenProgress" class="p-6 flex flex-col items-center justify-center gap-4 hidden">
+      <div class="win95-box p-5 w-full max-w-md flex flex-col gap-3">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-xs font-sans flex items-center gap-2">
+            <span class="animate-spin">⏳</span>
+            <span>Generating Dungeon Assets...</span>
+          </span>
+          <span id="progTimer" class="font-mono text-xs font-bold text-blue-800">0.0s</span>
+        </div>
+
+        <div class="win95-inset h-5 p-0.5 flex items-center overflow-hidden bg-slate-900">
+          <div id="progBarChunks" class="h-full flex items-center w-0 transition-all duration-300"></div>
+        </div>
+
+        <div class="flex justify-between items-center text-[11px] font-sans text-slate-700">
+          <span id="progStatusText">Initializing generator...</span>
+          <strong id="progPercentText">0%</strong>
+        </div>
+
+        <div id="progSubText" class="text-[10px] text-slate-500 font-sans text-center mt-1 border-t border-slate-300 pt-2">
+          Generating with ComfyUI MiniMax H3.
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN 3: Instant Interactive Game Play Screen -->
+    <div id="screenGame" class="p-1 hidden">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        
+        <!-- Viewport Column (2 cols wide) -->
+        <div class="md:col-span-2 flex flex-col gap-2">
+          <div class="win95-inset relative aspect-[4/3] flex items-center justify-center overflow-hidden bg-black">
+            
+            <!-- v2 3D Canvas Viewport -->
+            <canvas id="viewportCanvas" width="320" height="240" class="w-full h-full object-contain image-rendering-pixelated"></canvas>
+
+            <!-- v1 FMV Video Player Element -->
+            <video id="gameVideo" playsinline class="w-full h-full object-contain image-rendering-pixelated hidden">
+              <source id="videoSource" src="" type="video/mp4">
+            </video>
+
+            <!-- Dynamic HUD Overlay -->
+            <div class="absolute top-2 left-2 bg-black/80 text-green-400 font-mono text-xs px-2.5 py-1.5 rounded border border-green-500/40">
+              SPOT: <span id="hudSpot" class="font-bold text-yellow-300">1</span> | FACING: <span id="hudFacing" class="font-bold text-yellow-300">EAST</span>
+            </div>
+
+            <!-- Wall Bump / Alert Banner -->
+            <div id="bumpBanner" class="absolute inset-x-0 bottom-4 mx-auto w-max bg-red-700/90 text-white font-mono text-xs px-3 py-1 rounded shadow-lg border border-red-400 hidden animate-bounce">
+              🚫 SOLID WALL DIRECTLY AHEAD
+            </div>
+          </div>
+
+          <!-- Status Bar -->
+          <div class="win95-box p-1 text-xs flex justify-between items-center text-slate-800 font-sans">
+            <span>Location: <strong id="statusPos">Spot 1 [1] (Facing EAST)</strong></span>
+            <span>Engine: <strong id="statusEngine" class="text-blue-800">v2 texture</strong></span>
+          </div>
+        </div>
+
+        <!-- Controls & 3-Space Minimap Column (1 col wide) -->
+        <div class="flex flex-col gap-3">
+          
+          <!-- 3-Space Minimap -->
+          <div class="win95-box p-2">
+            <div class="text-xs font-bold font-sans mb-1 text-slate-700">3-SPACE DUNGEON MAP:</div>
+            <div class="win95-inset p-2 flex items-center justify-center bg-zinc-900">
+              <canvas id="minimapCanvas" width="180" height="70" class="w-full h-auto"></canvas>
+            </div>
+            <div class="text-[10px] text-slate-600 mt-1 font-sans text-center">
+              Corridor Layout: [ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]
+            </div>
+          </div>
+
+          <!-- Directional D-Pad Controls -->
+          <div class="win95-box p-2 flex flex-col items-center">
+            <div class="text-xs font-bold font-sans mb-2 text-slate-700">CONTROLS:</div>
+            
+            <div class="grid grid-cols-3 gap-1.5 w-36">
+              <div></div>
+              <button id="btnUp" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Move Forward (W / Up)">
+                ▲
+              </button>
+              <div></div>
+              
+              <button id="btnLeft" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Rotate Left 90° (A / Left)">
+                ◀
+              </button>
+              <button id="btnDown" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Move Backward (S / Down)">
+                ▼
+              </button>
+              <button id="btnRight" class="win95-btn py-2 text-center text-base flex items-center justify-center" title="Rotate Right 90° (D / Right)">
+                ▶
+              </button>
+            </div>
+
+            <button id="btnNewDungeon" class="win95-btn mt-3 w-full py-1 text-xs font-sans flex items-center justify-center gap-1">
+              <span>🔄</span>
+              <span>Create New Dungeon</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const SERVER_URL = "http://127.0.0.1:5555";
+
+    // Screens
+    const screenSetup = document.getElementById('screenSetup');
+    const screenProgress = document.getElementById('screenProgress');
+    const screenGame = document.getElementById('screenGame');
+
+    // UI Elements
+    const modeSelect = document.getElementById('modeSelect');
+    const modeDesc = document.getElementById('modeDesc');
+    const wallPromptInput = document.getElementById('wallPromptInput');
+    const btnCreate = document.getElementById('btnCreate');
+    const progBarChunks = document.getElementById('progBarChunks');
+    const progStatusText = document.getElementById('progStatusText');
+    const progPercentText = document.getElementById('progPercentText');
+    const progTimer = document.getElementById('progTimer');
+    const progSubText = document.getElementById('progSubText');
+
+    const viewportCanvas = document.getElementById('viewportCanvas');
+    const gameVideo = document.getElementById('gameVideo');
+    const hudSpot = document.getElementById('hudSpot');
+    const hudFacing = document.getElementById('hudFacing');
+    const statusPos = document.getElementById('statusPos');
+    const statusEngine = document.getElementById('statusEngine');
+    const bumpBanner = document.getElementById('bumpBanner');
+
+    const btnUp = document.getElementById('btnUp');
+    const btnDown = document.getElementById('btnDown');
+    const btnLeft = document.getElementById('btnLeft');
+    const btnRight = document.getElementById('btnRight');
+    const btnNewDungeon = document.getElementById('btnNewDungeon');
+    const allButtons = [btnUp, btnDown, btnLeft, btnRight];
+
+    modeSelect.addEventListener('change', () => {
+      if (modeSelect.value === 'v1_video') {
+        modeDesc.innerHTML = '<strong>v1 video:</strong> Pre-generates 8 frame-chained 1.5s AI video clips + ffmpeg native reverse clips (~1.5-2 mins creation).';
+      } else {
+        modeDesc.innerHTML = '<strong>v2 texture:</strong> Generates 1 high-res AI material texture in ~10s and renders with snappy 1.0s zero-slant 3D camera transitions.';
+      }
+    });
+
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        wallPromptInput.value = btn.getAttribute('data-val');
+      });
+    });
+
+    // ==============================================================
+    // Shared State & Minimap
+    // ==============================================================
+    let activeMode = "v2_texture";
+    let v1Clips = {};
+
+    const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
+    const DIR_VECS = [
+      { dx: 0, dy: -1 },
+      { dx: 1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 }
+    ];
+
+    const MAP_WIDTH = 5;
+    const MAP_HEIGHT = 3;
+    const MAP = [
+      [1, 1, 1, 1, 1],
+      [1, 0, 0, 0, 1], // (1,1)->1, (2,1)->2, (3,1)->3
+      [1, 1, 1, 1, 1]
+    ];
+
+    const player = {
+      gridX: 1, // Spot 1
+      gridY: 1,
+      dirIndex: 1, // EAST
+      posX: 1.5,
+      posY: 1.5,
+      angle: 0,
+      targetX: 1.5,
+      targetY: 1.5,
+      targetAngle: 0,
+      isAnimating: false
+    };
+
+    function dirToAngle(dIdx) {
+      switch(dIdx) {
+        case 1: return 0;
+        case 2: return Math.PI / 2;
+        case 3: return Math.PI;
+        case 0: return (3 * Math.PI) / 2;
+      }
+    }
+
+    const mcanvas = document.getElementById('minimapCanvas');
+    const mctx = mcanvas.getContext('2d');
+
+    function drawMinimap() {
+      mctx.fillStyle = '#111827';
+      mctx.fillRect(0, 0, mcanvas.width, mcanvas.height);
+
+      const size = 36;
+      const offsetX = 24;
+      const offsetY = 16;
+      const spacing = 18;
+
+      [1, 2, 3].forEach((spotNum, idx) => {
+        const px = offsetX + idx * (size + spacing);
+        const py = offsetY;
+        const isCurrent = (spotNum === player.gridX);
+
+        if (idx < 2) {
+          mctx.strokeStyle = '#475569';
+          mctx.lineWidth = 4;
+          mctx.beginPath();
+          mctx.moveTo(px + size, py + size / 2);
+          mctx.lineTo(px + size + spacing, py + size / 2);
+          mctx.stroke();
+        }
+
+        mctx.fillStyle = isCurrent ? '#15803d' : '#1e293b';
+        mctx.fillRect(px, py, size, size);
+        mctx.strokeStyle = isCurrent ? '#22c55e' : '#475569';
+        mctx.lineWidth = isCurrent ? 2 : 1;
+        mctx.strokeRect(px, py, size, size);
+
+        mctx.fillStyle = isCurrent ? '#fef08a' : '#94a3b8';
+        mctx.font = 'bold 13px sans-serif';
+        mctx.textAlign = 'center';
+        mctx.textBaseline = 'middle';
+        mctx.fillText(spotNum, px + size / 2, py + size / 2);
+
+        if (isCurrent) {
+          const cx = px + size / 2;
+          const cy = py + size / 2;
+
+          mctx.save();
+          mctx.translate(cx, cy);
+          mctx.rotate(player.angle);
+          mctx.fillStyle = '#ef4444';
+          mctx.beginPath();
+          mctx.moveTo(11, 0);
+          mctx.lineTo(-5, -5);
+          mctx.lineTo(-2, 0);
+          mctx.lineTo(-5, 5);
+          mctx.closePath();
+          mctx.fill();
+          mctx.restore();
+        }
+      });
+    }
+
+    function updateHUD() {
+      const spot = player.gridX;
+      const dirName = DIRS[player.dirIndex];
+      hudSpot.textContent = spot;
+      hudFacing.textContent = dirName;
+
+      let viewDesc = 'Hallway';
+      if (dirName === 'NORTH' || dirName === 'SOUTH') viewDesc = 'Side Wall';
+      else if (spot === 1 && dirName === 'WEST') viewDesc = 'Start Wall';
+      else if (spot === 3 && dirName === 'EAST') viewDesc = 'End Wall';
+
+      statusPos.textContent = `Spot ${spot} (Facing ${dirName} - ${viewDesc})`;
+      statusEngine.textContent = activeMode === 'v1_video' ? 'v1 video (1.5s Clips)' : 'v2 texture (1.0s 3D)';
+      drawMinimap();
+    }
+
+    function showBumpMessage(msg = "SOLID WALL DIRECTLY AHEAD") {
+      bumpBanner.textContent = "🚫 " + msg;
+      bumpBanner.classList.remove('hidden');
+      setTimeout(() => bumpBanner.classList.add('hidden'), 1200);
+    }
+
+    // ==============================================================
+    // v2 3D Raycaster Engine (1.0s Speed, Level Horizon)
+    // ==============================================================
+    const ctx = viewportCanvas.getContext('2d', { willReadFrequently: true });
+    const screenWidth = viewportCanvas.width;
+    const screenHeight = viewportCanvas.height;
+    const imgData = ctx.createImageData(screenWidth, screenHeight);
+    const buffer = imgData.data;
+
+    const TEX_SIZE = 64;
+    let wallTexture = null;
+    let ceilingTexture = null;
+    let floorTexture = null;
+
+    function buildDefaultTextures() {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#dc2626';
+      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      c.strokeStyle = '#f8fafc';
+      c.lineWidth = 2;
+      for (let r = 0; r < 4; r++) {
+        const y = r * 16;
+        c.strokeRect(0, y, TEX_SIZE, 16);
+        const off = (r % 2 === 0) ? 0 : 16;
+        c.strokeRect(off, y, 32, 16);
+      }
+      wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+
+      c.fillStyle = '#94a3b8';
+      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      c.strokeStyle = '#475569';
+      c.strokeRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ceilingTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+
+      c.fillStyle = '#ca8a04';
+      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+    }
+    buildDefaultTextures();
+
+    function loadAiTexture(dataUri) {
+      if (!dataUri) return;
+      const img = new Image();
+      img.onload = () => {
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = TEX_SIZE;
+        const c = cv.getContext('2d');
+        c.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
+        wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+        if (activeMode === 'v2_texture') render3D();
+      };
+      img.src = dataUri;
+    }
+
+    function render3D() {
+      const fov = Math.PI / 3;
+      const halfFov = fov / 2;
+      const posX = player.posX;
+      const posY = player.posY;
+      const pAngle = player.angle;
+
+      const dirX = Math.cos(pAngle);
+      const dirY = Math.sin(pAngle);
+      const planeX = -dirY * Math.tan(halfFov);
+      const planeY = dirX * Math.tan(halfFov);
+
+      for (let y = 0; y < screenHeight; y++) {
+        const isFloor = y > screenHeight / 2;
+        const p = isFloor ? (y - screenHeight / 2) : (screenHeight / 2 - y);
+        if (p === 0) continue;
+
+        const posZ = 0.5 * screenHeight;
+        const rowDist = posZ / p;
+
+        const stepX = rowDist * (planeX * 2) / screenWidth;
+        const stepY = rowDist * (planeY * 2) / screenWidth;
+
+        let floorX = posX + rowDist * (dirX - planeX);
+        let floorY = posY + rowDist * (dirY - planeY);
+
+        const tex = isFloor ? floorTexture : ceilingTexture;
+        const texData = tex.data;
+
+        for (let x = 0; x < screenWidth; x++) {
+          const tx = Math.floor((floorX - Math.floor(floorX)) * TEX_SIZE) & (TEX_SIZE - 1);
+          const ty = Math.floor((floorY - Math.floor(floorY)) * TEX_SIZE) & (TEX_SIZE - 1);
+
+          floorX += stepX;
+          floorY += stepY;
+
+          const tIdx = (ty * TEX_SIZE + tx) * 4;
+          const pIdx = (y * screenWidth + x) * 4;
+          const shade = Math.max(0.35, Math.min(1.0, 1.0 - (rowDist * 0.15)));
+
+          buffer[pIdx] = texData[tIdx] * shade;
+          buffer[pIdx + 1] = texData[tIdx + 1] * shade;
+          buffer[pIdx + 2] = texData[tIdx + 2] * shade;
+          buffer[pIdx + 3] = 255;
+        }
+      }
+
+      for (let x = 0; x < screenWidth; x++) {
+        const cameraX = (2 * x) / screenWidth - 1;
+        const rayDirX = dirX + planeX * cameraX;
+        const rayDirY = dirY + planeY * cameraX;
+
+        let mapX = Math.floor(posX);
+        let mapY = Math.floor(posY);
+
+        let sideDistX, sideDistY;
+        const deltaDistX = Math.abs(1 / (rayDirX === 0 ? 1e-6 : rayDirX));
+        const deltaDistY = Math.abs(1 / (rayDirY === 0 ? 1e-6 : rayDirY));
+        let perpWallDist;
+
+        let stepX, stepY;
+        let hit = 0;
+        let side = 0;
+
+        if (rayDirX < 0) {
+          stepX = -1;
+          sideDistX = (posX - mapX) * deltaDistX;
+        } else {
+          stepX = 1;
+          sideDistX = (mapX + 1.0 - posX) * deltaDistX;
+        }
+
+        if (rayDirY < 0) {
+          stepY = -1;
+          sideDistY = (posY - mapY) * deltaDistY;
+        } else {
+          stepY = 1;
+          sideDistY = (mapY + 1.0 - posY) * deltaDistY;
+        }
+
+        while (hit === 0) {
+          if (sideDistX < sideDistY) {
+            sideDistX += deltaDistX;
+            mapX += stepX;
+            side = 0;
+          } else {
+            sideDistY += deltaDistY;
+            mapY += stepY;
+            side = 1;
+          }
+          if (mapX < 0 || mapX >= MAP_WIDTH || mapY < 0 || mapY >= MAP_HEIGHT) {
+            hit = 1;
+            break;
+          }
+          if (MAP[mapY][mapX] > 0) hit = 1;
+        }
+
+        if (side === 0) perpWallDist = (mapX - posX + (1 - stepX) / 2) / rayDirX;
+        else perpWallDist = (mapY - posY + (1 - stepY) / 2) / rayDirY;
+
+        perpWallDist = Math.max(0.1, perpWallDist);
+
+        const lineHeight = Math.floor(screenHeight / perpWallDist);
+        let drawStart = Math.floor(-lineHeight / 2 + screenHeight / 2);
+        let drawEnd = Math.floor(lineHeight / 2 + screenHeight / 2);
+
+        const clampedStart = Math.max(0, drawStart);
+        const clampedEnd = Math.min(screenHeight - 1, drawEnd);
+
+        let wallX;
+        if (side === 0) wallX = posY + perpWallDist * rayDirY;
+        else wallX = posX + perpWallDist * rayDirX;
+        wallX -= Math.floor(wallX);
+
+        let texX = Math.floor(wallX * TEX_SIZE);
+        if (side === 0 && rayDirX > 0) texX = TEX_SIZE - texX - 1;
+        if (side === 1 && rayDirY < 0) texX = TEX_SIZE - texX - 1;
+
+        const wallData = wallTexture.data;
+        const sideShade = side === 1 ? 0.75 : 1.0;
+        const distShade = Math.max(0.35, Math.min(1.0, 1.0 - (perpWallDist * 0.12)));
+        const finalShade = sideShade * distShade;
+
+        const step = TEX_SIZE / lineHeight;
+        let texPos = (clampedStart - screenHeight / 2 + lineHeight / 2) * step;
+
+        for (let y = clampedStart; y <= clampedEnd; y++) {
+          const texY = Math.min(TEX_SIZE - 1, Math.max(0, Math.floor(texPos)));
+          texPos += step;
+
+          const tIdx = (texY * TEX_SIZE + texX) * 4;
+          const pIdx = (y * screenWidth + x) * 4;
+
+          buffer[pIdx] = wallData[tIdx] * finalShade;
+          buffer[pIdx + 1] = wallData[tIdx + 1] * finalShade;
+          buffer[pIdx + 2] = wallData[tIdx + 2] * finalShade;
+          buffer[pIdx + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function animate3D(targetX, targetY, targetAngle) {
+      player.isAnimating = true;
+      allButtons.forEach(b => b.disabled = true);
+
+      const startX = player.posX;
+      const startY = player.posY;
+      const startAngle = player.angle;
+      const animStart = performance.now();
+      const DURATION = 1000; // 1.0s
+
+      function step(now) {
+        const elapsed = now - animStart;
+        const progress = Math.min(1.0, elapsed / DURATION);
+        const ease = easeInOutCubic(progress);
+
+        player.posX = startX + (targetX - startX) * ease;
+        player.posY = startY + (targetY - startY) * ease;
+        player.angle = startAngle + (targetAngle - startAngle) * ease;
+
+        render3D();
+        drawMinimap();
+
+        if (progress < 1.0) {
+          requestAnimationFrame(step);
+        } else {
+          player.posX = targetX;
+          player.posY = targetY;
+          player.angle = targetAngle;
+          player.isAnimating = false;
+          allButtons.forEach(b => b.disabled = false);
+          updateHUD();
+        }
+      }
+      requestAnimationFrame(step);
+    }
+
+    // ==============================================================
+    // v1 Video Player Engine (8 Pre-Rendered Clips)
+    // ==============================================================
+    function getViewV1(spot, dir) {
+      if (dir === 'NORTH' || dir === 'SOUTH') return 'WALL_SIDE';
+      if (spot === 1 && dir === 'WEST') return 'WALL_START';
+      if (spot === 3 && dir === 'EAST') return 'WALL_END';
+      return 'CORRIDOR';
+    }
+
+    function playV1Clip(clipKey, nextSpot, nextDir) {
+      const clipData = v1Clips[clipKey];
+      if (!clipData) {
+        console.warn('Clip missing:', clipKey);
+        player.gridX = nextSpot;
+        player.dirIndex = DIRS.indexOf(nextDir);
+        player.angle = dirToAngle(player.dirIndex);
+        updateHUD();
+        return;
+      }
+
+      player.isAnimating = true;
+      allButtons.forEach(b => b.disabled = true);
+
+      gameVideo.src = clipData;
+      gameVideo.load();
+      gameVideo.currentTime = 0;
+      gameVideo.play();
+      gameVideo.onended = () => {
+        player.gridX = nextSpot;
+        player.dirIndex = DIRS.indexOf(nextDir);
+        player.angle = dirToAngle(player.dirIndex);
+        player.posX = player.gridX + 0.5;
+        player.posY = 1.5;
+        player.isAnimating = false;
+        allButtons.forEach(b => b.disabled = false);
+        updateHUD();
+      };
+    }
+
+    // ==============================================================
+    // Unified Movement Handlers
+    // ==============================================================
+    function moveForward() {
+      if (player.isAnimating) return;
+
+      if (activeMode === 'v2_texture') {
+        const vec = DIR_VECS[player.dirIndex];
+        const nextX = player.gridX + vec.dx;
+        const nextY = player.gridY + vec.dy;
+
+        if (MAP[nextY] && MAP[nextY][nextX] === 0) {
+          player.gridX = nextX;
+          animate3D(nextX + 0.5, nextY + 0.5, player.angle);
+        } else {
+          if (player.dirIndex === 1 && player.gridX === 3) showBumpMessage("DEAD END - SOLID WALL AT SPOT 3");
+          else if (player.dirIndex === 3 && player.gridX === 1) showBumpMessage("DEAD END - START WALL AT SPOT 1");
+          else showBumpMessage(`FACING SIDE WALL (${DIRS[player.dirIndex]})`);
+        }
+      } else {
+        // v1 video mode
+        const facing = DIRS[player.dirIndex];
+        if (facing === 'EAST') {
+          if (player.gridX === 1) playV1Clip('1_to_2_east', 2, 'EAST');
+          else if (player.gridX === 2) playV1Clip('2_to_3_east', 3, 'EAST');
+          else showBumpMessage("DEAD END - SOLID WALL AT SPOT 3");
+        } else if (facing === 'WEST') {
+          if (player.gridX === 3) playV1Clip('2_to_3_east_reverse', 2, 'WEST');
+          else if (player.gridX === 2) playV1Clip('1_to_2_east_reverse', 1, 'WEST');
+          else showBumpMessage("DEAD END - START WALL AT SPOT 1");
+        } else {
+          showBumpMessage(`FACING SIDE WALL (${facing})`);
+        }
+      }
+    }
+
+    function moveBackward() {
+      if (player.isAnimating) return;
+
+      if (activeMode === 'v2_texture') {
+        const vec = DIR_VECS[player.dirIndex];
+        const nextX = player.gridX - vec.dx;
+        const nextY = player.gridY - vec.dy;
+
+        if (MAP[nextY] && MAP[nextY][nextX] === 0) {
+          player.gridX = nextX;
+          animate3D(nextX + 0.5, nextY + 0.5, player.angle);
+        } else {
+          showBumpMessage(`CANNOT MOVE BACKWARD`);
+        }
+      } else {
+        // v1 video mode
+        const facing = DIRS[player.dirIndex];
+        if (facing === 'EAST') {
+          if (player.gridX === 3) playV1Clip('2_to_3_east_reverse', 2, 'EAST');
+          else if (player.gridX === 2) playV1Clip('1_to_2_east_reverse', 1, 'EAST');
+          else showBumpMessage("BACKED AGAINST START WALL");
+        } else if (facing === 'WEST') {
+          if (player.gridX === 1) playV1Clip('1_to_2_east', 2, 'WEST');
+          else if (player.gridX === 2) playV1Clip('2_to_3_east', 3, 'WEST');
+          else showBumpMessage("BACKED AGAINST END WALL");
+        } else {
+          showBumpMessage(`FACING SIDE WALL (${facing})`);
+        }
+      }
+    }
+
+    function rotateLeft() {
+      if (player.isAnimating) return;
+
+      if (activeMode === 'v2_texture') {
+        player.dirIndex = (player.dirIndex + 3) % 4;
+        animate3D(player.posX, player.posY, player.angle - Math.PI / 2);
+      } else {
+        const curDir = DIRS[player.dirIndex];
+        const newDir = DIRS[(player.dirIndex + 3) % 4];
+        const vFrom = getViewV1(player.gridX, curDir);
+        const vTo = getViewV1(player.gridX, newDir);
+
+        if (!vFrom.startsWith('WALL') && vTo.startsWith('WALL')) {
+          playV1Clip('turn_corridor_to_wall_left', player.gridX, newDir);
+        } else if (vFrom.startsWith('WALL') && !vTo.startsWith('WALL')) {
+          playV1Clip('turn_wall_to_corridor_left', player.gridX, newDir);
+        } else {
+          playV1Clip('turn_wall_to_wall_left', player.gridX, newDir);
+        }
+      }
+    }
+
+    function rotateRight() {
+      if (player.isAnimating) return;
+
+      if (activeMode === 'v2_texture') {
+        player.dirIndex = (player.dirIndex + 1) % 4;
+        animate3D(player.posX, player.posY, player.angle + Math.PI / 2);
+      } else {
+        const curDir = DIRS[player.dirIndex];
+        const newDir = DIRS[(player.dirIndex + 1) % 4];
+        const vFrom = getViewV1(player.gridX, curDir);
+        const vTo = getViewV1(player.gridX, newDir);
+
+        if (!vFrom.startsWith('WALL') && vTo.startsWith('WALL')) {
+          playV1Clip('turn_corridor_to_wall_right', player.gridX, newDir);
+        } else if (vFrom.startsWith('WALL') && !vTo.startsWith('WALL')) {
+          playV1Clip('turn_wall_to_corridor_right', player.gridX, newDir);
+        } else {
+          playV1Clip('turn_wall_to_wall_right', player.gridX, newDir);
+        }
+      }
+    }
+
+    // Button Listeners
+    btnUp.addEventListener('click', moveForward);
+    btnDown.addEventListener('click', moveBackward);
+    btnLeft.addEventListener('click', rotateLeft);
+    btnRight.addEventListener('click', rotateRight);
+
+    btnNewDungeon.addEventListener('click', () => {
+      screenGame.classList.add('hidden');
+      screenSetup.classList.remove('hidden');
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (screenGame.classList.contains('hidden') || player.isAnimating) return;
+
+      if (['ArrowUp', 'KeyW'].includes(e.code)) {
+        e.preventDefault();
+        moveForward();
+      } else if (['ArrowDown', 'KeyS'].includes(e.code)) {
+        e.preventDefault();
+        moveBackward();
+      } else if (['ArrowLeft', 'KeyA'].includes(e.code)) {
+        e.preventDefault();
+        rotateLeft();
+      } else if (['ArrowRight', 'KeyD'].includes(e.code)) {
+        e.preventDefault();
+        rotateRight();
+      }
+    });
+
+    // ==============================================================
+    // CREATE Flow
+    // ==============================================================
+    btnCreate.addEventListener('click', async () => {
+      const wallStyle = wallPromptInput.value.trim() || "classic Windows 95 red brick walls with white mortar";
+      activeMode = modeSelect.value;
+
+      screenSetup.classList.add('hidden');
+      screenProgress.classList.remove('hidden');
+
+      if (activeMode === 'v1_video') {
+        progSubText.textContent = 'Generating 8 frame-chained 1.5s AI video clips with MiniMax H3 (~1.5-2 mins)...';
+      } else {
+        progSubText.textContent = 'Generating AI material texture in 1.0s with MiniMax H3 (~10 seconds)...';
+      }
+
+      const startTime = Date.now();
+      progTimer.textContent = "0.0s";
+      const timerInterval = setInterval(() => {
+        progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
+      }, 100);
+
+      try {
+        await fetch(`${SERVER_URL}/api/generate_dungeon`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wall_style: wallStyle, mode: activeMode })
+        });
+
+        const pollInterval = setInterval(async () => {
+          try {
+            const res = await fetch(`${SERVER_URL}/api/progress`);
+            const p = await res.json();
+
+            progStatusText.textContent = p.status_message;
+            progPercentText.textContent = p.percent + "%";
+
+            const chunkCount = Math.floor((p.percent / 100) * 30);
+            progBarChunks.innerHTML = '';
+            for (let i = 0; i < chunkCount; i++) {
+              const ch = document.createElement('div');
+              ch.className = 'win95-prog-chunk';
+              progBarChunks.appendChild(ch);
+            }
+
+            if (!p.is_generating && p.completed_bundle) {
+              clearInterval(pollInterval);
+              clearInterval(timerInterval);
+
+              // Reset to Spot 1 Facing East
+              player.gridX = 1;
+              player.gridY = 1;
+              player.dirIndex = 1;
+              player.posX = 1.5;
+              player.posY = 1.5;
+              player.angle = 0;
+              player.targetX = 1.5;
+              player.targetY = 1.5;
+              player.targetAngle = 0;
+
+              if (activeMode === 'v1_video') {
+                v1Clips = p.completed_bundle.clips;
+                viewportCanvas.classList.add('hidden');
+                gameVideo.classList.remove('hidden');
+
+                if (p.completed_bundle.initial_image) {
+                  gameVideo.poster = p.completed_bundle.initial_image;
+                }
+              } else {
+                viewportCanvas.classList.remove('hidden');
+                gameVideo.classList.add('hidden');
+
+                if (p.completed_bundle.texture_image) {
+                  loadAiTexture(p.completed_bundle.texture_image);
+                }
+              }
+
+              screenProgress.classList.add('hidden');
+              screenGame.classList.remove('hidden');
+              if (activeMode === 'v2_texture') render3D();
+              updateHUD();
+            } else if (p.error) {
+              clearInterval(pollInterval);
+              clearInterval(timerInterval);
+              alert("Error: " + p.error);
+              screenProgress.classList.add('hidden');
+              screenSetup.classList.remove('hidden');
+            }
+          } catch(err) {
+            console.error('Progress poll error:', err);
+          }
+        }, 600);
+
+      } catch (err) {
+        clearInterval(timerInterval);
+        alert('Server communication error. Make sure dungeon_server.py is running!');
+        screenProgress.classList.add('hidden');
+        screenSetup.classList.remove('hidden');
+      }
+    });
+
+    render3D();
+    updateHUD();
+  </script>
+</body>
+</html>
