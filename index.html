@@ -1213,11 +1213,15 @@
       if (playerSpriteFrames && playerSpriteFrames.length > 1) {
         let currentFrame = playerSpriteFrames[0];
         if (attFrame > 0) {
+          // Frames 2 and 3 are attack frames (windup and upward slash)
           const prog = (combatState.attackFrame - 1) / combatState.maxAttackFrames;
-          let fIdx = 1 + Math.floor(prog * (playerSpriteFrames.length - 1));
-          if (fIdx >= playerSpriteFrames.length) fIdx = playerSpriteFrames.length - 1;
-          currentFrame = playerSpriteFrames[fIdx];
+          if (prog < 0.45) {
+            currentFrame = playerSpriteFrames[2] || playerSpriteFrames[0];
+          } else {
+            currentFrame = playerSpriteFrames[3] || playerSpriteFrames[0];
+          }
         } else if (shieldProgress > 0.3) {
+          // Frame 1 is the forward-facing shield block stance
           currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
         }
 

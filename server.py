@@ -102,17 +102,36 @@ def make_sprite_sheet_frames(img_path):
         alpha[white_mask] = 0
         arr[:, :, 3] = alpha
 
-        # Slicing into 4 equal cells: 1024 / 4 = 256
+        H = arr.shape[0]
         cell_w = arr.shape[1] // 4
         frame_paths = []
+        
         for i in range(4):
             frame_arr = arr[:, i * cell_w : (i + 1) * cell_w]
-            out_img = Image.fromarray(np.clip(frame_arr, 0, 255).astype(np.uint8))
+            alpha_ch = frame_arr[:, :, 3]
+            non_zero = np.where(alpha_ch > 20)
+            
+            if len(non_zero[0]) > 0:
+                y_min, y_max = non_zero[0].min(), non_zero[0].max()
+                x_min, x_max = non_zero[1].min(), non_zero[1].max()
+                
+                char_crop = frame_arr[y_min:y_max+1, x_min:x_max+1]
+                crop_h, crop_w = char_crop.shape[0], char_crop.shape[1]
+                
+                aligned = np.zeros((H, cell_w, 4), dtype=np.float32)
+                target_x = max(0, min(cell_w - crop_w, (cell_w - crop_w) // 2))
+                target_y = max(0, min(H - crop_h, H - crop_h - 10))
+                
+                aligned[target_y:target_y+crop_h, target_x:target_x+crop_w] = char_crop
+                out = Image.fromarray(np.clip(aligned, 0, 255).astype(np.uint8))
+            else:
+                out = Image.fromarray(np.clip(frame_arr, 0, 255).astype(np.uint8))
+                
             f_path = img_path.replace('.png', f'_frame{i}.png')
-            out_img.save(f_path, format="PNG")
+            out.save(f_path, format="PNG")
             frame_paths.append(f_path)
             
-        print(f"[Sprite] Created 4 aligned animation frames for {os.path.basename(img_path)}")
+        print(f"[Sprite] Created 4 centered animation frames for {os.path.basename(img_path)}")
         return frame_paths
     except Exception as e:
         print(f"[Sprite Sheet Error] {e}")
@@ -245,10 +264,13 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
         p_style = player_style.strip() if (player_style and player_style.strip()) else "armored knight"
         portrait_prompt = f"Close-up front view video game portrait of a heroic {p_style} warrior, Doom status portrait style, atmospheric dungeon lighting."
         player_prompt = (
-            f"2D game asset sprite sheet, 4 consecutive animation frames in a row from left to right on a pure solid white background. "
-            f"Frame 1: {p_style} warrior standing holding sword and shield. Frame 2: {p_style} warrior winding up for sword strike. "
-            f"Frame 3: {p_style} warrior striking with sword in wide slashing arc. Frame 4: {p_style} warrior follow-through pose. "
-            f"Photorealistic 3D game render, seen strictly directly from behind in third-person back view, highly detailed, Unreal Engine 5 aesthetic."
+            f"2D game asset sprite sheet, 4 distinct widely spaced animation frames in a single horizontal row on a pure solid white background. "
+            f"Character seen strictly directly from behind in third-person back view, 0 degree angle facing away from camera towards the front. "
+            f"Frame 1: {p_style} warrior standing idle holding sword. "
+            f"Frame 2: {p_style} warrior blocking with shield held forward facing away towards the front to block incoming attacks. "
+            f"Frame 3: {p_style} warrior winding up sword high overhead. "
+            f"Frame 4: {p_style} warrior executing an upward rising vertical sword slash arc. "
+            f"Photorealistic 3D game render, highly detailed textures, Unreal Engine 5 aesthetic."
         )
     elif player_style and player_style.strip():
         ps = player_style.strip().lower()
@@ -308,7 +330,7 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
         "f_save": {"inputs": {"filename_prefix": prefix_f, "images": ["f_dec", 0]}, "class_type": "SaveImage"},
 
         # Player Character Sprite
-        "p_lat": {"inputs": {"width": 1024 if mode == "v4_flux" else 512, "height": 256 if mode == "v4_flux" else 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "p_lat": {"inputs": {"width": 1536 if mode == "v4_flux" else 512, "height": 384 if mode == "v4_flux" else 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
         "p_pos": {"inputs": {"text": player_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
         "p_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["p_pos", 0], "negative": ["neg", 0], "latent_image": ["p_lat", 0]}, "class_type": "KSampler"},
         "p_dec": {"inputs": {"samples": ["p_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
