@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ComfyCrawler v4</title>
+  <title>ComfyCrawler</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * {
@@ -174,7 +174,7 @@
     <div class="win95-title text-xs flex items-center justify-between mb-1">
       <div class="flex items-center gap-1.5 font-bold">
         <span>🎮</span>
-        <span>ComfyCrawler v4</span>
+        <span>ComfyCrawler</span>
       </div>
       <div id="titleButtons" class="flex gap-1 text-xs">
         <button id="btnMaximize" class="win95-btn px-2 py-0.5 text-black hover:bg-slate-300" title="Toggle Fullscreen">□</button>
@@ -327,7 +327,8 @@
               Select Engine Mode:
             </label>
             <select id="modeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-              <option value="v3_flux" selected>⚡ v3 FLUX.1 [schnell] (Walls, Ceil, Floor, Character & AI Portrait)</option>
+              <option value="v4_flux" selected>⚡ v4 Multi-Frame Sprite Engine (FLUX Animated Sprite Sheet)</option>
+              <option value="v3_flux">v3 FLUX.1 [schnell] (Single Warrior + Valbrace Modular Rig)</option>
               <option value="v2_texture">v2 texture (MiniMax H3 Material Texture + 3D Engine)</option>
               <option value="v1_video">v1 video (FMV Video Clips)</option>
             </select>
@@ -568,6 +569,7 @@
 
     let playerSpriteImg = null;
     let playerFaceImg = null;
+    let playerSpriteFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
 
     let MAP = [];
@@ -1206,6 +1208,27 @@
       const tilt = combatState.vx * 0.012;
       c.translate(px, py);
       c.rotate(tilt);
+
+      // --- MULTI-FRAME AI SPRITE SHEET MODE (v4) ---
+      if (playerSpriteFrames && playerSpriteFrames.length > 1) {
+        let currentFrame = playerSpriteFrames[0];
+        if (attFrame > 0) {
+          const prog = (combatState.attackFrame - 1) / combatState.maxAttackFrames;
+          let fIdx = 1 + Math.floor(prog * (playerSpriteFrames.length - 1));
+          if (fIdx >= playerSpriteFrames.length) fIdx = playerSpriteFrames.length - 1;
+          currentFrame = playerSpriteFrames[fIdx];
+        } else if (shieldProgress > 0.3) {
+          currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
+        }
+
+        if (currentFrame && currentFrame.complete && currentFrame.naturalWidth > 0) {
+          const spriteH = 135;
+          const spriteW = spriteH * (currentFrame.naturalWidth / currentFrame.naturalHeight);
+          c.drawImage(currentFrame, -spriteW / 2, -spriteH + 12, spriteW, spriteH);
+        }
+        c.restore();
+        return;
+      }
 
       // --- HURT RECOIL WITH FACE TURN TO CAMERA ---
       if (hurtFrame > 0 && hurtFrame <= 14) {
@@ -2322,9 +2345,18 @@
               clearInterval(timerInterval);
 
               const b = p.completed_bundle;
-              if (b.player_sprite) {
+              if (b.player_sprites && b.player_sprites.length > 0) {
+                playerSpriteFrames = [];
+                b.player_sprites.forEach(src => {
+                  const img = new Image();
+                  img.src = src;
+                  playerSpriteFrames.push(img);
+                });
+                playerSpriteImg = playerSpriteFrames[0];
+              } else if (b.player_sprite) {
                 playerSpriteImg = new Image();
                 playerSpriteImg.src = b.player_sprite;
+                playerSpriteFrames = [playerSpriteImg];
               }
               if (b.player_face) {
                 playerFaceImg = new Image();

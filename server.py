@@ -86,6 +86,38 @@ def make_seamless_4way(img_path, blend_pixels=12):
         print(f"[Seamless Error] {e}")
 
 
+def make_sprite_sheet_frames(img_path):
+    import numpy as np
+    from PIL import Image
+    try:
+        img = Image.open(img_path).convert("RGBA")
+        arr = np.array(img).astype(np.float32)
+
+        corners = [arr[0:15, 0:15], arr[0:15, -15:], arr[-15:, 0:15], arr[-15:, -15:]]
+        bg_color = np.mean([c.mean(axis=(0, 1))[:3] for c in corners], axis=0)
+
+        diff = np.sqrt(np.sum((arr[:, :, :3] - bg_color) ** 2, axis=-1))
+        alpha = np.clip((diff - 20) / 30, 0, 1) * 255.0
+        white_mask = np.sum(arr[:, :, :3], axis=-1) > 700
+        alpha[white_mask] = 0
+        arr[:, :, 3] = alpha
+
+        # Slicing into 4 equal cells: 1024 / 4 = 256
+        cell_w = arr.shape[1] // 4
+        frame_paths = []
+        for i in range(4):
+            frame_arr = arr[:, i * cell_w : (i + 1) * cell_w]
+            out_img = Image.fromarray(np.clip(frame_arr, 0, 255).astype(np.uint8))
+            f_path = img_path.replace('.png', f'_frame{i}.png')
+            out_img.save(f_path, format="PNG")
+            frame_paths.append(f_path)
+            
+        print(f"[Sprite] Created 4 aligned animation frames for {os.path.basename(img_path)}")
+        return frame_paths
+    except Exception as e:
+        print(f"[Sprite Sheet Error] {e}")
+        return [img_path]
+
 def make_sprite_transparent(img_path):
     import numpy as np
     from PIL import Image
@@ -186,7 +218,7 @@ def get_surface_prompts(wall_style):
 
 
 
-def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=None):
+def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=None, mode="v4_flux"):
     """Generate Dungeon Textures (Wall, Ceil, Floor) + AI Face Portrait + Player Character Sprite in FLUX."""
     prefix_w = f"trio_w_{int(time.time()*1000)}"
     prefix_c = f"trio_c_{int(time.time()*1000)}"
@@ -208,6 +240,15 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
             "cinematic lighting, highly detailed realistic textures, bald shaved head with dark wireframe glasses visible from the side, "
             "wearing a realistic yellow cloth tunic and weathered leather armor harness, holding a glowing sword in the right hand and a sturdy shield in the left hand, ready for combat, dynamic action pose, "
             "8k resolution, Unreal Engine 5 aesthetic, photorealistic back view character body, pure solid white background."
+        )
+    elif mode == "v4_flux":
+        p_style = player_style.strip() if (player_style and player_style.strip()) else "armored knight"
+        portrait_prompt = f"Close-up front view video game portrait of a heroic {p_style} warrior, Doom status portrait style, atmospheric dungeon lighting."
+        player_prompt = (
+            f"2D game asset sprite sheet, 4 consecutive animation frames in a row from left to right on a pure solid white background. "
+            f"Frame 1: {p_style} warrior standing holding sword and shield. Frame 2: {p_style} warrior winding up for sword strike. "
+            f"Frame 3: {p_style} warrior striking with sword in wide slashing arc. Frame 4: {p_style} warrior follow-through pose. "
+            f"Photorealistic 3D game render, seen strictly directly from behind in third-person back view, highly detailed, Unreal Engine 5 aesthetic."
         )
     elif player_style and player_style.strip():
         ps = player_style.strip().lower()
@@ -267,7 +308,7 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
         "f_save": {"inputs": {"filename_prefix": prefix_f, "images": ["f_dec", 0]}, "class_type": "SaveImage"},
 
         # Player Character Sprite
-        "p_lat": {"inputs": {"width": 512, "height": 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "p_lat": {"inputs": {"width": 1024 if mode == "v4_flux" else 512, "height": 256 if mode == "v4_flux" else 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
         "p_pos": {"inputs": {"text": player_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
         "p_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["p_pos", 0], "negative": ["neg", 0], "latent_image": ["p_lat", 0]}, "class_type": "KSampler"},
         "p_dec": {"inputs": {"samples": ["p_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
@@ -317,14 +358,17 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
                     make_seamless_4way(w_path, blend_pixels=12)
                     make_seamless_4way(c_path, blend_pixels=12)
                     make_seamless_4way(f_path, blend_pixels=12)
-                    make_sprite_transparent(p_path)
-                    
-                    return w_path, c_path, f_path, p_path, face_path
+                    if mode == "v4_flux":
+                        p_frames = make_sprite_sheet_frames(p_path)
+                        return w_path, c_path, f_path, p_frames, face_path
+                    else:
+                        make_sprite_transparent(p_path)
+                        return w_path, c_path, f_path, p_path, face_path
                     
     raise TimeoutError("FLUX.1 Dungeon, Player & Portrait generation timed out.")
 
 
-def run_batch_v3_flux(wall_style, player_style=None, player_image=None):
+def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4_flux"):
     """v3 FLUX.1 [schnell] mode: Generates 3 Dungeon Surfaces + 1 Player Character Sprite + 1 AI Face Portrait."""
     global gen_progress
     gen_progress["is_generating"] = True
@@ -338,7 +382,7 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None):
         gen_progress["status_message"] = "Synthesizing Dungeon, Character & AI Portrait with FLUX.1 [schnell]..."
         gen_progress["percent"] = 50
 
-        w_path, c_path, f_path, p_path, face_path = generate_flux_all_assets(wall_style, player_style, player_image)
+        w_path, c_path, f_path, p_res, face_path = generate_flux_all_assets(wall_style, player_style, player_image, mode=mode)
 
         gen_progress["current_step"] = 2
         gen_progress["status_message"] = "Assembling 3D World & Valbrace Combat..."
@@ -350,8 +394,17 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None):
             c_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
         with open(f_path, "rb") as tf:
             f_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
-        with open(p_path, "rb") as tf:
-            p_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+        p_sprites_b64 = []
+        p_b64 = None
+        if isinstance(p_res, list):
+            for pf in p_res:
+                with open(pf, "rb") as tf:
+                    p_sprites_b64.append(f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}")
+            p_b64 = p_sprites_b64[0]
+        else:
+            with open(p_res, "rb") as tf:
+                p_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+            p_sprites_b64 = [p_b64]
         with open(face_path, "rb") as tf:
             face_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
 
@@ -364,6 +417,7 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None):
             "ceiling_texture": c_b64,
             "floor_texture": f_b64,
             "player_sprite": p_b64,
+            "player_sprites": p_sprites_b64,
             "player_face": face_b64
         }
         print("[FLUX.1] Dungeon textures, character sprite, and AI portrait complete and packaged!")
@@ -425,7 +479,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": True, "message": f"{mode} generation started"}, ensure_ascii=True).encode("utf-8"))
 
-            t = threading.Thread(target=run_batch_v3_flux, args=(wall_style, player_style, player_image), daemon=True)
+            t = threading.Thread(target=run_batch_v3_flux, args=(wall_style, player_style, player_image, mode), daemon=True)
             t.start()
             return
 
