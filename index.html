@@ -453,8 +453,8 @@
             </div>
             <div class="flex items-center gap-2">
               <!-- Doom-Style Face Portrait -->
-              <div class="win95-inset bg-black p-0.5 w-12 h-12 flex-shrink-0 flex items-center justify-center overflow-hidden">
-                <canvas id="doomFaceCanvas" width="44" height="44" class="w-full h-full pixelated"></canvas>
+              <div class="win95-inset bg-black p-0.5 w-28 h-28 flex-shrink-0 flex items-center justify-center overflow-hidden">
+                <canvas id="doomFaceCanvas" width="132" height="132" class="w-full h-full pixelated"></canvas>
               </div>
               <!-- HP & Stamina Bars -->
               <div class="flex-1 flex flex-col gap-1 text-[10px] font-bold">
@@ -768,9 +768,47 @@
           btnToggleBattle.innerHTML = "⚔️ <span>BATTLE (Space)</span>";
           btnToggleBattle.className = "win95-btn px-2 py-0.5 text-[10px] font-bold text-red-900 bg-red-100 hover:bg-red-200";
         }
+        // Hiding the action bar mid-press means the Block button never receives its pointerup or
+        // pointerleave, so keysHeld.block would stay stuck on - and a stuck block drains stamina to
+        // 2 and then blocks its own regen forever (see the regen guard in the combat loop).
+        releaseHeldKeys();
       }
       render3D();
     }
+
+    // Any held input has to be dropped whenever the player stops actively driving the game, or a
+    // key that never got its keyup survives into the next dungeon.
+    function releaseHeldKeys() {
+      keysHeld.left = false;
+      keysHeld.right = false;
+      keysHeld.block = false;
+    }
+
+    // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
+    // attack/hurt frames) carried over from the previous dungeon - so a run started while blocking
+    // or mid-fight began the next dungeon at near-zero stamina.
+    function resetCombatForNewDungeon() {
+      // Go through toggleBattleMode rather than just clearing the flag, so the badge, action bar,
+      // controls header and Battle/Flee button all return to exploration state too - otherwise the
+      // new dungeon starts out of battle but still wearing the "VALBRACE DUEL" chrome.
+      if (combatState.inBattle) toggleBattleMode(false);
+      releaseHeldKeys();
+      combatState.playerStm = combatState.playerMaxStm;
+      combatState.playerHp = combatState.playerMaxHp;
+      combatState.playerX = 0;
+      combatState.vx = 0;
+      combatState.attackFrame = 0;
+      combatState.hurtFrame = 0;
+      combatState.shieldProgress = 0;
+      combatState.combatEffects.length = 0;
+      combatState.enemy.hp = 100;
+      combatState.enemy.state = 'idle';
+      combatState.enemy.stateTimer = 0;
+      combatState.enemy.attackTimer = 110;
+    }
+
+    // Alt-tabbing or clicking into a text field while holding X swallows the keyup the same way.
+    window.addEventListener('blur', releaseHeldKeys);
 
     if (btnToggleBattle) {
       btnToggleBattle.addEventListener('click', () => toggleBattleMode());
@@ -843,7 +881,9 @@
         }
       }
 
-      if (!keysHeld.block && combatState.playerStm < combatState.playerMaxStm) {
+      // Only an ACTIVE block suppresses regen. Gating on keysHeld.block alone meant a block flag
+      // that never got cleared left stamina pinned just above zero forever, even out of combat.
+      if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
         combatState.playerStm = Math.min(combatState.playerMaxStm, combatState.playerStm + 0.45);
       }
 
@@ -934,6 +974,12 @@
     function renderDoomFace() {
       if (!doomFaceCtx) return;
       const c = doomFaceCtx;
+      // Every coordinate below is authored against the original 44x44 portrait. Scaling the
+      // context once here lets the canvas be backed at a much higher resolution (so the bigger
+      // on-screen portrait stays crisp) without touching any of that drawing maths. setTransform
+      // rather than save/restore, because this function has early returns.
+      const S = doomFaceCanvas.width / 44;
+      c.setTransform(S, 0, 0, S, 0, 0);
       c.clearRect(0, 0, 44, 44);
 
       const isHurt = combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
@@ -944,44 +990,25 @@
       if (playerFaceImg && playerFaceImg.complete && playerFaceImg.naturalWidth > 0) {
         c.drawImage(playerFaceImg, 2, 2, 40, 40);
 
-        const glance = combatState.glanceDir;
-        const eyeY = 17;
-        const leftEyeX = 14;
-        const rightEyeX = 26;
-
-        if (isHurt) {
-          c.fillStyle = 'rgba(24, 24, 27, 0.85)';
-          c.fillRect(leftEyeX - 3, eyeY - 2, 7, 4);
-          c.fillRect(rightEyeX - 3, eyeY - 2, 7, 4);
-        } else {
-          c.fillStyle = '#0f172a';
-          const pOff = glance === -1 ? -1.5 : glance === 1 ? 1.5 : 0;
-          c.beginPath(); c.arc(leftEyeX + pOff, eyeY, 1.8, 0, Math.PI * 2); c.fill();
-          c.beginPath(); c.arc(rightEyeX + pOff, eyeY, 1.8, 0, Math.PI * 2); c.fill();
-        }
-
-        if (isAttack || isBlock) {
-          c.strokeStyle = 'rgba(15, 23, 42, 0.9)'; c.lineWidth = 2;
-          c.beginPath(); c.moveTo(leftEyeX - 4, eyeY - 4); c.lineTo(leftEyeX + 3, eyeY - 1); c.stroke();
-          c.beginPath(); c.moveTo(rightEyeX + 4, eyeY - 4); c.lineTo(rightEyeX - 3, eyeY - 1); c.stroke();
-        }
-
-        if (isAttack) {
-          c.fillStyle = '#450a0a';
-          c.beginPath(); c.ellipse(20, 29, 6, 3, 0, 0, Math.PI * 2); c.fill();
-          c.fillStyle = '#ffffff';
-          c.fillRect(17, 28, 6, 2);
-        }
-
+        // Combat state is shown ONLY through full-portrait tints and the border colour. Pupils,
+        // eyebrows and a mouth used to be painted on at fixed coordinates, which assumed a face
+        // laid out exactly like the old FLUX portrait. The portrait now comes from the character's
+        // own IPAdapter reference and can be hooded, feline, helmeted or masked, so those features
+        // landed in the wrong place - very obvious at this larger size, and directly at odds with
+        // having the portrait resemble the player.
         if (isLowHp) {
           c.fillStyle = 'rgba(153, 27, 27, 0.35)';
           c.fillRect(2, 2, 40, 40);
-          c.fillStyle = '#991b1b';
-          c.fillRect(8, 4, 2.5, 6);
         }
 
         if (isHurt) {
           c.fillStyle = 'rgba(220, 38, 38, 0.55)';
+          c.fillRect(2, 2, 40, 40);
+        } else if (isAttack) {
+          c.fillStyle = 'rgba(245, 158, 11, 0.22)';
+          c.fillRect(2, 2, 40, 40);
+        } else if (isBlock) {
+          c.fillStyle = 'rgba(56, 189, 248, 0.22)';
           c.fillRect(2, 2, 40, 40);
         }
 
@@ -1212,7 +1239,10 @@
       // --- MULTI-FRAME AI SPRITE SHEET MODE (v4) ---
       if (playerSpriteFrames && playerSpriteFrames.length > 1) {
         let currentFrame = playerSpriteFrames[0];
-        if (attFrame > 0) {
+        if (hurtFrame > 0) {
+          // Frame 4 is the hurt/stagger recoil pose - takes priority over attack/block
+          currentFrame = playerSpriteFrames[4] || playerSpriteFrames[0];
+        } else if (attFrame > 0) {
           // Frames 2 and 3 are attack frames (windup and upward slash)
           const prog = (combatState.attackFrame - 1) / combatState.maxAttackFrames;
           if (prog < 0.45) {
@@ -2299,6 +2329,11 @@
       currentThemeName = wallStyle;
       activeMode = modeSelect.value;
       const numGrids = Math.max(10, Math.min(100, parseInt(gridCountInput.value) || 25));
+
+      // Start every dungeon from a clean slate. Quitting straight from an active battle (without
+      // pressing Space to leave battle mode first) used to carry that fight's drained stamina,
+      // damage and held keys into the new dungeon.
+      resetCombatForNewDungeon();
 
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
