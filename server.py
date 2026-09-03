@@ -35,6 +35,19 @@ COMFY_OUTPUT_DIR = r"C:\Users\sorryaboutyourcats\AppData\Local\Comfy-Desktop\Com
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSIONS_DIR = os.path.join(PROJECT_DIR, "dungeon_sessions")
 
+# v5 "krea2 turbo" engine. A single Qwen-arch diffusion model (no ControlNet / no
+# IPAdapter available for it), so v5 generates ONE clean image per asset instead
+# of v4's SDXL-Lightning + IPAdapter + OpenPose rig. Distilled from the workflow
+# embedded in ComfyUI-Shared/output/Krea2_turbo_0000*.png. cfg is fixed at 1.0 -
+# the model is distilled and the "negative" is a ConditioningZeroOut, so a real
+# negative prompt does nothing. Resolution and steps are tunable from the UI.
+KREA2_UNET = "krea2_turbo_fp8_scaled.safetensors"
+KREA2_CLIP = "qwen3vl_4b_fp8_scaled.safetensors"
+KREA2_VAE = "qwen_image_vae.safetensors"
+KREA2_RES_DEFAULT = 512
+KREA2_STEPS_DEFAULT = 8
+KREA2_CFG = 1.0
+
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
@@ -1521,6 +1534,487 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4
         gen_progress["is_generating"] = False
 
 
+# ==========================================================================
+# v5 - krea2 turbo "one-shot character" engine
+# ==========================================================================
+# krea2 turbo has no ControlNet and no IPAdapter, so v5 drops the v4 pose rig
+# entirely: one clean generation per asset (player / weapon / shield / enemy /
+# portrait), BiRefNet background removal, done. The JS rig animates the weapon
+# and shield sprites as overlays the same way the procedural rig does. The three
+# tiling wall/ceiling/floor textures stay on FLUX schnell - they already tile
+# cleanly and generate fast.
+
+def krea2_player_prompt(player_style):
+    p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
+    return (
+        f"A full-body video game character sprite of a {p}, viewed from directly behind in a "
+        f"third-person back view, facing away from the camera into the scene. Standing upright and "
+        f"centered, weight balanced, arms relaxed at the sides, hands empty - no weapon, no shield. "
+        f"Even front lighting, sharp detailed textures, the whole figure from head to feet with a "
+        f"little empty space above and below. Plain solid pure white background, nothing else in frame."
+    )
+
+
+def krea2_weapon_prompt(weapon_style, player_style):
+    w = weapon_style.strip() if (weapon_style and weapon_style.strip()) else "sword"
+    p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior"
+    return (
+        f"A single {w}, one object only, shown straight on from the side and standing perfectly "
+        f"upright and vertical: the head or blade points up at the top of the frame, the handle and "
+        f"grip sit at the bottom. Styled to match a {p}'s gear. Clean game item icon, centered with a "
+        f"clear margin on every side, even lighting, crisp detail. No hands, no arms, no character. "
+        f"Plain solid pure white background."
+    )
+
+
+def krea2_shield_prompt(player_style):
+    p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior"
+    return (
+        f"A single round battle shield seen straight on from the front, one shield only, with a "
+        f"plain raised central boss and a simple decorated rim. Bare surface, no emblem, no crest, "
+        f"no painted face or animal. Styled in the colours and materials of a {p}'s gear. Clean game "
+        f"item icon, centered with a clear margin on every side, even lighting. No hands, no arms, no "
+        f"character, no weapon. Plain solid pure white background."
+    )
+
+
+def krea2_enemy_prompt(enemy_style):
+    e = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "menacing dark fantasy demon knight"
+    return (
+        f"A full-body video game enemy sprite of a {e}, facing the camera head-on in a menacing "
+        f"combat-ready stance. Centered, the whole figure from head to feet with a little empty space "
+        f"above and below, dramatic even lighting, sharp detailed textures. Plain solid pure white "
+        f"background, nothing else in frame."
+    )
+
+
+def krea2_portrait_prompt(player_style):
+    p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
+    return (
+        f"A head and shoulders portrait bust of one {p}, facing the viewer with a determined heroic "
+        f"expression, the head filling the upper frame and the shoulders squared at the bottom. "
+        f"Video game status-screen portrait, Doom and Valbrace style, dramatic lighting. Plain "
+        f"uncluttered solid background."
+    )
+
+
+def _round16(n):
+    return max(256, int(round(float(n) / 16.0)) * 16)
+
+
+def _save_tight(img_path):
+    """Trim an RGBA PNG to its alpha bounding box, in place. BiRefNet already cut the
+    background, so this only removes the empty margin the model left around the subject."""
+    from PIL import Image
+    try:
+        img = _tight_crop(Image.open(img_path).convert("RGBA"))
+        img.save(img_path, format="PNG")
+    except Exception as e:
+        print(f"[Tight Crop Error] {os.path.basename(img_path)}: {e}")
+
+
+def generate_flux_surfaces_only(wall_style):
+    """Just the wall / ceiling / floor thirds of generate_flux_all_assets. v5 keeps FLUX
+    schnell for the tiling environment textures and generates everything else with krea2."""
+    prefixes = {"w": f"trio_w_{int(time.time()*1000)}",
+                "c": f"trio_c_{int(time.time()*1000)}",
+                "f": f"trio_f_{int(time.time()*1000)}"}
+    wall_p, ceil_p, floor_p = get_surface_prompts(wall_style)
+
+    def _surface(tag, prompt_text):
+        return {
+            f"{tag}_lat": {"inputs": {"width": 512, "height": 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+            f"{tag}_pos": {"inputs": {"text": prompt_text, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+            f"{tag}_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+                                       "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                       "model": ["1", 0], "positive": [f"{tag}_pos", 0], "negative": ["neg", 0],
+                                       "latent_image": [f"{tag}_lat", 0]}, "class_type": "KSampler"},
+            f"{tag}_dec": {"inputs": {"samples": [f"{tag}_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+            f"{tag}_save": {"inputs": {"filename_prefix": prefixes[tag], "images": [f"{tag}_dec", 0]}, "class_type": "SaveImage"},
+        }
+
+    payload = {
+        "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+        "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+    }
+    payload.update(_surface("w", wall_p))
+    payload.update(_surface("c", ceil_p))
+    payload.update(_surface("f", floor_p))
+
+    data = json.dumps({"prompt": payload}).encode("utf-8")
+    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+
+    start_time = time.time()
+    while time.time() - start_time < 90:
+        time.sleep(0.1)
+        hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
+        with urllib.request.urlopen(hist_req) as h_resp:
+            hist_data = json.loads(h_resp.read().decode("utf-8"))
+        if prompt_id not in hist_data:
+            continue
+        outputs = hist_data[prompt_id].get("outputs", {})
+        if not all(k in outputs for k in ("w_save", "c_save", "f_save")):
+            continue
+
+        def _p(key):
+            info = outputs[key]["images"][0]
+            return os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+
+        w_path, c_path, f_path = _p("w_save"), _p("c_save"), _p("f_save")
+        make_seamless_4way(w_path, blend_pixels=12)
+        make_seamless_4way(c_path, blend_pixels=12)
+        make_seamless_4way(f_path, blend_pixels=12)
+        return w_path, c_path, f_path
+
+    raise TimeoutError("FLUX.1 surface texture generation timed out.")
+
+
+def _krea2_loaders():
+    """Shared loader nodes for any krea2 ComfyUI prompt."""
+    return {
+        "k_unet": {"inputs": {"unet_name": KREA2_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
+        "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"}, "class_type": "CLIPLoader"},
+        "k_vae": {"inputs": {"vae_name": KREA2_VAE}, "class_type": "VAELoader"},
+        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+    }
+
+
+def _krea2_add_branch(payload, name, prompt_text, w, h, steps, seed, prefix):
+    """Add one krea2 txt2img + BiRefNet-alpha branch to a shared payload.
+
+    A caller that wants several outputs to read as one character (animation frames)
+    passes the SAME seed to every branch and varies only a pose clause in the prompt -
+    with no ControlNet for this arch that shared seed is the main consistency lever."""
+    payload[f"{name}_pos"] = {"inputs": {"text": prompt_text, "clip": ["k_clip", 0]}, "class_type": "CLIPTextEncode"}
+    # Distilled model at cfg 1.0 - the negative is a zeroed-out clone of the positive,
+    # exactly as the reference workflow wires it. A real negative prompt does nothing here.
+    payload[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
+    payload[f"{name}_lat"] = {"inputs": {"width": w, "height": h, "batch_size": 1}, "class_type": "EmptyLatentImage"}
+    payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": int(steps), "cfg": KREA2_CFG,
+                                          "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                          "model": ["k_unet", 0], "positive": [f"{name}_pos", 0],
+                                          "negative": [f"{name}_neg", 0], "latent_image": [f"{name}_lat", 0]},
+                               "class_type": "KSampler"}
+    payload[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["k_vae", 0]}, "class_type": "VAEDecode"}
+    payload[f"{name}_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": [f"{name}_dec", 0]}, "class_type": "RemoveBackground"}
+    payload[f"{name}_maskinv"] = {"inputs": {"mask": [f"{name}_mask", 0]}, "class_type": "InvertMask"}
+    payload[f"{name}_save"] = {"inputs": {"filename_prefix": f"{prefix}_{name}_{int(time.time()*1000)}",
+                                          "images": [f"{name}_dec", 0], "mask": [f"{name}_maskinv", 0]},
+                               "class_type": "SaveImageWithAlpha"}
+
+
+def _krea2_submit_and_collect(payload, save_keys, timeout=300):
+    """Submit a krea2 prompt, wait for every `<name>_save` in save_keys, return {name: path}."""
+    data = json.dumps({"prompt": payload}).encode("utf-8")
+    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+
+    expected = [f"{n}_save" for n in save_keys]
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        time.sleep(0.2)
+        hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
+        with urllib.request.urlopen(hist_req) as h_resp:
+            hist_data = json.loads(h_resp.read().decode("utf-8"))
+        if prompt_id not in hist_data:
+            continue
+        outputs = hist_data[prompt_id].get("outputs", {})
+        if not all(k in outputs for k in expected):
+            continue
+        result = {}
+        for n in save_keys:
+            info = outputs[f"{n}_save"]["images"][0]
+            result[n] = os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+        return result
+    raise TimeoutError("krea2 turbo generation timed out.")
+
+
+def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps):
+    """v5: one krea2-turbo prompt with five independent branches - player, weapon, shield,
+    enemy, portrait - each generated once. Returns {player, weapon, shield, enemy, portrait}
+    of PNG paths; portrait may be None if it failed validation."""
+    sq = _round16(res)
+    pw, ph = _round16(res * 0.75), _round16(res)          # taller canvas for the bust
+    ww = _round16(res * 0.5)                              # narrow canvas for the upright weapon
+
+    payload = _krea2_loaders()
+    _krea2_add_branch(payload, "player", krea2_player_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
+    _krea2_add_branch(payload, "weapon", krea2_weapon_prompt(weapon_style, player_style), ww, sq, steps, random.randint(1, 1000000000), "v5")
+    _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
+    _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
+    _krea2_add_branch(payload, "portrait", krea2_portrait_prompt(player_style), pw, ph, steps, random.randint(1, 1000000000), "v5")
+
+    names = ("player", "weapon", "shield", "enemy", "portrait")
+    paths = _krea2_submit_and_collect(payload, names)
+
+    for n in ("player", "enemy"):
+        keep_largest_figure(paths[n])
+        _save_tight(paths[n])
+    for n in ("weapon", "shield"):
+        _save_tight(paths[n])
+    if not crop_portrait_square(paths["portrait"]):
+        paths["portrait"] = None
+
+    print(f"[krea2] v5 player/weapon/shield/enemy/portrait bundle complete ({sq}x{sq}, {int(steps)} steps)")
+    return paths
+
+
+# v6 - krea2 multi-frame player. krea2 turbo has no ControlNet, so the poses are driven
+# purely by text with one shared seed holding the character/weapon/framing steady between
+# frames (the same lever v4 leaned on alongside its OpenPose skeletons). The frontend's
+# existing multi-frame path swaps these during block / attack / hurt.
+V6_FRAME_NAMES = ["idle", "block", "windup", "slash1", "slash2", "slash3", "hurt"]
+
+# Attack progress (0..1) -> index into V6_FRAME_NAMES. windup, then the three swing frames.
+V6_ATTACK_FRAME_INDICES = [2, 3, 4, 5]
+V6_BLOCK_FRAME_INDEX = 1
+V6_HURT_FRAME_INDEX = 6
+
+
+def krea2_frame_prompts(player_style, weapon_style):
+    """The seven v6 pose prompts. Identical scaffold - same character, same gear, same
+    strict back view - so only the action clause varies frame to frame."""
+    p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
+    w = weapon_style.strip() if (weapon_style and weapon_style.strip()) else "sword"
+    base = (
+        f"A full-body video game character sprite of a {p}, seen strictly from directly behind in a "
+        f"third-person back view, facing away from the camera into the scene, holding a {w} in the "
+        f"right hand and a round battle shield on the left arm. The whole figure from head to feet, "
+        f"small and centered in the frame with a clear wide empty margin on every side so nothing "
+        f"touches the edges. Even lighting, sharp detailed textures, plain solid pure white "
+        f"background, no shadow on the ground, nothing else in frame. "
+    )
+    actions = {
+        "idle":   f"Standing at the ready, the {w} lowered at their side, shield down.",
+        # Strict back view (the base wins that), one shield only - so lift THE shield already
+        # on the arm rather than adding a raised one: left arm bent and lifted to bring the
+        # round shield up beside the head, body dropping into a low braced crouch. Sword hand
+        # lowered and back. Planted and still, no motion blur. Shield stays arm-connected for
+        # clean matting.
+        "block":  (f"Raising the shield into a high guard: the left arm bent and lifted so the round "
+                   f"battle shield already on that arm comes up beside the head with its face turned "
+                   f"to the side, covering the head and shoulder. The body drops into a low braced "
+                   f"crouch, knees bent, weight settled back. The {w} in the right hand is lowered "
+                   f"and drawn back. One shield only. A still, planted guard stance, no motion blur."),
+        "windup": f"Winding up to strike: the {w} raised high overhead and cocked back behind the shoulder.",
+        "slash1": f"Mid-swing: the {w} sweeping down and forward through a fast diagonal arc, motion blur streaking off the blade.",
+        "slash2": f"Full follow-through: the {w} swung all the way down and across the body, arms extended, motion blur.",
+        "slash3": f"Recovering from the swing: the {w} trailing low across the far side, weight settling back to centre.",
+        "hurt":   f"Staggering backward off balance, recoiling from a hit, the {w} and shield flung wide.",
+    }
+    return [base + actions[n] for n in V6_FRAME_NAMES]
+
+
+def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps):
+    """v6: one krea2 prompt with the 7 shared-seed player pose frames plus an enemy and a
+    portrait. Returns {"frames": [7 paths], "enemy": path|None, "portrait": path|None}."""
+    sq = _round16(res)
+    pw, ph = _round16(res * 0.75), _round16(res)
+    frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
+
+    payload = _krea2_loaders()
+    frame_prompts = krea2_frame_prompts(player_style, weapon_style)
+    for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
+        _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
+    _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style), sq, sq, steps, random.randint(1, 1000000000), "v6")
+    _krea2_add_branch(payload, "portrait", krea2_portrait_prompt(player_style), pw, ph, steps, random.randint(1, 1000000000), "v6")
+
+    keys = V6_FRAME_NAMES + ["enemy", "portrait"]
+    paths = _krea2_submit_and_collect(payload, keys)
+
+    frame_paths = [paths[n] for n in V6_FRAME_NAMES]
+    for fp in frame_paths:
+        keep_largest_figure(fp)
+    # One shared bounding box so the character holds still between frames instead of
+    # rescaling on every swap (same rule as the v4 pipeline).
+    crop_frames_to_common_bbox(frame_paths)
+
+    keep_largest_figure(paths["enemy"])
+    _save_tight(paths["enemy"])
+    portrait = paths["portrait"] if crop_portrait_square(paths["portrait"]) else None
+
+    print(f"[krea2] v6 {len(frame_paths)}-frame player + enemy + portrait complete ({sq}x{sq}, {int(steps)} steps)")
+    return {"frames": frame_paths, "enemy": paths["enemy"], "portrait": portrait}
+
+
+def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
+                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT):
+    """v5 krea2 turbo mode: FLUX schnell for the 3 tiling textures, krea2 turbo for the
+    player sprite, weapon, shield, enemy and HUD portrait - one generation each."""
+    global gen_progress
+    gen_progress["is_generating"] = True
+    gen_progress["completed_bundle"] = None
+    gen_progress["error"] = None
+    gen_progress["current_step"] = 0
+    gen_progress["total_steps"] = 2
+
+    def _b64(path):
+        with open(path, "rb") as tf:
+            return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+
+    try:
+        gen_progress["current_step"] = 1
+        gen_progress["status_message"] = "Synthesizing dungeon textures with FLUX.1 [schnell]..."
+        gen_progress["percent"] = 20
+        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+
+        gen_progress["current_step"] = 2
+        gen_progress["status_message"] = "Forging character, weapon & foe with krea2 turbo..."
+        gen_progress["percent"] = 55
+        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps)
+
+        gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
+        gen_progress["percent"] = 92
+
+        player_b64 = _b64(assets["player"])
+        portrait_b64 = _b64(assets["portrait"]) if assets.get("portrait") else player_b64
+
+        gen_progress["percent"] = 100
+        gen_progress["status_message"] = "krea2 turbo dungeon & character ready!"
+        gen_progress["completed_bundle"] = {
+            "mode": "v5_krea",
+            "wall_style": wall_style,
+            "wall_texture": _b64(w_path),
+            "ceiling_texture": _b64(c_path),
+            "floor_texture": _b64(f_path),
+            "player_sprite": player_b64,
+            "player_sprites": [player_b64],
+            "player_face": portrait_b64,
+            "player_faces": [portrait_b64],
+            "weapon_sprite": _b64(assets["weapon"]) if assets.get("weapon") else None,
+            "shield_sprite": _b64(assets["shield"]) if assets.get("shield") else None,
+            "enemy_sprites": [_b64(assets["enemy"])] if assets.get("enemy") else [],
+            "enemy_style": (enemy_style or "").strip(),
+        }
+        print("[krea2] v5 bundle complete and packaged!")
+
+    except Exception as e:
+        print(f"[krea2 v5 Error] {e}")
+        gen_progress["error"] = str(e)
+    finally:
+        gen_progress["is_generating"] = False
+
+
+def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
+                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT):
+    """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
+    seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
+    v4 did it, on the stronger model."""
+    global gen_progress
+    gen_progress["is_generating"] = True
+    gen_progress["completed_bundle"] = None
+    gen_progress["error"] = None
+    gen_progress["current_step"] = 0
+    gen_progress["total_steps"] = 2
+
+    def _b64(path):
+        with open(path, "rb") as tf:
+            return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+
+    try:
+        gen_progress["current_step"] = 1
+        gen_progress["status_message"] = "Synthesizing dungeon textures with FLUX.1 [schnell]..."
+        gen_progress["percent"] = 18
+        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+
+        gen_progress["current_step"] = 2
+        gen_progress["status_message"] = "Animating the swing with krea2 turbo (7 frames)..."
+        gen_progress["percent"] = 50
+        bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps)
+
+        gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
+        gen_progress["percent"] = 92
+
+        frames_b64 = [_b64(p) for p in bundle["frames"]]
+        portrait_b64 = _b64(bundle["portrait"]) if bundle.get("portrait") else frames_b64[0]
+
+        gen_progress["percent"] = 100
+        gen_progress["status_message"] = "krea2 turbo swing animation & dungeon ready!"
+        gen_progress["completed_bundle"] = {
+            "mode": "v6_krea",
+            "wall_style": wall_style,
+            "wall_texture": _b64(w_path),
+            "ceiling_texture": _b64(c_path),
+            "floor_texture": _b64(f_path),
+            "player_sprite": frames_b64[0],
+            "player_sprites": frames_b64,
+            "player_face": portrait_b64,
+            "player_faces": [portrait_b64],
+            "weapon_sprite": None,
+            "shield_sprite": None,
+            "enemy_sprites": [_b64(bundle["enemy"])] if bundle.get("enemy") else [],
+            "enemy_style": (enemy_style or "").strip(),
+        }
+        print("[krea2] v6 bundle complete and packaged!")
+
+    except Exception as e:
+        print(f"[krea2 v6 Error] {e}")
+        gen_progress["error"] = str(e)
+    finally:
+        gen_progress["is_generating"] = False
+
+
+def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
+                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT):
+    """v5 krea2 turbo mode: FLUX schnell for the 3 tiling textures, krea2 turbo for the
+    player sprite, weapon, shield, enemy and HUD portrait - one generation each."""
+    global gen_progress
+    gen_progress["is_generating"] = True
+    gen_progress["completed_bundle"] = None
+    gen_progress["error"] = None
+    gen_progress["current_step"] = 0
+    gen_progress["total_steps"] = 2
+
+    def _b64(path):
+        with open(path, "rb") as tf:
+            return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+
+    try:
+        gen_progress["current_step"] = 1
+        gen_progress["status_message"] = "Synthesizing dungeon textures with FLUX.1 [schnell]..."
+        gen_progress["percent"] = 20
+        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+
+        gen_progress["current_step"] = 2
+        gen_progress["status_message"] = "Forging character, weapon & foe with krea2 turbo..."
+        gen_progress["percent"] = 55
+        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps)
+
+        gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
+        gen_progress["percent"] = 92
+
+        player_b64 = _b64(assets["player"])
+        portrait_b64 = _b64(assets["portrait"]) if assets.get("portrait") else player_b64
+
+        gen_progress["percent"] = 100
+        gen_progress["status_message"] = "krea2 turbo dungeon & character ready!"
+        gen_progress["completed_bundle"] = {
+            "mode": "v5_krea",
+            "wall_style": wall_style,
+            "wall_texture": _b64(w_path),
+            "ceiling_texture": _b64(c_path),
+            "floor_texture": _b64(f_path),
+            "player_sprite": player_b64,
+            "player_sprites": [player_b64],
+            "player_face": portrait_b64,
+            "player_faces": [portrait_b64],
+            "weapon_sprite": _b64(assets["weapon"]) if assets.get("weapon") else None,
+            "shield_sprite": _b64(assets["shield"]) if assets.get("shield") else None,
+            "enemy_sprites": [_b64(assets["enemy"])] if assets.get("enemy") else [],
+            "enemy_style": (enemy_style or "").strip(),
+        }
+        print("[krea2] v5 bundle complete and packaged!")
+
+    except Exception as e:
+        print(f"[krea2 v5 Error] {e}")
+        gen_progress["error"] = str(e)
+    finally:
+        gen_progress["is_generating"] = False
+
+
 class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/progress":
@@ -1570,13 +2064,24 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             enemy_style = data.get("enemy_style", "")
             mode = data.get("mode", "v3_flux")
 
+            def _int(v, fallback):
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return fallback
+
+            krea_res = _int(data.get("krea_res"), KREA2_RES_DEFAULT)
+            krea_steps = _int(data.get("krea_steps"), KREA2_STEPS_DEFAULT)
+
             # Reset progress synchronously
             gen_progress["is_generating"] = True
             gen_progress["completed_bundle"] = None
             gen_progress["error"] = None
             gen_progress["current_step"] = 1
             gen_progress["total_steps"] = 2
-            gen_progress["status_message"] = "Synthesizing 3D Dungeon & Character with FLUX.1 [schnell]..."
+            gen_progress["status_message"] = (
+                "Synthesizing dungeon & character with krea2 turbo..." if mode in ("v5_krea", "v6_krea")
+                else "Synthesizing 3D Dungeon & Character with FLUX.1 [schnell]...")
             gen_progress["percent"] = 25
 
             self.send_response(200)
@@ -1585,9 +2090,18 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": True, "message": f"{mode} generation started"}, ensure_ascii=True).encode("utf-8"))
 
-            t = threading.Thread(target=run_batch_v3_flux,
-                                 args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
-                                 daemon=True)
+            if mode == "v5_krea":
+                t = threading.Thread(target=run_batch_v5_krea,
+                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps),
+                                     daemon=True)
+            elif mode == "v6_krea":
+                t = threading.Thread(target=run_batch_v6_krea,
+                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps),
+                                     daemon=True)
+            else:
+                t = threading.Thread(target=run_batch_v3_flux,
+                                     args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
+                                     daemon=True)
             t.start()
             return
 

@@ -11,6 +11,8 @@
 
     const modeSelect = document.getElementById('modeSelect');
     const modeDesc = document.getElementById('modeDesc');
+    const krea2ResInput = document.getElementById('krea2ResInput');
+    const krea2StepsInput = document.getElementById('krea2StepsInput');
     const gridCountInput = document.getElementById('gridCountInput');
     const gridCountSlider = document.getElementById('gridCountSlider');
     const gridDesc = document.getElementById('gridDesc');
@@ -101,6 +103,10 @@
     let playerSpriteImg = null;
     let playerFaceImg = null;
     let playerSpriteFrames = [];
+    // v5 (krea2) generates the weapon and shield as their own transparent sprites; the rig
+    // draws these instead of the procedural bezier gear. Null in every other mode.
+    let weaponSpriteImg = null;
+    let shieldSpriteImg = null;
     let enemySpriteFrames = [];
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
@@ -116,7 +122,7 @@
     let startRoom = { x: 1, y: 1 };
     let zBuffer = new Float64Array(screenWidth);
 
-    let activeMode = 'v3_flux';
+    let activeMode = 'v6_krea';
     let currentThemeName = "Windows 95";
     let totalMoves = 0;
     let queuedAction = null;
@@ -199,6 +205,23 @@
     btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+
+    const MODE_DESCRIPTIONS = {
+      v6_krea: '<strong>v6 krea2 turbo:</strong> like v5, but the player is a 7-frame krea2 swing animation (shared seed) swapped through on block / attack / hurt, the way v4 did it.',
+      v5_krea: '<strong>v5 krea2 turbo:</strong> FLUX schnell tiles the dungeon; krea2 turbo makes the player, weapon, shield, enemy & portrait in one clean pass each.',
+      v4_flux: '<strong>v4 Multi-Frame Sprite Engine:</strong> SDXL-Lightning + IPAdapter + OpenPose rig, 5 posed player frames with composited gear.',
+      v3_flux: '<strong>v3 FLUX.1 [schnell]:</strong> Synthesizes full 3D environment & custom warrior character in ~10s.',
+      v2_texture: '<strong>v2 texture:</strong> MiniMax H3 material textures in a 3D raycaster.',
+      v1_video: '<strong>v1 video:</strong> Pre-rendered frame-chained FMV clips.',
+    };
+    const krea2Settings = document.getElementById('krea2Settings');
+    const KREA2_MODES = ['v5_krea', 'v6_krea'];
+    const syncModeDesc = () => {
+      if (modeDesc && MODE_DESCRIPTIONS[modeSelect.value]) modeDesc.innerHTML = MODE_DESCRIPTIONS[modeSelect.value];
+      if (krea2Settings) krea2Settings.classList.toggle('hidden', !KREA2_MODES.includes(modeSelect.value));
+    };
+    modeSelect.addEventListener('change', syncModeDesc);
+    syncModeDesc();
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -760,6 +783,79 @@
       c.restore();
     }
 
+    // 1b / 2b. SPRITE GEAR (v5 / krea2) - same anchors and swing timing as the procedural
+    // rig above, but blits the generated weapon & shield sprites instead of bezier shapes.
+    // The weapon sprite is generated blade-up with its grip at the bottom, so it rotates
+    // cleanly about a pivot near the hand.
+    function blitWeaponSprite(c, pivotX, pivotY, angleRad, targetLen) {
+      const img = weaponSpriteImg;
+      if (!img || !img.complete || !img.naturalWidth) return;
+      const h = targetLen;
+      const w = h * (img.naturalWidth / img.naturalHeight);
+      c.save();
+      c.translate(pivotX, pivotY);
+      c.rotate(angleRad);
+      // Grip sits ~10% up from the bottom edge of the sprite; park that point on the pivot.
+      c.drawImage(img, -w / 2, -h * 0.90, w, h);
+      c.restore();
+    }
+
+    function drawSpriteWeapon(c, attFrame, isMoving, walkBob, shieldProgress) {
+      if (attFrame === 0) {
+        const hx = rig.swordX;
+        const hy = rig.swordY + (isMoving ? walkBob * 0.5 : 0) + (shieldProgress * 4);
+        blitWeaponSprite(c, hx, hy, shieldProgress * 0.35, 74);
+
+      } else if (attFrame <= 4) {
+        // Wind-up: cocked up and back over the shoulder.
+        const prog = attFrame / 4;
+        blitWeaponSprite(c, rig.swordX + 6, rig.swordY - 6, -0.5 - prog * 0.5, 74);
+
+      } else if (attFrame <= 9) {
+        // Slash: sweep the blade through a downward arc and trail the swipe streak.
+        const progress = (attFrame - 5) / 4;
+        c.strokeStyle = 'rgba(255, 255, 255, 0.95)'; c.lineWidth = 6;
+        c.beginPath(); c.moveTo(rig.swordX + 7, -20); c.quadraticCurveTo(rig.swordX + 15, -85, -35, -95); c.stroke();
+        c.strokeStyle = 'rgba(56, 189, 248, 0.85)'; c.lineWidth = 3;
+        c.beginPath(); c.moveTo(rig.swordX + 7, -20); c.quadraticCurveTo(rig.swordX + 15, -85, -35, -95); c.stroke();
+
+        const bx = 18 - progress * 34;
+        const by = -46 - Math.sin(progress * Math.PI) * 20;
+        const angle = -1.0 + progress * 2.4;      // over-the-shoulder -> swept down across body
+        blitWeaponSprite(c, bx, by, angle, 78);
+
+      } else if (attFrame <= 13) {
+        // Follow-through: blade low and across to the shield side.
+        blitWeaponSprite(c, rig.swordX - 20, rig.swordY - 24, 1.5, 74);
+
+      } else {
+        // Recover back to rest.
+        const progress = (attFrame - 14) / 4;
+        const hx = rig.swordX - (1.0 - progress) * 18;
+        const hy = rig.swordY - (1.0 - progress) * 20;
+        blitWeaponSprite(c, hx, hy, 1.5 * (1.0 - progress), 74);
+      }
+    }
+
+    function drawSpriteShield(c, shieldProgress) {
+      const img = shieldSpriteImg;
+      if (!img || !img.complete || !img.naturalWidth) return;
+      // Rise from the left flank to a centred high guard as the block builds.
+      const sx = rig.shieldX + shieldProgress * (0 - rig.shieldX);
+      const sy = rig.shieldY - shieldProgress * 34;
+      const size = 40 + shieldProgress * 20;
+      const w = size * (img.naturalWidth / img.naturalHeight);
+      c.save();
+      c.translate(sx, sy);
+      c.drawImage(img, -w / 2, -size / 2, w, size);
+      if (shieldProgress > 0.3) {
+        c.strokeStyle = `rgba(56, 189, 248, ${shieldProgress * 0.9})`;
+        c.lineWidth = 4;
+        c.beginPath(); c.arc(0, 0, w / 2 + 6, 0, Math.PI * 2); c.stroke();
+      }
+      c.restore();
+    }
+
         // 3. COMPOSITE OVER-THE-SHOULDER PLAYER RENDERER (VALBRACE PROPORTIONS)
     function drawOverTheShoulderPlayer(c, width, height) {
       if (!combatState.inBattle) return;
@@ -775,6 +871,14 @@
       const hurtFrame = combatState.hurtFrame;
       const shieldProgress = combatState.shieldProgress;
 
+      // v5 (krea2) supplies its own weapon & shield sprites; every other single-sprite mode
+      // falls back to the procedural bezier rig. gearWeapon/gearShield are drop-in for the
+      // drawModular* pair below.
+      const useSpriteGear = activeMode === 'v5_krea' && weaponSpriteImg && weaponSpriteImg.complete && weaponSpriteImg.naturalWidth > 0;
+      const gearWeapon = useSpriteGear ? drawSpriteWeapon : drawModularWeapon;
+      const gearShield = (useSpriteGear && shieldSpriteImg && shieldSpriteImg.complete && shieldSpriteImg.naturalWidth > 0)
+        ? drawSpriteShield : drawModularShield;
+
       if (hurtFrame > 0) {
         c.fillStyle = 'rgba(239, 68, 68, 0.35)';
         c.fillRect(0, 0, width, height);
@@ -785,22 +889,26 @@
       c.translate(px, py);
       c.rotate(tilt);
 
-      // --- MULTI-FRAME AI SPRITE SHEET MODE (v4) ---
+      // --- MULTI-FRAME AI SPRITE SHEET MODE (v4: 5 frames / v6: 7-frame swing) ---
       if (playerSpriteFrames && playerSpriteFrames.length > 1) {
+        const v6Frames = playerSpriteFrames.length >= 7;
         let currentFrame = playerSpriteFrames[0];
         if (hurtFrame > 0) {
-          // Frame 4 is the hurt/stagger recoil pose - takes priority over attack/block
-          currentFrame = playerSpriteFrames[4] || playerSpriteFrames[0];
+          // v6: idle, block, windup, slash1, slash2, slash3, hurt -> hurt is frame 6.
+          currentFrame = playerSpriteFrames[v6Frames ? 6 : 4] || playerSpriteFrames[0];
         } else if (attFrame > 0) {
-          // Frames 2 and 3 are attack frames (windup and upward slash)
           const prog = (combatState.attackFrame - 1) / combatState.maxAttackFrames;
-          if (prog < 0.45) {
+          if (v6Frames) {
+            // windup + three swing frames spread across the attack
+            const swing = [2, 3, 4, 5];
+            const k = Math.min(3, Math.max(0, Math.floor(prog * 4)));
+            currentFrame = playerSpriteFrames[swing[k]] || playerSpriteFrames[0];
+          } else if (prog < 0.45) {
             currentFrame = playerSpriteFrames[2] || playerSpriteFrames[0];
           } else {
             currentFrame = playerSpriteFrames[3] || playerSpriteFrames[0];
           }
         } else if (shieldProgress > 0.3) {
-          // Frame 1 is the forward-facing shield block stance
           currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
         }
 
@@ -826,8 +934,8 @@
         c.strokeStyle = '#18181b'; c.lineWidth = 1.5;
         c.strokeRect(-10, -58, 7, 6);
         c.strokeRect(-1, -58, 7, 6);
-        drawModularShield(c, 0);
-        drawModularWeapon(c, 0, false, 0, 0);
+        gearShield(c, 0);
+        gearWeapon(c, 0, false, 0, 0);
         c.restore();
         return;
       }
@@ -836,12 +944,12 @@
       // LAYER 1: WEAPONS (BEHIND Body in 2D order, deeper in 3D scene)
       // =========================================================================
       if (shieldProgress <= 0.3) {
-        drawModularShield(c, shieldProgress);
+        gearShield(c, shieldProgress);
       }
-      
+
       // Neutral sword drawn BEHIND the player so the player's arm overlaps the hilt
       if (attFrame === 0) {
-        drawModularWeapon(c, attFrame, isMoving, walkBob, shieldProgress);
+        gearWeapon(c, attFrame, isMoving, walkBob, shieldProgress);
       }
 
       // =========================================================================
@@ -874,12 +982,12 @@
       // LAYER 3: RAISED SHIELD & ACTIVE SWORD SWING (Overlaying character body)
       // =========================================================================
       if (shieldProgress > 0.3) {
-        drawModularShield(c, shieldProgress);
+        gearShield(c, shieldProgress);
       }
 
       // When actively swinging the sword, it sweeps across the foreground
       if (attFrame > 0) {
-        drawModularWeapon(c, attFrame, isMoving, walkBob, shieldProgress);
+        gearWeapon(c, attFrame, isMoving, walkBob, shieldProgress);
       }
       
       c.restore();
@@ -1985,7 +2093,9 @@
             weapon_image: attachedImages.weapon || null,
             enemy_style: enemyPromptInput ? enemyPromptInput.value.trim() : "",
             enemy_image: attachedImages.enemy || null,
-            mode: activeMode
+            mode: activeMode,
+            krea_res: krea2ResInput ? parseInt(krea2ResInput.value) || 512 : 512,
+            krea_steps: krea2StepsInput ? parseInt(krea2StepsInput.value) || 8 : 8
           })
         });
 
@@ -2022,6 +2132,18 @@
                 playerSpriteImg = new Image();
                 playerSpriteImg.src = b.player_sprite;
                 playerSpriteFrames = [playerSpriteImg];
+              }
+              // v5 (krea2): separately generated weapon & shield sprites the rig animates
+              // as overlays. Cleared first so switching back to another mode drops them.
+              weaponSpriteImg = null;
+              shieldSpriteImg = null;
+              if (b.weapon_sprite) {
+                weaponSpriteImg = new Image();
+                weaponSpriteImg.src = b.weapon_sprite;
+              }
+              if (b.shield_sprite) {
+                shieldSpriteImg = new Image();
+                shieldSpriteImg.src = b.shield_sprite;
               }
               playerFaceFrames = [];
               if (b.player_faces && b.player_faces.length > 0) {
