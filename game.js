@@ -1,0 +1,2093 @@
+    const SERVER_URL = "http://127.0.0.1:5555";
+
+    const appContainer = document.getElementById('appContainer');
+    const screenSetup = document.getElementById('screenSetup');
+    const screenProgress = document.getElementById('screenProgress');
+    const screenGame = document.getElementById('screenGame');
+    const modalSettings = document.getElementById('modalSettings');
+    const victoryModal = document.getElementById('victoryModal');
+    const btnPlayAgain = document.getElementById('btnPlayAgain');
+    const winMovesCount = document.getElementById('winMovesCount');
+
+    const modeSelect = document.getElementById('modeSelect');
+    const modeDesc = document.getElementById('modeDesc');
+    const gridCountInput = document.getElementById('gridCountInput');
+    const gridCountSlider = document.getElementById('gridCountSlider');
+    const gridDesc = document.getElementById('gridDesc');
+    const wallPromptInput = document.getElementById('wallPromptInput');
+    const playerPromptInput = document.getElementById('playerPromptInput');
+    const playerFileInput = document.getElementById('playerFileInput');
+    const btnAttachPlayerImage = document.getElementById('btnAttachPlayerImage');
+    const playerImageBadge = document.getElementById('playerImageBadge');
+    const playerImageThumb = document.getElementById('playerImageThumb');
+    const playerImageName = document.getElementById('playerImageName');
+    const btnClearPlayerImage = document.getElementById('btnClearPlayerImage');
+    let uploadedPlayerImageDataUrl = null;
+
+    const weaponPromptInput = document.getElementById('weaponPromptInput');
+    const enemyPromptInput = document.getElementById('enemyPromptInput');
+    // Attached reference images, keyed the same way the request payload expects them.
+    const attachedImages = { player: null, weapon: null, enemy: null };
+
+    const btnCreate = document.getElementById('btnCreate');
+    const btnSettings = document.getElementById('btnSettings');
+    const btnCloseSettings = document.getElementById('btnCloseSettings');
+    const btnSaveSettings = document.getElementById('btnSaveSettings');
+
+    const progBarChunks = document.getElementById('progBarChunks');
+    const progStatusText = document.getElementById('progStatusText');
+    const progPercentText = document.getElementById('progPercentText');
+    const progTimer = document.getElementById('progTimer');
+    const progSubText = document.getElementById('progSubText');
+
+    const viewportCanvas = document.getElementById('viewportCanvas');
+    const gameVideo = document.getElementById('gameVideo');
+    const statusPos = document.getElementById('statusPos');
+    const bumpBanner = document.getElementById('bumpBanner');
+    const bumpText = document.getElementById('bumpText');
+    const mapProgressBadge = document.getElementById('mapProgressBadge');
+
+    const titleButtons = document.getElementById('titleButtons');
+    const btnUp = document.getElementById('btnUp');
+    const btnDown = document.getElementById('btnDown');
+    const btnLeft = document.getElementById('btnLeft');
+    const btnRight = document.getElementById('btnRight');
+    const btnMaximize = document.getElementById('btnMaximize');
+    const btnClose = document.getElementById('btnClose');
+
+    // ==========================================
+    // RAYCASTER MAZE & TEXTURE ENGINE
+    // ==========================================
+    const screenWidth = 320;
+    const screenHeight = 240;
+
+    // Wall height in world units (one map cell is 1x1) and how far the camera sits BEHIND the
+    // player's cell centre. Together these decide how much of the screen a faced wall covers:
+    // coverage = WALL_HEIGHT / (0.5 + CAMERA_SETBACK), so ~0.62/0.92 = 67%, always leaving bands of
+    // ceiling and floor with room for a duel.
+    //
+    // Both knobs are needed. Movement is strictly grid based, so a faced wall is otherwise ALWAYS
+    // exactly 0.5 away and towers over the screen. Shortening walls alone does buy the headroom,
+    // but at 0.36 (the value that works on its own) corridors turn into a squat crawlspace, because
+    // it shrinks distant walls just as much as near ones. The setback only affects what is directly
+    // ahead, so corridors keep their height.
+    //
+    // Both replace an earlier attempt that clamped the projected DISTANCE per column. That broke
+    // perspective outright: near walls were drawn at a distance they weren't at, so their textures
+    // compressed, and the near ends of side walls were cut short - which read as corridors opening
+    // to the left and right that did not exist.
+    const WALL_HEIGHT = 0.62;
+    const CAMERA_SETBACK = 0.42;
+    const TEX_SIZE = 256;
+
+    // Texels per world unit on the floor and ceiling. A cell is 1x1 in plan but only WALL_HEIGHT
+    // tall, so eye level sits at WALL_HEIGHT/2 - about 1.6x nearer both planes than the old 0.5.
+    // Geometry then magnifies their texture by that same 1.6x, which is why the moss and leaves
+    // ballooned. One texture per cell (the v3 rule) is only the right density when the eye is at
+    // 0.5; tiling 1/WALL_HEIGHT times per cell restores the grain v3 had. Purely a texture-density
+    // choice - the geometry, and so the Valbrace framing, is untouched.
+    const SURFACE_TEXELS = TEX_SIZE / WALL_HEIGHT;
+
+    let ctx = viewportCanvas.getContext('2d');
+    let imgData = ctx.createImageData(screenWidth, screenHeight);
+    let buffer = imgData.data;
+
+    let wallTexture = null;
+    let ceilingTexture = null;
+    let floorTexture = null;
+    let wallLanternTexture = null;
+    let exitSignTexture = null;
+
+    let playerSpriteImg = null;
+    let playerFaceImg = null;
+    let playerSpriteFrames = [];
+    let enemySpriteFrames = [];
+    // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
+    let playerFaceFrames = [];
+    let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
+
+    let MAP = [];
+    let MAP_WIDTH = 0;
+    let MAP_HEIGHT = 0;
+    let visitedTiles = new Set();
+    let passagesList = [];
+    let lanternList = [];
+    let exitRoom = { x: 5, y: 5 };
+    let startRoom = { x: 1, y: 1 };
+    let zBuffer = new Float64Array(screenWidth);
+
+    let activeMode = 'v3_flux';
+    let currentThemeName = "Windows 95";
+    let totalMoves = 0;
+    let queuedAction = null;
+
+    const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
+    const DIR_VECS = [
+      { dx: 0, dy: -1 }, // 0: NORTH
+      { dx: 1, dy: 0 },  // 1: EAST
+      { dx: 0, dy: 1 },  // 2: SOUTH
+      { dx: -1, dy: 0 }  // 3: WEST
+    ];
+
+    function dirToAngle(dirIndex) {
+      if (dirIndex === 0) return -Math.PI / 2; // NORTH
+      if (dirIndex === 1) return 0;            // EAST
+      if (dirIndex === 2) return Math.PI / 2;  // SOUTH
+      if (dirIndex === 3) return Math.PI;      // WEST
+      return 0;
+    }
+
+    let player = {
+      gridX: 1,
+      gridY: 1,
+      posX: 1.5,
+      posY: 1.5,
+      angle: 0,
+      dirIndex: 1,
+      isAnimating: false
+    };
+
+    // ==========================================
+    // WINDOW BUTTONS & FULLSCREEN HANDLERS
+    // ==========================================
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => console.warn(err));
+        btnMaximize.textContent = "❐";
+      } else {
+        document.exitFullscreen().catch(err => console.warn(err));
+        btnMaximize.textContent = "□";
+      }
+    }
+
+    btnMaximize.addEventListener('click', toggleFullscreen);
+    document.addEventListener('fullscreenchange', () => {
+      btnMaximize.textContent = document.fullscreenElement ? "❐" : "□";
+    });
+
+    function openSetupScreen() {
+      screenGame.classList.add('hidden');
+      victoryModal.classList.add('hidden');
+      screenSetup.classList.remove('hidden');
+      if (titleButtons) titleButtons.classList.remove('hidden');
+      appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+    }
+
+    btnClose.addEventListener('click', () => {
+      if (!screenGame.classList.contains('hidden')) {
+        if (confirm("Would you like to create a new dungeon?")) openSetupScreen();
+      } else {
+        openSetupScreen();
+      }
+    });
+
+    btnPlayAgain.addEventListener('click', openSetupScreen);
+
+    function updateGridText(val) {
+      const v = Math.max(10, Math.min(100, parseInt(val) || 25));
+      gridCountInput.value = v;
+      gridCountSlider.value = v;
+      if (v <= 15) gridDesc.textContent = `Quick 3DMaze: ${v} grid corridors with glowing lanterns and Exit.`;
+      else if (v <= 35) gridDesc.textContent = `Standard 3DMaze Labyrinth: ${v} corridors with branching paths and lanterns.`;
+      else if (v <= 70) gridDesc.textContent = `Large 3DMaze Labyrinth: ${v} complex winding passages with distant Exit.`;
+      else gridDesc.textContent = `Epic 3DMaze Challenge: ${v} massive interconnected passages!`;
+    }
+
+    gridCountInput.addEventListener('input', (e) => updateGridText(e.target.value));
+    gridCountSlider.addEventListener('input', (e) => updateGridText(e.target.value));
+
+    btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
+    btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+    btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        wallPromptInput.value = btn.getAttribute('data-val');
+      });
+    });
+
+    // ==========================================
+    // VALBRACE REAL-TIME COMBAT ENGINE (v5)
+    // ==========================================
+    const doomFaceCanvas = document.getElementById('doomFaceCanvas');
+    const doomFaceCtx = doomFaceCanvas ? doomFaceCanvas.getContext('2d') : null;
+    const btnToggleBattle = document.getElementById('btnToggleBattle');
+    const battleActionBar = document.getElementById('battleActionBar');
+    const battleModeBadge = document.getElementById('battleModeBadge');
+    const playerHpBar = document.getElementById('playerHpBar');
+    const playerHpText = document.getElementById('playerHpText');
+    const playerStmBar = document.getElementById('playerStmBar');
+    const playerStmText = document.getElementById('playerStmText');
+    const controlsHeader = document.getElementById('controlsHeader');
+
+    const btnCombatDodgeL = document.getElementById('btnCombatDodgeL');
+    const btnCombatAttack = document.getElementById('btnCombatAttack');
+    const btnCombatBlock = document.getElementById('btnCombatBlock');
+    const btnCombatDodgeR = document.getElementById('btnCombatDodgeR');
+
+    const keysHeld = {
+      left: false,
+      right: false,
+      block: false
+    };
+
+    const combatState = {
+      inBattle: false,
+      playerHp: 100,
+      playerMaxHp: 100,
+      playerStm: 100,
+      playerMaxStm: 100,
+      playerX: 0,
+      vx: 0,
+      attackFrame: 0,
+      maxAttackFrames: 18,
+      hurtFrame: 0,
+      maxHurtFrames: 24,
+      shieldProgress: 0.0,
+      combatEffects: [],
+      enemy: {
+        name: 'NIGHTSTALKER',
+        hp: 100,
+        maxHp: 100,
+        attackTimer: 110,
+        state: 'idle',
+        stateTimer: 0
+      },
+      faceState: 'idle',
+      faceTimer: 0,
+      glanceDir: 0,
+      glanceTimer: 60
+    };
+
+    function toggleBattleMode(forceState) {
+      if (typeof forceState === 'boolean') {
+        combatState.inBattle = forceState;
+      } else {
+        combatState.inBattle = !combatState.inBattle;
+      }
+
+      if (combatState.inBattle) {
+        if (battleModeBadge) {
+          battleModeBadge.textContent = "VALBRACE DUEL";
+          battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white animate-pulse";
+        }
+        if (battleActionBar) battleActionBar.classList.remove('hidden');
+        if (controlsHeader) controlsHeader.textContent = "COMBAT: A/D (Strafe), Z (Strike), X (Block)";
+        if (btnToggleBattle) {
+          btnToggleBattle.innerHTML = "🏃 <span>FLEE (Space)</span>";
+          btnToggleBattle.className = "win95-btn px-2 py-0.5 text-[10px] font-bold text-slate-800 bg-slate-200 hover:bg-slate-300";
+        }
+
+        combatState.playerX = 0;
+        combatState.vx = 0;
+        combatState.attackFrame = 0;
+        combatState.hurtFrame = 0;
+        combatState.shieldProgress = 0;
+
+        if (combatState.enemy.hp <= 0) {
+          combatState.enemy.hp = 100;
+          combatState.enemy.state = 'idle';
+          combatState.enemy.attackTimer = 110;
+        }
+
+        showFloatingCombatText("VALBRACE DUEL INITIATED!", 160, 80, "#facc15");
+      } else {
+        if (battleModeBadge) {
+          battleModeBadge.textContent = "MAZE EXPLORATION";
+          battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800";
+        }
+        if (battleActionBar) battleActionBar.classList.add('hidden');
+        if (controlsHeader) controlsHeader.textContent = "CONTROLS (Space: Battle):";
+        if (btnToggleBattle) {
+          btnToggleBattle.innerHTML = "⚔️ <span>BATTLE (Space)</span>";
+          btnToggleBattle.className = "win95-btn px-2 py-0.5 text-[10px] font-bold text-red-900 bg-red-100 hover:bg-red-200";
+        }
+        // Hiding the action bar mid-press means the Block button never receives its pointerup or
+        // pointerleave, so keysHeld.block would stay stuck on - and a stuck block drains stamina to
+        // 2 and then blocks its own regen forever (see the regen guard in the combat loop).
+        releaseHeldKeys();
+      }
+      render3D();
+    }
+
+    // Any held input has to be dropped whenever the player stops actively driving the game, or a
+    // key that never got its keyup survives into the next dungeon.
+    function releaseHeldKeys() {
+      keysHeld.left = false;
+      keysHeld.right = false;
+      keysHeld.block = false;
+    }
+
+    // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
+    // attack/hurt frames) carried over from the previous dungeon - so a run started while blocking
+    // or mid-fight began the next dungeon at near-zero stamina.
+    function resetCombatForNewDungeon() {
+      // Go through toggleBattleMode rather than just clearing the flag, so the badge, action bar,
+      // controls header and Battle/Flee button all return to exploration state too - otherwise the
+      // new dungeon starts out of battle but still wearing the "VALBRACE DUEL" chrome.
+      if (combatState.inBattle) toggleBattleMode(false);
+      releaseHeldKeys();
+      combatState.playerStm = combatState.playerMaxStm;
+      combatState.playerHp = combatState.playerMaxHp;
+      combatState.playerX = 0;
+      combatState.vx = 0;
+      combatState.attackFrame = 0;
+      combatState.hurtFrame = 0;
+      combatState.shieldProgress = 0;
+      combatState.combatEffects.length = 0;
+      combatState.enemy.hp = 100;
+      combatState.enemy.state = 'idle';
+      combatState.enemy.stateTimer = 0;
+      combatState.enemy.attackTimer = 110;
+    }
+
+    // Alt-tabbing or clicking into a text field while holding X swallows the keyup the same way.
+    window.addEventListener('blur', releaseHeldKeys);
+
+    if (btnToggleBattle) {
+      btnToggleBattle.addEventListener('click', () => toggleBattleMode());
+    }
+
+    function showFloatingCombatText(text, x, y, color = '#ffffff') {
+      combatState.combatEffects.push({
+        text: text,
+        x: x,
+        y: y,
+        color: color,
+        life: 32,
+        maxLife: 32
+      });
+    }
+
+    function combatAttack() {
+      if (!combatState.inBattle || combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
+      if (combatState.playerStm < 15) {
+        showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
+        return;
+      }
+      combatState.playerStm = Math.max(0, combatState.playerStm - 15);
+      combatState.attackFrame = 1;
+      combatState.faceState = 'attack';
+      combatState.faceTimer = 18;
+    }
+
+    if (btnCombatDodgeL) {
+      btnCombatDodgeL.addEventListener('pointerdown', (e) => { e.preventDefault(); keysHeld.left = true; });
+      btnCombatDodgeL.addEventListener('pointerup', () => { keysHeld.left = false; });
+      btnCombatDodgeL.addEventListener('pointerleave', () => { keysHeld.left = false; });
+    }
+    if (btnCombatDodgeR) {
+      btnCombatDodgeR.addEventListener('pointerdown', (e) => { e.preventDefault(); keysHeld.right = true; });
+      btnCombatDodgeR.addEventListener('pointerup', () => { keysHeld.right = false; });
+      btnCombatDodgeR.addEventListener('pointerleave', () => { keysHeld.right = false; });
+    }
+    if (btnCombatBlock) {
+      btnCombatBlock.addEventListener('pointerdown', (e) => { e.preventDefault(); keysHeld.block = true; });
+      btnCombatBlock.addEventListener('pointerup', () => { keysHeld.block = false; });
+      btnCombatBlock.addEventListener('pointerleave', () => { keysHeld.block = false; });
+    }
+    if (btnCombatAttack) {
+      btnCombatAttack.addEventListener('pointerdown', (e) => { e.preventDefault(); combatAttack(); });
+    }
+
+    // 60 FPS Combat Game Loop
+    setInterval(() => {
+      if (!screenGame || screenGame.classList.contains('hidden')) return;
+
+      if (combatState.inBattle) {
+        if (keysHeld.left) {
+          combatState.vx = -3.8;
+          combatState.glanceDir = -1;
+        } else if (keysHeld.right) {
+          combatState.vx = 3.8;
+          combatState.glanceDir = 1;
+        } else {
+          combatState.vx *= 0.65;
+        }
+        combatState.playerX = Math.max(-85, Math.min(85, combatState.playerX + combatState.vx));
+
+        if (keysHeld.block && combatState.playerStm > 2) {
+          combatState.shieldProgress = Math.min(1.0, combatState.shieldProgress + 0.2);
+          combatState.playerStm = Math.max(0, combatState.playerStm - 0.12);
+          combatState.faceState = 'block';
+        } else {
+          combatState.shieldProgress = Math.max(0.0, combatState.shieldProgress - 0.2);
+        }
+      }
+
+      // Only an ACTIVE block suppresses regen. Gating on keysHeld.block alone meant a block flag
+      // that never got cleared left stamina pinned just above zero forever, even out of combat.
+      if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
+        combatState.playerStm = Math.min(combatState.playerMaxStm, combatState.playerStm + 0.45);
+      }
+
+      if (combatState.attackFrame > 0) {
+        combatState.attackFrame++;
+        if (combatState.attackFrame === 7 && combatState.enemy.hp > 0) {
+          const dmg = 24 + Math.floor(Math.random() * 12);
+          combatState.enemy.hp = Math.max(0, combatState.enemy.hp - dmg);
+          combatState.enemy.state = 'hurt';
+          combatState.enemy.stateTimer = 12;
+          showFloatingCombatText(`-${dmg} SLASH!`, 160 + (Math.random() * 30 - 15), 100, "#f87171");
+
+          if (combatState.enemy.hp <= 0) {
+            combatState.enemy.state = 'defeated';
+            showFloatingCombatText("VICTORY! +50 ESSENCE", 160, 70, "#fde047");
+          }
+        }
+        if (combatState.attackFrame > combatState.maxAttackFrames) {
+          combatState.attackFrame = 0;
+        }
+      }
+
+      if (combatState.hurtFrame > 0) {
+        combatState.hurtFrame++;
+        if (combatState.hurtFrame > combatState.maxHurtFrames) {
+          combatState.hurtFrame = 0;
+        }
+      }
+
+      if (combatState.faceTimer > 0) {
+        combatState.faceTimer--;
+        if (combatState.faceTimer <= 0) combatState.faceState = 'idle';
+      }
+
+      combatState.glanceTimer--;
+      if (combatState.glanceTimer <= 0) {
+        const r = Math.random();
+        combatState.glanceDir = r < 0.25 ? -1 : r < 0.5 ? 1 : 0;
+        combatState.glanceTimer = 60 + Math.floor(Math.random() * 80);
+      }
+
+      if (combatState.inBattle && combatState.enemy.hp > 0) {
+        const e = combatState.enemy;
+
+        // 'attack' is held for a few frames the same way 'hurt' is, so the enemy's attack sprite
+        // has a state to actually be drawn during - previously the swing resolved and dropped
+        // straight back to idle, leaving that frame with nothing to bind to.
+        if (e.state === 'hurt' || e.state === 'attack') {
+          e.stateTimer--;
+          if (e.stateTimer <= 0) e.state = 'idle';
+        } else {
+          e.attackTimer--;
+
+          if (e.attackTimer === 30) {
+            e.state = 'telegraph';
+            showFloatingCombatText("⚠️ ENEMY WIND-UP!", 160, 75, "#fbbf24");
+          } else if (e.attackTimer <= 0) {
+            e.attackTimer = 110 + Math.floor(Math.random() * 50);
+            e.state = 'attack';
+            e.stateTimer = 14;
+
+            const isDodged = Math.abs(combatState.playerX) > 42;
+            const isGuarded = combatState.shieldProgress > 0.6;
+
+            if (isDodged) {
+              showFloatingCombatText("DODGED! (MISS)", 160, 130, "#38bdf8");
+            } else if (isGuarded) {
+              showFloatingCombatText("🛡️ PARRY BLOCKED!", 160, 140, "#a855f7");
+              combatState.playerHp = Math.max(1, combatState.playerHp - 2);
+            } else {
+              const dmg = 18;
+              combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
+              combatState.hurtFrame = 1;
+              combatState.faceState = 'hurt';
+              combatState.faceTimer = 26;
+              showFloatingCombatText(`-${dmg} HP HIT!`, 160, 160, "#dc2626");
+            }
+          }
+        }
+      }
+
+      if (playerHpBar) playerHpBar.style.width = `${(combatState.playerHp / combatState.playerMaxHp) * 100}%`;
+      if (playerHpText) playerHpText.textContent = `${Math.ceil(combatState.playerHp)}/${combatState.playerMaxHp}`;
+      if (playerStmBar) playerStmBar.style.width = `${(combatState.playerStm / combatState.playerMaxStm) * 100}%`;
+      if (playerStmText) playerStmText.textContent = `${Math.ceil(combatState.playerStm)}/${combatState.playerMaxStm}`;
+
+      renderDoomFace();
+      if (activeMode !== 'v1_video' && !player.isAnimating) {
+        render3D();
+      }
+    }, 1000 / 60);
+
+    function renderDoomFace() {
+      if (!doomFaceCtx) return;
+      const c = doomFaceCtx;
+      // Every coordinate below is authored against the original 44x44 portrait. Scaling the
+      // context once here lets the canvas be backed at a much higher resolution (so the bigger
+      // on-screen portrait stays crisp) without touching any of that drawing maths. setTransform
+      // rather than save/restore, because this function has early returns.
+      const S = doomFaceCanvas.width / 44;
+      c.setTransform(S, 0, 0, S, 0, 0);
+      c.clearRect(0, 0, 44, 44);
+
+      const isHurt = combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
+      const isAttack = combatState.faceState === 'attack' || combatState.attackFrame > 0;
+      const isBlock = combatState.shieldProgress > 0.5;
+      const isLowHp = combatState.playerHp < 30;
+
+      // Pick the expression that matches what the player is doing. Hurt wins over attack, which
+      // wins over block, matching the priority the body sprite uses.
+      let face = playerFaceImg;
+      if (playerFaceFrames.length > 1) {
+        const idx = isHurt ? 3 : isAttack ? 1 : isBlock ? 2 : 0;
+        face = playerFaceFrames[idx] || playerFaceFrames[0];
+      }
+
+      if (face && face.complete && face.naturalWidth > 0) {
+        c.drawImage(face, 2, 2, 40, 40);
+
+        // Combat state is shown ONLY through full-portrait tints and the border colour. Pupils,
+        // eyebrows and a mouth used to be painted on at fixed coordinates, which assumed a face
+        // laid out exactly like the old FLUX portrait. The portrait now comes from the character's
+        // own IPAdapter reference and can be hooded, feline, helmeted or masked, so those features
+        // landed in the wrong place - very obvious at this larger size, and directly at odds with
+        // having the portrait resemble the player.
+        if (isLowHp) {
+          c.fillStyle = 'rgba(153, 27, 27, 0.35)';
+          c.fillRect(2, 2, 40, 40);
+        }
+
+        if (isHurt) {
+          c.fillStyle = 'rgba(220, 38, 38, 0.55)';
+          c.fillRect(2, 2, 40, 40);
+        } else if (isAttack) {
+          c.fillStyle = 'rgba(245, 158, 11, 0.22)';
+          c.fillRect(2, 2, 40, 40);
+        } else if (isBlock) {
+          c.fillStyle = 'rgba(56, 189, 248, 0.22)';
+          c.fillRect(2, 2, 40, 40);
+        }
+
+        c.strokeStyle = isHurt ? '#ef4444' : isAttack ? '#f59e0b' : isBlock ? '#38bdf8' : '#64748b';
+        c.lineWidth = 2;
+        c.strokeRect(1, 1, 42, 42);
+        return;
+      }
+
+      // Procedural fallback
+      c.fillStyle = '#0f172a';
+      c.fillRect(0, 0, 44, 44);
+      c.fillStyle = isHurt ? '#fca5a5' : '#fed7aa';
+      c.fillRect(10, 10, 24, 26);
+      c.fillStyle = '#1e3a8a';
+      c.fillRect(14, 20, 4, 3);
+      c.fillRect(26, 20, 4, 3);
+      c.strokeStyle = isHurt ? '#ef4444' : '#64748b';
+      c.lineWidth = 2;
+      c.strokeRect(1, 1, 42, 42);
+    }
+
+    // ========================================================
+    // VALBRACE ACCURATE MODULAR COMBAT RIG (v6)
+    // ========================================================
+
+    // 1. MODULAR WEAPON (RIGHT HAND - VALBRACE STYLE)
+        // 1. MODULAR WEAPON (RIGHT HAND - VALBRACE STYLE)
+    function drawModularWeapon(c, attFrame, isMoving, walkBob, shieldProgress) {
+      c.save();
+
+      if (attFrame === 0) {
+        const hx = rig.swordX;
+        const hy = rig.swordY + (isMoving ? walkBob * 0.5 : 0) + (shieldProgress * 4);
+        const tilt = shieldProgress * 0.35;
+        c.translate(hx, hy);
+        c.rotate(tilt);
+
+        c.fillStyle = '#ca8a04';
+        c.beginPath(); c.arc(0, 14, 3.5, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#78350f';
+        c.fillRect(-2.5, 0, 5, 14);
+
+        c.fillStyle = '#facc15';
+        c.beginPath();
+        c.moveTo(-14, 0); c.bezierCurveTo(-6, -4, 6, -4, 14, 0);
+        c.lineTo(14, 4); c.bezierCurveTo(6, 0, -6, 0, -14, 4);
+        c.closePath(); c.fill();
+        c.strokeStyle = '#a16207'; c.lineWidth = 1; c.stroke();
+
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.moveTo(-3.5, 0); c.lineTo(-2.5, -58); c.lineTo(0, -66); c.lineTo(2.5, -58); c.lineTo(3.5, 0);
+        c.closePath(); c.fill();
+        c.strokeStyle = '#38bdf8'; c.lineWidth = 1.5; c.stroke();
+
+        c.strokeStyle = '#fef08a'; c.lineWidth = 1;
+        c.beginPath(); c.moveTo(0, 0); c.lineTo(0, -60); c.stroke();
+
+        // NO FAKE HAND - Sword is drawn behind the player's real arm!
+
+      } else if (attFrame <= 4) {
+        const hx = rig.swordX + 7;
+        const hy = rig.swordY - 4;
+        c.translate(hx, hy);
+        c.rotate(Math.PI / 3.2);
+
+        c.fillStyle = '#78350f'; c.fillRect(-2.5, 0, 5, 14);
+        c.fillStyle = '#facc15'; c.fillRect(-12, -2, 24, 4);
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.moveTo(-3.5, -2); c.lineTo(-2.5, -58); c.lineTo(0, -66); c.lineTo(2.5, -58); c.lineTo(3.5, -2);
+        c.closePath(); c.fill();
+        c.strokeStyle = '#38bdf8'; c.lineWidth = 1.5; c.stroke();
+
+      } else if (attFrame <= 9) {
+        const progress = (attFrame - 5) / 4;
+        c.strokeStyle = 'rgba(255, 255, 255, 0.95)'; c.lineWidth = 6;
+        c.beginPath(); c.moveTo(rig.swordX + 7, -20); c.quadraticCurveTo(rig.swordX + 15, -85, -35, -95); c.stroke();
+
+        c.strokeStyle = 'rgba(56, 189, 248, 0.85)'; c.lineWidth = 3;
+        c.beginPath(); c.moveTo(rig.swordX + 7, -20); c.quadraticCurveTo(rig.swordX + 15, -85, -35, -95); c.stroke();
+
+        const bladeAngle = Math.PI / 4 - (progress * Math.PI * 0.85);
+        const bx = 20 - (progress * 36);
+        const by = -45 - (Math.sin(progress * Math.PI) * 22);
+
+        c.save();
+        c.translate(bx, by);
+        c.rotate(bladeAngle);
+        c.fillStyle = '#ffffff'; c.fillRect(-3, -58, 6, 58);
+        c.strokeStyle = '#0284c7'; c.lineWidth = 1.5; c.strokeRect(-3, -58, 6, 58);
+        c.restore();
+
+        c.fillStyle = '#fde047';
+        c.beginPath(); c.arc(0, -90, 15, 0, Math.PI * 2); c.fill();
+
+      } else if (attFrame <= 13) {
+        const hx = rig.swordX - 21;
+        const hy = rig.swordY - 28;
+
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.moveTo(hx - 3.5, hy + 20); c.lineTo(hx - 2, hy - 28); c.lineTo(hx, hy - 38); c.lineTo(hx + 2, hy - 28); c.lineTo(hx + 3.5, hy + 20);
+        c.closePath(); c.fill();
+        c.strokeStyle = '#0284c7'; c.lineWidth = 1.5; c.stroke();
+
+        c.fillStyle = '#facc15'; c.fillRect(hx - 10, hy + 18, 20, 4);
+
+      } else {
+        const progress = (attFrame - 14) / 4;
+        const hx = rig.swordX + ((1.0 - progress) * 5);
+        const hy = rig.swordY - ((1.0 - progress) * 6);
+
+        c.fillStyle = '#ffffff';
+        c.save();
+        c.translate(hx, hy);
+        c.rotate(Math.PI / 6 * (1.0 - progress));
+        c.fillRect(-2.5, -52, 5, 52);
+        c.fillStyle = '#facc15'; c.fillRect(-8, -2, 16, 4);
+        c.restore();
+      }
+
+      c.restore();
+    }
+
+    // 2. MODULAR SHIELD (LEFT HAND - VALBRACE STYLE)
+    function drawModularShield(c, shieldProgress) {
+      c.save();
+
+      if (shieldProgress > 0.1) {
+        // --- VALBRACE SHIELD RAISED UP TO HEAD / CHEST (Valbrace Image 4) ---
+        // Smoothly rises from Left Flank (-28, -32) to Center High Guard (0, -68)
+        const sx = -28 + (shieldProgress * 28);
+        const sy = -32 - (shieldProgress * 36);
+        const sw = 26 + (shieldProgress * 12);
+        const sh = 34 + (shieldProgress * 14);
+
+        c.translate(sx, sy);
+
+        // Rectangular Curved Kite Shield
+        const gradShield = c.createLinearGradient(-sw/2, -sh/2, sw/2, sh/2);
+        gradShield.addColorStop(0, '#1e3a8a');
+        gradShield.addColorStop(0.5, '#3b82f6');
+        gradShield.addColorStop(1, '#0f172a');
+        c.fillStyle = gradShield;
+
+        c.beginPath();
+        c.moveTo(-sw/2, -sh/2);
+        c.lineTo(sw/2, -sh/2);
+        c.lineTo(sw/2, sh/4);
+        c.lineTo(0, sh/2); // Pointed Bottom
+        c.lineTo(-sw/2, sh/4);
+        c.closePath();
+        c.fill();
+
+        c.strokeStyle = '#facc15';
+        c.lineWidth = 3;
+        c.stroke();
+
+        // Steel Boss Emblem
+        c.fillStyle = '#f8fafc';
+        c.beginPath(); c.arc(0, 0, 5, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#64748b'; c.lineWidth = 1; c.stroke();
+
+        // Glowing Blue Parry Energy Barrier
+        c.strokeStyle = `rgba(56, 189, 248, ${shieldProgress * 0.9})`;
+        c.lineWidth = 4;
+        c.beginPath();
+        c.arc(0, 0, sw/2 + 6, 0, Math.PI * 2);
+        c.stroke();
+
+      } else {
+        // --- NEUTRAL RESTING SHIELD AT LEFT FLANK (Valbrace Image 2 & 3) ---
+        const sx = rig.shieldX;
+        const sy = rig.shieldY;
+        const sw = 24;
+        const sh = 34;
+
+        c.translate(sx, sy);
+
+        const gradShield = c.createLinearGradient(-sw/2, -sh/2, sw/2, sh/2);
+        gradShield.addColorStop(0, '#1e3a8a');
+        gradShield.addColorStop(0.5, '#2563eb');
+        gradShield.addColorStop(1, '#0f172a');
+        c.fillStyle = gradShield;
+
+        c.beginPath();
+        c.moveTo(-sw/2, -sh/2);
+        c.lineTo(sw/2, -sh/2);
+        c.lineTo(sw/2, sh/4);
+        c.lineTo(0, sh/2);
+        c.lineTo(-sw/2, sh/4);
+        c.closePath();
+        c.fill();
+
+        c.strokeStyle = '#facc15';
+        c.lineWidth = 2.5;
+        c.stroke();
+      }
+
+      c.restore();
+    }
+
+        // 3. COMPOSITE OVER-THE-SHOULDER PLAYER RENDERER (VALBRACE PROPORTIONS)
+    function drawOverTheShoulderPlayer(c, width, height) {
+      if (!combatState.inBattle) return;
+
+      const px = width / 2 + combatState.playerX;
+      const isMoving = Math.abs(combatState.vx) > 0.5;
+      // Bob only while actually strafing. The old idle bob ran constantly and, on a sprite with no
+      // feet planted animation, read as the character hovering rather than breathing.
+      const walkBob = isMoving ? Math.sin(Date.now() / 90) * 3 : 0;
+      const py = height + walkBob;
+
+      const attFrame = combatState.attackFrame;
+      const hurtFrame = combatState.hurtFrame;
+      const shieldProgress = combatState.shieldProgress;
+
+      if (hurtFrame > 0) {
+        c.fillStyle = 'rgba(239, 68, 68, 0.35)';
+        c.fillRect(0, 0, width, height);
+      }
+
+      c.save();
+      const tilt = combatState.vx * 0.012;
+      c.translate(px, py);
+      c.rotate(tilt);
+
+      // --- MULTI-FRAME AI SPRITE SHEET MODE (v4) ---
+      if (playerSpriteFrames && playerSpriteFrames.length > 1) {
+        let currentFrame = playerSpriteFrames[0];
+        if (hurtFrame > 0) {
+          // Frame 4 is the hurt/stagger recoil pose - takes priority over attack/block
+          currentFrame = playerSpriteFrames[4] || playerSpriteFrames[0];
+        } else if (attFrame > 0) {
+          // Frames 2 and 3 are attack frames (windup and upward slash)
+          const prog = (combatState.attackFrame - 1) / combatState.maxAttackFrames;
+          if (prog < 0.45) {
+            currentFrame = playerSpriteFrames[2] || playerSpriteFrames[0];
+          } else {
+            currentFrame = playerSpriteFrames[3] || playerSpriteFrames[0];
+          }
+        } else if (shieldProgress > 0.3) {
+          // Frame 1 is the forward-facing shield block stance
+          currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
+        }
+
+        if (currentFrame && currentFrame.complete && currentFrame.naturalWidth > 0) {
+          const spriteH = 135;
+          const spriteW = spriteH * (currentFrame.naturalWidth / currentFrame.naturalHeight);
+          c.drawImage(currentFrame, -spriteW / 2, -spriteH + 12, spriteW, spriteH);
+        }
+        c.restore();
+        return;
+      }
+
+      // --- HURT RECOIL WITH FACE TURN TO CAMERA ---
+      if (hurtFrame > 0 && hurtFrame <= 14) {
+        c.translate((Math.random() * 6 - 3), -6);
+        c.fillStyle = '#b45309';
+        c.beginPath();
+        c.moveTo(-22, 0); c.lineTo(-26, -42); c.lineTo(26, -42); c.lineTo(22, 0);
+        c.closePath(); c.fill();
+        c.fillStyle = '#fed7aa';
+        c.beginPath(); c.arc(-3, -54, 14, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#7c2d12'; c.lineWidth = 1; c.stroke();
+        c.strokeStyle = '#18181b'; c.lineWidth = 1.5;
+        c.strokeRect(-10, -58, 7, 6);
+        c.strokeRect(-1, -58, 7, 6);
+        drawModularShield(c, 0);
+        drawModularWeapon(c, 0, false, 0, 0);
+        c.restore();
+        return;
+      }
+
+      // =========================================================================
+      // LAYER 1: WEAPONS (BEHIND Body in 2D order, deeper in 3D scene)
+      // =========================================================================
+      if (shieldProgress <= 0.3) {
+        drawModularShield(c, shieldProgress);
+      }
+      
+      // Neutral sword drawn BEHIND the player so the player's arm overlaps the hilt
+      if (attFrame === 0) {
+        drawModularWeapon(c, attFrame, isMoving, walkBob, shieldProgress);
+      }
+
+      // =========================================================================
+      // LAYER 2: CHARACTER BODY (Foreground layer - overlaps shield & neutral sword)
+      // =========================================================================
+      if (playerSpriteImg && playerSpriteImg.complete && playerSpriteImg.naturalWidth > 0) {
+        const spriteH = 135;
+        const spriteW = spriteH * (playerSpriteImg.naturalWidth / playerSpriteImg.naturalHeight);
+        rig.shieldX = (-spriteW / 2) + 5;
+        rig.swordX = (spriteW / 2) - 5;
+        c.drawImage(playerSpriteImg, -spriteW / 2, -spriteH + 12, spriteW, spriteH);
+      } else {
+        rig.shieldX = -28;
+        rig.swordX = 24;
+        const gradTorso = c.createLinearGradient(-22, -45, 22, 0);
+        gradTorso.addColorStop(0, '#b45309');
+        gradTorso.addColorStop(0.5, '#d97706');
+        gradTorso.addColorStop(1, '#78350f');
+        c.fillStyle = gradTorso;
+        c.beginPath();
+        c.moveTo(-22, 0); c.lineTo(-26, -46); c.lineTo(26, -46); c.lineTo(22, 0);
+        c.closePath(); c.fill();
+        c.strokeStyle = '#451a03'; c.lineWidth = 1.5; c.stroke();
+        c.fillStyle = '#fed7aa';
+        c.beginPath(); c.arc(0, -58, 14, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#7c2d12'; c.lineWidth = 1; c.stroke();
+      }
+
+      // =========================================================================
+      // LAYER 3: RAISED SHIELD & ACTIVE SWORD SWING (Overlaying character body)
+      // =========================================================================
+      if (shieldProgress > 0.3) {
+        drawModularShield(c, shieldProgress);
+      }
+
+      // When actively swinging the sword, it sweeps across the foreground
+      if (attFrame > 0) {
+        drawModularWeapon(c, attFrame, isMoving, walkBob, shieldProgress);
+      }
+      
+      c.restore();
+    }
+
+    // High-Detail Shaded Dark Fantasy Demon Knight Enemy
+    function drawCombatEnemy(c, width, height) {
+      if (!combatState.inBattle || combatState.enemy.hp <= 0) return;
+
+      const e = combatState.enemy;
+      const ex = width / 2;
+      const ey = 95 + Math.sin(Date.now() / 200) * 4;
+
+      if (e.state === 'telegraph') {
+        c.fillStyle = 'rgba(239, 68, 68, 0.4)';
+        c.beginPath(); c.arc(ex, ey, 60, 0, Math.PI * 2); c.fill();
+      }
+
+      // --- AI ENEMY SPRITE (idle / attack / hurt) ---
+      // Falls through to the procedural enemy below when no sprites were generated, so an enemy
+      // that failed to generate (or a dungeon made before this existed) still has an opponent.
+      if (enemySpriteFrames && enemySpriteFrames.length > 0) {
+        let frame = enemySpriteFrames[0];
+        if (e.state === 'hurt') frame = enemySpriteFrames[2] || frame;
+        else if (e.state === 'attack' || e.state === 'telegraph') frame = enemySpriteFrames[1] || frame;
+
+        if (frame && frame.complete && frame.naturalWidth > 0) {
+          c.save();
+          if (e.state === 'hurt') {
+            c.translate((Math.random() * 8 - 4), 0);
+            c.globalAlpha = 0.9;
+          }
+          // Sized to roughly match the procedural enemy it replaces (~100px on a 240px-tall
+          // canvas). Drawn much larger it swallowed the player sprite, whose head starts at y=117.
+          const h = 104;
+          const w = h * (frame.naturalWidth / frame.naturalHeight);
+          c.drawImage(frame, ex - w / 2, ey - h * 0.66, w, h);
+          c.restore();
+          drawEnemyHpBar(c, width, e);
+          return;
+        }
+      }
+
+      const isHurt = e.state === 'hurt';
+      c.save();
+      if (isHurt) c.translate((Math.random() * 8 - 4), 0);
+
+      // Spiked Pauldrons
+      c.fillStyle = isHurt ? '#7f1d1d' : '#18181b';
+      c.beginPath();
+      c.moveTo(ex - 15, ey - 10); c.lineTo(ex - 48, ey - 32); c.lineTo(ex - 52, ey - 10); c.lineTo(ex - 20, ey + 15);
+      c.closePath(); c.fill();
+      c.strokeStyle = '#38bdf8'; c.lineWidth = 1.5; c.stroke();
+
+      c.beginPath();
+      c.moveTo(ex + 15, ey - 10); c.lineTo(ex + 48, ey - 32); c.lineTo(ex + 52, ey - 10); c.lineTo(ex + 20, ey + 15);
+      c.closePath(); c.fill();
+      c.strokeStyle = '#38bdf8'; c.lineWidth = 1.5; c.stroke();
+
+      // Chestplate
+      const gradTorso = c.createRadialGradient(ex, ey + 10, 4, ex, ey + 10, 32);
+      gradTorso.addColorStop(0, isHurt ? '#ef4444' : '#312e81');
+      gradTorso.addColorStop(0.7, isHurt ? '#991b1b' : '#0f172a');
+      gradTorso.addColorStop(1, '#020617');
+      c.fillStyle = gradTorso;
+
+      c.beginPath();
+      c.moveTo(-24 + ex, ey - 12); c.lineTo(24 + ex, ey - 12); c.lineTo(18 + ex, ey + 32); c.lineTo(-18 + ex, ey + 32);
+      c.closePath(); c.fill();
+      c.strokeStyle = '#475569'; c.lineWidth = 2; c.stroke();
+
+      // Rune
+      c.fillStyle = e.state === 'telegraph' ? '#fde047' : '#ef4444';
+      c.beginPath();
+      c.moveTo(ex, ey - 4); c.lineTo(ex + 8, ey + 8); c.lineTo(ex, ey + 20); c.lineTo(ex - 8, ey + 8);
+      c.closePath(); c.fill();
+
+      // Horned Helmet
+      const gradHelm = c.createRadialGradient(ex, ey - 22, 2, ex, ey - 22, 20);
+      gradHelm.addColorStop(0, '#475569'); gradHelm.addColorStop(0.8, '#0f172a'); gradHelm.addColorStop(1, '#020617');
+      c.fillStyle = gradHelm;
+
+      c.beginPath();
+      c.moveTo(ex - 18, ey - 12); c.lineTo(ex - 16, ey - 36); c.lineTo(ex, ey - 44); c.lineTo(ex + 16, ey - 36); c.lineTo(ex + 18, ey - 12);
+      c.closePath(); c.fill();
+      c.strokeStyle = '#1e293b'; c.lineWidth = 2; c.stroke();
+
+      // Horns
+      c.fillStyle = '#020617';
+      c.beginPath();
+      c.moveTo(ex - 14, ey - 32); c.bezierCurveTo(ex - 36, ey - 42, ex - 44, ey - 60, ex - 32, ey - 65); c.bezierCurveTo(ex - 32, ey - 50, ex - 22, ey - 40, ex - 10, ey - 36);
+      c.moveTo(ex + 14, ey - 32); c.bezierCurveTo(ex + 36, ey - 42, ex + 44, ey - 60, ex + 32, ey - 65); c.bezierCurveTo(ex + 32, ey - 50, ex + 22, ey - 40, ex + 10, ey - 36);
+      c.fill();
+      c.strokeStyle = '#dc2626'; c.lineWidth = 1.5; c.stroke();
+
+      // Glowing Eyes
+      c.fillStyle = e.state === 'telegraph' ? '#facc15' : '#ef4444';
+      c.fillRect(ex - 12, ey - 24, 10, 4);
+      c.fillRect(ex + 2, ey - 24, 10, 4);
+
+      c.restore();
+
+      drawEnemyHpBar(c, width, e);
+    }
+
+    // Pulled out of drawCombatEnemy so the AI-sprite path can draw it too - that path returns
+    // early to skip the procedural body, which silently took the name plate with it.
+    function drawEnemyHpBar(c, width, e) {
+      c.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      c.fillRect(width / 2 - 75, 8, 150, 18);
+      c.strokeStyle = '#94a3b8'; c.lineWidth = 1.5;
+      c.strokeRect(width / 2 - 75, 8, 150, 18);
+
+      const hpW = Math.max(0, (e.hp / e.maxHp) * 146);
+      c.fillStyle = '#dc2626';
+      c.fillRect(width / 2 - 73, 10, hpW, 14);
+
+      c.fillStyle = '#f8fafc';
+      c.font = 'bold 10px sans-serif';
+      c.textAlign = 'center';
+      c.fillText(`${e.name || 'NIGHTSTALKER'} [${e.hp}/${e.maxHp}]`, width / 2, 21);
+    }
+
+    function drawCombatEffects(c) {
+      for (let i = combatState.combatEffects.length - 1; i >= 0; i--) {
+        const eff = combatState.combatEffects[i];
+        eff.life--;
+        eff.y -= 0.8;
+
+        c.fillStyle = eff.color;
+        c.font = 'bold 12px monospace';
+        c.textAlign = 'center';
+        c.shadowColor = '#000000';
+        c.shadowBlur = 4;
+        c.fillText(eff.text, eff.x, eff.y);
+        c.shadowBlur = 0;
+
+        if (eff.life <= 0) {
+          combatState.combatEffects.splice(i, 1);
+        }
+      }
+    }
+
+    // ==========================================
+    // PROCEDURAL TEXTURE GENERATION
+    // ==========================================
+    function buildDefaultTextures() {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      // Windows 95 Crimson Red Brick Wall
+      c.fillStyle = '#ffffff';
+      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+
+      const rows = 4;
+      const rowHeight = TEX_SIZE / rows;
+      const mortar = 8;
+
+      for (let r = 0; r < rows; r++) {
+        const y = r * rowHeight + mortar / 2;
+        const h = rowHeight - mortar;
+        const off = (r % 2 === 0) ? 0 : TEX_SIZE / 4;
+
+        for (let x = -TEX_SIZE / 2; x < TEX_SIZE * 1.5; x += TEX_SIZE / 2) {
+          const bx = x + off + mortar / 2;
+          const bw = TEX_SIZE / 2 - mortar;
+
+          c.fillStyle = '#9e1414';
+          c.fillRect(bx, y, bw, h);
+
+          c.fillStyle = 'rgba(239, 68, 68, 0.45)';
+          c.fillRect(bx + 2, y + 2, bw - 4, 3);
+          c.fillRect(bx + 2, y + 2, 3, h - 4);
+
+          c.fillStyle = 'rgba(69, 10, 10, 0.55)';
+          c.fillRect(bx + 2, y + h - 5, bw - 4, 3);
+          c.fillRect(bx + bw - 5, y + 2, 3, h - 4);
+        }
+      }
+      wallTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+
+      // Drop Ceiling
+      c.fillStyle = '#f8fafc';
+      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      c.strokeStyle = '#94a3b8';
+      c.lineWidth = 4;
+      c.strokeRect(0, 0, TEX_SIZE, TEX_SIZE);
+      c.beginPath();
+      c.moveTo(0, TEX_SIZE / 2); c.lineTo(TEX_SIZE, TEX_SIZE / 2);
+      c.moveTo(TEX_SIZE / 2, 0); c.lineTo(TEX_SIZE / 2, TEX_SIZE);
+      c.stroke();
+      ceilingTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+
+      // Parquet Floor
+      c.fillStyle = '#c27e2c';
+      c.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      const half = TEX_SIZE / 2;
+      for (let py = 0; py < 2; py++) {
+        for (let px = 0; px < 2; px++) {
+          const ox = px * half;
+          const oy = py * half;
+          const isHoriz = (px + py) % 2 === 0;
+          c.strokeStyle = '#78350f';
+          c.lineWidth = 2;
+          c.strokeRect(ox, oy, half, half);
+          for (let k = 1; k <= 3; k++) {
+            c.beginPath();
+            if (isHoriz) {
+              c.moveTo(ox, oy + (half / 4) * k);
+              c.lineTo(ox + half, oy + (half / 4) * k);
+            } else {
+              c.moveTo(ox + (half / 4) * k, oy);
+              c.lineTo(ox + (half / 4) * k, oy + half);
+            }
+            c.stroke();
+          }
+        }
+      }
+      floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+
+      buildLanternWallFromBase(wallTexture, "Windows 95");
+      buildDynamicExitSignTexture("Windows 95", wallTexture);
+    }
+
+    function buildLanternWallFromBase(baseWallImageData, styleName = "Windows 95") {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      c.putImageData(baseWallImageData, 0, 0);
+
+      const isWin95 = styleName.toLowerCase().includes('windows');
+
+      const radGrad = c.createRadialGradient(128, 95, 10, 128, 95, 115);
+      radGrad.addColorStop(0, 'rgba(255, 220, 90, 0.85)');
+      radGrad.addColorStop(0.5, 'rgba(245, 158, 11, 0.4)');
+      radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      c.fillStyle = radGrad;
+      c.fillRect(18, 0, 220, 220);
+
+      if (isWin95) {
+        // Windows 95 Logo Lantern
+        c.fillStyle = '#18181b'; c.fillRect(122, 112, 12, 30);
+        c.strokeStyle = '#000000'; c.lineWidth = 4;
+        c.beginPath(); c.moveTo(128, 115); c.lineTo(128, 70); c.stroke();
+
+        c.fillStyle = '#27272a';
+        c.beginPath(); c.moveTo(108, 70); c.lineTo(148, 70); c.lineTo(128, 54); c.closePath(); c.fill();
+
+        c.fillStyle = '#ef4444'; c.fillRect(112, 72, 14, 14);
+        c.fillStyle = '#22c55e'; c.fillRect(130, 72, 14, 14);
+        c.fillStyle = '#3b82f6'; c.fillRect(112, 90, 14, 14);
+        c.fillStyle = '#eab308'; c.fillRect(130, 90, 14, 14);
+
+        c.strokeStyle = '#09090b'; c.lineWidth = 3;
+        c.strokeRect(112, 72, 32, 32);
+      } else {
+        // Classic Dungeon Glowing Crystal Sconce
+        // Iron Bracket
+        c.fillStyle = '#18181b';
+        c.fillRect(120, 102, 16, 24);
+        c.fillRect(112, 98, 32, 6);
+        c.fillStyle = '#3f3f46';
+        c.fillRect(112, 98, 32, 2);
+
+        // Glowing Core
+        const glowGrad = c.createLinearGradient(128, 50, 128, 98);
+        glowGrad.addColorStop(0, '#fef08a');
+        glowGrad.addColorStop(0.4, '#f59e0b');
+        glowGrad.addColorStop(1, '#b45309');
+        c.fillStyle = glowGrad;
+        
+        c.beginPath();
+        c.moveTo(128, 50);
+        c.lineTo(144, 75);
+        c.lineTo(136, 98);
+        c.lineTo(120, 98);
+        c.lineTo(112, 75);
+        c.closePath();
+        c.fill();
+        
+        c.strokeStyle = '#fde047';
+        c.lineWidth = 2;
+        c.stroke();
+      }
+
+      wallLanternTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+    }
+
+    function buildDynamicExitSignTexture(styleName = "Windows 95", sourceWallImageData = null) {
+      const cv = document.createElement('canvas');
+      cv.width = 256;
+      cv.height = 140;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      c.fillStyle = 'rgba(241, 245, 249, 0.95)';
+      c.fillRect(6, 6, 244, 128);
+
+      c.strokeStyle = '#475569'; c.lineWidth = 4;
+      c.strokeRect(6, 6, 244, 128);
+
+      c.fillStyle = '#0f172a';
+      c.font = '900 46px "Courier New", monospace';
+      c.textAlign = 'left';
+      c.textBaseline = 'middle';
+      c.fillText("End", 120, 70);
+
+      c.fillStyle = '#eab308';
+      c.beginPath(); c.arc(68, 70, 24, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = '#ca8a04'; c.lineWidth = 3; c.stroke();
+
+      exitSignTexture = c.getImageData(0, 0, 256, 140);
+    }
+
+        // ==========================================
+    // AUTHENTIC 3DMAZE GENERATOR (GOLDEN STANDARD - EXACT TILES)
+    // ==========================================
+    function generateAuthentic3DMaze(numGrids = 25) {
+      numGrids = Math.max(10, Math.min(100, numGrids));
+
+      // Calculate target cells to reach exactly (or close to) numGrids total walkable tiles.
+      // Since total tiles = cells + (cells - 1) = 2 * cells - 1
+      const targetCells = Math.max(2, Math.ceil((numGrids + 1) / 2));
+
+      // Create a bounding box large enough to let the DFS wander organically
+      const cellCols = Math.max(3, Math.ceil(Math.sqrt(targetCells * 1.5)));
+      const cellRows = Math.max(3, Math.ceil(targetCells / cellCols) + 1);
+
+      MAP_WIDTH = cellCols * 2 + 1;
+      MAP_HEIGHT = cellRows * 2 + 1;
+
+      MAP = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(1));
+      lanternList = [];
+
+      const visitedCells = Array(cellRows).fill(0).map(() => Array(cellCols).fill(false));
+      const stack = [];
+      
+      const startR = Math.floor(cellRows / 2);
+      const startC = Math.floor(cellCols / 2);
+      const startCell = { r: startR, c: startC };
+      
+      visitedCells[startR][startC] = true;
+      MAP[startR * 2 + 1][startC * 2 + 1] = 0;
+      stack.push(startCell);
+
+      let visitedCount = 1;
+      let maxDist = 0;
+      let furthestCell = { r: startR, c: startC };
+      const distances = Array(cellRows).fill(0).map(() => Array(cellCols).fill(0));
+
+      while (stack.length > 0 && visitedCount < targetCells) {
+        const current = stack[stack.length - 1];
+        const neighbors = [];
+
+        const deltas = [
+          { dr: -1, dc: 0 },
+          { dr: 1, dc: 0 },
+          { dr: 0, dc: -1 },
+          { dr: 0, dc: 1 }
+        ];
+
+        for (const d of deltas) {
+          const nr = current.r + d.dr;
+          const nc = current.c + d.dc;
+          if (nr >= 0 && nr < cellRows && nc >= 0 && nc < cellCols && !visitedCells[nr][nc]) {
+            neighbors.push({ r: nr, c: nc, dr: d.dr, dc: d.dc });
+          }
+        }
+
+        if (neighbors.length > 0) {
+          const next = neighbors[Math.floor(Math.random() * neighbors.length)];
+          const wallY = current.r * 2 + 1 + next.dr;
+          const wallX = current.c * 2 + 1 + next.dc;
+          const nextY = next.r * 2 + 1;
+          const nextX = next.c * 2 + 1;
+
+          MAP[wallY][wallX] = 0;
+          MAP[nextY][nextX] = 0;
+
+          visitedCells[next.r][next.c] = true;
+          distances[next.r][next.c] = distances[current.r][current.c] + 1;
+          visitedCount++;
+
+          if (distances[next.r][next.c] > maxDist) {
+            maxDist = distances[next.r][next.c];
+            furthestCell = { r: next.r, c: next.c };
+          }
+
+          stack.push({ r: next.r, c: next.c });
+        } else {
+          stack.pop();
+        }
+      }
+
+      // Add Lanterns to Walls
+      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+        for (let x = 1; x < MAP_WIDTH - 1; x++) {
+          if (MAP[y][x] === 1) {
+            const hasAdjacentFloor = (MAP[y-1][x] === 0 || MAP[y+1][x] === 0 || MAP[y][x-1] === 0 || MAP[y][x+1] === 0);
+            if (hasAdjacentFloor && (x + y) % 3 === 0) {
+              MAP[y][x] = 2;
+              lanternList.push({ x, y });
+            }
+          }
+        }
+      }
+
+      passagesList = [];
+      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+        for (let x = 1; x < MAP_WIDTH - 1; x++) {
+          if (MAP[y][x] === 0) {
+            passagesList.push({ x, y });
+          }
+        }
+      }
+
+      startRoom = { x: startC * 2 + 1, y: startR * 2 + 1 };
+      exitRoom = { x: furthestCell.c * 2 + 1, y: furthestCell.r * 2 + 1 };
+
+      // GUARANTEE player spawns facing the OPEN corridor (never facing a wall!)
+      let spawnDir = 1;
+      if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x + 1] === 0) spawnDir = 1;
+      else if (MAP[startRoom.y + 1] && MAP[startRoom.y + 1][startRoom.x] === 0) spawnDir = 2;
+      else if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x - 1] === 0) spawnDir = 3;
+      else if (MAP[startRoom.y - 1] && MAP[startRoom.y - 1][startRoom.x] === 0) spawnDir = 0;
+
+      player.gridX = startRoom.x;
+      player.gridY = startRoom.y;
+      player.dirIndex = spawnDir;
+      player.posX = startRoom.x + 0.5;
+      player.posY = startRoom.y + 0.5;
+      player.angle = dirToAngle(spawnDir);
+      player.isAnimating = false;
+
+      visitedTiles.clear();
+      visitedTiles.add(`${startRoom.x},${startRoom.y}`);
+      totalMoves = 0;
+      queuedAction = null;
+
+      if (mapProgressBadge) {
+        mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
+      }
+    }
+
+    // ==========================================
+    // 3D RAYCASTER RENDERER + 3D EXIT SIGN
+    // ==========================================
+    function render3D() {
+      if (!wallTexture || !ceilingTexture || !floorTexture) return;
+
+      const fov = Math.PI / 3;
+      const halfFov = fov / 2;
+      const pAngle = player.angle;
+
+      const dirX = Math.cos(pAngle);
+      const dirY = Math.sin(pAngle);
+
+      // The camera sits back from the player's cell centre rather than on it. Movement is grid
+      // based, so a faced wall would otherwise always be exactly 0.5 away and tower over the
+      // screen. Setting the camera back pushes that wall to ~0.9 without shortening the walls
+      // themselves - which is what keeps corridors looking tall while still leaving ceiling and
+      // floor visible when the player is right up against something. Shortening walls alone
+      // (the first attempt) bought the headroom at the cost of a squashed, crawlspace-looking
+      // corridor. The camera stays inside the current cell, so raycasting is unaffected.
+      const posX = player.posX - dirX * CAMERA_SETBACK;
+      const posY = player.posY - dirY * CAMERA_SETBACK;
+      const planeX = -dirY * Math.tan(halfFov);
+      const planeY = dirX * Math.tan(halfFov);
+
+      // Floor & Ceiling Casting
+      for (let y = 0; y < screenHeight; y++) {
+        const isFloor = y > screenHeight / 2;
+        const p = isFloor ? (y - screenHeight / 2) : (screenHeight / 2 - y);
+        if (p === 0) continue;
+
+        // Eye level sits at half the wall height, so this has to track WALL_HEIGHT or the floor and
+        // ceiling planes stop meeting the walls where they should.
+        const posZ = (WALL_HEIGHT / 2) * screenHeight;
+        const rowDist = posZ / p;
+
+        const stepX = rowDist * (planeX * 2) / screenWidth;
+        const stepY = rowDist * (planeY * 2) / screenWidth;
+
+        let floorX = posX + rowDist * (dirX - planeX);
+        let floorY = posY + rowDist * (dirY - planeY);
+
+        const tex = isFloor ? floorTexture : ceilingTexture;
+        const texData = tex.data;
+
+        for (let x = 0; x < screenWidth; x++) {
+          // See SURFACE_TEXELS. The mask wraps the tiling across cell boundaries.
+          const tx = Math.floor(floorX * SURFACE_TEXELS) & (TEX_SIZE - 1);
+          const ty = Math.floor(floorY * SURFACE_TEXELS) & (TEX_SIZE - 1);
+
+          let lanternLight = 0;
+          for (let li = 0; li < lanternList.length; li++) {
+            const lx = lanternList[li].x + 0.5;
+            const ly = lanternList[li].y + 0.5;
+            const d = Math.hypot(floorX - lx, floorY - ly);
+            if (d < 2.8) {
+              lanternLight += (1.0 - d / 2.8) * 0.65;
+            }
+          }
+
+          floorX += stepX;
+          floorY += stepY;
+
+          const tIdx = (ty * TEX_SIZE + tx) * 4;
+          const pIdx = (y * screenWidth + x) * 4;
+          const baseShade = Math.max(0.35, Math.min(1.0, 1.0 - (rowDist * 0.15)));
+          const finalShade = Math.min(1.0, baseShade + lanternLight);
+
+          buffer[pIdx] = Math.min(255, texData[tIdx] * finalShade + (lanternLight * 25));
+          buffer[pIdx + 1] = Math.min(255, texData[tIdx + 1] * finalShade + (lanternLight * 15));
+          buffer[pIdx + 2] = Math.min(255, texData[tIdx + 2] * finalShade);
+          buffer[pIdx + 3] = 255;
+        }
+      }
+
+      // Wall Casting
+      for (let x = 0; x < screenWidth; x++) {
+        const cameraX = (2 * x) / screenWidth - 1;
+        const rayDirX = dirX + planeX * cameraX;
+        const rayDirY = dirY + planeY * cameraX;
+
+        let mapX = Math.floor(posX);
+        let mapY = Math.floor(posY);
+
+        let sideDistX, sideDistY;
+        const deltaDistX = Math.abs(1 / (rayDirX === 0 ? 1e-6 : rayDirX));
+        const deltaDistY = Math.abs(1 / (rayDirY === 0 ? 1e-6 : rayDirY));
+        let perpWallDist;
+
+        let stepX, stepY;
+        let hit = 0;
+        let side = 0;
+
+        if (rayDirX < 0) {
+          stepX = -1;
+          sideDistX = (posX - mapX) * deltaDistX;
+        } else {
+          stepX = 1;
+          sideDistX = (mapX + 1.0 - posX) * deltaDistX;
+        }
+
+        if (rayDirY < 0) {
+          stepY = -1;
+          sideDistY = (posY - mapY) * deltaDistY;
+        } else {
+          stepY = 1;
+          sideDistY = (mapY + 1.0 - posY) * deltaDistY;
+        }
+
+        while (hit === 0) {
+          if (sideDistX < sideDistY) {
+            sideDistX += deltaDistX;
+            mapX += stepX;
+            side = 0;
+          } else {
+            sideDistY += deltaDistY;
+            mapY += stepY;
+            side = 1;
+          }
+          if (mapX < 0 || mapX >= MAP_WIDTH || mapY < 0 || mapY >= MAP_HEIGHT) {
+            hit = 1;
+            break;
+          }
+          if (MAP[mapY][mapX] > 0) hit = MAP[mapY][mapX];
+        }
+
+        if (side === 0) perpWallDist = (mapX - posX + (1 - stepX) / 2) / rayDirX;
+        else perpWallDist = (mapY - posY + (1 - stepY) / 2) / rayDirY;
+
+        perpWallDist = Math.max(0.1, perpWallDist);
+        zBuffer[x] = perpWallDist;
+
+        // True perspective, just with shorter walls - see WALL_HEIGHT.
+        const lineHeight = Math.floor((screenHeight * WALL_HEIGHT) / perpWallDist);
+        let drawStart = Math.floor(-lineHeight / 2 + screenHeight / 2);
+        let drawEnd = Math.floor(lineHeight / 2 + screenHeight / 2);
+
+        const clampedStart = Math.max(0, drawStart);
+        const clampedEnd = Math.min(screenHeight - 1, drawEnd);
+
+        let wallX;
+        if (side === 0) wallX = posY + perpWallDist * rayDirY;
+        else wallX = posX + perpWallDist * rayDirX;
+        wallX -= Math.floor(wallX);
+
+        let texX = Math.floor(wallX * TEX_SIZE);
+        if (side === 0 && rayDirX > 0) texX = TEX_SIZE - texX - 1;
+        if (side === 1 && rayDirY < 0) texX = TEX_SIZE - texX - 1;
+
+        const wallTexToUse = (hit === 2 && wallLanternTexture) ? wallLanternTexture : wallTexture;
+        const wallData = wallTexToUse.data;
+
+        let wallLanternLight = 0;
+        const wallWorldX = side === 0 ? mapX : (posX + perpWallDist * rayDirX);
+        const wallWorldY = side === 1 ? mapY : (posY + perpWallDist * rayDirY);
+
+        for (let li = 0; li < lanternList.length; li++) {
+          const lx = lanternList[li].x + 0.5;
+          const ly = lanternList[li].y + 0.5;
+          const d = Math.hypot(wallWorldX - lx, wallWorldY - ly);
+          if (d < 3.2) {
+            wallLanternLight += (1.0 - d / 3.2) * 0.75;
+          }
+        }
+
+        const sideShade = side === 1 ? 0.82 : 1.0;
+        const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
+        const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
+        const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
+
+        // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
+        // unchanged), but are now only WALL_HEIGHT tall - so squeezing the whole texture in
+        // vertically compressed it by 0.62 and made bark and brick read as 1.6x too wide. Showing
+        // only WALL_HEIGHT of the texture instead makes texels square again. Centring the crop
+        // keeps wall-mounted detail (the lantern sconce sits around y=50-126) fully in frame.
+        const step = (TEX_SIZE * WALL_HEIGHT) / lineHeight;
+        const texTop = (TEX_SIZE * (1 - WALL_HEIGHT)) / 2;
+        let texPos = texTop + (clampedStart - screenHeight / 2 + lineHeight / 2) * step;
+
+        for (let y = clampedStart; y <= clampedEnd; y++) {
+          const texY = Math.min(TEX_SIZE - 1, Math.max(0, Math.floor(texPos)));
+          texPos += step;
+
+          const tIdx = (texY * TEX_SIZE + texX) * 4;
+          const pIdx = (y * screenWidth + x) * 4;
+
+          buffer[pIdx] = Math.min(255, wallData[tIdx] * finalShade + (wallLanternLight * 35));
+          buffer[pIdx + 1] = Math.min(255, wallData[tIdx + 1] * finalShade + (wallLanternLight * 20));
+          buffer[pIdx + 2] = Math.min(255, wallData[tIdx + 2] * finalShade);
+          buffer[pIdx + 3] = 255;
+        }
+      }
+
+      // 3D Billboard "END" Sign
+      if (exitSignTexture) {
+        const spriteX = (exitRoom.x + 0.5) - posX;
+        const spriteY = (exitRoom.y + 0.5) - posY;
+
+        const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+        const transformX = invDet * (dirY * spriteX - dirX * spriteY);
+        const transformY = invDet * (-planeY * spriteX + planeX * spriteY);
+
+        if (transformY > 0.1) {
+          const spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
+          // 0.55 of a wall's height - scaled by WALL_HEIGHT so the sign keeps that ratio.
+          const spriteHeight = Math.abs(Math.floor((screenHeight * WALL_HEIGHT / transformY) * 1.1));
+          const spriteWidth = Math.floor(spriteHeight * 1.5);
+
+          const drawStartY = Math.max(0, Math.floor(-spriteHeight / 2 + screenHeight / 2));
+          const drawEndY = Math.min(screenHeight - 1, Math.floor(spriteHeight / 2 + screenHeight / 2));
+          const drawStartX = Math.max(0, Math.floor(-spriteWidth / 2 + spriteScreenX));
+          const drawEndX = Math.min(screenWidth - 1, Math.floor(spriteWidth / 2 + spriteScreenX));
+
+          const signData = exitSignTexture.data;
+          const signW = 256;
+          const signH = 140;
+
+          for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
+            const texX = Math.floor(((stripe - (-spriteWidth / 2 + spriteScreenX)) * signW) / spriteWidth);
+
+            if (transformY > 0 && stripe >= 0 && stripe < screenWidth && transformY < zBuffer[stripe]) {
+              for (let y = drawStartY; y < drawEndY; y++) {
+                const d = (y - (-spriteHeight / 2 + screenHeight / 2)) * signH;
+                const texY = Math.floor(d / spriteHeight);
+
+                if (texX >= 0 && texX < signW && texY >= 0 && texY < signH) {
+                  const sIdx = (texY * signW + texX) * 4;
+                  const alpha = signData[sIdx + 3] / 255;
+
+                  if (alpha > 0.05) {
+                    const pIdx = (y * screenWidth + stripe) * 4;
+                    buffer[pIdx] = Math.floor(buffer[pIdx] * (1 - alpha) + signData[sIdx] * alpha);
+                    buffer[pIdx + 1] = Math.floor(buffer[pIdx + 1] * (1 - alpha) + signData[sIdx + 1] * alpha);
+                    buffer[pIdx + 2] = Math.floor(buffer[pIdx + 2] * (1 - alpha) + signData[sIdx + 2] * alpha);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+
+      // Render 3D Combat Entities
+      drawCombatEnemy(ctx, screenWidth, screenHeight);
+      drawOverTheShoulderPlayer(ctx, screenWidth, screenHeight);
+      drawCombatEffects(ctx);
+    }
+
+    // ==========================================
+    // MINIMAP & NAVIGATION (FOG OF WAR)
+    // ==========================================
+    const minimapCanvas = document.getElementById('minimapCanvas');
+    const minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
+
+    function drawMinimap() {
+      if (!minimapCtx || passagesList.length === 0) return;
+      const c = minimapCtx;
+      c.fillStyle = '#000000';
+      c.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+
+      visitedTiles.add(`${player.gridX},${player.gridY}`);
+      if (mapProgressBadge) {
+        mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
+      }
+
+      const tileSize = passagesList.length > 50 ? 14 : (passagesList.length > 25 ? 18 : 22);
+      const centerX = minimapCanvas.width / 2;
+      const centerY = minimapCanvas.height / 2;
+
+      const offsetX = centerX - player.posX * tileSize;
+      const offsetY = centerY - player.posY * tileSize;
+
+      visitedTiles.forEach(vKey => {
+        const [vx, vy] = vKey.split(',').map(Number);
+        const rx = offsetX + vx * tileSize;
+        const ry = offsetY + vy * tileSize;
+
+        const isCurrent = (vx === player.gridX && vy === player.gridY);
+        const isExit = (vx === exitRoom.x && vy === exitRoom.y);
+
+        c.fillStyle = isCurrent ? '#16a34a' : (isExit ? '#eab308' : '#2563eb');
+        c.fillRect(rx, ry, tileSize, tileSize);
+
+        if (isExit) {
+          c.fillStyle = '#000000';
+          c.font = `bold ${Math.max(8, tileSize - 6)}px sans-serif`;
+          c.textAlign = 'center';
+          c.textBaseline = 'middle';
+          c.fillText('★', rx + tileSize / 2, ry + tileSize / 2);
+        }
+
+        const adj = [
+          { x: vx, y: vy - 1 },
+          { x: vx, y: vy + 1 },
+          { x: vx - 1, y: vy },
+          { x: vx + 1, y: vy }
+        ];
+
+        adj.forEach(w => {
+          if (w.x >= 0 && w.x < MAP_WIDTH && w.y >= 0 && w.y < MAP_HEIGHT && MAP[w.y][w.x] >= 1) {
+            const wx = offsetX + w.x * tileSize;
+            const wy = offsetY + w.y * tileSize;
+            c.fillStyle = '#334155';
+            c.fillRect(wx, wy, tileSize, tileSize);
+            c.strokeStyle = '#475569';
+            c.lineWidth = 0.5;
+            c.strokeRect(wx, wy, tileSize, tileSize);
+          }
+        });
+      });
+
+      // Player Arrow
+      c.save();
+      c.translate(centerX, centerY);
+      c.rotate(player.angle + Math.PI / 2);
+      c.fillStyle = '#ef4444';
+      c.beginPath();
+      c.moveTo(0, -tileSize * 0.45);
+      c.lineTo(tileSize * 0.35, tileSize * 0.35);
+      c.lineTo(0, tileSize * 0.15);
+      c.lineTo(-tileSize * 0.35, tileSize * 0.35);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = '#ffffff';
+      c.lineWidth = 1;
+      c.stroke();
+      c.restore();
+
+      // Check Victory Condition
+      const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
+      if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
+        winMovesCount.textContent = totalMoves;
+        victoryModal.classList.remove('hidden');
+      }
+    }
+
+    function updateHUD() {
+      if (statusPos) {
+        statusPos.textContent = `Spot (${player.gridX}, ${player.gridY}) [Facing ${DIRS[player.dirIndex]}]`;
+      }
+    }
+
+    function showBumpMessage(msg) {
+      if (!bumpBanner) return;
+      bumpText.textContent = msg;
+      bumpBanner.classList.remove('hidden');
+      setTimeout(() => bumpBanner.classList.add('hidden'), 1200);
+    }
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function animate3D(targetX, targetY, targetAngle) {
+      player.isAnimating = true;
+      const startX = player.posX;
+      const startY = player.posY;
+      const startAngle = player.angle;
+      const animStart = performance.now();
+      const DURATION = 160;
+
+      function step(now) {
+        const elapsed = now - animStart;
+        const progress = Math.min(1.0, elapsed / DURATION);
+        const ease = easeInOutCubic(progress);
+
+        player.posX = startX + (targetX - startX) * ease;
+        player.posY = startY + (targetY - startY) * ease;
+        player.angle = startAngle + (targetAngle - startAngle) * ease;
+
+        render3D();
+        drawMinimap();
+
+        if (progress < 1.0) {
+          requestAnimationFrame(step);
+        } else {
+          player.posX = targetX;
+          player.posY = targetY;
+          player.angle = targetAngle;
+          player.isAnimating = false;
+          updateHUD();
+
+          if (queuedAction) {
+            const next = queuedAction;
+            queuedAction = null;
+            if (next === 'UP') moveForward();
+            else if (next === 'DOWN') moveBackward();
+            else if (next === 'LEFT') rotateLeft();
+            else if (next === 'RIGHT') rotateRight();
+          }
+        }
+      }
+      requestAnimationFrame(step);
+    }
+
+    function moveForward() {
+      if (player.isAnimating) { queuedAction = 'UP'; return; }
+      const vec = DIR_VECS[player.dirIndex];
+      const nextX = player.gridX + vec.dx;
+      const nextY = player.gridY + vec.dy;
+
+      // STRICT COLLISION: ONLY MAP === 0 is walkable floor! (MAP === 1 and MAP === 2 are solid walls)
+      if (MAP[nextY] && MAP[nextY][nextX] === 0) {
+        player.gridX = nextX;
+        player.gridY = nextY;
+        totalMoves++;
+        animate3D(nextX + 0.5, nextY + 0.5, player.angle);
+      } else {
+        showBumpMessage("SOLID WALL DIRECTLY AHEAD");
+      }
+    }
+
+    function moveBackward() {
+      if (player.isAnimating) { queuedAction = 'DOWN'; return; }
+      const vec = DIR_VECS[player.dirIndex];
+      const nextX = player.gridX - vec.dx;
+      const nextY = player.gridY - vec.dy;
+
+      // STRICT COLLISION: ONLY MAP === 0 is walkable floor!
+      if (MAP[nextY] && MAP[nextY][nextX] === 0) {
+        player.gridX = nextX;
+        player.gridY = nextY;
+        totalMoves++;
+        animate3D(nextX + 0.5, nextY + 0.5, player.angle);
+      } else {
+        showBumpMessage("CANNOT MOVE BACKWARD");
+      }
+    }
+
+    function rotateLeft() {
+      if (player.isAnimating) { queuedAction = 'LEFT'; return; }
+      player.dirIndex = (player.dirIndex + 3) % 4;
+      animate3D(player.posX, player.posY, player.angle - Math.PI / 2);
+    }
+
+    function rotateRight() {
+      if (player.isAnimating) { queuedAction = 'RIGHT'; return; }
+      player.dirIndex = (player.dirIndex + 1) % 4;
+      animate3D(player.posX, player.posY, player.angle + Math.PI / 2);
+    }
+
+    // ==========================================
+    // EVENT LISTENERS & INITIALIZATION
+    // ==========================================
+    btnUp.addEventListener('pointerdown', (e) => { e.preventDefault(); moveForward(); });
+    btnDown.addEventListener('pointerdown', (e) => { e.preventDefault(); moveBackward(); });
+    btnLeft.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateLeft(); });
+    btnRight.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateRight(); });
+
+    window.addEventListener('keydown', (e) => {
+      if (screenGame.classList.contains('hidden')) return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggleBattleMode();
+        return;
+      }
+
+      if (combatState.inBattle) {
+        if (['KeyA', 'ArrowLeft'].includes(e.code)) {
+          e.preventDefault();
+          keysHeld.left = true;
+        } else if (['KeyD', 'ArrowRight'].includes(e.code)) {
+          e.preventDefault();
+          keysHeld.right = true;
+        } else if (['KeyX', 'KeyS', 'ArrowDown', 'KeyK'].includes(e.code)) {
+          e.preventDefault();
+          keysHeld.block = true;
+        } else if (['KeyZ', 'KeyW', 'ArrowUp', 'KeyJ'].includes(e.code)) {
+          e.preventDefault();
+          combatAttack();
+        }
+        return;
+      }
+
+      if (['ArrowUp', 'KeyW'].includes(e.code)) {
+        e.preventDefault();
+        moveForward();
+      } else if (['ArrowDown', 'KeyS'].includes(e.code)) {
+        e.preventDefault();
+        moveBackward();
+      } else if (['ArrowLeft', 'KeyA'].includes(e.code)) {
+        e.preventDefault();
+        rotateLeft();
+      } else if (['ArrowRight', 'KeyD'].includes(e.code)) {
+        e.preventDefault();
+        rotateRight();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (['KeyA', 'ArrowLeft'].includes(e.code)) {
+        keysHeld.left = false;
+      } else if (['KeyD', 'ArrowRight'].includes(e.code)) {
+        keysHeld.right = false;
+      } else if (['KeyX', 'KeyS', 'ArrowDown', 'KeyK'].includes(e.code)) {
+        keysHeld.block = false;
+      }
+    });
+
+    // One attach/clear implementation shared by the player, weapon and enemy madlib lines, rather
+    // than three near-identical copies. `key` indexes into attachedImages.
+    function wireImageAttach(key, ids) {
+      const promptInput = document.getElementById(ids.prompt);
+      const fileInput = document.getElementById(ids.file);
+      const attachBtn = document.getElementById(ids.attach);
+      const badge = document.getElementById(ids.badge);
+      const thumb = document.getElementById(ids.thumb);
+      const nameEl = document.getElementById(ids.name);
+      const clearBtn = document.getElementById(ids.clear);
+      if (!promptInput || !fileInput || !attachBtn) return;
+
+      attachBtn.addEventListener('click', () => fileInput.click());
+
+      fileInput.addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const maxDim = 512;
+            let w = img.width, h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+              else { w = Math.round((w * maxDim) / h); h = maxDim; }
+            }
+            const cv = document.createElement('canvas');
+            cv.width = w; cv.height = h;
+            cv.getContext('2d').drawImage(img, 0, 0, w, h);
+            const dataUrl = cv.toDataURL('image/jpeg', 0.88);
+
+            attachedImages[key] = dataUrl;
+            if (key === 'player') uploadedPlayerImageDataUrl = dataUrl;
+            if (thumb) thumb.src = dataUrl;
+            if (nameEl) nameEl.textContent = file.name;
+            if (badge) badge.classList.remove('hidden');
+            promptInput.disabled = true;
+            promptInput.value = "";
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+
+      if (clearBtn) {
+        clearBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          fileInput.value = "";
+          attachedImages[key] = null;
+          if (key === 'player') uploadedPlayerImageDataUrl = null;
+          if (thumb) thumb.src = "";
+          if (nameEl) nameEl.textContent = "";
+          if (badge) badge.classList.add('hidden');
+          promptInput.disabled = false;
+          promptInput.focus();
+        });
+      }
+    }
+
+    wireImageAttach('player', {
+      prompt: 'playerPromptInput', file: 'playerFileInput', attach: 'btnAttachPlayerImage',
+      badge: 'playerImageBadge', thumb: 'playerImageThumb', name: 'playerImageName',
+      clear: 'btnClearPlayerImage'
+    });
+    wireImageAttach('weapon', {
+      prompt: 'weaponPromptInput', file: 'weaponFileInput', attach: 'btnAttachWeaponImage',
+      badge: 'weaponImageBadge', thumb: 'weaponImageThumb', name: 'weaponImageName',
+      clear: 'btnClearWeaponImage'
+    });
+    wireImageAttach('enemy', {
+      prompt: 'enemyPromptInput', file: 'enemyFileInput', attach: 'btnAttachEnemyImage',
+      badge: 'enemyImageBadge', thumb: 'enemyImageThumb', name: 'enemyImageName',
+      clear: 'btnClearEnemyImage'
+    });
+
+    function imageToTexture(img) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      c.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
+      return c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+    }
+
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95") {
+      let loaded = 0;
+      const total = (ceilUri && floorUri) ? 3 : 1;
+
+      function checkDone() {
+        loaded++;
+        if (loaded >= total && activeMode !== 'v1_video') {
+          buildLanternWallFromBase(wallTexture, styleName);
+          buildDynamicExitSignTexture(styleName, wallTexture);
+          render3D();
+          drawMinimap();
+        }
+      }
+
+      if (wallUri) {
+        const imgW = new Image();
+        imgW.onload = () => { wallTexture = imageToTexture(imgW); checkDone(); };
+        imgW.src = wallUri;
+      }
+      if (ceilUri) {
+        const imgC = new Image();
+        imgC.onload = () => { ceilingTexture = imageToTexture(imgC); checkDone(); };
+        imgC.src = ceilUri;
+      }
+      if (floorUri) {
+        const imgF = new Image();
+        imgF.onload = () => { floorTexture = imageToTexture(imgF); checkDone(); };
+        imgF.src = floorUri;
+      }
+    }
+
+    btnCreate.addEventListener('click', async () => {
+      const wallStyle = wallPromptInput.value.trim() || "Windows 95";
+      currentThemeName = wallStyle;
+      activeMode = modeSelect.value;
+      const numGrids = Math.max(10, Math.min(100, parseInt(gridCountInput.value) || 25));
+
+      // Start every dungeon from a clean slate. Quitting straight from an active battle (without
+      // pressing Space to leave battle mode first) used to carry that fight's drained stamina,
+      // damage and held keys into the new dungeon.
+      resetCombatForNewDungeon();
+
+      screenSetup.classList.add('hidden');
+      screenProgress.classList.remove('hidden');
+      if (titleButtons) titleButtons.classList.add('hidden');
+      appContainer.className = 'win95-box p-1 text-black mode-progress';
+
+      progSubText.textContent = `Generating ${numGrids}-grid authentic 3DMaze with FLUX.1 [schnell] (~10s)...`;
+
+      generateAuthentic3DMaze(numGrids);
+      buildDynamicExitSignTexture(wallStyle, wallTexture);
+
+      const startTime = Date.now();
+      progTimer.textContent = "0.0s";
+      const timerInterval = setInterval(() => {
+        progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
+      }, 100);
+
+      try {
+        await fetch(`${SERVER_URL}/api/generate_dungeon`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            wall_style: wallStyle,
+            player_style: playerPromptInput ? playerPromptInput.value.trim() : "",
+            player_image: uploadedPlayerImageDataUrl || null,
+            weapon_style: weaponPromptInput ? weaponPromptInput.value.trim() : "",
+            weapon_image: attachedImages.weapon || null,
+            enemy_style: enemyPromptInput ? enemyPromptInput.value.trim() : "",
+            enemy_image: attachedImages.enemy || null,
+            mode: activeMode
+          })
+        });
+
+        const pollInterval = setInterval(async () => {
+          try {
+            const res = await fetch(`${SERVER_URL}/api/progress`);
+            const p = await res.json();
+
+            progStatusText.textContent = p.status_message;
+            progPercentText.textContent = p.percent + "%";
+
+            const chunkCount = Math.floor((p.percent / 100) * 30);
+            progBarChunks.innerHTML = '';
+            for (let i = 0; i < chunkCount; i++) {
+              const ch = document.createElement('div');
+              ch.className = 'win95-prog-chunk';
+              progBarChunks.appendChild(ch);
+            }
+
+            if (!p.is_generating && p.completed_bundle) {
+              clearInterval(pollInterval);
+              clearInterval(timerInterval);
+
+              const b = p.completed_bundle;
+              if (b.player_sprites && b.player_sprites.length > 0) {
+                playerSpriteFrames = [];
+                b.player_sprites.forEach(src => {
+                  const img = new Image();
+                  img.src = src;
+                  playerSpriteFrames.push(img);
+                });
+                playerSpriteImg = playerSpriteFrames[0];
+              } else if (b.player_sprite) {
+                playerSpriteImg = new Image();
+                playerSpriteImg.src = b.player_sprite;
+                playerSpriteFrames = [playerSpriteImg];
+              }
+              playerFaceFrames = [];
+              if (b.player_faces && b.player_faces.length > 0) {
+                b.player_faces.forEach(src => {
+                  const img = new Image();
+                  img.src = src;
+                  playerFaceFrames.push(img);
+                });
+                playerFaceImg = playerFaceFrames[0];
+              } else if (b.player_face) {
+                playerFaceImg = new Image();
+                playerFaceImg.src = b.player_face;
+                playerFaceFrames = [playerFaceImg];
+              }
+              enemySpriteFrames = [];
+              if (b.enemy_sprites && b.enemy_sprites.length > 0) {
+                b.enemy_sprites.forEach(src => {
+                  const img = new Image();
+                  img.src = src;
+                  enemySpriteFrames.push(img);
+                });
+              }
+              if (b.enemy_style) {
+                combatState.enemy.name = b.enemy_style.toUpperCase();
+              }
+              loadAiTextures(
+                b.wall_texture,
+                b.ceiling_texture,
+                b.floor_texture,
+                wallStyle
+              );
+
+              screenProgress.classList.add('hidden');
+              screenGame.classList.remove('hidden');
+              if (titleButtons) titleButtons.classList.remove('hidden');
+              appContainer.className = 'win95-box p-1 text-black mode-game';
+              render3D();
+              drawMinimap();
+              updateHUD();
+            } else if (p.error) {
+              clearInterval(pollInterval);
+              clearInterval(timerInterval);
+              alert("Error: " + p.error);
+              screenProgress.classList.add('hidden');
+              screenSetup.classList.remove('hidden');
+              if (titleButtons) titleButtons.classList.remove('hidden');
+              appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+            }
+          } catch (err) {
+            console.error('Progress poll error:', err);
+          }
+        }, 600);
+
+      } catch (err) {
+        clearInterval(timerInterval);
+        alert('Server communication error. Make sure server.py is running!');
+        screenProgress.classList.add('hidden');
+        screenSetup.classList.remove('hidden');
+        if (titleButtons) titleButtons.classList.remove('hidden');
+        appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+      }
+    });
+
+    // Boot engine
+    buildDefaultTextures();
+    generateAuthentic3DMaze(25);
+    render3D();
+    drawMinimap();
+    updateHUD();

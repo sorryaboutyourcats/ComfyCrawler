@@ -187,9 +187,16 @@ PLAYER_POSE_KEYPOINTS = {
 # The sword sprite is generated blade-up with the grip at the bottom, so `angle` is a plain
 # counter-clockwise rotation about the grip: 0 = held upright, positive = cocked left,
 # negative = swung right. `scale` is blade length as a fraction of frame height.
+# How far up the blade the hand actually closes, as a fraction of sprite height. Pivoting on the
+# very bottom edge balanced the weapon on the tip of its pommel, which read as the hand hovering
+# next to a floating sword rather than gripping one.
+SWORD_GRIP_FRAC = 0.12
+
 # Offsets zero for the same reason as the shield: the grip belongs in the hand, not near it.
 PLAYER_SWORD_TRANSFORMS = {
-    "idle":   {"angle":    0, "scale": 0.40, "offset": (0.00,  0.00), "streak": None},
+    # Tilted up and out rather than straight vertical, so at rest the weapon reads as raised and
+    # ready to strike instead of parked at the side.
+    "idle":   {"angle":  -18, "scale": 0.40, "offset": (0.00,  0.00), "streak": None},
     "block":  {"angle":  -25, "scale": 0.34, "offset": (0.00,  0.00), "streak": None},
     # Blade swept up and across to the left from the raised guard hand - this is what actually
     # reads as "cocked back", now that the arm itself stays in a natural position.
@@ -224,11 +231,12 @@ PLAYER_SHIELD_TRANSFORMS = {
 }
 
 
-def render_pose_skeleton(pose_name, size=768):
+def render_pose_skeleton(pose_name, size=768, keypoints=None, prefix="pose_skel"):
     """Render a pose as an OpenPose-style skeleton PNG into ComfyUI's input folder, for use as
-    ControlNet conditioning. Pure PIL - no opencv dependency needed for this simplified version."""
+    ControlNet conditioning. Pure PIL - no opencv dependency needed for this simplified version.
+    Pass `keypoints` explicitly to render a set other than the player's (e.g. the enemy's)."""
     from PIL import Image, ImageDraw
-    kps = PLAYER_POSE_KEYPOINTS[pose_name]
+    kps = keypoints if keypoints is not None else PLAYER_POSE_KEYPOINTS[pose_name]
     canvas = Image.new("RGB", (size, size), (0, 0, 0))
     draw = ImageDraw.Draw(canvas)
     stick_width = max(4, size // 100)
@@ -246,7 +254,7 @@ def render_pose_skeleton(pose_name, size=768):
         x, y = kp[0] * size, kp[1] * size
         draw.ellipse([x - stick_width, y - stick_width, x + stick_width, y + stick_width], fill=color)
 
-    filename = f"pose_skel_{pose_name}.png"
+    filename = f"{prefix}_{pose_name}.png"
     canvas.save(os.path.join(COMFY_INPUT_DIR, filename), format="PNG")
     return filename
 
@@ -254,8 +262,8 @@ def render_pose_skeleton(pose_name, size=768):
 
 
 def get_player_sprite_prompts(player_style):
-    """Retro flat 2D low-poly prompts for the IPAdapter-conditioned player sprite pipeline.
-    Weapon + shield are baked into the character description itself (not drawn as separate overlays)."""
+    """Prompts for the IPAdapter-conditioned player sprite pipeline. Structure (orientation, single
+    figure, framing) is forced; art style is left entirely to whatever the player typed."""
     p_style = player_style.strip() if (player_style and player_style.strip()) else "armored knight"
 
     # Pose clause goes FIRST and the shared style/background text is kept short - CLIP truncates
@@ -271,64 +279,96 @@ def get_player_sprite_prompts(player_style):
     # that to all five frames. Only ORIENTATION words are weighted: an earlier attempt at weighting
     # face/species words ("muzzle", "animal face") to suppress the face also erased what made a cat
     # a cat, and the brief is explicitly that every species has to still work.
+    # STRUCTURE IS FORCED, STYLE IS NOT. A/B'd three prompt stacks against the same styles:
+    #   - heavy forcing (art style clamped at 1.35, ~40-term negative) produced ragged alpha
+    #     fringing and no better orientation than this;
+    #   - no forcing at all held the back view fine - ControlNet and IPAdapter carry structure on
+    #     their own - but let the art style wander off into pixel-art;
+    #   - this middle stack was cleanest and at least as reliable across "pretty lady" and "cat".
+    # So orientation keeps its weighting, which demonstrably earns its keep, while the art style is
+    # merely named and the negative trimmed to the things that actually recur.
+    # No art style is imposed. The look now comes from whatever the player typed - ask for a woman
+    # and you get a realistic woman; ask for a pixel-art goblin and you get pixel art. Everything
+    # here that isn't orientation or framing was previously clamping the result to flat retro CGI,
+    # and the negative was additionally blocking "photorealistic" outright.
     tail = (
-        f"Single {p_style} warrior, only one figure in the image, "
-        f"(low-poly flat-shaded retro 90s video game character sprite:1.35). "
-        f"(Viewed from directly behind:1.5), (back of the head visible:1.4), (facing away from the viewer:1.4), "
-        f"turned to face deeper into the scene toward a distant enemy, spine straight, centered. "
-        f"Both hands empty, closed in gripping fists, carrying nothing. "
-        f"Isolated alone on a solid plain white background, no room, no floor, no scenery."
+        f"Single {p_style} warrior, one figure only, full body game character. "
+        f"(Viewed from directly behind:1.4), facing away from the viewer, "
+        f"spine straight, centered. Both hands empty, carrying nothing. "
+        f"Isolated on a plain white background, no scenery."
     )
 
     reference_prompt = f"Neutral standing pose, arms relaxed at the sides. {tail}"
 
     pose_prompts = [
         f"Standing idle stance, weight balanced evenly, right arm hanging relaxed at the side. {tail}",
-        f"Shield raised up and forward, bracing to block an incoming attack. {tail}",
-        f"Right arm cocked back low across the chest, coiled and about to strike. {tail}",
-        f"Mid-swing dynamic action pose, right arm swept through to the side, torso twisted into the "
-        f"swing, front leg lunging forward. {tail}",
-        f"Staggering backward off-balance, recoiling from a hit, shield dropped low. {tail}",
+        f"Shield arm raised up and forward, bracing to block an incoming attack. {tail}",
+        f"Sword arm raised high and out to the side, coiled and about to strike. {tail}",
+        f"Mid-swing dynamic action pose, torso twisted into the swing, front leg lunging forward. {tail}",
+        f"Staggering backward off-balance, recoiling from a hit. {tail}",
     ]
 
     player_negative = (
-        "(front view:1.5), (facing the camera:1.5), (facing the viewer:1.4), (looking at viewer:1.4), "
-        "(sword:1.4), (holding a weapon:1.4), blade, axe, spear, staff, shield, buckler, "
-        "portrait, eye contact, "
-        "two characters, twins, duplicate character, multiple views, character turnaround, character sheet, "
-        "reference sheet, concept art sheet, weapon closeup, item icons, ui text, labels, callouts, "
-        "front and back view, two poses, split screen, mirrored duplicate, side by side, "
-        "two shields, twin shields, matching shields, symmetric shields, "
-        "turned around, three quarter view, side view, profile view, "
-        "comic book art, ink outlines, heavy black outlines, inked linework, cel shaded illustration, "
-        "manga, anime, pinup, painterly, watercolor, sketch, "
-        "room, floor, wall, walls, tile floor, doorway, window, interior, architecture, ground, ground plane, "
-        "photorealistic, 3d render, realistic skin texture, detailed background, scenery, landscape, environment, "
-        "desert, rocks, cliffs, buildings, horizon, sky, blurry, watermark, cropped, extra limbs, deformed hands, "
-        "multiple characters, text, signature, ugly, bad anatomy, disfigured, jpeg artifacts"
+        "front view, facing the camera, looking at viewer, "
+        "two characters, duplicate character, character sheet, multiple views, "
+        # Weapon suppression carries weight (style deliberately does not). The character has to come
+        # out EMPTY-HANDED because the real sword and shield are composited on afterwards; left
+        # unweighted the model kept strapping extra blades and scabbards to the character's back,
+        # which is the old "two swords" problem wearing a different hat.
+        "(sword:1.3), (weapon:1.3), (shield:1.3), blade, axe, spear, scabbard, sheath, "
+        "weapons on back, armed, holding an object, "
+        "room, floor, scenery, landscape, "
+        "blurry, watermark, text, signature, bad anatomy"
     )
 
     return reference_prompt, pose_prompts, player_negative
 
 
-def get_sword_prompts(player_style):
-    """Prompt pair for the one-off sword sprite that gets composited into every frame.
-    Generated blade-up with the grip at the bottom so rotation about the grip is trivial."""
+def get_sword_prompts(player_style, weapon_style=None):
+    """Prompt pair for the one-off weapon sprite that gets composited into every frame.
+    Generated blade-up with the grip at the bottom so rotation about the grip is trivial.
+    `weapon_style` is the player's own words for the weapon; without it, the weapon is just
+    described as a sword styled to match the character."""
     p_style = player_style.strip() if (player_style and player_style.strip()) else "armored knight"
+    w_style = weapon_style.strip() if (weapon_style and weapon_style.strip()) else ""
+    # Only describe a BLADE when nobody asked for something specific. Forcing "one straight blade,
+    # hilt crossguard" onto a stated weapon fights the request - an axe came back as a slab.
+    if w_style:
+        shape = (f"A single {w_style}, held upright with its head at the top and its handle and grip "
+                 f"at the bottom, one weapon only, flat side-on view.")
+    else:
+        shape = ("A single sword weapon held vertically, blade pointing straight up, hilt crossguard "
+                 "and grip at the bottom, one straight blade, flat side-on view.")
     sword_positive = (
-        f"A single sword weapon held vertically, blade pointing straight up, hilt crossguard and grip at the "
-        f"bottom, one straight double-edged blade, flat side-on view. Low-poly flat-shaded retro 90s video game "
-        f"item sprite, styled to match a {p_style} warrior. Isolated alone on a solid plain white background, "
-        f"no character, no person, no hands."
+        f"{shape} Game item sprite, styled to match a {p_style} "
+        f"warrior. Isolated alone on a solid plain white background, no character, no person, no hands."
     )
     sword_negative = (
         "person, character, human, warrior, knight, hand, hands, arm, arms, body, face, holding, wielding, "
-        "two swords, multiple swords, crossed swords, pair of swords, sword rack, weapon collection, "
+        # Weapon-agnostic: the stated weapon may be an axe, a mace, a staff - "two swords" alone
+        # did nothing to discourage a stacked column of axe heads.
+        "two weapons, multiple weapons, pair of weapons, crossed weapons, weapon rack, weapon collection, "
+        "row of weapons, stacked weapons, contact sheet, "
         "shield, item icons, ui text, labels, inventory grid, "
-        "horizontal sword, diagonal sword, tilted, room, floor, scenery, background, landscape, "
-        "photorealistic, 3d render, blurry, watermark, cropped, text, signature, jpeg artifacts"
+        "horizontal, diagonal, tilted, room, floor, scenery, background, landscape, "
+        "blurry, watermark, cropped, text, signature, jpeg artifacts"
     )
     return sword_positive, sword_negative
+
+
+PORTRAIT_FRAME_NAMES = ["idle", "attack", "block", "hurt"]
+
+# Expression per HUD portrait frame. Only this clause changes between them - same seed, same
+# IPAdapter reference - so the four read as one character pulling four faces.
+# Kept to ONE short clause each. An earlier version piled three or four facial descriptors into the
+# attack and hurt frames and those were exactly the ones that collapsed into abstract collages -
+# the same over-conditioning this 8-step model has broken under repeatedly.
+PORTRAIT_EXPRESSIONS = {
+    "idle":   "calm determined expression",
+    "attack": "shouting fiercely with mouth open",
+    "block":  "jaw clenched and braced",
+    "hurt":   "wincing in pain",
+}
 
 
 def get_portrait_prompts(player_style):
@@ -341,20 +381,22 @@ def get_portrait_prompts(player_style):
     # collapsed some seeds into an abstract kaleidoscope with no character in it at all - the same
     # fragility this 8-step distilled model showed when given heavy multi-conditioning elsewhere.
     # One head, facing forward, is carried mostly by plain wording.
-    portrait_positive = (
+    portrait_positives = [
         f"Head and shoulders portrait of one {p_style} warrior, (facing the viewer:1.2), a single "
-        f"centered bust filling the frame, determined expression. Low-poly flat-shaded retro 90s "
-        f"video game character art. Plain solid light background."
-    )
+        f"centered bust filling the frame, {PORTRAIT_EXPRESSIONS[n]}. Game character portrait art. "
+        f"Plain solid light background."
+        for n in PORTRAIT_FRAME_NAMES
+    ]
     portrait_negative = (
         "back view, facing away, back of the head, rear view, "
         "two characters, multiple heads, duplicate, character sheet, multiple views, "
         "grid, tiled, side by side, mirrored, "
         "full body, legs, feet, weapon, sword, shield, "
         "trees, forest, sky, room, floor, scenery, landscape, detailed background, "
-        "photorealistic, 3d render, blurry, watermark, cropped, text, signature, jpeg artifacts"
+        "abstract, kaleidoscope, pattern, collage, "
+        "blurry, watermark, cropped, text, signature, jpeg artifacts"
     )
-    return portrait_positive, portrait_negative
+    return portrait_positives, portrait_negative
 
 
 def get_shield_prompts(player_style):
@@ -369,7 +411,7 @@ def get_shield_prompts(player_style):
     shield_positive = (
         f"A single round battle shield seen face-on, one circular shield with a plain raised central boss "
         f"and a decorated rim, bare undecorated surface, no emblem, no crest, no painted figure. Low-poly "
-        f"flat-shaded retro 90s video game item sprite, in the colours and materials of a {p_style} "
+        f"game item sprite, in the colours and materials of a {p_style} "
         f"warrior's gear. Isolated alone and centered on a solid plain white background, no character, "
         f"no person, no hands, no sword."
     )
@@ -382,12 +424,132 @@ def get_shield_prompts(player_style):
         "sword, blade, weapon, spear, axe, crossed weapons, "
         "two shields, multiple shields, pair of shields, shield rack, collection, row of shields, "
         "item icons, ui text, labels, inventory grid, room, floor, scenery, background, landscape, "
-        "photorealistic, 3d render, blurry, watermark, cropped, text, signature, jpeg artifacts"
+        "blurry, watermark, cropped, text, signature, jpeg artifacts"
     )
     return shield_positive, shield_negative
 
 
-def generate_player_sprite_ipadapter(player_style):
+ENEMY_FRAME_NAMES = ["idle", "attack", "hurt"]
+
+# Enemy skeletons are FRONT-facing (it is looking at the player), which is why these carry a nose
+# and eyes where the player's deliberately omit them. Without ControlNet the three enemy frames
+# collapsed into the same image - a shared seed plus a strong IPAdapter leaves pose wording alone
+# with nothing to push against, so the "attack" and "hurt" frames were indistinguishable from idle.
+ENEMY_POSE_KEYPOINTS = {
+    "idle": [
+        (0.50, 0.16), (0.50, 0.24),
+        (0.61, 0.27), (0.66, 0.42), (0.68, 0.56),
+        (0.39, 0.27), (0.34, 0.42), (0.32, 0.56),
+        (0.57, 0.56), (0.58, 0.74), (0.58, 0.92),
+        (0.43, 0.56), (0.42, 0.74), (0.42, 0.92),
+        (0.535, 0.145), (0.465, 0.145), (0.575, 0.16), (0.425, 0.16),
+    ],
+    # Lunging at the player: both arms thrown up and out toward the viewer, legs splayed.
+    "attack": [
+        (0.50, 0.18), (0.50, 0.26),
+        (0.62, 0.28), (0.73, 0.21), (0.82, 0.13),
+        (0.38, 0.28), (0.27, 0.21), (0.18, 0.13),
+        (0.57, 0.57), (0.63, 0.75), (0.69, 0.93),
+        (0.43, 0.57), (0.37, 0.75), (0.31, 0.93),
+        (0.535, 0.165), (0.465, 0.165), (0.575, 0.18), (0.425, 0.18),
+    ],
+    # Recoiling from a hit: head snapped back and down, arms flung backward, off balance.
+    "hurt": [
+        (0.52, 0.22), (0.51, 0.29),
+        (0.61, 0.32), (0.71, 0.39), (0.79, 0.32),
+        (0.41, 0.32), (0.31, 0.39), (0.23, 0.32),
+        (0.58, 0.59), (0.62, 0.77), (0.66, 0.94),
+        (0.44, 0.59), (0.40, 0.77), (0.36, 0.94),
+        (0.555, 0.205), (0.485, 0.205), (0.595, 0.22), (0.445, 0.22),
+    ],
+}
+
+
+def generate_enemy_sprites(enemy_style):
+    """Generate the enemy's idle / attack / hurt frames.
+
+    Deliberately much simpler than the player pipeline: the enemy FACES the camera (it is looking
+    at the player), so there is no back-view problem to solve and no ControlNet skeleton needed -
+    the three poses are far enough apart to separate on text alone. Identity is held together the
+    same way as the player's, by generating one reference and IPAdapter-conditioning the frames on
+    it, and all three share a seed so they read as one creature rather than three."""
+    e_style = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "shadowy nightstalker demon"
+    seed = random.randint(1, 1000000000)
+
+    tail = (
+        f"Single {e_style} enemy monster, one figure only, full body game character. Facing the viewer head on, full body, centered. "
+        f"Isolated on a plain white background, no scenery."
+    )
+    negative = (
+        "two characters, duplicate, character sheet, multiple views, grid, tiled, "
+        "human hero, knight, player character, "
+        "room, floor, scenery, landscape, "
+        "blurry, watermark, text, signature, bad anatomy"
+    )
+    pose_prompts = [
+        f"Standing menacingly at rest, arms low, breathing. {tail}",
+        f"Lunging forward mid-attack, arms swung out toward the viewer, aggressive. {tail}",
+        f"Recoiling backward in pain from a hit, head thrown back, staggering. {tail}",
+    ]
+
+    payload = {
+        "ckpt": {"inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+        "lora": {"inputs": {"model": ["ckpt", 0], "clip": ["ckpt", 1], "lora_name": "sdxl_lightning_8step_lora.safetensors", "strength_model": 1.0, "strength_clip": 1.0}, "class_type": "LoraLoader"},
+        "neg": {"inputs": {"text": negative, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
+        "ipa_loader": {"inputs": {"model": ["lora", 0], "preset": "PLUS (high strength)"}, "class_type": "IPAdapterUnifiedLoader"},
+        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        "cn_loader": {"inputs": {"control_net_name": "SDXL\\OpenPoseXL2.safetensors"}, "class_type": "ControlNetLoader"},
+
+        "ref_lat": {"inputs": {"width": 768, "height": 768, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "ref_pos": {"inputs": {"text": f"Standing still, neutral pose. {tail}", "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
+        "ref_pose_img": {"inputs": {"image": render_pose_skeleton("idle", keypoints=ENEMY_POSE_KEYPOINTS["idle"], prefix="enemy_skel")}, "class_type": "LoadImage"},
+        "ref_cn": {"inputs": {"positive": ["ref_pos", 0], "negative": ["neg", 0], "control_net": ["cn_loader", 0], "image": ["ref_pose_img", 0], "strength": 0.85, "start_percent": 0.0, "end_percent": 1.0}, "class_type": "ControlNetApplyAdvanced"},
+        "ref_samp": {"inputs": {"seed": seed, "steps": 8, "cfg": 2.0, "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0, "model": ["lora", 0], "positive": ["ref_cn", 0], "negative": ["ref_cn", 1], "latent_image": ["ref_lat", 0]}, "class_type": "KSampler"},
+        "ref_dec": {"inputs": {"samples": ["ref_samp", 0], "vae": ["ckpt", 2]}, "class_type": "VAEDecode"},
+    }
+
+    for i, pose_prompt in enumerate(pose_prompts):
+        name = ENEMY_FRAME_NAMES[i]
+        skeleton = render_pose_skeleton(name, keypoints=ENEMY_POSE_KEYPOINTS[name], prefix="enemy_skel")
+        payload[f"ipa_{name}"] = {"inputs": {"model": ["lora", 0], "ipadapter": ["ipa_loader", 1], "image": ["ref_dec", 0], "weight": 0.75, "weight_type": "linear", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}, "class_type": "IPAdapterAdvanced"}
+        payload[f"{name}_lat"] = {"inputs": {"width": 768, "height": 768, "batch_size": 1}, "class_type": "EmptyLatentImage"}
+        payload[f"{name}_pos"] = {"inputs": {"text": pose_prompt, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"}
+        payload[f"{name}_pose_img"] = {"inputs": {"image": skeleton}, "class_type": "LoadImage"}
+        payload[f"{name}_cn"] = {"inputs": {"positive": [f"{name}_pos", 0], "negative": ["neg", 0], "control_net": ["cn_loader", 0], "image": [f"{name}_pose_img", 0], "strength": 0.85, "start_percent": 0.0, "end_percent": 1.0}, "class_type": "ControlNetApplyAdvanced"}
+        payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": 8, "cfg": 2.0, "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0, "model": [f"ipa_{name}", 0], "positive": [f"{name}_cn", 0], "negative": [f"{name}_cn", 1], "latent_image": [f"{name}_lat", 0]}, "class_type": "KSampler"}
+        payload[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["ckpt", 2]}, "class_type": "VAEDecode"}
+        payload[f"{name}_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": [f"{name}_dec", 0]}, "class_type": "RemoveBackground"}
+        payload[f"{name}_maskinv"] = {"inputs": {"mask": [f"{name}_mask", 0]}, "class_type": "InvertMask"}
+        payload[f"{name}_save"] = {"inputs": {"filename_prefix": f"enemy_{name}_{int(time.time()*1000)}", "images": [f"{name}_dec", 0], "mask": [f"{name}_maskinv", 0]}, "class_type": "SaveImageWithAlpha"}
+
+    data = json.dumps({"prompt": payload}).encode("utf-8")
+    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+
+    expected = [f"{n}_save" for n in ENEMY_FRAME_NAMES]
+    start_time = time.time()
+    while time.time() - start_time < 300:
+        time.sleep(0.2)
+        with urllib.request.urlopen(urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")) as h:
+            hist = json.loads(h.read().decode("utf-8"))
+        if prompt_id in hist:
+            outputs = hist[prompt_id].get("outputs", {})
+            if all(k in outputs for k in expected):
+                paths = []
+                for k in expected:
+                    info = outputs[k]["images"][0]
+                    p = os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+                    keep_largest_figure(p)
+                    paths.append(p)
+                crop_frames_to_common_bbox(paths)
+                print(f"[Enemy Sprite] 3-frame set complete for '{e_style}'")
+                return paths
+
+    raise TimeoutError("Enemy sprite generation timed out.")
+
+
+def generate_player_sprite_ipadapter(player_style, weapon_style=None):
     """Generate one clean reference character with SDXL-Lightning, then 5 pose frames
     IPAdapter-conditioned on that reference (idle, block, windup, slash, hurt), all sharing
     one locked seed for consistency. Each frame is background-removed independently, then has the
@@ -395,9 +557,9 @@ def generate_player_sprite_ipadapter(player_style):
 
     Returns (frame_paths, portrait_path)."""
     reference_prompt, pose_prompts, player_negative = get_player_sprite_prompts(player_style)
-    sword_positive, sword_negative = get_sword_prompts(player_style)
+    sword_positive, sword_negative = get_sword_prompts(player_style, weapon_style)
     shield_positive, shield_negative = get_shield_prompts(player_style)
-    portrait_positive, portrait_negative = get_portrait_prompts(player_style)
+    portrait_positives, portrait_negative = get_portrait_prompts(player_style)
     seed = random.randint(1, 1000000000)
     prefix_ref = f"player_ref_{int(time.time()*1000)}"
 
@@ -437,15 +599,26 @@ def generate_player_sprite_ipadapter(player_style):
     # composited into all five frames. IPAdapter runs in "style transfer" mode here (not linear) so
     # it picks up the reference character's palette/shading without dragging a body into the image.
     payload.update({
+        # TWO weapon candidates, different seeds, picked between afterwards. On a square canvas the
+        # weapon pass fairly often returns a fan of crossed swords fused into one squat blob, and
+        # once that has happened no amount of component analysis can recover a single blade from it.
+        # The canvas is also TALL (384x768) - the same trick that fixed the duplicated portrait -
+        # because a fan of crossed weapons has nowhere to lay itself out in a narrow frame.
         "sword_neg": {"inputs": {"text": sword_negative, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
         "sword_pos": {"inputs": {"text": sword_positive, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
         "ipa_sword": {"inputs": {"model": ["lora", 0], "ipadapter": ["ipa_loader", 1], "image": ["ref_crop", 0], "weight": 0.4, "weight_type": "style transfer", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}, "class_type": "IPAdapterAdvanced"},
-        "sword_lat": {"inputs": {"width": 768, "height": 768, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "sword_lat": {"inputs": {"width": 384, "height": 768, "batch_size": 1}, "class_type": "EmptyLatentImage"},
         "sword_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 8, "cfg": 2.0, "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0, "model": ["ipa_sword", 0], "positive": ["sword_pos", 0], "negative": ["sword_neg", 0], "latent_image": ["sword_lat", 0]}, "class_type": "KSampler"},
         "sword_dec": {"inputs": {"samples": ["sword_samp", 0], "vae": ["ckpt", 2]}, "class_type": "VAEDecode"},
         "sword_mask": {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["sword_dec", 0]}, "class_type": "RemoveBackground"},
         "sword_maskinv": {"inputs": {"mask": ["sword_mask", 0]}, "class_type": "InvertMask"},
         "sword_save": {"inputs": {"filename_prefix": f"player_sword_{int(time.time()*1000)}", "images": ["sword_dec", 0], "mask": ["sword_maskinv", 0]}, "class_type": "SaveImageWithAlpha"},
+
+        "sword2_samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 8, "cfg": 2.0, "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0, "model": ["ipa_sword", 0], "positive": ["sword_pos", 0], "negative": ["sword_neg", 0], "latent_image": ["sword_lat", 0]}, "class_type": "KSampler"},
+        "sword2_dec": {"inputs": {"samples": ["sword2_samp", 0], "vae": ["ckpt", 2]}, "class_type": "VAEDecode"},
+        "sword2_mask": {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["sword2_dec", 0]}, "class_type": "RemoveBackground"},
+        "sword2_maskinv": {"inputs": {"mask": ["sword2_mask", 0]}, "class_type": "InvertMask"},
+        "sword2_save": {"inputs": {"filename_prefix": f"player_sword2_{int(time.time()*1000)}", "images": ["sword2_dec", 0], "mask": ["sword2_maskinv", 0]}, "class_type": "SaveImageWithAlpha"},
 
         "shield_neg": {"inputs": {"text": shield_negative, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
         "shield_pos": {"inputs": {"text": shield_positive, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
@@ -465,19 +638,47 @@ def generate_player_sprite_ipadapter(player_style):
         # head. Strong-style-transfer carries the design - species, palette, armour - while leaving
         # framing to the prompt, which is what lets this one actually face the viewer.
         "portrait_neg": {"inputs": {"text": portrait_negative, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
-        "portrait_pos": {"inputs": {"text": portrait_positive, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
         # Weight kept moderate: "strong style transfer" at 0.9 sometimes overwhelmed the prompt
         # entirely and produced an abstract stained-glass pattern instead of a character.
-        "ipa_portrait": {"inputs": {"model": ["lora", 0], "ipadapter": ["ipa_loader", 1], "image": ["ref_crop", 0], "weight": 0.7, "weight_type": "style transfer", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}, "class_type": "IPAdapterAdvanced"},
+        # start_at 0.35 is the important part. Layout is decided in the earliest denoising steps, so
+        # an IPAdapter running from step 0 was voting on COMPOSITION using a full-body reference
+        # while the prompt asked for a single bust - and the model settled that argument by tiling
+        # the bust into a 2x2 grid. Letting the prompt own the first third of the schedule fixes the
+        # composition; IPAdapter still supplies the character's colours and design after that.
+        "ipa_portrait": {"inputs": {"model": ["lora", 0], "ipadapter": ["ipa_loader", 1], "image": ["ref_crop", 0], "weight": 0.7, "weight_type": "style transfer", "combine_embeds": "concat", "start_at": 0.35, "end_at": 1.0, "embeds_scaling": "V only"}, "class_type": "IPAdapterAdvanced"},
         # Deliberately TALL rather than square. On a square canvas the bust framing kept coming back
         # as two portraits side by side; a 3:4 canvas simply has no room to lay two heads out
         # horizontally, which suppresses the duplication structurally instead of by prompt-wrangling.
         # Cropped back to a square below, since the HUD slot is square.
         "portrait_lat": {"inputs": {"width": 384, "height": 512, "batch_size": 1}, "class_type": "EmptyLatentImage"},
-        "portrait_samp": {"inputs": {"seed": seed, "steps": 8, "cfg": 2.0, "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0, "model": ["ipa_portrait", 0], "positive": ["portrait_pos", 0], "negative": ["portrait_neg", 0], "latent_image": ["portrait_lat", 0]}, "class_type": "KSampler"},
-        "portrait_dec": {"inputs": {"samples": ["portrait_samp", 0], "vae": ["ckpt", 2]}, "class_type": "VAEDecode"},
-        "portrait_save": {"inputs": {"filename_prefix": f"player_portrait_{int(time.time()*1000)}", "images": ["portrait_dec", 0]}, "class_type": "SaveImage"},
     })
+
+    # Four HUD portrait frames - idle / attack / block / hurt - so the mugshot reacts the way a
+    # Doom-style face does. Only the expression clause differs; the seed and IPAdapter reference are
+    # shared, so they read as one character rather than four different people.
+    # All four share ONE seed and differ only by the expression clause. That is what makes them the
+    # same character pulling four faces - IPAdapter carries style but NOT facial identity, so giving
+    # each frame its own seed (tried, reverted) returned four different people.
+    #
+    # Deriving the three expressions from the idle frame by partial-denoise img2img was also tried
+    # and reverted: it held identity perfectly but this 8-step distilled model handles partial
+    # denoise badly, tearing the results into glitchy colour patches while barely changing the
+    # expression at all.
+    #
+    # The residual risk of a shared seed is that a seed which tiles the bust into a grid tiles all
+    # four at once. That is what the validation in crop_portrait_square is for: tiled frames are
+    # rejected on coverage or aspect, and a set that fails outright falls back to the FLUX portrait.
+    for i, pos_text in enumerate(portrait_positives):
+        pn = PORTRAIT_FRAME_NAMES[i]
+        payload[f"portrait_{pn}_pos"] = {"inputs": {"text": pos_text, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"}
+        payload[f"portrait_{pn}_samp"] = {"inputs": {"seed": seed, "steps": 8, "cfg": 2.0, "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0, "model": ["ipa_portrait", 0], "positive": [f"portrait_{pn}_pos", 0], "negative": ["portrait_neg", 0], "latent_image": ["portrait_lat", 0]}, "class_type": "KSampler"}
+        payload[f"portrait_{pn}_dec"] = {"inputs": {"samples": [f"portrait_{pn}_samp", 0], "vae": ["ckpt", 2]}, "class_type": "VAEDecode"}
+        # Background-removed like everything else, which gives the single-bust safety net in
+        # crop_portrait_square separable components to work with (and looks better in the dark
+        # HUD inset regardless).
+        payload[f"portrait_{pn}_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": [f"portrait_{pn}_dec", 0]}, "class_type": "RemoveBackground"}
+        payload[f"portrait_{pn}_maskinv"] = {"inputs": {"mask": [f"portrait_{pn}_mask", 0]}, "class_type": "InvertMask"}
+        payload[f"portrait_{pn}_save"] = {"inputs": {"filename_prefix": f"player_portrait_{pn}_{int(time.time()*1000)}", "images": [f"portrait_{pn}_dec", 0], "mask": [f"portrait_{pn}_maskinv", 0]}, "class_type": "SaveImageWithAlpha"}
 
     # Fresh txt2img per pose, with two separate anchors doing two separate jobs instead of one
     # anchor trying to do both: ControlNet (OpenPose skeleton, hand-authored per pose above) forces
@@ -514,7 +715,9 @@ def generate_player_sprite_ipadapter(player_style):
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
 
-    expected_saves = [f"{name}_save" for name in PLAYER_FRAME_NAMES] + ["sword_save", "shield_save", "portrait_save"]
+    expected_saves = ([f"{name}_save" for name in PLAYER_FRAME_NAMES]
+                      + ["sword_save", "sword2_save", "shield_save"]
+                      + [f"portrait_{n}_save" for n in PORTRAIT_FRAME_NAMES])
     start_time = time.time()
     while time.time() - start_time < 300:
         time.sleep(0.2)
@@ -528,7 +731,7 @@ def generate_player_sprite_ipadapter(player_style):
                         img_info = outputs[key]["images"][0]
                         return os.path.join(COMFY_OUTPUT_DIR, img_info.get("subfolder", ""), img_info["filename"])
 
-                    sword_path = extract_single_sword(_path_of("sword_save"))
+                    sword_path = pick_best_weapon([_path_of("sword_save"), _path_of("sword2_save")])
                     shield_path = extract_single_shield(_path_of("shield_save"))
 
                     # Composite BEFORE cropping: the anchor points are in the same normalized space
@@ -548,11 +751,18 @@ def generate_player_sprite_ipadapter(player_style):
                     # aspect ratio against a fixed height.
                     crop_frames_to_common_bbox(frame_paths)
 
-                    portrait_path = _path_of("portrait_save")
-                    crop_portrait_square(portrait_path)
+                    # Any portrait frame that came out as an abstract mess falls back to the idle
+                    # one, so a bad roll costs an expression rather than the whole mugshot.
+                    portrait_paths = []
+                    for pn in PORTRAIT_FRAME_NAMES:
+                        p = _path_of(f"portrait_{pn}_save")
+                        portrait_paths.append(p if crop_portrait_square(p) else None)
+                    idle_portrait = portrait_paths[0] or next((p for p in portrait_paths if p), None)
+                    portrait_paths = [p or idle_portrait for p in portrait_paths]
 
-                    print(f"[Player Sprite] IPAdapter 5-frame set + composited gear + portrait complete for '{player_style}'")
-                    return frame_paths, portrait_path
+                    print(f"[Player Sprite] IPAdapter 5-frame set + composited gear + "
+                          f"{sum(1 for p in portrait_paths if p)} portrait frames for '{player_style}'")
+                    return frame_paths, portrait_paths
 
     raise TimeoutError("SDXL-Lightning + IPAdapter player sprite generation timed out.")
 
@@ -576,7 +786,7 @@ def _isolate_component(img_path, elongated):
     arr = np.array(Image.open(img_path).convert("RGBA"))
     labels, n = ndimage.label(arr[:, :, 3] > 20)
     if n == 0:
-        return None, None
+        return None, None, 0.0
 
     all_comps, shaped = [], []
     for idx, (sl_y, sl_x) in enumerate(ndimage.find_objects(labels)):
@@ -610,7 +820,14 @@ def _isolate_component(img_path, elongated):
         # 0.3 (a hoop on the arm), while a contact sheet of shields packed edge to edge forms one
         # near-solid RECTANGLE approaching 1.0 (a tiled slab on the arm).
         solidity = filled / float(max(1, sub.shape[0] * sub.shape[1]))
-        shape_ok = (2.2 < elong < 12.0) if elongated else (elong < 1.9 and 0.55 < solidity < 0.90)
+        # Running off BOTH the top and bottom edge means this is not one item but a column of them
+        # fused end to end - a stack of axe heads, say. That reads as a single run per row and a
+        # perfectly sword-like elongation, so nothing else here catches it; only the fact that a
+        # real item sprite is generated with margins and does not bleed off both edges at once.
+        spans_canvas = (sl_y.start == 0 and sl_y.stop == arr.shape[0])
+        # Upper elongation bound is generous: real sheets routinely contain slim blades scoring ~14,
+        # and capping at 12 threw those away and left only the fused blobs to choose from.
+        shape_ok = (2.2 < elong < 22.0 and not spans_canvas) if elongated else (elong < 1.9 and 0.55 < solidity < 0.90)
         if shape_ok:
             shaped.append(entry)
 
@@ -618,17 +835,19 @@ def _isolate_component(img_path, elongated):
     # compositing the ENTIRE untouched sheet into every frame - that is the "fan of swords" bug.
     pool = shaped or all_comps
     if not pool:
-        return None, None
+        return None, None, 0.0
 
     # Sort single-run components ahead of clusters FIRST, then take the beefiest of those - a
     # bulky blade reads best once scaled to sprite size, where a spindly one would vanish. Ranking
     # on size alone let a fused group of parallel blades win whenever it outweighed every clean
     # single sword on the sheet, which is how a fan of swords kept ending up in the player's hand.
-    label_id, sl_y, sl_x, _, _, major, _ = max(pool, key=lambda c: (c[6] <= 1.4, c[3]))
+    label_id, sl_y, sl_x, _, elong, major, _ = max(pool, key=lambda c: (c[6] <= 1.4, c[3]))
     crop = arr[sl_y, sl_x].copy()
     # Blank out any NEIGHBOURING item overlapping this bounding box.
     crop[:, :, 3] = np.where(labels[sl_y, sl_x] == label_id, crop[:, :, 3], 0)
-    return Image.fromarray(crop), major
+    # `elong` doubles as a quality score for the caller: a fused bundle of crossed swords comes back
+    # as one squat blob scoring under 2, which is how the caller tells a real pick from a failure.
+    return Image.fromarray(crop), major, elong
 
 
 def _tight_crop(img):
@@ -641,15 +860,59 @@ def _tight_crop(img):
 
 
 def crop_portrait_square(portrait_path):
-    """Square off the tall portrait for the square HUD slot, keeping the TOP of the frame - that
-    is where the head sits in a head-and-shoulders bust, so cropping downward would behead it."""
+    """Reduce the portrait to ONE head-and-shoulders bust and square it off for the HUD slot.
+
+    Safety net for the duplicate-bust failure: when the model returns several busts, they come back
+    as separate connected components once the background is removed, so keeping the largest one
+    leaves a single face. A well-formed single portrait already IS the largest component, so this
+    costs nothing in the normal case. The square crop then keeps the TOP of the frame, since that
+    is where the head sits - cropping from the bottom would behead it.
+
+    Returns False when the frame is unusable, which the caller treats as "fall back to idle"."""
+    import numpy as np
+    from scipy import ndimage
     from PIL import Image
     try:
-        img = Image.open(portrait_path).convert("RGB")
+        img = Image.open(portrait_path).convert("RGBA")
+        arr = np.array(img)
+        labels, n = ndimage.label(arr[:, :, 3] > 20)
+        if n == 0:
+            return False
+
+        counts = np.bincount(labels.ravel())
+        counts[0] = 0
+        keep = int(counts.argmax())
+
+        # A real bust sits on a background the segmenter can cut away, so it covers a middling
+        # slice of the canvas. The abstract-collage failures have no background at all - they are
+        # edge-to-edge texture, so the "subject" swallows essentially the whole frame. Coverage
+        # separates those two cases cleanly, where the symmetry tests tried earlier could not.
+        coverage = counts[keep] / float(arr.shape[0] * arr.shape[1])
+        if coverage > 0.92 or coverage < 0.10:
+            print(f"[Portrait] rejected a frame - subject covers {coverage:.0%} of the canvas")
+            return False
+
+        if n > 1:
+            ys, xs = np.nonzero(labels == keep)
+            arr[:, :, 3] = np.where(labels == keep, arr[:, :, 3], 0)
+            arr = arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+            img = Image.fromarray(arr)
+
+        # A single head-and-shoulders bust is square or taller. Coming out markedly WIDER than tall
+        # means several busts ended up connected to each other and got cropped together - the tiled
+        # failure that coverage alone does not catch, because a tiled grid still has background
+        # around it.
+        if img.width > img.height * 1.3:
+            print(f"[Portrait] rejected a frame - {img.width}x{img.height} is too wide for one bust")
+            return False
+
         if img.height > img.width:
-            img.crop((0, 0, img.width, img.width)).save(portrait_path, format="PNG")
+            img = img.crop((0, 0, img.width, img.width))
+        img.save(portrait_path, format="PNG")
+        return True
     except Exception as e:
         print(f"[Portrait Crop Error] {e}")
+        return False
 
 
 def keep_largest_figure(frame_path):
@@ -686,13 +949,14 @@ def _pick_path(src):
 def extract_single_sword(sword_path):
     """Reduce whatever the sword pass produced to exactly one upright, grip-at-the-bottom blade,
     so PLAYER_SWORD_TRANSFORMS' angles always pivot about the grip with 0 degrees = held upright.
-    Returns the path of the extracted sprite, or None if nothing usable was found."""
+    Returns (path, score) where score rates how weapon-like the pick was - a fused bundle of
+    crossed swords scores under 2 - or (None, 0) if nothing usable was found."""
     import math
     from PIL import Image
     try:
-        sword, major = _isolate_component(sword_path, elongated=True)
+        sword, major, score = _isolate_component(sword_path, elongated=True)
         if sword is None:
-            return None
+            return None, 0.0
 
         # Stand the blade upright along its own principal axis. The axis is a line, so its sign is
         # ambiguous - rotate both ways and keep whichever comes out actually vertical, which sidesteps
@@ -729,10 +993,27 @@ def extract_single_sword(sword_path):
 
         out = _pick_path(sword_path)
         sword.save(out, format="PNG")
-        return out
+        return out, score
     except Exception as e:
         print(f"[Sword Extract Error] {e}")
-        return None
+        return None, 0.0
+
+
+def pick_best_weapon(candidate_paths):
+    """Extract from every weapon candidate and keep the most weapon-like result.
+
+    The weapon pass sometimes returns a fan of crossed swords fused into one squat blob rather than
+    separable blades. Nothing downstream can rescue that - the blob IS the only component - so the
+    cheapest defence is to roll a second candidate with a different seed and keep the better of the
+    two. A real blade scores 3-15 on elongation; a fused bundle scores under 2."""
+    best_path, best_score = None, 0.0
+    for p in candidate_paths:
+        path, score = extract_single_sword(p)
+        if path and score > best_score:
+            best_path, best_score = path, score
+    if best_path and best_score < 2.2:
+        print(f"[Weapon] every candidate looked fused (best score {best_score:.2f}); using it anyway")
+    return best_path
 
 
 def extract_single_shield(shield_path):
@@ -740,7 +1021,7 @@ def extract_single_shield(shield_path):
     a shield reads fine at any roll angle, unlike a blade.
     Returns the path of the extracted sprite, or None if nothing usable was found."""
     try:
-        shield, _ = _isolate_component(shield_path, elongated=False)
+        shield, _, _ = _isolate_component(shield_path, elongated=False)
         if shield is None:
             return None
         out = _pick_path(shield_path)
@@ -751,10 +1032,12 @@ def extract_single_shield(shield_path):
         return None
 
 
-def _paste_pivoted(frame, sprite, cfg, anchor, pivot_bottom):
+def _paste_pivoted(frame, sprite, cfg, anchor, pivot_bottom, grip_frac=0.0):
     """Scale, rotate and paste one gear sprite onto a frame at a normalized anchor point.
-    `pivot_bottom` rotates about the sprite's bottom-centre (a sword swinging from its grip);
-    otherwise it rotates about its own centre (a shield strapped flat to the forearm)."""
+    `pivot_bottom` rotates about a point near the sprite's bottom-centre (a sword swinging from its
+    grip); otherwise it rotates about its own centre (a shield strapped flat to the forearm).
+    `grip_frac` lifts that pivot up from the very bottom edge as a fraction of sprite height, so
+    the hand closes around the HANDLE instead of balancing on the tip of the pommel."""
     from PIL import Image
     fw, fh = frame.size
     target_h = max(8, int(cfg["scale"] * fh))
@@ -765,7 +1048,7 @@ def _paste_pivoted(frame, sprite, cfg, anchor, pivot_bottom):
     # scratch canvas and that point becomes the pivot.
     pad = max(target_h, target_w) * 2
     scratch = Image.new("RGBA", (pad, pad), (0, 0, 0, 0))
-    top = pad // 2 - target_h if pivot_bottom else pad // 2 - target_h // 2
+    top = (pad // 2 - int(target_h * (1.0 - grip_frac))) if pivot_bottom else (pad // 2 - target_h // 2)
     scratch.paste(sprite, (pad // 2 - target_w // 2, top), sprite)
     scratch = scratch.rotate(cfg["angle"], resample=Image.BICUBIC, center=(pad // 2, pad // 2))
 
@@ -844,7 +1127,7 @@ def composite_gear_onto_frame(frame_path, sword_path, shield_path, pose_name):
 
         if cfg and kps[4] and sword_path and os.path.exists(sword_path):
             gear = _paste_pivoted(gear, Image.open(sword_path).convert("RGBA"),
-                                  cfg, kps[4], pivot_bottom=True)
+                                  cfg, kps[4], pivot_bottom=True, grip_frac=SWORD_GRIP_FRAC)
 
         Image.alpha_composite(gear, frame).save(frame_path, format="PNG")
     except Exception as e:
@@ -967,7 +1250,11 @@ def get_surface_prompts(wall_style):
         floor_p = f"Retro 90s warm honey oak wood parquet floor tiles with subtle cute paw prints, directly 90 degree bird's-eye top-down view, uniform flat lighting, zero 3D figures on floor."
 
     else:
-        wall_p = f"A flat 2D vertical wall surface texture of {wall_style}, close-up flat orthographic front view, vibrant retro 90s video game wallpaper material, zero horizon, zero sky, zero landscape, pure flat vertical wall material."
+        # No era clamp on the generic path: the named presets above are deliberately retro because
+        # the player asked for "Windows 95", but an arbitrary typed style should render however
+        # that style actually looks. The flat orthographic framing stays - that is a tiling
+        # requirement for a wall texture, not an art direction.
+        wall_p = f"A flat 2D vertical wall surface texture of {wall_style}, close-up flat orthographic front view, seamless tileable wall material, zero horizon, zero sky, zero landscape, pure flat vertical wall material."
         ceil_p = f"A flat 2D overhead sky canopy or ceiling texture themed after {wall_style}, clean flat 90 degree top-down overhead view, zero walls, zero ground, zero horizon, pure tileable overhead material."
         floor_p = f"A flat 2D top-down fine-grained ground terrain floor texture themed after {wall_style}, close-up flat 90 degree bird's-eye view of the ground surface, uniform macro ground material, zero large focal objects, zero standing trees, zero people, zero horizon, zero sky, pure flat ground terrain material."
     
@@ -975,7 +1262,8 @@ def get_surface_prompts(wall_style):
 
 
 
-def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=None, mode="v4_flux", progress_cb=None):
+def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=None, mode="v4_flux",
+                             progress_cb=None, weapon_style=None, enemy_style=None):
     """Generate Dungeon Textures (Wall, Ceil, Floor) + AI Face Portrait + Player Character Sprite in FLUX."""
     prefix_w = f"trio_w_{int(time.time()*1000)}"
     prefix_c = f"trio_c_{int(time.time()*1000)}"
@@ -1125,23 +1413,37 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
                     make_seamless_4way(f_path, blend_pixels=12)
                     if use_ipadapter_sprites:
                         if progress_cb:
-                            progress_cb("Rigging Character Animation Frames (SDXL-Lightning + IPAdapter)...", 65)
+                            progress_cb("Rigging Character Animation Frames (SDXL-Lightning + IPAdapter)...", 60)
                         # Prefer the sprite pipeline's own portrait - it shares the character's
                         # IPAdapter reference, so it actually looks like the player, unlike the
                         # FLUX portrait generated independently up in the texture batch.
-                        p_frames, portrait_path = generate_player_sprite_ipadapter(player_style)
-                        return w_path, c_path, f_path, p_frames, (portrait_path or face_path)
+                        p_frames, portrait_paths = generate_player_sprite_ipadapter(player_style, weapon_style)
+
+                        # The enemy is optional: a failure here must not cost the player everything
+                        # else that already generated successfully, so the game just falls back to
+                        # its built-in procedural enemy.
+                        enemy_frames = []
+                        try:
+                            if progress_cb:
+                                progress_cb("Summoning the Enemy (SDXL-Lightning + IPAdapter)...", 78)
+                            enemy_frames = generate_enemy_sprites(enemy_style)
+                        except Exception as e:
+                            print(f"[Enemy Sprite Error] {e}")
+
+                        return (w_path, c_path, f_path, p_frames,
+                                ([p for p in portrait_paths if p] or [face_path]), enemy_frames)
                     else:
                         p_img = outputs["p_save"]["images"][0]["filename"]
                         p_sub = outputs["p_save"]["images"][0].get("subfolder", "")
                         p_path = os.path.join(COMFY_OUTPUT_DIR, p_sub, p_img)
                         make_sprite_transparent(p_path)
-                        return w_path, c_path, f_path, p_path, face_path
+                        return w_path, c_path, f_path, p_path, [face_path], []
 
     raise TimeoutError("FLUX.1 Dungeon, Player & Portrait generation timed out.")
 
 
-def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4_flux"):
+def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4_flux",
+                      weapon_style=None, enemy_style=None):
     """v3 FLUX.1 [schnell] mode: Generates 3 Dungeon Surfaces + 1 Player Character Sprite + 1 AI Face Portrait."""
     global gen_progress
     gen_progress["is_generating"] = True
@@ -1159,7 +1461,9 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4
         gen_progress["status_message"] = "Synthesizing Dungeon Textures & AI Portrait with FLUX.1 [schnell]..."
         gen_progress["percent"] = 30
 
-        w_path, c_path, f_path, p_res, face_path = generate_flux_all_assets(wall_style, player_style, player_image, mode=mode, progress_cb=_progress)
+        w_path, c_path, f_path, p_res, face_paths, enemy_frames = generate_flux_all_assets(
+            wall_style, player_style, player_image, mode=mode, progress_cb=_progress,
+            weapon_style=weapon_style, enemy_style=enemy_style)
 
         gen_progress["current_step"] = 2
         gen_progress["status_message"] = "Assembling 3D World & Valbrace Combat..."
@@ -1182,8 +1486,16 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4
             with open(p_res, "rb") as tf:
                 p_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
             p_sprites_b64 = [p_b64]
-        with open(face_path, "rb") as tf:
-            face_b64 = f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
+        face_b64_list = []
+        for fp in face_paths:
+            with open(fp, "rb") as tf:
+                face_b64_list.append(f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}")
+        face_b64 = face_b64_list[0]
+
+        enemy_b64 = []
+        for ef in (enemy_frames or []):
+            with open(ef, "rb") as tf:
+                enemy_b64.append(f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}")
 
         gen_progress["percent"] = 100
         gen_progress["status_message"] = "FLUX.1 Dungeon & Character Ready!"
@@ -1195,7 +1507,10 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4
             "floor_texture": f_b64,
             "player_sprite": p_b64,
             "player_sprites": p_sprites_b64,
-            "player_face": face_b64
+            "player_face": face_b64,
+            "player_faces": face_b64_list,
+            "enemy_sprites": enemy_b64,
+            "enemy_style": (enemy_style or "").strip()
         }
         print("[FLUX.1] Dungeon textures, character sprite, and AI portrait complete and packaged!")
 
@@ -1228,6 +1543,18 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
+        elif self.path == "/game.js":
+            js_file = os.path.join(PROJECT_DIR, "game.js")
+            if os.path.exists(js_file):
+                with open(js_file, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
         self.send_response(404)
         self.end_headers()
 
@@ -1239,6 +1566,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             wall_style = data.get("wall_style", "Windows 95")
             player_style = data.get("player_style", "")
             player_image = data.get("player_image", None)
+            weapon_style = data.get("weapon_style", "")
+            enemy_style = data.get("enemy_style", "")
             mode = data.get("mode", "v3_flux")
 
             # Reset progress synchronously
@@ -1256,7 +1585,9 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": True, "message": f"{mode} generation started"}, ensure_ascii=True).encode("utf-8"))
 
-            t = threading.Thread(target=run_batch_v3_flux, args=(wall_style, player_style, player_image, mode), daemon=True)
+            t = threading.Thread(target=run_batch_v3_flux,
+                                 args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
+                                 daemon=True)
             t.start()
             return
 
