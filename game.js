@@ -224,9 +224,27 @@
     modeSelect.addEventListener('change', syncModeDesc);
     syncModeDesc();
 
+    // Each quick idea fills in the whole setup - dungeon look plus the player, weapon and
+    // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
+    // are locked to an uploaded image are left alone.
+    const PRESET_IDEAS = {
+      'Windows 95':  { player: 'nerd in a shirt and tie with thick glasses', weapon: 'computer keyboard',            enemy: 'giant stick of RAM' },
+      'Deep Forest': { player: 'wood elf ranger in leaf armor',              weapon: 'living oak longbow',            enemy: 'moss-covered dire bear' },
+      'Cyber Neon':  { player: 'chrome street samurai in a neon jacket',      weapon: 'glowing plasma katana',        enemy: 'rogue security drone' },
+      'Mossy Stone': { player: 'lichen-cloaked stone knight',                weapon: 'moss-covered stone warhammer', enemy: 'crumbling gargoyle golem' },
+      'Candy Cane':  { player: 'gingerbread paladin with frosting armor',    weapon: 'peppermint candy cane staff',  enemy: 'giant gummy bear' },
+      'tacos':       { player: 'masked luchador chef',                       weapon: 'sizzling cast-iron skillet',   enemy: 'giant walking taco monster' },
+    };
+
     document.querySelectorAll('.preset-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        wallPromptInput.value = btn.getAttribute('data-val');
+        const val = btn.getAttribute('data-val');
+        wallPromptInput.value = val;
+        const idea = PRESET_IDEAS[val];
+        if (!idea) return;
+        if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
+        if (weaponPromptInput && !weaponPromptInput.disabled) weaponPromptInput.value = idea.weapon;
+        if (enemyPromptInput && !enemyPromptInput.disabled) enemyPromptInput.value = idea.enemy;
       });
     });
 

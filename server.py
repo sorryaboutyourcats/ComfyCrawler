@@ -48,10 +48,12 @@ KREA2_RES_DEFAULT = 512
 KREA2_STEPS_DEFAULT = 8
 KREA2_CFG = 1.0
 # The HUD portrait is drawn into a ~120px doom-face slot, so it does not need the
-# full character resolution. Four expression frames are generated per bundle, so
-# a small square here is the cheapest place to buy back generation time - 128 is
-# the baseline and holds up fine at the on-screen size; bump it for a sharper mugshot.
-KREA2_PORTRAIT_RES_DEFAULT = 128
+# full character resolution. The idle bust is generated fresh and the other three
+# frames are a low-denoise img2img resample of it (see _krea2_add_portrait_branches),
+# and that resample needs enough pixels for the new expression to actually render -
+# at 128 the mouth/brow changes were mush, so this sits at 256 and is downscaled
+# into the HUD slot on the frontend.
+KREA2_PORTRAIT_RES_DEFAULT = 256
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
@@ -1592,37 +1594,49 @@ def krea2_shield_prompt(player_style):
 def krea2_enemy_prompt(enemy_style, tighten=0):
     """`tighten` (0..2) shrinks the requested figure size for the retry path in
     _krea2_regen_enemy - a creature with a wide wingspan or a long tail sometimes has
-    to be asked for smaller before every part of it fits inside the frame."""
-    e = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "menacing dark fantasy demon knight"
+    to be asked for smaller before every part of it fits inside the frame. The base
+    request (tighten=0) already asks for a small, well-margined creature: a dragon drawn
+    large fills the frame with its body and the model then just drops the wings to make
+    it fit, which is the "dragon with no wings" look."""
+    e = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "fearsome dragon with wide outstretched wings"
     margin = [
-        "a clear wide empty margin on every side",
-        "a very large empty margin on every side, the creature occupying only the middle of the frame",
-        "a huge empty border on all four sides, the creature small and well within the centre of the frame",
+        "a large empty margin on every side, the whole creature small and sitting in the middle of the frame",
+        "a very large empty margin on every side, the creature small and well within the middle of the frame",
+        "a huge empty border on all four sides, the creature quite small and centred with lots of clear space around it",
     ][min(int(tighten), 2)]
     return (
         f"A full-body video game enemy sprite of a {e}, facing the camera head-on in a menacing "
-        f"combat-ready stance. The entire creature is centered with {margin}, so that every part of "
-        f"it - head, body, both feet, and any wings, horns, tail, claws or other outstretched limbs "
-        f"and appendages - is fully visible well inside the picture and nothing is touching, running "
-        f"into or cut off at any edge of the image. Dramatic even lighting, sharp detailed textures. "
-        f"Plain solid pure white background, nothing else in frame."
+        f"combat-ready stance. The entire creature is drawn small and centered with {margin}, so that "
+        f"every part of it - head, body, both feet, and its full wingspan plus any horns, tail, claws "
+        f"or other outstretched limbs and appendages - is fully visible well inside the picture and "
+        f"nothing is touching, running into or cut off at any edge of the image. Dramatic even "
+        f"lighting, sharp detailed textures. Plain solid pure white background, nothing else in frame."
     )
 
 
 # One short expression clause per HUD portrait frame, in PORTRAIT_FRAME_NAMES order
 # (idle, attack, block, hurt - the frontend's doom-face renderer indexes them as
-# idle=0, attack=1, block=2, hurt=3). Each frame gets its OWN seed (see
-# _krea2_add_portrait_branches): a shared seed anchored all four to the same
-# near-neutral face and the closed-mouth expressions (block especially) came out
-# indistinguishable from idle. Per-seed lets the expression actually render; the
-# shared scaffold + style still keeps it recognisably one character. Kept to ONE
-# short clause each - this distilled model muddies a portrait that is over-conditioned.
+# idle=0, attack=1, block=2, hurt=3). Only the idle frame is generated from scratch;
+# attack/block/hurt are a low-denoise img2img resample of the finished idle bust (see
+# _krea2_add_portrait_branches) so all four lock to one face. krea2 turbo has no
+# IPAdapter for this arch, so the resample is the only identity lever - which is why
+# the earlier per-seed frames only ever looked right on idle. Clauses are kept BASIC:
+# the reference already carries the face and framing, so each one only has to swing
+# the expression - angry battle cry / serious / sad.
 KREA2_PORTRAIT_EXPRESSIONS = {
-    "idle":   "a neutral relaxed expression, mouth closed",
-    "attack": "a furious angry snarl, mouth wide open in a battle cry",
-    "block":  "a furious scowl, brow lowered, eyes narrowed with rage, mouth closed",
-    "hurt":   "both eyes closed",
+    "idle":   "a calm, level expression",
+    "attack": "an angry battle cry, mouth wide open, shouting",
+    "block":  "a serious, focused game face, jaw set, mouth closed",
+    # "sad" alone barely moves this distilled model at portrait size - eyes shut is a
+    # strong, legible geometric cue that still reads as hurt/pain.
+    "hurt":   "a pained wince, eyes shut, brow furrowed, mouth open in a grimace",
 }
+
+# How hard to pull each reaction frame away from the idle bust. Higher = the new
+# expression renders more strongly but the face drifts more; lower = tighter identity.
+# "serious" sits closest to the calm idle so it needs the least; the open-mouthed
+# battle cry needs the most to actually break the idle's closed mouth.
+KREA2_PORTRAIT_REF_DENOISE = {"attack": 0.6, "block": 0.48, "hurt": 0.6}
 
 
 def krea2_portrait_prompt(player_style, expression=None):
@@ -1636,16 +1650,30 @@ def krea2_portrait_prompt(player_style, expression=None):
     )
 
 
+def krea2_portrait_ref_prompt(player_style, expression):
+    """Short prompt for the img2img reaction frames - the idle bust supplies the face,
+    the colours and the framing, so this only names the character and the new expression."""
+    p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
+    return (
+        f"The same {p} head and shoulders portrait bust, facing the viewer, same face and same "
+        f"colours, now with {expression}. Video game status-screen portrait, dramatic lighting."
+    )
+
+
 def _krea2_add_portrait_branches(payload, player_style, size, steps, prefix):
-    """Add the four HUD portrait frames (idle/attack/block/hurt) to a shared payload as
-    square branches, each with its OWN seed - a shared seed pinned every frame to the
-    same near-neutral face and the closed-mouth expressions never diverged from idle.
-    The shared prompt scaffold keeps it one recognisable character. Branch names are
-    portrait_<frame>; caller collects them with _krea2_collect_portraits."""
-    for pn in PORTRAIT_FRAME_NAMES:
-        _krea2_add_branch(payload, f"portrait_{pn}",
-                          krea2_portrait_prompt(player_style, KREA2_PORTRAIT_EXPRESSIONS[pn]),
-                          size, size, steps, random.randint(1, 1000000000), prefix)
+    """Add the four HUD portrait frames to a shared payload. idle is a fresh krea2 bust;
+    attack/block/hurt are each a low-denoise img2img resample of idle's decoded image
+    (_krea2_add_ref_branch), so the mugshot is one face pulling three expressions rather
+    than three unrelated faces. Branch names are portrait_<frame>; the caller collects
+    them with _krea2_collect_portraits."""
+    _krea2_add_branch(payload, "portrait_idle",
+                      krea2_portrait_prompt(player_style, KREA2_PORTRAIT_EXPRESSIONS["idle"]),
+                      size, size, steps, random.randint(1, 1000000000), prefix)
+    for pn in ("attack", "block", "hurt"):
+        _krea2_add_ref_branch(payload, f"portrait_{pn}", "portrait_idle_dec",
+                              krea2_portrait_ref_prompt(player_style, KREA2_PORTRAIT_EXPRESSIONS[pn]),
+                              steps, random.randint(1, 1000000000), prefix,
+                              KREA2_PORTRAIT_REF_DENOISE[pn])
 
 
 def _krea2_collect_portraits(paths):
@@ -1760,6 +1788,31 @@ def _krea2_add_branch(payload, name, prompt_text, w, h, steps, seed, prefix):
                                           "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
                                           "model": ["k_unet", 0], "positive": [f"{name}_pos", 0],
                                           "negative": [f"{name}_neg", 0], "latent_image": [f"{name}_lat", 0]},
+                               "class_type": "KSampler"}
+    payload[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["k_vae", 0]}, "class_type": "VAEDecode"}
+    payload[f"{name}_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": [f"{name}_dec", 0]}, "class_type": "RemoveBackground"}
+    payload[f"{name}_maskinv"] = {"inputs": {"mask": [f"{name}_mask", 0]}, "class_type": "InvertMask"}
+    payload[f"{name}_save"] = {"inputs": {"filename_prefix": f"{prefix}_{name}_{int(time.time()*1000)}",
+                                          "images": [f"{name}_dec", 0], "mask": [f"{name}_maskinv", 0]},
+                               "class_type": "SaveImageWithAlpha"}
+
+
+def _krea2_add_ref_branch(payload, name, src_dec_node, prompt_text, steps, seed, prefix, denoise):
+    """Add a krea2 img2img branch that resamples another branch's decoded image.
+
+    `src_dec_node` is the node key of a VAEDecode already in the payload (e.g.
+    "portrait_idle_dec"); this branch VAE-encodes that image and runs a partial-denoise
+    KSampler over it, so the result keeps the source's composition and identity while the
+    prompt nudges it (a new facial expression). krea2 turbo has no IPAdapter for this arch,
+    so this is how several frames are locked to one reference face. The canvas size is
+    inherited from the source image, so no width/height is passed."""
+    payload[f"{name}_pos"] = {"inputs": {"text": prompt_text, "clip": ["k_clip", 0]}, "class_type": "CLIPTextEncode"}
+    payload[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
+    payload[f"{name}_enc"] = {"inputs": {"pixels": [src_dec_node, 0], "vae": ["k_vae", 0]}, "class_type": "VAEEncode"}
+    payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": int(steps), "cfg": KREA2_CFG,
+                                          "sampler_name": "euler", "scheduler": "simple", "denoise": float(denoise),
+                                          "model": ["k_unet", 0], "positive": [f"{name}_pos", 0],
+                                          "negative": [f"{name}_neg", 0], "latent_image": [f"{name}_enc", 0]},
                                "class_type": "KSampler"}
     payload[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["k_vae", 0]}, "class_type": "VAEDecode"}
     payload[f"{name}_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": [f"{name}_dec", 0]}, "class_type": "RemoveBackground"}
