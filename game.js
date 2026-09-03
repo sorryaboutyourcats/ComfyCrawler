@@ -548,7 +548,6 @@
       const isHurt = combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
       const isAttack = combatState.faceState === 'attack' || combatState.attackFrame > 0;
       const isBlock = combatState.shieldProgress > 0.5;
-      const isLowHp = combatState.playerHp < 30;
 
       // Pick the expression that matches what the player is doing. Hurt wins over attack, which
       // wins over block, matching the priority the body sprite uses.
@@ -561,28 +560,12 @@
       if (face && face.complete && face.naturalWidth > 0) {
         c.drawImage(face, 2, 2, 40, 40);
 
-        // Combat state is shown ONLY through full-portrait tints and the border colour. Pupils,
-        // eyebrows and a mouth used to be painted on at fixed coordinates, which assumed a face
-        // laid out exactly like the old FLUX portrait. The portrait now comes from the character's
-        // own IPAdapter reference and can be hooded, feline, helmeted or masked, so those features
-        // landed in the wrong place - very obvious at this larger size, and directly at odds with
-        // having the portrait resemble the player.
-        if (isLowHp) {
-          c.fillStyle = 'rgba(153, 27, 27, 0.35)';
-          c.fillRect(2, 2, 40, 40);
-        }
-
-        if (isHurt) {
-          c.fillStyle = 'rgba(220, 38, 38, 0.55)';
-          c.fillRect(2, 2, 40, 40);
-        } else if (isAttack) {
-          c.fillStyle = 'rgba(245, 158, 11, 0.22)';
-          c.fillRect(2, 2, 40, 40);
-        } else if (isBlock) {
-          c.fillStyle = 'rgba(56, 189, 248, 0.22)';
-          c.fillRect(2, 2, 40, 40);
-        }
-
+        // Combat state is shown ONLY through the border colour. Full-portrait tints used to be
+        // laid over the face too, but the per-frame krea2 expressions now carry the state
+        // (open-mouthed for attack, eyes shut for hurt, and so on), and the coloured wash just
+        // muddied a portrait that is already doing the job. Pupils / eyebrows / mouth painted at
+        // fixed coordinates were dropped earlier for the same reason - the portrait can be hooded,
+        // feline, helmeted or masked, so nothing can be drawn on top at a fixed spot.
         c.strokeStyle = isHurt ? '#ef4444' : isAttack ? '#f59e0b' : isBlock ? '#38bdf8' : '#64748b';
         c.lineWidth = 2;
         c.strokeRect(1, 1, 42, 42);
@@ -857,6 +840,66 @@
       c.restore();
     }
 
+    // Measured opaque bounds of a generated sprite frame, as fractions of the frame, cached per
+    // <img>. The krea2 / v4 bundles don't always crop tight - a faint ground-shadow blob or an
+    // uneven margin below the feet slips through - which left the multi-frame player hovering in
+    // mid-scene instead of standing on the floor. Scanning the real alpha here makes placement
+    // independent of how tightly the server trimmed each frame.
+    const _spriteTrimCache = new WeakMap();
+    let _trimScratch = null;
+    function spriteTrimBox(img) {
+      const cached = _spriteTrimCache.get(img);
+      if (cached !== undefined) return cached;
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (!_trimScratch) _trimScratch = document.createElement('canvas');
+      const cv = _trimScratch;
+      // A downscaled pass is plenty to find the bounds and keeps the getImageData scan cheap.
+      const scale = Math.min(1, 220 / Math.max(iw, ih));
+      const sw = Math.max(1, Math.round(iw * scale));
+      const sh = Math.max(1, Math.round(ih * scale));
+      cv.width = sw; cv.height = sh;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      cx.clearRect(0, 0, sw, sh);
+      cx.drawImage(img, 0, 0, sw, sh);
+      let data;
+      try { data = cx.getImageData(0, 0, sw, sh).data; }
+      catch (e) { _spriteTrimCache.set(img, null); return null; }
+      let minX = sw, minY = sh, maxX = -1, maxY = -1;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (data[(y * sw + x) * 4 + 3] > 14) {   // skip the near-transparent shadow fringe
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      const box = maxX < 0 ? null : {
+        x: minX / sw, y: minY / sh,
+        w: (maxX - minX + 1) / sw, h: (maxY - minY + 1) / sh,
+      };
+      _spriteTrimCache.set(img, box);
+      return box;
+    }
+
+    // Draw a generated character frame so its opaque content is `contentH` px tall and its feet
+    // sit at `footY` (origin-relative), horizontally centred on the origin - regardless of the
+    // empty margin baked into the frame.
+    function drawTrimmedSprite(c, img, footY, contentH) {
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const box = spriteTrimBox(img);
+      if (!box) {
+        c.drawImage(img, -(contentH * aspect) / 2, footY - contentH, contentH * aspect, contentH);
+        return;
+      }
+      const fullH = contentH / box.h;
+      const fullW = fullH * aspect;
+      const contentCX = (box.x + box.w / 2) * fullW;   // opaque centre, from the frame's left
+      const contentBottom = (box.y + box.h) * fullH;   // opaque bottom, from the frame's top
+      c.drawImage(img, -contentCX, footY - contentBottom, fullW, fullH);
+    }
+
         // 3. COMPOSITE OVER-THE-SHOULDER PLAYER RENDERER (VALBRACE PROPORTIONS)
     function drawOverTheShoulderPlayer(c, width, height) {
       if (!combatState.inBattle) return;
@@ -914,9 +957,10 @@
         }
 
         if (currentFrame && currentFrame.complete && currentFrame.naturalWidth > 0) {
-          const spriteH = 135;
-          const spriteW = spriteH * (currentFrame.naturalWidth / currentFrame.naturalHeight);
-          c.drawImage(currentFrame, -spriteW / 2, -spriteH + 12, spriteW, spriteH);
+          // Size the character by its measured opaque height and plant its feet just past the
+          // bottom edge, so a loose frame crop or a faint ground-shadow blob can't leave the
+          // sprite floating in mid-scene. py is already the canvas bottom, so footY is +18.
+          drawTrimmedSprite(c, currentFrame, 12, Math.round(height * 0.6));
         }
         c.restore();
         return;
@@ -2097,7 +2141,7 @@
             mode: activeMode,
             krea_res: krea2ResInput ? parseInt(krea2ResInput.value) || 512 : 512,
             krea_steps: krea2StepsInput ? parseInt(krea2StepsInput.value) || 8 : 8,
-            krea_portrait_res: krea2PortraitResInput ? parseInt(krea2PortraitResInput.value) || 256 : 256
+            krea_portrait_res: krea2PortraitResInput ? parseInt(krea2PortraitResInput.value) || 128 : 128
           })
         });
 

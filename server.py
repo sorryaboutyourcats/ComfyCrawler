@@ -47,11 +47,11 @@ KREA2_VAE = "qwen_image_vae.safetensors"
 KREA2_RES_DEFAULT = 512
 KREA2_STEPS_DEFAULT = 8
 KREA2_CFG = 1.0
-# The HUD portrait is drawn into a ~40px doom-face slot, so it does not need the
+# The HUD portrait is drawn into a ~120px doom-face slot, so it does not need the
 # full character resolution. Four expression frames are generated per bundle, so
-# a small square here is the cheapest place to buy back generation time - 256 is
-# the baseline, bump to 576 for a visibly sharper mugshot.
-KREA2_PORTRAIT_RES_DEFAULT = 256
+# a small square here is the cheapest place to buy back generation time - 128 is
+# the baseline and holds up fine at the on-screen size; bump it for a sharper mugshot.
+KREA2_PORTRAIT_RES_DEFAULT = 128
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
@@ -1152,15 +1152,21 @@ def composite_gear_onto_frame(frame_path, sword_path, shield_path, pose_name):
         print(f"[Gear Composite Error] {pose_name}: {e}")
 
 
-def crop_frames_to_common_bbox(frame_paths, pad=6):
-    """Crop every frame to the UNION of all their alpha bounding boxes, so all frames come out the
-    same size and the character holds still between swaps instead of rescaling each time."""
+def crop_frames_to_common_bbox(frame_paths, pad=6, bbox_indices=None):
+    """Crop every frame to a common alpha bounding box, so all frames come out the same size and the
+    character holds still between swaps instead of rescaling each time.
+
+    By default the box is the UNION of every frame's bbox. Pass bbox_indices to build the box from
+    only those frames - use this when some frames (a wide weapon swing, a stagger with the arms
+    flung out) would otherwise balloon the box and shrink the character in every frame. Frames
+    outside the set are still cropped to it, so an extended blade tip may clip at the edge."""
     import numpy as np
     from PIL import Image
     try:
         imgs = [Image.open(p).convert("RGBA") for p in frame_paths]
+        src = imgs if not bbox_indices else [imgs[i] for i in bbox_indices]
         boxes = []
-        for img in imgs:
+        for img in src:
             ys, xs = np.where(np.array(img)[:, :, 3] > 20)
             if len(ys):
                 boxes.append((xs.min(), ys.min(), xs.max(), ys.max()))
@@ -1605,15 +1611,17 @@ def krea2_enemy_prompt(enemy_style, tighten=0):
 
 # One short expression clause per HUD portrait frame, in PORTRAIT_FRAME_NAMES order
 # (idle, attack, block, hurt - the frontend's doom-face renderer indexes them as
-# idle=0, attack=1, block=2, hurt=3). All four share one seed and one scaffold, so
-# only this clause changes and the set reads as one character pulling four faces.
-# Kept to ONE clause each: this distilled model collapses into abstract mush when a
-# single frame is over-conditioned (the same fragility the v4 portraits hit).
+# idle=0, attack=1, block=2, hurt=3). Each frame gets its OWN seed (see
+# _krea2_add_portrait_branches): a shared seed anchored all four to the same
+# near-neutral face and the closed-mouth expressions (block especially) came out
+# indistinguishable from idle. Per-seed lets the expression actually render; the
+# shared scaffold + style still keeps it recognisably one character. Kept to ONE
+# short clause each - this distilled model muddies a portrait that is over-conditioned.
 KREA2_PORTRAIT_EXPRESSIONS = {
-    "idle":   "a determined heroic expression",
-    "attack": "shouting fiercely, mouth open in a battle cry",
-    "block":  "jaw clenched, bracing for an impact",
-    "hurt":   "wincing in pain, brow furrowed",
+    "idle":   "a neutral relaxed expression, mouth closed",
+    "attack": "a furious angry snarl, mouth wide open in a battle cry",
+    "block":  "a furious scowl, brow lowered, eyes narrowed with rage, mouth closed",
+    "hurt":   "both eyes closed",
 }
 
 
@@ -1630,14 +1638,14 @@ def krea2_portrait_prompt(player_style, expression=None):
 
 def _krea2_add_portrait_branches(payload, player_style, size, steps, prefix):
     """Add the four HUD portrait frames (idle/attack/block/hurt) to a shared payload as
-    square, shared-seed branches - one seed and one scaffold across all four so they
-    read as one face. Branch names are portrait_<frame>; caller collects them with
-    _krea2_collect_portraits."""
-    pseed = random.randint(1, 1000000000)
+    square branches, each with its OWN seed - a shared seed pinned every frame to the
+    same near-neutral face and the closed-mouth expressions never diverged from idle.
+    The shared prompt scaffold keeps it one recognisable character. Branch names are
+    portrait_<frame>; caller collects them with _krea2_collect_portraits."""
     for pn in PORTRAIT_FRAME_NAMES:
         _krea2_add_branch(payload, f"portrait_{pn}",
                           krea2_portrait_prompt(player_style, KREA2_PORTRAIT_EXPRESSIONS[pn]),
-                          size, size, steps, pseed, prefix)
+                          size, size, steps, random.randint(1, 1000000000), prefix)
 
 
 def _krea2_collect_portraits(paths):
@@ -1654,8 +1662,8 @@ def _krea2_collect_portraits(paths):
     return [p or fallback for p in frames]
 
 
-def _round16(n):
-    return max(256, int(round(float(n) / 16.0)) * 16)
+def _round16(n, floor=256):
+    return max(floor, int(round(float(n) / 16.0)) * 16)
 
 
 def _save_tight(img_path):
@@ -1827,10 +1835,10 @@ def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2):
 def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps,
                                     portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
     """v5: one krea2-turbo prompt - player, weapon, shield, enemy plus the four HUD portrait
-    frames (idle/attack/block/hurt, shared seed). Returns {player, weapon, shield, enemy,
+    frames (idle/attack/block/hurt, each its own seed). Returns {player, weapon, shield, enemy,
     portrait, portraits}; portraits is a 4-list (or None) and portrait is portraits[0]."""
     sq = _round16(res)
-    psq = _round16(portrait_res)                          # square canvas for the bust frames
+    psq = _round16(portrait_res, floor=64)                # square canvas for the bust frames
     ww = _round16(res * 0.5)                              # narrow canvas for the upright weapon
 
     payload = _krea2_loaders()
@@ -1886,9 +1894,11 @@ def krea2_frame_prompts(player_style, weapon_style):
         f"A full-body video game character sprite of a {p}, seen strictly from directly behind in a "
         f"third-person back view, facing away from the camera into the scene, holding a {w} in the "
         f"right hand and a round battle shield on the left arm. The whole figure from head to feet, "
-        f"small and centered in the frame with a clear wide empty margin on every side so nothing "
-        f"touches the edges. Even lighting, sharp detailed textures, plain solid pure white "
-        f"background, no shadow on the ground, nothing else in frame. "
+        f"standing large and upright and filling the frame from top to bottom, the head near the top "
+        f"edge and the feet near the bottom edge, with only a thin margin above and below and enough "
+        f"clear room to the left and right for the weapon to swing without being cut off. Even "
+        f"lighting, sharp detailed textures, plain solid pure white background, no shadow on the "
+        f"ground, nothing else in frame. "
     )
     actions = {
         "idle":   f"Standing at the ready, the {w} lowered at their side, shield down.",
@@ -1914,10 +1924,10 @@ def krea2_frame_prompts(player_style, weapon_style):
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps,
                                 portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames, an enemy, and the four
-    HUD portrait frames (idle/attack/block/hurt, shared seed). Returns
+    HUD portrait frames (idle/attack/block/hurt, each its own seed). Returns
     {"frames": [7 paths], "enemy": path|None, "portrait": path|None, "portraits": [4]|None}."""
     sq = _round16(res)
-    psq = _round16(portrait_res)
+    psq = _round16(portrait_res, floor=64)
     frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
 
     payload = _krea2_loaders()
@@ -1935,9 +1945,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     frame_paths = [paths[n] for n in V6_FRAME_NAMES]
     for fp in frame_paths:
         keep_largest_figure(fp)
-    # One shared bounding box so the character holds still between frames instead of
-    # rescaling on every swap (same rule as the v4 pipeline).
-    crop_frames_to_common_bbox(frame_paths)
+    # One shared bounding box so the character holds still between frames instead of rescaling on
+    # every swap. Build it from the planted stances only (idle / block) - the slash, windup and
+    # hurt frames fling the weapon and arms well past the body, and letting those into the union
+    # blew the box out sideways and left the character tiny and floating in every frame.
+    _planted = [V6_FRAME_NAMES.index(n) for n in ("idle", "block")]
+    crop_frames_to_common_bbox(frame_paths, bbox_indices=_planted)
 
     keep_largest_figure(paths["enemy"])
     if _subject_bleeds_off_edge(paths["enemy"]):
