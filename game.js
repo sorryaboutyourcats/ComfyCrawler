@@ -13,6 +13,7 @@
     const modeDesc = document.getElementById('modeDesc');
     const krea2ResInput = document.getElementById('krea2ResInput');
     const krea2StepsInput = document.getElementById('krea2StepsInput');
+    const krea2PortraitResInput = document.getElementById('krea2PortraitResInput');
     const gridCountInput = document.getElementById('gridCountInput');
     const gridCountSlider = document.getElementById('gridCountSlider');
     const gridDesc = document.getElementById('gridDesc');
@@ -2095,7 +2096,8 @@
             enemy_image: attachedImages.enemy || null,
             mode: activeMode,
             krea_res: krea2ResInput ? parseInt(krea2ResInput.value) || 512 : 512,
-            krea_steps: krea2StepsInput ? parseInt(krea2StepsInput.value) || 8 : 8
+            krea_steps: krea2StepsInput ? parseInt(krea2StepsInput.value) || 8 : 8,
+            krea_portrait_res: krea2PortraitResInput ? parseInt(krea2PortraitResInput.value) || 256 : 256
           })
         });
 

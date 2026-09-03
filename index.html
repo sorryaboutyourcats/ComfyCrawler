@@ -417,7 +417,11 @@
               <label class="text-[11px] font-bold text-slate-700" for="krea2StepsInput">Sampler steps</label>
               <input type="number" id="krea2StepsInput" min="4" max="20" step="1" value="8" class="win95-input w-20 text-center text-xs font-bold" />
             </div>
-            <div class="text-[10px] text-slate-500 font-bold">Lower both for faster generation. 512&nbsp;px / 8&nbsp;steps is the current baseline; bump to 768&ndash;896 for more detail.</div>
+            <div class="flex justify-between items-center gap-2">
+              <label class="text-[11px] font-bold text-slate-700" for="krea2PortraitResInput">HUD portrait res (square px)</label>
+              <input type="number" id="krea2PortraitResInput" min="256" max="768" step="64" value="256" class="win95-input w-20 text-center text-xs font-bold" />
+            </div>
+            <div class="text-[10px] text-slate-500 font-bold">Lower all three for faster generation. 512&nbsp;px / 8&nbsp;steps is the current baseline; bump to 768&ndash;896 for more detail. Four portrait frames (idle / attack / block / hurt) are generated at the portrait res &ndash; 256 is cheap, 576 is noticeably sharper.</div>
           </div>
 
           <div class="flex justify-end mt-2">

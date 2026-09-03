@@ -47,6 +47,11 @@ KREA2_VAE = "qwen_image_vae.safetensors"
 KREA2_RES_DEFAULT = 512
 KREA2_STEPS_DEFAULT = 8
 KREA2_CFG = 1.0
+# The HUD portrait is drawn into a ~40px doom-face slot, so it does not need the
+# full character resolution. Four expression frames are generated per bundle, so
+# a small square here is the cheapest place to buy back generation time - 256 is
+# the baseline, bump to 576 for a visibly sharper mugshot.
+KREA2_PORTRAIT_RES_DEFAULT = 256
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
@@ -1578,24 +1583,75 @@ def krea2_shield_prompt(player_style):
     )
 
 
-def krea2_enemy_prompt(enemy_style):
+def krea2_enemy_prompt(enemy_style, tighten=0):
+    """`tighten` (0..2) shrinks the requested figure size for the retry path in
+    _krea2_regen_enemy - a creature with a wide wingspan or a long tail sometimes has
+    to be asked for smaller before every part of it fits inside the frame."""
     e = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "menacing dark fantasy demon knight"
+    margin = [
+        "a clear wide empty margin on every side",
+        "a very large empty margin on every side, the creature occupying only the middle of the frame",
+        "a huge empty border on all four sides, the creature small and well within the centre of the frame",
+    ][min(int(tighten), 2)]
     return (
         f"A full-body video game enemy sprite of a {e}, facing the camera head-on in a menacing "
-        f"combat-ready stance. Centered, the whole figure from head to feet with a little empty space "
-        f"above and below, dramatic even lighting, sharp detailed textures. Plain solid pure white "
-        f"background, nothing else in frame."
+        f"combat-ready stance. The entire creature is centered with {margin}, so that every part of "
+        f"it - head, body, both feet, and any wings, horns, tail, claws or other outstretched limbs "
+        f"and appendages - is fully visible well inside the picture and nothing is touching, running "
+        f"into or cut off at any edge of the image. Dramatic even lighting, sharp detailed textures. "
+        f"Plain solid pure white background, nothing else in frame."
     )
 
 
-def krea2_portrait_prompt(player_style):
+# One short expression clause per HUD portrait frame, in PORTRAIT_FRAME_NAMES order
+# (idle, attack, block, hurt - the frontend's doom-face renderer indexes them as
+# idle=0, attack=1, block=2, hurt=3). All four share one seed and one scaffold, so
+# only this clause changes and the set reads as one character pulling four faces.
+# Kept to ONE clause each: this distilled model collapses into abstract mush when a
+# single frame is over-conditioned (the same fragility the v4 portraits hit).
+KREA2_PORTRAIT_EXPRESSIONS = {
+    "idle":   "a determined heroic expression",
+    "attack": "shouting fiercely, mouth open in a battle cry",
+    "block":  "jaw clenched, bracing for an impact",
+    "hurt":   "wincing in pain, brow furrowed",
+}
+
+
+def krea2_portrait_prompt(player_style, expression=None):
     p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
+    expr = expression or KREA2_PORTRAIT_EXPRESSIONS["idle"]
     return (
-        f"A head and shoulders portrait bust of one {p}, facing the viewer with a determined heroic "
-        f"expression, the head filling the upper frame and the shoulders squared at the bottom. "
+        f"A head and shoulders portrait bust of one {p}, facing the viewer with {expr}, "
+        f"the head filling the upper frame and the shoulders squared at the bottom. "
         f"Video game status-screen portrait, Doom and Valbrace style, dramatic lighting. Plain "
         f"uncluttered solid background."
     )
+
+
+def _krea2_add_portrait_branches(payload, player_style, size, steps, prefix):
+    """Add the four HUD portrait frames (idle/attack/block/hurt) to a shared payload as
+    square, shared-seed branches - one seed and one scaffold across all four so they
+    read as one face. Branch names are portrait_<frame>; caller collects them with
+    _krea2_collect_portraits."""
+    pseed = random.randint(1, 1000000000)
+    for pn in PORTRAIT_FRAME_NAMES:
+        _krea2_add_branch(payload, f"portrait_{pn}",
+                          krea2_portrait_prompt(player_style, KREA2_PORTRAIT_EXPRESSIONS[pn]),
+                          size, size, steps, pseed, prefix)
+
+
+def _krea2_collect_portraits(paths):
+    """Validate the four portrait_<frame> paths and return a 4-list in idle/attack/block/hurt
+    order. Any frame that fails validation falls back to the idle frame; if idle itself is
+    unusable the first surviving frame is used, and if none survive the result is None."""
+    frames = []
+    for pn in PORTRAIT_FRAME_NAMES:
+        p = paths.get(f"portrait_{pn}")
+        frames.append(p if (p and crop_portrait_square(p)) else None)
+    fallback = frames[0] or next((p for p in frames if p), None)
+    if not fallback:
+        return None
+    return [p or fallback for p in frames]
 
 
 def _round16(n):
@@ -1732,12 +1788,49 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300):
     raise TimeoutError("krea2 turbo generation timed out.")
 
 
-def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps):
-    """v5: one krea2-turbo prompt with five independent branches - player, weapon, shield,
-    enemy, portrait - each generated once. Returns {player, weapon, shield, enemy, portrait}
-    of PNG paths; portrait may be None if it failed validation."""
+def _subject_bleeds_off_edge(img_path, thresh=8, frac=0.02):
+    """True if a background-removed subject runs into any edge of the canvas - meaning
+    part of it (a dragon's wingtips, a tail) was cropped off during generation rather
+    than sitting fully inside the frame. `frac` of any border being opaque is enough."""
+    from PIL import Image
+    import numpy as np
+    try:
+        a = np.array(Image.open(img_path).convert("RGBA"))
+        alpha = a[:, :, 3] > thresh
+        if not alpha.any():
+            return False
+        return bool(alpha[0, :].mean() > frac or alpha[-1, :].mean() > frac
+                    or alpha[:, 0].mean() > frac or alpha[:, -1].mean() > frac)
+    except Exception as e:
+        print(f"[Edge Check Error] {os.path.basename(img_path)}: {e}")
+        return False
+
+
+def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2):
+    """Re-generate the enemy on its own, with a fresh seed and a tighter margin request
+    each try, when the batched one came out with part of the creature cropped off at the
+    frame edge. Returns the first clean frame, or the last attempt if none come back clean."""
+    last = None
+    for i in range(attempts):
+        payload = _krea2_loaders()
+        _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style, tighten=i + 1),
+                          size, size, steps, random.randint(1, 1000000000), prefix)
+        last = _krea2_submit_and_collect(payload, ["enemy"])["enemy"]
+        keep_largest_figure(last)
+        if not _subject_bleeds_off_edge(last):
+            print(f"[krea2] enemy regen attempt {i + 1} is clean")
+            return last
+        print(f"[krea2] enemy regen attempt {i + 1} still bleeds off the edge")
+    return last
+
+
+def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps,
+                                    portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
+    """v5: one krea2-turbo prompt - player, weapon, shield, enemy plus the four HUD portrait
+    frames (idle/attack/block/hurt, shared seed). Returns {player, weapon, shield, enemy,
+    portrait, portraits}; portraits is a 4-list (or None) and portrait is portraits[0]."""
     sq = _round16(res)
-    pw, ph = _round16(res * 0.75), _round16(res)          # taller canvas for the bust
+    psq = _round16(portrait_res)                          # square canvas for the bust frames
     ww = _round16(res * 0.5)                              # narrow canvas for the upright weapon
 
     payload = _krea2_loaders()
@@ -1745,20 +1838,30 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     _krea2_add_branch(payload, "weapon", krea2_weapon_prompt(weapon_style, player_style), ww, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
-    _krea2_add_branch(payload, "portrait", krea2_portrait_prompt(player_style), pw, ph, steps, random.randint(1, 1000000000), "v5")
+    _krea2_add_portrait_branches(payload, player_style, psq, steps, "v5")
 
-    names = ("player", "weapon", "shield", "enemy", "portrait")
+    names = ("player", "weapon", "shield", "enemy") + tuple(f"portrait_{n}" for n in PORTRAIT_FRAME_NAMES)
+    t0 = time.time()
     paths = _krea2_submit_and_collect(payload, names)
+    elapsed = time.time() - t0
 
-    for n in ("player", "enemy"):
-        keep_largest_figure(paths[n])
-        _save_tight(paths[n])
+    keep_largest_figure(paths["player"])
+    _save_tight(paths["player"])
+
+    keep_largest_figure(paths["enemy"])
+    if _subject_bleeds_off_edge(paths["enemy"]):
+        print("[krea2] v5 enemy bled off the frame edge - regenerating it alone")
+        paths["enemy"] = _krea2_regen_enemy(enemy_style, sq, steps, "v5")
+    _save_tight(paths["enemy"])
+
     for n in ("weapon", "shield"):
         _save_tight(paths[n])
-    if not crop_portrait_square(paths["portrait"]):
-        paths["portrait"] = None
 
-    print(f"[krea2] v5 player/weapon/shield/enemy/portrait bundle complete ({sq}x{sq}, {int(steps)} steps)")
+    paths["portraits"] = _krea2_collect_portraits(paths)
+    paths["portrait"] = paths["portraits"][0] if paths["portraits"] else None
+
+    print(f"[krea2] v5 bundle complete - character {sq}x{sq}, 4 portraits {psq}x{psq}, "
+          f"{int(steps)} steps, {elapsed:.1f}s")
     return paths
 
 
@@ -1808,11 +1911,13 @@ def krea2_frame_prompts(player_style, weapon_style):
     return [base + actions[n] for n in V6_FRAME_NAMES]
 
 
-def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps):
-    """v6: one krea2 prompt with the 7 shared-seed player pose frames plus an enemy and a
-    portrait. Returns {"frames": [7 paths], "enemy": path|None, "portrait": path|None}."""
+def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps,
+                                portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
+    """v6: one krea2 prompt with the 7 shared-seed player pose frames, an enemy, and the four
+    HUD portrait frames (idle/attack/block/hurt, shared seed). Returns
+    {"frames": [7 paths], "enemy": path|None, "portrait": path|None, "portraits": [4]|None}."""
     sq = _round16(res)
-    pw, ph = _round16(res * 0.75), _round16(res)
+    psq = _round16(portrait_res)
     frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
 
     payload = _krea2_loaders()
@@ -1820,10 +1925,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
     _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style), sq, sq, steps, random.randint(1, 1000000000), "v6")
-    _krea2_add_branch(payload, "portrait", krea2_portrait_prompt(player_style), pw, ph, steps, random.randint(1, 1000000000), "v6")
+    _krea2_add_portrait_branches(payload, player_style, psq, steps, "v6")
 
-    keys = V6_FRAME_NAMES + ["enemy", "portrait"]
+    keys = V6_FRAME_NAMES + ["enemy"] + [f"portrait_{n}" for n in PORTRAIT_FRAME_NAMES]
+    t0 = time.time()
     paths = _krea2_submit_and_collect(payload, keys)
+    elapsed = time.time() - t0
 
     frame_paths = [paths[n] for n in V6_FRAME_NAMES]
     for fp in frame_paths:
@@ -1833,17 +1940,23 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     crop_frames_to_common_bbox(frame_paths)
 
     keep_largest_figure(paths["enemy"])
+    if _subject_bleeds_off_edge(paths["enemy"]):
+        print("[krea2] v6 enemy bled off the frame edge - regenerating it alone")
+        paths["enemy"] = _krea2_regen_enemy(enemy_style, sq, steps, "v6")
     _save_tight(paths["enemy"])
-    portrait = paths["portrait"] if crop_portrait_square(paths["portrait"]) else None
+    portraits = _krea2_collect_portraits(paths)
 
-    print(f"[krea2] v6 {len(frame_paths)}-frame player + enemy + portrait complete ({sq}x{sq}, {int(steps)} steps)")
-    return {"frames": frame_paths, "enemy": paths["enemy"], "portrait": portrait}
+    print(f"[krea2] v6 {len(frame_paths)}-frame player + enemy complete - character {sq}x{sq}, "
+          f"4 portraits {psq}x{psq}, {int(steps)} steps, {elapsed:.1f}s")
+    return {"frames": frame_paths, "enemy": paths["enemy"],
+            "portrait": portraits[0] if portraits else None, "portraits": portraits}
 
 
 def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
-                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT):
+                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT,
+                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
     """v5 krea2 turbo mode: FLUX schnell for the 3 tiling textures, krea2 turbo for the
-    player sprite, weapon, shield, enemy and HUD portrait - one generation each."""
+    player sprite, weapon, shield, enemy and the 4 HUD portrait frames - one pass each."""
     global gen_progress
     gen_progress["is_generating"] = True
     gen_progress["completed_bundle"] = None
@@ -1864,13 +1977,14 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["current_step"] = 2
         gen_progress["status_message"] = "Forging character, weapon & foe with krea2 turbo..."
         gen_progress["percent"] = 55
-        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps)
+        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
 
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
         gen_progress["percent"] = 92
 
         player_b64 = _b64(assets["player"])
-        portrait_b64 = _b64(assets["portrait"]) if assets.get("portrait") else player_b64
+        # idle/attack/block/hurt busts; falls back to the player sprite if the whole set failed.
+        faces_b64 = [_b64(p) for p in assets["portraits"]] if assets.get("portraits") else [player_b64]
 
         gen_progress["percent"] = 100
         gen_progress["status_message"] = "krea2 turbo dungeon & character ready!"
@@ -1882,8 +1996,8 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "floor_texture": _b64(f_path),
             "player_sprite": player_b64,
             "player_sprites": [player_b64],
-            "player_face": portrait_b64,
-            "player_faces": [portrait_b64],
+            "player_face": faces_b64[0],
+            "player_faces": faces_b64,
             "weapon_sprite": _b64(assets["weapon"]) if assets.get("weapon") else None,
             "shield_sprite": _b64(assets["shield"]) if assets.get("shield") else None,
             "enemy_sprites": [_b64(assets["enemy"])] if assets.get("enemy") else [],
@@ -1899,7 +2013,8 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
 
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
-                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT):
+                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT,
+                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model."""
@@ -1923,13 +2038,14 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["current_step"] = 2
         gen_progress["status_message"] = "Animating the swing with krea2 turbo (7 frames)..."
         gen_progress["percent"] = 50
-        bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps)
+        bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
 
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
         gen_progress["percent"] = 92
 
         frames_b64 = [_b64(p) for p in bundle["frames"]]
-        portrait_b64 = _b64(bundle["portrait"]) if bundle.get("portrait") else frames_b64[0]
+        # idle/attack/block/hurt busts; falls back to frame 0 if the whole set failed.
+        faces_b64 = [_b64(p) for p in bundle["portraits"]] if bundle.get("portraits") else [frames_b64[0]]
 
         gen_progress["percent"] = 100
         gen_progress["status_message"] = "krea2 turbo swing animation & dungeon ready!"
@@ -1941,8 +2057,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "floor_texture": _b64(f_path),
             "player_sprite": frames_b64[0],
             "player_sprites": frames_b64,
-            "player_face": portrait_b64,
-            "player_faces": [portrait_b64],
+            "player_face": faces_b64[0],
+            "player_faces": faces_b64,
             "weapon_sprite": None,
             "shield_sprite": None,
             "enemy_sprites": [_b64(bundle["enemy"])] if bundle.get("enemy") else [],
@@ -1952,64 +2068,6 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
     except Exception as e:
         print(f"[krea2 v6 Error] {e}")
-        gen_progress["error"] = str(e)
-    finally:
-        gen_progress["is_generating"] = False
-
-
-def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
-                      res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT):
-    """v5 krea2 turbo mode: FLUX schnell for the 3 tiling textures, krea2 turbo for the
-    player sprite, weapon, shield, enemy and HUD portrait - one generation each."""
-    global gen_progress
-    gen_progress["is_generating"] = True
-    gen_progress["completed_bundle"] = None
-    gen_progress["error"] = None
-    gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 2
-
-    def _b64(path):
-        with open(path, "rb") as tf:
-            return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
-
-    try:
-        gen_progress["current_step"] = 1
-        gen_progress["status_message"] = "Synthesizing dungeon textures with FLUX.1 [schnell]..."
-        gen_progress["percent"] = 20
-        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
-
-        gen_progress["current_step"] = 2
-        gen_progress["status_message"] = "Forging character, weapon & foe with krea2 turbo..."
-        gen_progress["percent"] = 55
-        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps)
-
-        gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
-        gen_progress["percent"] = 92
-
-        player_b64 = _b64(assets["player"])
-        portrait_b64 = _b64(assets["portrait"]) if assets.get("portrait") else player_b64
-
-        gen_progress["percent"] = 100
-        gen_progress["status_message"] = "krea2 turbo dungeon & character ready!"
-        gen_progress["completed_bundle"] = {
-            "mode": "v5_krea",
-            "wall_style": wall_style,
-            "wall_texture": _b64(w_path),
-            "ceiling_texture": _b64(c_path),
-            "floor_texture": _b64(f_path),
-            "player_sprite": player_b64,
-            "player_sprites": [player_b64],
-            "player_face": portrait_b64,
-            "player_faces": [portrait_b64],
-            "weapon_sprite": _b64(assets["weapon"]) if assets.get("weapon") else None,
-            "shield_sprite": _b64(assets["shield"]) if assets.get("shield") else None,
-            "enemy_sprites": [_b64(assets["enemy"])] if assets.get("enemy") else [],
-            "enemy_style": (enemy_style or "").strip(),
-        }
-        print("[krea2] v5 bundle complete and packaged!")
-
-    except Exception as e:
-        print(f"[krea2 v5 Error] {e}")
         gen_progress["error"] = str(e)
     finally:
         gen_progress["is_generating"] = False
@@ -2072,6 +2130,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
             krea_res = _int(data.get("krea_res"), KREA2_RES_DEFAULT)
             krea_steps = _int(data.get("krea_steps"), KREA2_STEPS_DEFAULT)
+            krea_portrait_res = _int(data.get("krea_portrait_res"), KREA2_PORTRAIT_RES_DEFAULT)
 
             # Reset progress synchronously
             gen_progress["is_generating"] = True
@@ -2092,11 +2151,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
             if mode == "v5_krea":
                 t = threading.Thread(target=run_batch_v5_krea,
-                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps),
+                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps, krea_portrait_res),
                                      daemon=True)
             elif mode == "v6_krea":
                 t = threading.Thread(target=run_batch_v6_krea,
-                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps),
+                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps, krea_portrait_res),
                                      daemon=True)
             else:
                 t = threading.Thread(target=run_batch_v3_flux,
