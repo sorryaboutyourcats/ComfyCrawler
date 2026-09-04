@@ -46,8 +46,6 @@
     const viewportCanvas = document.getElementById('viewportCanvas');
     const gameVideo = document.getElementById('gameVideo');
     const statusPos = document.getElementById('statusPos');
-    const bumpBanner = document.getElementById('bumpBanner');
-    const bumpText = document.getElementById('bumpText');
     const mapProgressBadge = document.getElementById('mapProgressBadge');
 
     const titleButtons = document.getElementById('titleButtons');
@@ -2056,13 +2054,6 @@
       }
     }
 
-    function showBumpMessage(msg) {
-      if (!bumpBanner) return;
-      bumpText.textContent = msg;
-      bumpBanner.classList.remove('hidden');
-      setTimeout(() => bumpBanner.classList.add('hidden'), 1200);
-    }
-
     function easeInOutCubic(t) {
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
@@ -2109,6 +2100,54 @@
       requestAnimationFrame(step);
     }
 
+    function animateBump(dx, dy) {
+      player.isAnimating = true;
+      const startX = player.posX;
+      const startY = player.posY;
+      const bumpX = startX + dx * 0.18;
+      const bumpY = startY + dy * 0.18;
+      const animStart = performance.now();
+      const OUT_DURATION = 90;
+      const BACK_DURATION = 140;
+      const TOTAL = OUT_DURATION + BACK_DURATION;
+
+      function step(now) {
+        const elapsed = now - animStart;
+
+        if (elapsed < OUT_DURATION) {
+          const ease = easeInOutCubic(Math.min(1, elapsed / OUT_DURATION));
+          player.posX = startX + (bumpX - startX) * ease;
+          player.posY = startY + (bumpY - startY) * ease;
+        } else if (elapsed < TOTAL) {
+          const ease = easeInOutCubic(Math.min(1, (elapsed - OUT_DURATION) / BACK_DURATION));
+          player.posX = bumpX + (startX - bumpX) * ease;
+          player.posY = bumpY + (startY - bumpY) * ease;
+        } else {
+          player.posX = startX;
+          player.posY = startY;
+        }
+
+        render3D();
+        drawMinimap();
+
+        if (elapsed < TOTAL) {
+          requestAnimationFrame(step);
+        } else {
+          player.isAnimating = false;
+
+          if (queuedAction) {
+            const next = queuedAction;
+            queuedAction = null;
+            if (next === 'UP') moveForward();
+            else if (next === 'DOWN') moveBackward();
+            else if (next === 'LEFT') rotateLeft();
+            else if (next === 'RIGHT') rotateRight();
+          }
+        }
+      }
+      requestAnimationFrame(step);
+    }
+
     function moveForward() {
       if (player.isAnimating) { queuedAction = 'UP'; return; }
       const vec = DIR_VECS[player.dirIndex];
@@ -2122,7 +2161,7 @@
         totalMoves++;
         animate3D(nextX + 0.5, nextY + 0.5, player.angle);
       } else {
-        showBumpMessage("SOLID WALL DIRECTLY AHEAD");
+        animateBump(vec.dx, vec.dy);
       }
     }
 
@@ -2139,7 +2178,7 @@
         totalMoves++;
         animate3D(nextX + 0.5, nextY + 0.5, player.angle);
       } else {
-        showBumpMessage("CANNOT MOVE BACKWARD");
+        animateBump(-vec.dx, -vec.dy);
       }
     }
 
