@@ -109,6 +109,11 @@
     let weaponSpriteImg = null;
     let shieldSpriteImg = null;
     let enemySpriteFrames = [];
+    // The three foes generated from one typed enemy idea (server bundle.enemy_variants):
+    // walker (ground), flyer (swoops from out of reach), boss (big, tanky). One is chosen
+    // at random each time a battle starts. enemySpriteFrames tracks the active one.
+    let enemyVariantImgs = {};
+    let enemyStyleName = '';
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
@@ -289,17 +294,69 @@
       combatEffects: [],
       enemy: {
         name: 'NIGHTSTALKER',
+        variant: 'walker',
         hp: 100,
         maxHp: 100,
         attackTimer: 110,
         state: 'idle',
-        stateTimer: 0
+        stateTimer: 0,
+        x: 0,            // horizontal offset from centre, px
+        vx: 0,
+        altitude: 0,     // 0 = grounded; >0 = hovering height (flyer)
+        swoop: 'none',   // flyer: none | diving | striking | rising
+        swoopTimer: 0,
+        blockTimer: 0    // walker: >0 = guarding, the next player strike is largely absorbed
       },
       faceState: 'idle',
       faceTimer: 0,
       glanceDir: 0,
       glanceTimer: 60
     };
+
+    // walker / flyer / boss - one typed enemy idea, three battlefield roles. Stats and AI
+    // differ here; the distinct sprites come from the server (bundle.enemy_variants).
+    //   heightFrac - target on-screen height as a fraction of the 240px combat canvas
+    //   widthFrac  - hard cap on drawn width as a fraction of the 320px width. Sprites now
+    //                fill their generated canvas, so a winged flyer arrives far wider than
+    //                it is tall and would otherwise span the whole screen.
+    //   cadence    - frames between attacks   telegraph - wind-up lead frames
+    const ENEMY_VARIANTS = {
+      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.58, widthFrac: 0.60, fly: false, canBlock: true,  slow: false, hover: 0  },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.44, widthFrac: 0.72, fly: true,  canBlock: false, slow: false, hover: 58 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: false, slow: true,  hover: 0  },
+    };
+    const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
+
+    // Roll one of the three foes and apply its stats. Called on every battle entry, so during
+    // testing you cycle the variants just by leaving and re-entering combat (Space).
+    function pickEnemyVariant(forceKey) {
+      // Only roll the full set when we actually have distinct sprites for it (v5/v6 krea);
+      // other modes ship one enemy, so they stay on the walker.
+      const haveVariants = ENEMY_VARIANT_KEYS.filter(k => enemyVariantImgs[k]).length >= 2;
+      const key = forceKey || (haveVariants
+        ? ENEMY_VARIANT_KEYS[Math.floor(Math.random() * ENEMY_VARIANT_KEYS.length)]
+        : 'walker');
+      const cfg = ENEMY_VARIANTS[key] || ENEMY_VARIANTS.walker;
+      const e = combatState.enemy;
+      e.variant = key;
+      e.maxHp = cfg.maxHp;
+      e.hp = cfg.maxHp;
+      e.state = 'idle';
+      e.stateTimer = 0;
+      e.attackTimer = cfg.cadence;
+      e.x = 0;
+      e.vx = cfg.slow ? 0.5 : 1.5;
+      e.altitude = cfg.hover;
+      e.swoop = 'none';
+      e.swoopTimer = cfg.fly ? 90 : 0;
+      e.blockTimer = 0;
+      e.name = (cfg.tag + (enemyStyleName || 'nightstalker')).toUpperCase();
+      // Only swap the active sprite when we have a real per-variant set; otherwise leave
+      // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
+      const img = enemyVariantImgs[key];
+      if (img && haveVariants) enemySpriteFrames = [img];
+      return key;
+    }
 
     function toggleBattleMode(forceState) {
       if (typeof forceState === 'boolean') {
@@ -326,13 +383,10 @@
         combatState.hurtFrame = 0;
         combatState.shieldProgress = 0;
 
-        if (combatState.enemy.hp <= 0) {
-          combatState.enemy.hp = 100;
-          combatState.enemy.state = 'idle';
-          combatState.enemy.attackTimer = 110;
-        }
+        // Roll a fresh foe (walker / flyer / boss) every time a battle begins.
+        pickEnemyVariant();
 
-        showFloatingCombatText("VALBRACE DUEL INITIATED!", 160, 80, "#facc15");
+        showFloatingCombatText(`${combatState.enemy.name} APPROACHES!`, 160, 80, "#facc15");
       } else {
         if (battleModeBadge) {
           battleModeBadge.textContent = "MAZE EXPLORATION";
@@ -377,10 +431,7 @@
       combatState.hurtFrame = 0;
       combatState.shieldProgress = 0;
       combatState.combatEffects.length = 0;
-      combatState.enemy.hp = 100;
-      combatState.enemy.state = 'idle';
-      combatState.enemy.stateTimer = 0;
-      combatState.enemy.attackTimer = 110;
+      pickEnemyVariant();
     }
 
     // Alt-tabbing or clicking into a text field while holding X swallows the keyup the same way.
@@ -466,15 +517,26 @@
       if (combatState.attackFrame > 0) {
         combatState.attackFrame++;
         if (combatState.attackFrame === 7 && combatState.enemy.hp > 0) {
-          const dmg = 24 + Math.floor(Math.random() * 12);
-          combatState.enemy.hp = Math.max(0, combatState.enemy.hp - dmg);
-          combatState.enemy.state = 'hurt';
-          combatState.enemy.stateTimer = 12;
-          showFloatingCombatText(`-${dmg} SLASH!`, 160 + (Math.random() * 30 - 15), 100, "#f87171");
+          const e = combatState.enemy;
+          const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+          const outOfReach = cfg.fly && e.altitude > 34;
+          const guarded = e.blockTimer > 0;
+          if (outOfReach) {
+            showFloatingCombatText("OUT OF REACH!", 160, 90, "#93c5fd");
+          } else {
+            let dmg = 24 + Math.floor(Math.random() * 12);
+            if (guarded) { dmg = Math.max(1, Math.floor(dmg * 0.25)); e.blockTimer = 0; }
+            if (cfg.slow) dmg = Math.floor(dmg * 0.7);   // boss is armoured
+            e.hp = Math.max(0, e.hp - dmg);
+            e.state = 'hurt';
+            e.stateTimer = 12;
+            showFloatingCombatText(guarded ? `BLOCKED! -${dmg}` : `-${dmg} SLASH!`,
+              160 + (Math.random() * 30 - 15), 100, guarded ? "#94a3b8" : "#f87171");
 
-          if (combatState.enemy.hp <= 0) {
-            combatState.enemy.state = 'defeated';
-            showFloatingCombatText("VICTORY! +50 ESSENCE", 160, 70, "#fde047");
+            if (e.hp <= 0) {
+              e.state = 'defeated';
+              showFloatingCombatText("VICTORY! +50 ESSENCE", 160, 70, "#fde047");
+            }
           }
         }
         if (combatState.attackFrame > combatState.maxAttackFrames) {
@@ -503,39 +565,87 @@
 
       if (combatState.inBattle && combatState.enemy.hp > 0) {
         const e = combatState.enemy;
+        const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+        if (e.blockTimer > 0) e.blockTimer--;
 
-        // 'attack' is held for a few frames the same way 'hurt' is, so the enemy's attack sprite
-        // has a state to actually be drawn during - previously the swing resolved and dropped
-        // straight back to idle, leaving that frame with nothing to bind to.
-        if (e.state === 'hurt' || e.state === 'attack') {
-          e.stateTimer--;
-          if (e.stateTimer <= 0) e.state = 'idle';
+        // Resolve one of the enemy's telegraphed strikes against the player's position/guard.
+        const landStrike = (dmg, dodgeMsg, blockMsg, hitLabel) => {
+          const isDodged = Math.abs(combatState.playerX - e.x) > 44;
+          const isGuarded = combatState.shieldProgress > 0.6;
+          if (isDodged) {
+            showFloatingCombatText(dodgeMsg, 160, 130, "#38bdf8");
+          } else if (isGuarded) {
+            showFloatingCombatText(blockMsg, 160, 140, "#a855f7");
+            combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
+          } else {
+            combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
+            combatState.hurtFrame = 1;
+            combatState.faceState = 'hurt';
+            combatState.faceTimer = 26;
+            showFloatingCombatText(`-${dmg} ${hitLabel}`, 160, 160, "#dc2626");
+          }
+        };
+
+        if (cfg.fly) {
+          // Flyer: hovers high and out of reach, drifting side to side, until it commits to a
+          // swoop - dive to the player, strike, climb back up.
+          if (e.state === 'hurt') {
+            e.stateTimer--;
+            if (e.stateTimer <= 0 && e.swoop === 'none') e.state = 'idle';
+          }
+          e.swoopTimer--;
+          if (e.swoop === 'none') {
+            e.x += Math.sin(Date.now() / 620) * 1.3;
+            e.altitude = cfg.hover + Math.sin(Date.now() / 300) * 5;
+            if (e.swoopTimer <= 0 && e.state !== 'hurt') {
+              e.swoop = 'diving'; e.swoopTimer = 26; e.state = 'telegraph';
+              showFloatingCombatText("⚠️ SWOOP INCOMING!", 160, 58, "#fbbf24");
+            }
+          } else if (e.swoop === 'diving') {
+            e.altitude += (0 - e.altitude) * 0.22;
+            e.x += (combatState.playerX - e.x) * 0.14;
+            if (e.swoopTimer <= 0) {
+              e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
+              landStrike(cfg.dmg, "DODGED THE SWOOP!", "🛡️ SWOOP BLOCKED!", "SWOOP!");
+            }
+          } else if (e.swoop === 'striking') {
+            if (e.swoopTimer <= 0) { e.swoop = 'rising'; e.swoopTimer = 26; }
+          } else if (e.swoop === 'rising') {
+            e.altitude += (cfg.hover - e.altitude) * 0.16;
+            if (e.swoopTimer <= 0) {
+              e.swoop = 'none'; e.swoopTimer = 80 + Math.floor(Math.random() * 60); e.state = 'idle';
+            }
+          }
         } else {
-          e.attackTimer--;
+          // Walker & boss: strafe along the ground. The boss barely moves and hits like a truck.
+          const range = cfg.slow ? 24 : 58;
+          const spd = cfg.slow ? 0.5 : 1.5;
+          if (e.state !== 'attack' && e.state !== 'telegraph') {
+            e.x += e.vx;
+            if (e.x > range) { e.x = range; e.vx = -spd; }
+            else if (e.x < -range) { e.x = -range; e.vx = spd; }
+          }
 
-          if (e.attackTimer === 30) {
-            e.state = 'telegraph';
-            showFloatingCombatText("⚠️ ENEMY WIND-UP!", 160, 75, "#fbbf24");
-          } else if (e.attackTimer <= 0) {
-            e.attackTimer = 110 + Math.floor(Math.random() * 50);
-            e.state = 'attack';
-            e.stateTimer = 14;
-
-            const isDodged = Math.abs(combatState.playerX) > 42;
-            const isGuarded = combatState.shieldProgress > 0.6;
-
-            if (isDodged) {
-              showFloatingCombatText("DODGED! (MISS)", 160, 130, "#38bdf8");
-            } else if (isGuarded) {
-              showFloatingCombatText("🛡️ PARRY BLOCKED!", 160, 140, "#a855f7");
-              combatState.playerHp = Math.max(1, combatState.playerHp - 2);
-            } else {
-              const dmg = 18;
-              combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
-              combatState.hurtFrame = 1;
-              combatState.faceState = 'hurt';
-              combatState.faceTimer = 26;
-              showFloatingCombatText(`-${dmg} HP HIT!`, 160, 160, "#dc2626");
+          if (e.state === 'hurt' || e.state === 'attack') {
+            e.stateTimer--;
+            if (e.stateTimer <= 0) e.state = 'idle';
+          } else {
+            e.attackTimer--;
+            // A walker occasionally raises its guard between attacks (see the player-strike
+            // resolution, where e.blockTimer soaks most of a hit).
+            if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0 && Math.random() < 0.006) {
+              e.blockTimer = 75;
+              showFloatingCombatText("ENEMY GUARDS", 160 + e.x, 78, "#94a3b8");
+            }
+            if (e.attackTimer === cfg.telegraph) {
+              e.state = 'telegraph';
+              showFloatingCombatText(cfg.slow ? "⚠️ HEAVY WIND-UP!" : "⚠️ ENEMY WIND-UP!", 160, 75, "#fbbf24");
+            } else if (e.attackTimer <= 0) {
+              e.attackTimer = cfg.cadence + Math.floor(Math.random() * 50);
+              e.state = 'attack';
+              e.stateTimer = cfg.slow ? 20 : 14;
+              e.blockTimer = 0;
+              landStrike(cfg.dmg, "DODGED! (MISS)", "🛡️ PARRY BLOCKED!", cfg.slow ? "CRUSH!" : "HP HIT!");
             }
           }
         }
@@ -918,6 +1028,75 @@
       c.drawImage(img, -contentCX, footY - contentBottom, fullW, fullH);
     }
 
+    // Like spriteTrimBox, but with a HARD alpha cut. The enemy sprite is generated small on a
+    // white background and background-removed; a faint BiRefNet halo can survive that and, at
+    // spriteTrimBox's alpha>14, pass as content - which made the creature read tiny with a big
+    // empty margin. alpha>80 pins the box to the solid body so it can be scaled up to fill.
+    const _solidBoxCache = new WeakMap();
+    function solidContentBox(img) {
+      const cached = _solidBoxCache.get(img);
+      if (cached !== undefined) return cached;
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (!iw || !ih) return null;
+      if (!_trimScratch) _trimScratch = document.createElement('canvas');
+      const cv = _trimScratch;
+      const scale = Math.min(1, 220 / Math.max(iw, ih));
+      const sw = Math.max(1, Math.round(iw * scale));
+      const sh = Math.max(1, Math.round(ih * scale));
+      cv.width = sw; cv.height = sh;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      cx.clearRect(0, 0, sw, sh);
+      cx.drawImage(img, 0, 0, sw, sh);
+      let data;
+      try { data = cx.getImageData(0, 0, sw, sh).data; }
+      catch (e) { _solidBoxCache.set(img, null); return null; }
+      let minX = sw, minY = sh, maxX = -1, maxY = -1;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (data[(y * sw + x) * 4 + 3] > 80) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      const box = maxX < 0 ? null : {
+        x: minX / sw, y: minY / sh, w: (maxX - minX + 1) / sw, h: (maxY - minY + 1) / sh,
+      };
+      _solidBoxCache.set(img, box);
+      return box;
+    }
+
+    // Draw an enemy frame so its SOLID content is `targetH` px tall (but never wider than
+    // `maxW`), centred on cx, with the content's bottom edge at bottomY - independent of the
+    // empty margin baked into the PNG.
+    //
+    // Both bounds are needed because the generated sprites now fill their canvas, so their
+    // aspect ratios vary enormously with the subject: a RAM stick comes back 141x512 and a
+    // dragon with its wingspan 503x187. Sizing on height alone would draw that dragon ~285px
+    // wide on a 320px screen.
+    function drawEnemyContent(c, img, cx, bottomY, targetH, maxW) {
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const box = solidContentBox(img);
+      if (!box) {
+        let h = targetH, w = targetH * aspect;
+        if (maxW && w > maxW) { h *= maxW / w; w = maxW; }
+        c.drawImage(img, cx - w / 2, bottomY - h, w, h);
+        return;
+      }
+      // Scale the whole frame so the measured content lands on the target box.
+      let fullH = targetH / box.h;
+      let fullW = fullH * aspect;
+      if (maxW) {
+        const contentW = box.w * fullW;
+        if (contentW > maxW) { const k = maxW / contentW; fullH *= k; fullW *= k; }
+      }
+      const contentCX = (box.x + box.w / 2) * fullW;
+      const contentBottom = (box.y + box.h) * fullH;
+      c.drawImage(img, cx - contentCX, bottomY - contentBottom, fullW, fullH);
+    }
+
         // 3. COMPOSITE OVER-THE-SHOULDER PLAYER RENDERER (VALBRACE PROPORTIONS)
     function drawOverTheShoulderPlayer(c, width, height) {
       if (!combatState.inBattle) return;
@@ -1061,8 +1240,10 @@
       if (!combatState.inBattle || combatState.enemy.hp <= 0) return;
 
       const e = combatState.enemy;
-      const ex = width / 2;
-      const ey = 95 + Math.sin(Date.now() / 200) * 4;
+      const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+      const GROUND_Y = 165;                       // where a grounded enemy's feet sit
+      const ex = width / 2 + (e.x || 0);
+      const ey = (GROUND_Y - 70) - (e.altitude || 0) + Math.sin(Date.now() / 200) * 4;
 
       if (e.state === 'telegraph') {
         c.fillStyle = 'rgba(239, 68, 68, 0.4)';
@@ -1078,16 +1259,37 @@
         else if (e.state === 'attack' || e.state === 'telegraph') frame = enemySpriteFrames[1] || frame;
 
         if (frame && frame.complete && frame.naturalWidth > 0) {
+          // Size by MEASURED solid content, not the raw frame - a small generation still fills
+          // the combat view. heightFrac is per-variant: boss looms, flyer is smaller & airborne.
+          const targetH = Math.round(height * cfg.heightFrac);
+          const maxW = Math.round(width * (cfg.widthFrac || 0.7));
+          const bob = cfg.fly ? Math.sin(Date.now() / 110) * 4 : Math.sin(Date.now() / 220) * 3;
+          const bottomY = GROUND_Y - (e.altitude || 0) + bob;
+
           c.save();
-          if (e.state === 'hurt') {
-            c.translate((Math.random() * 8 - 4), 0);
-            c.globalAlpha = 0.9;
+          // Ground shadow - fades and shrinks as a flyer climbs.
+          const sh = cfg.fly ? Math.max(0.14, 1 - (e.altitude || 0) / 90) : 1;
+          c.fillStyle = `rgba(0,0,0,${0.28 * sh})`;
+          c.beginPath();
+          c.ellipse(width / 2 + (e.x || 0), GROUND_Y + 3, targetH * 0.32 * sh, targetH * 0.08 * sh, 0, 0, Math.PI * 2);
+          c.fill();
+
+          if (e.state === 'hurt') { c.translate((Math.random() * 8 - 4), 0); c.globalAlpha = 0.9; }
+          else if (e.blockTimer > 0) { c.globalAlpha = 0.94; }
+
+          drawEnemyContent(c, frame, ex, bottomY, targetH, maxW);
+          c.globalAlpha = 1;
+
+          // Walker guard flash.
+          if (e.blockTimer > 0) {
+            c.strokeStyle = 'rgba(148,163,184,0.9)'; c.lineWidth = 3;
+            c.beginPath(); c.arc(ex, bottomY - targetH * 0.5, targetH * 0.34, -0.4, Math.PI + 0.4); c.stroke();
           }
-          // Sized to roughly match the procedural enemy it replaces (~100px on a 240px-tall
-          // canvas). Drawn much larger it swallowed the player sprite, whose head starts at y=117.
-          const h = 104;
-          const w = h * (frame.naturalWidth / frame.naturalHeight);
-          c.drawImage(frame, ex - w / 2, ey - h * 0.66, w, h);
+          // Boss aura.
+          if (cfg.slow) {
+            c.strokeStyle = 'rgba(220,38,38,0.35)'; c.lineWidth = 2;
+            c.beginPath(); c.ellipse(ex, bottomY - targetH * 0.5, targetH * 0.42, targetH * 0.56, 0, 0, Math.PI * 2); c.stroke();
+          }
           c.restore();
           drawEnemyHpBar(c, width, e);
           return;
@@ -2223,16 +2425,30 @@
                 playerFaceFrames = [playerFaceImg];
               }
               enemySpriteFrames = [];
+              enemyVariantImgs = {};
+              // walker / flyer / boss, each its own generated sprite. Older bundles / other
+              // modes only send enemy_sprites - fold that in as the walker.
+              if (b.enemy_variants) {
+                Object.entries(b.enemy_variants).forEach(([key, src]) => {
+                  if (!src) return;
+                  const img = new Image();
+                  img.src = src;
+                  enemyVariantImgs[key] = img;
+                });
+              }
               if (b.enemy_sprites && b.enemy_sprites.length > 0) {
                 b.enemy_sprites.forEach(src => {
                   const img = new Image();
                   img.src = src;
                   enemySpriteFrames.push(img);
                 });
+                if (!enemyVariantImgs.walker) enemyVariantImgs.walker = enemySpriteFrames[0];
               }
-              if (b.enemy_style) {
-                combatState.enemy.name = b.enemy_style.toUpperCase();
+              enemyStyleName = (b.enemy_style || '').trim();
+              if (enemyStyleName) {
+                combatState.enemy.name = enemyStyleName.toUpperCase();
               }
+              pickEnemyVariant();
               loadAiTextures(
                 b.wall_texture,
                 b.ceiling_texture,

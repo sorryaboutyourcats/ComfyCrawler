@@ -868,10 +868,10 @@ def _isolate_component(img_path, elongated):
     return Image.fromarray(crop), major, elong
 
 
-def _tight_crop(img):
+def _tight_crop(img, thresh=20):
     import numpy as np
     a = np.array(img)
-    ys, xs = np.nonzero(a[:, :, 3] > 20)
+    ys, xs = np.nonzero(a[:, :, 3] > thresh)
     if not len(ys):
         return img
     return img.crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
@@ -933,20 +933,24 @@ def crop_portrait_square(portrait_path):
         return False
 
 
-def keep_largest_figure(frame_path):
+def keep_largest_figure(frame_path, thresh=20):
     """Erase everything in a background-removed frame except the biggest connected blob.
 
     The character pass occasionally renders a SECOND figure - a bystander off to one side - and
     BiRefNet, correctly, cuts them both out. That extra person then rides along in the sprite and
     turns up in the game standing next to the player. The player is always the dominant mass in
-    frame, so keeping only the largest component removes the intruder without touching them."""
+    frame, so keeping only the largest component removes the intruder without touching them.
+
+    `thresh` is the alpha cut for "solid". A higher value (used for the enemy) also discards a
+    faint BiRefNet halo left on the old pure-white background - that halo would otherwise be the
+    largest component and defeat the tight crop that follows, leaving the creature tiny."""
     import numpy as np
     from scipy import ndimage
     from PIL import Image
     try:
         img = Image.open(frame_path).convert("RGBA")
         arr = np.array(img)
-        labels, n = ndimage.label(arr[:, :, 3] > 20)
+        labels, n = ndimage.label(arr[:, :, 3] > thresh)
         if n <= 1:
             return
         counts = np.bincount(labels.ravel())
@@ -1589,26 +1593,82 @@ def krea2_shield_prompt(player_style):
     )
 
 
-def krea2_enemy_prompt(enemy_style, tighten=0):
-    """`tighten` (0..2) shrinks the requested figure size for the retry path in
-    _krea2_regen_enemy - a creature with a wide wingspan or a long tail sometimes has
-    to be asked for smaller before every part of it fits inside the frame. The base
-    request (tighten=0) already asks for a small, well-margined creature: a dragon drawn
-    large fills the frame with its body and the model then just drops the wings to make
-    it fit, which is the "dragon with no wings" look."""
+# The three foes built from one typed enemy idea. Every variant keeps the SAME {e} noun so
+# all three read as the same species - a ground fighter, an airborne swooper that stays out
+# of reach, and a hulking champion. The frontend (bundle["enemy_variants"]) sizes and drives
+# each one differently; here they only differ by form/pose wording.
+ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
+
+
+def _a_or_an(noun):
+    return ("an " if noun[:1].lower() in "aeiou" else "a ") + noun
+
+
+def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
+    """One enemy idea, three battlefield roles (`variant` = walker / flyer / boss).
+
+    Two things this prompt has to get right, both learned the hard way:
+
+    1. SIZE. It asks the subject to FILL the frame. The previous version asked for the
+       creature "small, with a large empty margin" as insurance against a dragon's wingtips
+       being clipped - and the model obliged, spending ~4% of a 512x512 canvas on the
+       creature. Measured on real output: the saved sprites were 62x89 to 94x114 px, so
+       blowing one up to ~140px on screen was an upscale of a thumbnail. Filling the frame
+       instead measured 144x511 (RAM), 509x512 (mushroom person) and 508x191 (winged
+       dragon) - 4-5x the linear resolution, and the dragon's wingspan came back complete,
+       so the margin was never what was protecting it. This is the same fix already applied
+       to the v6 player frames for the same reason.
+
+    2. IDENTITY. The subject is named first and repeated, and the "enemy" framing is applied
+       CONDITIONALLY. The old wording led with the pose ("menacing combat-ready stance") and
+       demanded "head, body, both feet ... horns, tail, claws", which are creature parts - so
+       a non-creature noun like "RAM stick" lost the argument and came back as a monster.
+       Leading with the literal object and letting the animation clause opt out for things
+       that aren't alive renders an actual DDR module, verified.
+
+    `tighten` (0..2) is the retry lever for _krea2_regen_enemy and now only widens the margin
+    a little - it never goes back to asking for a small subject."""
     e = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "fearsome dragon with wide outstretched wings"
     margin = [
-        "a large empty margin on every side, the whole creature small and sitting in the middle of the frame",
-        "a very large empty margin on every side, the creature small and well within the middle of the frame",
-        "a huge empty border on all four sides, the creature quite small and centred with lots of clear space around it",
+        "only a thin margin around it",
+        "a modest even margin around it",
+        "a comfortable even margin around it",
     ][min(int(tighten), 2)]
+
+    if variant == "flyer":
+        # The wing clause has to opt out the same way the animation clause does. Asking flatly
+        # for "the flying version of X with wings spread" is a creature instruction, and it
+        # beats the identity wording: "a giant stick of RAM" came back as a bird. Telling the
+        # model to bolt wings ONTO the unchanged subject keeps the RAM stick a RAM stick.
+        role = (f"It is the flying, airborne version, hovering in mid-air clear of the ground "
+                f"with a pair of large wings spread wide and fully outstretched to either "
+                f"side. If {e} is not naturally a winged flying creature, keep {e} itself "
+                f"completely unchanged and simply attach the outspread wings to it, instead "
+                f"of replacing it with a bird, a bat or any other winged animal")
+        fill = (f"Drawn LARGE and filling the frame edge to edge, the wingtips reaching out "
+                f"close to the left and right edges and the body filling the height, with "
+                f"{margin}")
+    elif variant == "boss":
+        role = (f"It is the colossal, hulking boss version of {e} - massively built, heavily "
+                f"armoured and battle-scarred, towering and imposing")
+        fill = (f"Drawn LARGE and filling the frame from top to bottom, the top of it near the "
+                f"top edge and the base near the bottom edge, with {margin}")
+    else:
+        role = (f"It faces the camera head-on, squarely on the ground in a menacing, "
+                f"combat-ready fighting stance")
+        fill = (f"Drawn LARGE and filling the frame from top to bottom, the top of it near the "
+                f"top edge and the base near the bottom edge, with {margin}")
+
     return (
-        f"A full-body video game enemy sprite of a {e}, facing the camera head-on in a menacing "
-        f"combat-ready stance. The entire creature is drawn small and centered with {margin}, so that "
-        f"every part of it - head, body, both feet, and its full wingspan plus any horns, tail, claws "
-        f"or other outstretched limbs and appendages - is fully visible well inside the picture and "
-        f"nothing is touching, running into or cut off at any edge of the image. Dramatic even "
-        f"lighting, sharp detailed textures. Plain solid pure white background, nothing else in frame."
+        f"A full-body video game enemy sprite of {e}. The subject is literally {e}, drawn "
+        f"exactly as {e} really looks, with the true shape, proportions, colours and details "
+        f"of {e}, instantly recognisable as {e} at a glance. It is brought to life as a "
+        f"monster opponent: if {e} is not naturally a living creature, keep its real shape, "
+        f"proportions, colours and surface details exactly as they are and simply animate "
+        f"that object itself - give it eyes and small limbs - without replacing it with an "
+        f"animal, a beast or a humanoid. {role}. {fill}, the whole thing completely inside "
+        f"the picture with nothing cut off at any edge. Dramatic even lighting, sharp "
+        f"detailed textures. Plain solid pure white background, nothing else in frame."
     )
 
 
@@ -1632,7 +1692,8 @@ FLUX_T5      = "t5xxl_fp8_e4m3fn.safetensors"
 FLUX_CLIP_L  = "clip_l.safetensors"
 FLUX_AE      = "ae.safetensors"
 KONTEXT_STEPS = 20            # Kontext-dev; quality/speed knob (~10s/frame at 256px / 20 steps)
-KONTEXT_GUIDANCE = 2.5
+KONTEXT_GUIDANCE = 3.5        # 2.5 changed mostly the mouth; 3.5 makes the eyes/brow/forehead
+                             # follow the instruction too, without breaking identity
 # Portrait working resolution. The pipeline deliberately does NOT use FluxKontextImageScale
 # (which snaps to ~1MP and cost ~50s/frame) - the HUD slot is ~112px so it does not need it.
 # 256 is the floor: at 128 Kontext can still do the big change (open-mouth attack) but the
@@ -1641,16 +1702,24 @@ KONTEXT_PORTRAIT_RES = 256
 
 # One edit instruction per reaction frame. Kontext responds to imperative "change X, keep
 # everything else" phrasing - the long "keep the exact same face..." tail is what pins the
-# identity, so keep it on every edit.
+# identity, so keep it on every edit. Each edit calls out the EYES / BROW / FOREHEAD and
+# the WHOLE face explicitly, not just the mouth - at guidance 2.5 Kontext moved mainly the
+# mouth and left the eyes near-neutral.
 _KEEP = ("Keep the exact same face, identity, head shape, hair, skin, colours, lighting, "
          "pose and framing - change nothing else.")
 KONTEXT_EXPRESSION_EDITS = {
-    "attack": f"Change only the facial expression to a furious battle cry: mouth wide open "
-              f"shouting, teeth bared, brow low and furrowed with rage. {_KEEP}",
-    "block":  f"Change only the facial expression to a hard, focused, angry glare: brow "
-              f"furrowed, jaw set, mouth firmly closed with the lips pressed together. {_KEEP}",
-    "hurt":   f"Change only the facial expression: close both eyes tightly and screw the face "
-              f"up in a pained wince, brow creased. {_KEEP}",
+    "attack": f"Change the facial expression to explosive rage: mouth wide open roaring with "
+              f"teeth bared, AND the eyes glaring wide and furious, eyebrows slammed down hard "
+              f"and drawn together, deep angry creases across the forehead and between the "
+              f"brows, the whole upper face contorted with fury. {_KEEP}",
+    "block":  f"Change the facial expression to intense angry focus with the mouth kept closed: "
+              f"jaw clenched, lips pressed into a hard flat line, eyes narrowed and locked "
+              f"forward in a fierce concentrated stare, eyebrows pulled low and together, brow "
+              f"deeply furrowed. {_KEEP}",
+    "hurt":   f"Change the facial expression to anguished pain and grief: both eyes squeezed "
+              f"tightly shut, eyebrows pulled upward and together into a pained sorrowful knot, "
+              f"the whole face crumpled and grimacing, mouth open and pulled down at the "
+              f"corners as if crying out, forehead and cheeks tense with distress. {_KEEP}",
 }
 
 
@@ -1739,12 +1808,13 @@ def _round16(n, floor=256):
     return max(floor, int(round(float(n) / 16.0)) * 16)
 
 
-def _save_tight(img_path):
+def _save_tight(img_path, thresh=20):
     """Trim an RGBA PNG to its alpha bounding box, in place. BiRefNet already cut the
-    background, so this only removes the empty margin the model left around the subject."""
+    background, so this only removes the empty margin the model left around the subject.
+    A higher `thresh` (enemy) ignores a faint halo so the crop lands on the real subject."""
     from PIL import Image
     try:
-        img = _tight_crop(Image.open(img_path).convert("RGBA"))
+        img = _tight_crop(Image.open(img_path).convert("RGBA"), thresh)
         img.save(img_path, format="PNG")
     except Exception as e:
         print(f"[Tight Crop Error] {os.path.basename(img_path)}: {e}")
@@ -1869,40 +1939,95 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300):
     raise TimeoutError("krea2 turbo generation timed out.")
 
 
-def _subject_bleeds_off_edge(img_path, thresh=8, frac=0.02):
-    """True if a background-removed subject runs into any edge of the canvas - meaning
-    part of it (a dragon's wingtips, a tail) was cropped off during generation rather
-    than sitting fully inside the frame. `frac` of any border being opaque is enough."""
+# Replaced _subject_bleeds_off_edge, which asked "does the subject touch any edge?" with a
+# 2% tolerance. That test only made sense while the enemy was deliberately drawn SMALL and
+# centred; now that it is asked to FILL the frame, touching an edge is the normal, desired
+# result and the old bound fired on 3 of 4 healthy samples.
+#
+# How much of the canvas a healthy fill-the-frame enemy spans on its longest axis. Measured
+# on real output: dragon-with-wingspan 0.98, RAM stick 1.00, dog 1.00, boss dog 1.00, versus
+# 0.18-0.26 for the old "draw it small" prompt. 0.55 sits well clear of both clusters.
+ENEMY_MIN_FILL = 0.55
+# How much of a single border a healthy subject may cover before it reads as sliced off.
+# Measured on the same run: 0.000 (dragon, nothing touching), 0.068 (dog's head), 0.178/0.242
+# (RAM stick spanning the full height), 0.367 (boss dog's feet planted on the bottom edge).
+# 0.60 clears every legitimate case while a genuinely chopped subject leaves a long flat run.
+ENEMY_MAX_BORDER = 0.60
+
+
+def _enemy_frame_problem(img_path, thresh=50):
+    """Judge a background-removed enemy frame. Returns None when it is fine, otherwise a
+    short reason string ('too small' / 'clipped' / 'empty') for the regen path to log and act
+    on. Deliberately two-sided: the failure that actually bites is the subject coming out
+    TINY (a ~90px creature upscaled to fill the combat view), which no edge test can see."""
     from PIL import Image
     import numpy as np
     try:
         a = np.array(Image.open(img_path).convert("RGBA"))
         alpha = a[:, :, 3] > thresh
         if not alpha.any():
-            return False
-        return bool(alpha[0, :].mean() > frac or alpha[-1, :].mean() > frac
-                    or alpha[:, 0].mean() > frac or alpha[:, -1].mean() > frac)
+            return "empty"
+        H, W = alpha.shape
+        ys, xs = np.nonzero(alpha)
+        fill = max((xs.max() - xs.min() + 1) / float(W), (ys.max() - ys.min() + 1) / float(H))
+        if fill < ENEMY_MIN_FILL:
+            return f"too small (spans {fill:.0%} of the canvas)"
+        worst = max(alpha[0, :].mean(), alpha[-1, :].mean(),
+                    alpha[:, 0].mean(), alpha[:, -1].mean())
+        if worst > ENEMY_MAX_BORDER:
+            return f"clipped ({worst:.0%} of one border is solid)"
+        return None
     except Exception as e:
-        print(f"[Edge Check Error] {os.path.basename(img_path)}: {e}")
-        return False
+        print(f"[Enemy Frame Check Error] {os.path.basename(img_path)}: {e}")
+        return None
 
 
-def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2):
-    """Re-generate the enemy on its own, with a fresh seed and a tighter margin request
-    each try, when the batched one came out with part of the creature cropped off at the
-    frame edge. Returns the first clean frame, or the last attempt if none come back clean."""
+def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="walker", clipped=False):
+    """Re-generate one enemy variant on its own with a fresh seed, when the batched one came
+    back unusable. A CLIPPED subject is retried with a slightly wider margin; a subject that
+    merely came out too small is retried on the unchanged fill-the-frame prompt, since that
+    is a bad roll rather than bad wording. Returns the first good frame, else the last try."""
     last = None
     for i in range(attempts):
         payload = _krea2_loaders()
-        _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style, tighten=i + 1),
+        tighten = (i + 1) if clipped else 0
+        _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style, variant=variant, tighten=tighten),
                           size, size, steps, random.randint(1, 1000000000), prefix)
         last = _krea2_submit_and_collect(payload, ["enemy"])["enemy"]
-        keep_largest_figure(last)
-        if not _subject_bleeds_off_edge(last):
-            print(f"[krea2] enemy regen attempt {i + 1} is clean")
+        keep_largest_figure(last, thresh=50)
+        problem = _enemy_frame_problem(last)
+        if problem is None:
+            print(f"[krea2] {variant} enemy regen attempt {i + 1} is clean")
             return last
-        print(f"[krea2] enemy regen attempt {i + 1} still bleeds off the edge")
+        print(f"[krea2] {variant} enemy regen attempt {i + 1} still {problem}")
     return last
+
+
+def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix):
+    """Add a walker / flyer / boss enemy branch to a shared krea2 payload, keyed
+    `enemy_<variant>`. Each gets its own seed - they should look like the same species,
+    not the same pose."""
+    for v in ENEMY_VARIANT_NAMES:
+        _krea2_add_branch(payload, f"enemy_{v}", krea2_enemy_prompt(enemy_style, variant=v),
+                          sq, sq, steps, random.randint(1, 1000000000), prefix)
+
+
+def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
+    """Post-process the three enemy branches collected into `paths` (keys `enemy_<variant>`):
+    drop any stray blob / BiRefNet halo, regen a variant that came back too small or clipped,
+    then tight-crop. Returns {variant: path}."""
+    enemies = {}
+    for v in ENEMY_VARIANT_NAMES:
+        ep = paths[f"enemy_{v}"]
+        keep_largest_figure(ep, thresh=50)
+        problem = _enemy_frame_problem(ep)
+        if problem:
+            print(f"[krea2] {prefix} {v} enemy is {problem} - regenerating it alone")
+            ep = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v,
+                                    clipped=problem.startswith("clipped"))
+        _save_tight(ep, thresh=50)
+        enemies[v] = ep
+    return enemies
 
 
 def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps,
@@ -1919,9 +2044,9 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     _krea2_add_branch(payload, "player", krea2_player_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "weapon", krea2_weapon_prompt(weapon_style, player_style), ww, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
-    _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
+    _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5")
 
-    names = ("player", "weapon", "shield", "enemy")
+    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in ENEMY_VARIANT_NAMES)
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, names)
     elapsed = time.time() - t0
@@ -1929,11 +2054,9 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     keep_largest_figure(paths["player"])
     _save_tight(paths["player"])
 
-    keep_largest_figure(paths["enemy"])
-    if _subject_bleeds_off_edge(paths["enemy"]):
-        print("[krea2] v5 enemy bled off the frame edge - regenerating it alone")
-        paths["enemy"] = _krea2_regen_enemy(enemy_style, sq, steps, "v5")
-    _save_tight(paths["enemy"])
+    enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v5")
+    paths["enemies"] = enemies
+    paths["enemy"] = enemies["walker"]
 
     for n in ("weapon", "shield"):
         _save_tight(paths[n])
@@ -2007,9 +2130,9 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     frame_prompts = krea2_frame_prompts(player_style, weapon_style)
     for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
-    _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style), sq, sq, steps, random.randint(1, 1000000000), "v6")
+    _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6")
 
-    keys = V6_FRAME_NAMES + ["enemy"]
+    keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in ENEMY_VARIANT_NAMES]
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, keys)
     elapsed = time.time() - t0
@@ -2024,16 +2147,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     _planted = [V6_FRAME_NAMES.index(n) for n in ("idle", "block")]
     crop_frames_to_common_bbox(frame_paths, bbox_indices=_planted)
 
-    keep_largest_figure(paths["enemy"])
-    if _subject_bleeds_off_edge(paths["enemy"]):
-        print("[krea2] v6 enemy bled off the frame edge - regenerating it alone")
-        paths["enemy"] = _krea2_regen_enemy(enemy_style, sq, steps, "v6")
-    _save_tight(paths["enemy"])
+    enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v6")
     portraits = generate_kontext_portrait_set(player_style)
 
-    print(f"[krea2] v6 {len(frame_paths)}-frame player + enemy complete - character {sq}x{sq}, "
-          f"Kontext portrait set, {int(steps)} steps, krea2 {elapsed:.1f}s")
-    return {"frames": frame_paths, "enemy": paths["enemy"],
+    print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
+          f"character {sq}x{sq}, Kontext portrait set, {int(steps)} steps, krea2 {elapsed:.1f}s")
+    return {"frames": frame_paths, "enemy": enemies["walker"], "enemies": enemies,
             "portrait": portraits[0] if portraits else None, "portraits": portraits}
 
 
@@ -2086,6 +2205,9 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "weapon_sprite": _b64(assets["weapon"]) if assets.get("weapon") else None,
             "shield_sprite": _b64(assets["shield"]) if assets.get("shield") else None,
             "enemy_sprites": [_b64(assets["enemy"])] if assets.get("enemy") else [],
+            # walker / flyer / boss - the frontend picks one at random on each battle entry.
+            "enemy_variants": ({v: _b64(p) for v, p in assets["enemies"].items()}
+                               if assets.get("enemies") else None),
             "enemy_style": (enemy_style or "").strip(),
         }
         print("[krea2] v5 bundle complete and packaged!")
@@ -2147,6 +2269,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "weapon_sprite": None,
             "shield_sprite": None,
             "enemy_sprites": [_b64(bundle["enemy"])] if bundle.get("enemy") else [],
+            # walker / flyer / boss - the frontend picks one at random on each battle entry.
+            "enemy_variants": ({v: _b64(p) for v, p in bundle["enemies"].items()}
+                               if bundle.get("enemies") else None),
             "enemy_style": (enemy_style or "").strip(),
         }
         print("[krea2] v6 bundle complete and packaged!")

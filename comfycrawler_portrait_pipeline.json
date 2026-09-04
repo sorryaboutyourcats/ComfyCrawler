@@ -677,7 +677,7 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "Change only the facial expression to a furious battle cry: mouth wide open shouting, teeth bared, brow low and furrowed with rage. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
+        "Change the facial expression to explosive rage: mouth wide open roaring with teeth bared, AND the eyes glaring wide and furious, eyebrows slammed down hard and drawn together, deep angry creases across the forehead and between the brows, the whole upper face contorted with fury. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
       ]
     },
     {
@@ -757,7 +757,7 @@
         "Node name for S&R": "FluxGuidance"
       },
       "widgets_values": [
-        2.5
+        3.5
       ]
     },
     {
@@ -1044,7 +1044,7 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "Change only the facial expression to a hard, focused, angry glare: brow furrowed, jaw set, mouth firmly closed with the lips pressed together. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
+        "Change the facial expression to intense angry focus with the mouth kept closed: jaw clenched, lips pressed into a hard flat line, eyes narrowed and locked forward in a fierce concentrated stare, eyebrows pulled low and together, brow deeply furrowed. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
       ]
     },
     {
@@ -1124,7 +1124,7 @@
         "Node name for S&R": "FluxGuidance"
       },
       "widgets_values": [
-        2.5
+        3.5
       ]
     },
     {
@@ -1411,7 +1411,7 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "Change only the facial expression: close both eyes tightly and screw the face up in a pained wince, brow creased. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
+        "Change the facial expression to anguished pain and grief: both eyes squeezed tightly shut, eyebrows pulled upward and together into a pained sorrowful knot, the whole face crumpled and grimacing, mouth open and pulled down at the corners as if crying out, forehead and cheeks tense with distress. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
       ]
     },
     {
@@ -1491,7 +1491,7 @@
         "Node name for S&R": "FluxGuidance"
       },
       "widgets_values": [
-        2.5
+        3.5
       ]
     },
     {
