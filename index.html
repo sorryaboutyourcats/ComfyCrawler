@@ -139,6 +139,23 @@
       letter-spacing: 2px;
       margin-bottom: 18px;
     }
+    /* Narration follow-along. Brightness only, no motion, so it stays appropriate for a
+       reader who asked for reduced motion. .narrating is only on the node while speech is
+       actually running, so if narration is off or blocked the text renders at full opacity
+       exactly as it did before. */
+    #crawlText p { transition: opacity 0.25s ease, text-shadow 0.25s ease; }
+    #crawlText.narrating p { opacity: 0.45; }
+    #crawlText.narrating p.speaking {
+      opacity: 1;
+      text-shadow: 0 0 10px rgba(255, 232, 31, 0.55);
+    }
+    #btnNarrateManual {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      z-index: 3;
+      font-size: 11px;
+    }
     @keyframes crawlUp {
       0%   { top: 100%; }
       100% { top: -260%; }
@@ -532,6 +549,7 @@
           <div id="crawlText"></div>
         </div>
         <div id="crawlPending">The chronicle is being written...</div>
+        <button id="btnNarrateManual" class="win95-btn px-2 py-1 text-black hidden">🔊 Narrate</button>
       </div>
 
       <div class="win95-inset h-5 p-0.5 flex items-center overflow-hidden bg-slate-900">
@@ -554,6 +572,11 @@
       <label class="flex items-center justify-center gap-2 text-[11px] text-slate-700 select-none cursor-pointer">
         <input type="checkbox" id="chkAutoEnter" class="cursor-pointer">
         <span>Enter when done loading</span>
+      </label>
+
+      <label class="flex items-center justify-center gap-2 text-[11px] text-slate-700 select-none cursor-pointer">
+        <input type="checkbox" id="chkNarrate" class="cursor-pointer">
+        <span>Narrate the intro</span>
       </label>
     </div>
 
@@ -619,7 +642,7 @@
           <!-- Minimap -->
           <div class="win95-box p-1.5 flex flex-col justify-center flex-shrink-0">
             <div class="flex justify-between items-center mb-1">
-              <span class="text-[11px] font-bold text-slate-700">3DMAZE MAP:</span>
+              <span class="text-[11px] font-bold text-slate-700">MAP:</span>
               <span id="mapProgressBadge" class="text-[10px] text-blue-900 font-bold bg-blue-100 px-1.5 py-0.2 rounded">1/25 Tiles</span>
             </div>
             <div class="win95-inset p-1 flex items-center justify-center bg-black overflow-hidden relative">
@@ -630,7 +653,7 @@
           <!-- Combat Doom Face & Stats Box -->
           <div id="battleStatsBox" class="win95-box p-1.5 flex flex-col gap-1 flex-shrink-0 bg-slate-100">
             <div class="flex items-center justify-between">
-              <span class="text-[10px] font-bold text-slate-700">WARRIOR STATUS:</span>
+              <span id="heroStatusLabel" class="text-[10px] font-bold text-slate-700 truncate">WARRIOR STATUS:</span>
               <span id="battleModeBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800">MAZE EXPLORATION</span>
             </div>
             <div class="flex items-center gap-2">

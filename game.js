@@ -47,6 +47,8 @@
     const crawlPending = document.getElementById('crawlPending');
     const btnEnterDungeon = document.getElementById('btnEnterDungeon');
     const chkAutoEnter = document.getElementById('chkAutoEnter');
+    const chkNarrate = document.getElementById('chkNarrate');
+    const btnNarrateManual = document.getElementById('btnNarrateManual');
     const progHeaderText = document.getElementById('progHeaderText');
     const progHeaderIcon = document.getElementById('progHeaderIcon');
 
@@ -141,6 +143,141 @@
       chkAutoEnter.checked = loadAutoEnter();
       chkAutoEnter.addEventListener('change', () => saveAutoEnter(chkAutoEnter.checked));
     }
+
+    // ---- Intro narration (Web Speech API) ----------------------------------
+    // Uses whatever voices the OS already provides, so there is no model, no download and
+    // no server involvement - narration cannot slow down or block the ComfyUI image queue.
+    // Defaults ON (it is the point of the feature) but is remembered once touched, hence
+    // !== '0' rather than === '1'.
+    const NARRATE_KEY = 'comfycrawler.narrate';
+    function loadNarrate() {
+      try { return localStorage.getItem(NARRATE_KEY) !== '0'; } catch (e) { return true; }
+    }
+    function saveNarrate(on) {
+      try { localStorage.setItem(NARRATE_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+    }
+
+    const speech = window.speechSynthesis || null;
+    let narrateKeepalive = null;
+    let narrateStartCheck = null;
+    let narrateVoice = null;
+
+    // getVoices() usually returns [] on the first call and only fills in after
+    // 'voiceschanged'. The timeout matters: a browser that never fires that event would
+    // otherwise leave narration waiting forever instead of falling back to the default voice.
+    function resolveVoice() {
+      return new Promise(resolve => {
+        if (!speech) return resolve(null);
+        const pick = () => {
+          const voices = speech.getVoices() || [];
+          if (!voices.length) return null;
+          // A dungeon narrator wants gravitas: en-GB first, then the deeper Windows voices.
+          const score = v => {
+            const lang = (v.lang || '').toLowerCase();
+            const name = (v.name || '').toLowerCase();
+            let s = 0;
+            if (lang.startsWith('en-gb')) s += 40;
+            else if (lang.startsWith('en')) s += 20;
+            if (/\bmark\b/.test(name)) s += 12;
+            else if (/\bdavid\b/.test(name)) s += 10;
+            else if (/\bgeorge\b|\bryan\b|\bdaniel\b/.test(name)) s += 8;
+            if (v.localService) s += 3;
+            return s;
+          };
+          return voices.slice().sort((a, b) => score(b) - score(a))[0] || null;
+        };
+        const immediate = pick();
+        if (immediate) return resolve(immediate);
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          speech.removeEventListener('voiceschanged', finish);
+          resolve(pick());
+        };
+        speech.addEventListener('voiceschanged', finish);
+        setTimeout(finish, 1500);
+      });
+    }
+
+    function stopNarration() {
+      if (narrateKeepalive) { clearInterval(narrateKeepalive); narrateKeepalive = null; }
+      if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
+      if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
+      if (crawlText) {
+        crawlText.classList.remove('narrating');
+        crawlText.querySelectorAll('p.speaking').forEach(p => p.classList.remove('speaking'));
+      }
+      if (speech) { try { speech.cancel(); } catch (e) { /* nothing queued */ } }
+    }
+
+    // One utterance per paragraph rather than one long one. That gives paragraph tracking
+    // for free (each utterance knows its own <p>) and sidesteps Chrome cutting a single
+    // utterance off after ~15s - individual paragraphs run about 8.
+    async function startNarration() {
+      if (!speech || !crawlText) return;
+      if (chkNarrate && !chkNarrate.checked) return;
+      const paras = Array.from(crawlText.querySelectorAll('p'));
+      if (!paras.length) return;
+
+      stopNarration();
+      if (!narrateVoice) narrateVoice = await resolveVoice();
+      // The player may have unchecked it or left the screen while voices were resolving.
+      if (chkNarrate && !chkNarrate.checked) return;
+      if (screenProgress.classList.contains('hidden')) return;
+
+      crawlText.classList.add('narrating');
+      let started = false;
+
+      paras.forEach((p, i) => {
+        const text = (p.textContent || '').trim();
+        if (!text) return;
+        const u = new SpeechSynthesisUtterance(text);
+        if (narrateVoice) u.voice = narrateVoice;
+        u.rate = 0.92;
+        u.pitch = 0.9;
+        u.onstart = () => {
+          started = true;
+          if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
+          if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
+          p.classList.add('speaking');
+        };
+        u.onend = () => {
+          p.classList.remove('speaking');
+          if (i === paras.length - 1) stopNarration();
+        };
+        u.onerror = () => p.classList.remove('speaking');
+        speech.speak(u);
+      });
+
+      // Some Chrome builds pause the queue partway through. resume() only - the widespread
+      // pause()/resume() hack audibly glitches the voice.
+      narrateKeepalive = setInterval(() => {
+        if (speech.paused && speech.speaking) { try { speech.resume(); } catch (e) {} }
+      }, 5000);
+
+      // Chrome gates speech on user activation. The CREATE click should cover it, but if
+      // nothing ever starts we must not look simply broken - offer a real click to start.
+      narrateStartCheck = setTimeout(() => {
+        if (!started && btnNarrateManual) btnNarrateManual.classList.remove('hidden');
+      }, 2000);
+    }
+
+    if (chkNarrate) {
+      chkNarrate.checked = loadNarrate();
+      chkNarrate.addEventListener('change', () => {
+        saveNarrate(chkNarrate.checked);
+        if (chkNarrate.checked) startNarration();
+        else stopNarration();
+      });
+    }
+    if (btnNarrateManual) {
+      btnNarrateManual.addEventListener('click', () => {
+        btnNarrateManual.classList.add('hidden');
+        startNarration();
+      });
+    }
+    window.addEventListener('beforeunload', stopNarration);
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
@@ -292,6 +429,16 @@
     const btnToggleBattle = document.getElementById('btnToggleBattle');
     const battleActionBar = document.getElementById('battleActionBar');
     const battleModeBadge = document.getElementById('battleModeBadge');
+    // Replaced with the story's hero name as soon as the crawl lands; falls back to the
+    // generic label for legacy modes that never generate a story.
+    const heroStatusLabel = document.getElementById('heroStatusLabel');
+    const HERO_STATUS_DEFAULT = 'WARRIOR STATUS:';
+
+    function applyHeroStatusLabel() {
+      if (!heroStatusLabel) return;
+      const hero = (dungeonStory && dungeonStory.hero || '').trim();
+      heroStatusLabel.textContent = hero ? (hero.toUpperCase() + ':') : HERO_STATUS_DEFAULT;
+    }
     const playerHpBar = document.getElementById('playerHpBar');
     const playerHpText = document.getElementById('playerHpText');
     const playerStmBar = document.getElementById('playerStmBar');
@@ -405,7 +552,7 @@
 
       if (combatState.inBattle) {
         if (battleModeBadge) {
-          battleModeBadge.textContent = "VALBRACE DUEL";
+          battleModeBadge.textContent = "BATTLE TIME";
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white animate-pulse";
         }
         if (battleActionBar) battleActionBar.classList.remove('hidden');
@@ -458,7 +605,7 @@
     function resetCombatForNewDungeon() {
       // Go through toggleBattleMode rather than just clearing the flag, so the badge, action bar,
       // controls header and Battle/Flee button all return to exploration state too - otherwise the
-      // new dungeon starts out of battle but still wearing the "VALBRACE DUEL" chrome.
+      // new dungeon starts out of battle but still wearing the "BATTLE TIME" chrome.
       if (combatState.inBattle) toggleBattleMode(false);
       releaseHeldKeys();
       combatState.playerStm = combatState.playerMaxStm;
@@ -2403,6 +2550,8 @@
     // generation happens to finish.
     function enterDungeon(b) {
       if (!b) return;
+      // speechSynthesis keeps going across screen changes; silence it before the game starts.
+      stopNarration();
       if (b.player_sprites && b.player_sprites.length > 0) {
         playerSpriteFrames = [];
         b.player_sprites.forEach(src => {
@@ -2496,6 +2645,7 @@
       if (!story || crawlStarted) return;
       crawlStarted = true;
       dungeonStory = story;
+      applyHeroStatusLabel();
 
       const paras = Array.isArray(story.crawl) ? story.crawl : [];
       const frag = document.createDocumentFragment();
@@ -2522,9 +2672,14 @@
       crawlText.classList.remove('rolling');
       void crawlText.offsetWidth;
       crawlText.classList.add('rolling');
+
+      startNarration();
     }
 
     function resetCrawl() {
+      // Before anything else: a second CREATE must not leave the previous dungeon's
+      // narrator talking over the new one.
+      stopNarration();
       crawlStarted = false;
       if (crawlStage) crawlStage.style.display = '';
       if (progHeaderText) progHeaderText.textContent = 'Generating Dungeon Assets & Character...';
@@ -2532,6 +2687,7 @@
       progSubText.style.display = '';
       pendingBundle = null;
       dungeonStory = null;
+      applyHeroStatusLabel();
       if (crawlText) {
         crawlText.classList.remove('rolling');
         crawlText.innerHTML = '';
