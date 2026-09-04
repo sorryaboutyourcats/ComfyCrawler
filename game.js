@@ -83,13 +83,15 @@
     const CAMERA_SETBACK = 0.42;
     const TEX_SIZE = 256;
 
-    // Texels per world unit on the floor and ceiling. A cell is 1x1 in plan but only WALL_HEIGHT
-    // tall, so eye level sits at WALL_HEIGHT/2 - about 1.6x nearer both planes than the old 0.5.
-    // Geometry then magnifies their texture by that same 1.6x, which is why the moss and leaves
-    // ballooned. One texture per cell (the v3 rule) is only the right density when the eye is at
-    // 0.5; tiling 1/WALL_HEIGHT times per cell restores the grain v3 had. Purely a texture-density
-    // choice - the geometry, and so the Valbrace framing, is untouched.
-    const SURFACE_TEXELS = TEX_SIZE / WALL_HEIGHT;
+    // Texels per world unit on the floor and ceiling. This MUST stay exactly TEX_SIZE: the sampler
+    // masks with & (TEX_SIZE - 1), so one full texture then lands on exactly one 1x1 map cell,
+    // aligned to the cell boundaries. Any other value tiles at a rate that does not divide the
+    // grid, and the texture's own seam lands somewhere in the middle of a cell instead of on its
+    // edge - which is what put a second, off-centre copy of the floor and ceiling art inside every
+    // square. (The previous TEX_SIZE / WALL_HEIGHT was a density tweak to counter the eye sitting
+    // at WALL_HEIGHT/2 rather than 0.5; it fixed the grain and broke the alignment. Grain is a
+    // texture-generation problem, not a UV one - fix it in the prompt, not here.)
+    const SURFACE_TEXELS = TEX_SIZE;
 
     let ctx = viewportCanvas.getContext('2d');
     let imgData = ctx.createImageData(screenWidth, screenHeight);
@@ -1756,7 +1758,7 @@
         const texData = tex.data;
 
         for (let x = 0; x < screenWidth; x++) {
-          // See SURFACE_TEXELS. The mask wraps the tiling across cell boundaries.
+          // See SURFACE_TEXELS. One texture per map cell; the mask wraps at the cell boundary.
           const tx = Math.floor(floorX * SURFACE_TEXELS) & (TEX_SIZE - 1);
           const ty = Math.floor(floorY * SURFACE_TEXELS) & (TEX_SIZE - 1);
 

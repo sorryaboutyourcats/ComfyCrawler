@@ -1283,8 +1283,16 @@ def get_surface_prompts(wall_style):
         # that style actually looks. The flat orthographic framing stays - that is a tiling
         # requirement for a wall texture, not an art direction.
         wall_p = f"A flat 2D vertical wall surface texture of {wall_style}, close-up flat orthographic front view, seamless tileable wall material, zero horizon, zero sky, zero landscape, pure flat vertical wall material."
-        ceil_p = f"A flat 2D overhead sky canopy or ceiling texture themed after {wall_style}, clean flat 90 degree top-down overhead view, zero walls, zero ground, zero horizon, pure tileable overhead material."
-        floor_p = f"A flat 2D top-down fine-grained ground terrain floor texture themed after {wall_style}, close-up flat 90 degree bird's-eye view of the ground surface, uniform macro ground material, zero large focal objects, zero standing trees, zero people, zero horizon, zero sky, pure flat ground terrain material."
+        # "sky canopy" used to be an option here, which is why arbitrary indoor styles kept coming
+        # back as outdoor scenes. An arbitrary style is a PLACE, and the ceiling of a place is a
+        # built surface - name the material, and forbid the single hanging light fixture the model
+        # otherwise centres in frame (a chandelier is a focal object, and one texture now covers one
+        # whole map cell, so a focal object repeats visibly in every square).
+        ceil_p = f"A flat 2D seamless tileable ceiling material texture, the ceiling surface of {wall_style}, uniform repeating overhead material such as panelling, plaster, beams or tiles, evenly spread across the whole frame, camera pointing straight up at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero chandelier, zero hanging lamp, zero light fixture, zero single focal object, zero empty blank areas, edge to edge material."
+        # "ground terrain" was doing the same damage on the floor: it reads as outdoors, so an
+        # interior style came back as dirt and undergrowth. Ask for a FLOOR - a built, walked-on
+        # surface - and let the style decide whether that is boards, flagstone or carpet.
+        floor_p = f"A flat 2D seamless tileable floor material texture, the floor surface of {wall_style}, uniform repeating walked-on material such as floorboards, flagstones, tiles or carpet, fine even grain across the whole frame, camera pointing straight down at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero grass, zero soil, zero outdoor landscape, zero furniture, zero people, zero large focal objects, edge to edge material."
     
     return wall_p, ceil_p, floor_p
 
