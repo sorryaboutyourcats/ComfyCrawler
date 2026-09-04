@@ -101,7 +101,7 @@
        settle on its last frame and stay there when it outruns the asset generation. */
     #crawlStage {
       position: relative;
-      height: 300px;
+      height: 430px;
       overflow: hidden;
       background: #000000;
       perspective: 320px;
@@ -139,12 +139,6 @@
       letter-spacing: 2px;
       margin-bottom: 18px;
     }
-    #crawlText .crawl-sub {
-      font-size: 12px;
-      letter-spacing: 1px;
-      opacity: 0.75;
-      margin-bottom: 22px;
-    }
     @keyframes crawlUp {
       0%   { top: 100%; }
       100% { top: -260%; }
@@ -163,9 +157,11 @@
     @media (prefers-reduced-motion: reduce) {
       #crawlText.rolling { animation: none; }
       #crawlText { position: relative; top: 0; left: 0; width: 100%; transform: none;
-                   padding: 12px; }
-      #crawlViewport { overflow-y: auto; -webkit-mask-image: none; mask-image: none; }
-      #crawlStage { perspective: none; }
+                   padding: 16px 20px; }
+      #crawlViewport { position: relative; inset: auto; overflow: visible;
+                       -webkit-mask-image: none; mask-image: none; }
+      #crawlStage { perspective: none; height: auto; min-height: 200px; overflow: visible; }
+      #crawlPending { position: relative; padding: 24px; }
     }
     #btnEnterDungeon:disabled {
       color: #808080;
@@ -525,8 +521,8 @@
     <div id="screenProgress" class="p-5 flex flex-col gap-3 hidden">
       <div class="flex items-center justify-between">
         <span class="font-bold text-xs flex items-center gap-2">
-          <span>⏳</span>
-          <span>Generating Dungeon Assets & Character...</span>
+          <span id="progHeaderIcon">⏳</span>
+          <span id="progHeaderText">Generating Dungeon Assets &amp; Character...</span>
         </span>
         <span id="progTimer" class="text-xs font-bold text-blue-800">0.0s</span>
       </div>
@@ -554,6 +550,11 @@
       <button id="btnEnterDungeon" class="win95-btn px-6 py-2 text-sm text-black font-bold w-full justify-center" disabled>
         GENERATING ASSETS
       </button>
+
+      <label class="flex items-center justify-center gap-2 text-[11px] text-slate-700 select-none cursor-pointer">
+        <input type="checkbox" id="chkAutoEnter" class="cursor-pointer">
+        <span>Enter when done loading</span>
+      </label>
     </div>
 
     <!-- SCREEN 3: Instant Interactive Game Play Screen -->

@@ -46,6 +46,9 @@
     const crawlText = document.getElementById('crawlText');
     const crawlPending = document.getElementById('crawlPending');
     const btnEnterDungeon = document.getElementById('btnEnterDungeon');
+    const chkAutoEnter = document.getElementById('chkAutoEnter');
+    const progHeaderText = document.getElementById('progHeaderText');
+    const progHeaderIcon = document.getElementById('progHeaderIcon');
 
     const viewportCanvas = document.getElementById('viewportCanvas');
     const gameVideo = document.getElementById('gameVideo');
@@ -124,6 +127,20 @@
     // Set once generation finishes; the player enters on their own schedule, not ours.
     let pendingBundle = null;
     let crawlStarted = false;
+
+    // Remembered across sessions: skip the ENTER button and drop straight into the
+    // dungeon the moment generation finishes.
+    const AUTO_ENTER_KEY = 'comfycrawler.autoEnter';
+    function loadAutoEnter() {
+      try { return localStorage.getItem(AUTO_ENTER_KEY) === '1'; } catch (e) { return false; }
+    }
+    function saveAutoEnter(on) {
+      try { localStorage.setItem(AUTO_ENTER_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+    }
+    if (chkAutoEnter) {
+      chkAutoEnter.checked = loadAutoEnter();
+      chkAutoEnter.addEventListener('change', () => saveAutoEnter(chkAutoEnter.checked));
+    }
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
@@ -369,11 +386,9 @@
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
-      // The champion earned a proper name of its own; the walker and flyer keep the
-      // variant tag in front of the common foe's name.
-      e.name = (key === 'boss' && dungeonStory && dungeonStory.boss)
-        ? dungeonStory.boss.toUpperCase()
-        : (cfg.tag + (enemyStyleName || 'nightstalker')).toUpperCase();
+      // Every foe is named after the story's champion, with the variant tag in front:
+      // "GOLEM OF DATA", "FLYING GOLEM OF DATA", "DREAD GOLEM OF DATA".
+      e.name = (cfg.tag + (enemyStyleName || 'nightstalker')).toUpperCase();
       // Only swap the active sprite when we have a real per-variant set; otherwise leave
       // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
       const img = enemyVariantImgs[key];
@@ -2446,8 +2461,10 @@
         });
         if (!enemyVariantImgs.walker) enemyVariantImgs.walker = enemySpriteFrames[0];
       }
-      // Prefer the name the model invented over the raw phrase the player typed.
-      enemyStyleName = ((dungeonStory && dungeonStory.foe) || b.enemy_style || '').trim();
+      // The story's boss is the name every enemy is referred to by, in preference to the
+      // common-foe name or the raw phrase the player typed.
+      enemyStyleName = ((dungeonStory && (dungeonStory.boss || dungeonStory.foe))
+                        || b.enemy_style || '').trim();
       if (enemyStyleName) {
         combatState.enemy.name = enemyStyleName.toUpperCase();
       }
@@ -2488,11 +2505,6 @@
       title.textContent = (story.location || 'THE DUNGEON').toUpperCase();
       frag.appendChild(title);
 
-      const sub = document.createElement('p');
-      sub.className = 'crawl-sub';
-      sub.textContent = [story.hero, story.foe].filter(Boolean).join('  vs  ');
-      frag.appendChild(sub);
-
       paras.forEach(text => {
         const p = document.createElement('p');
         p.textContent = text;   // textContent, not innerHTML: this string came from a model
@@ -2504,7 +2516,7 @@
       if (crawlPending) crawlPending.style.display = 'none';
 
       const seconds = Math.max(CRAWL_MIN_SECONDS,
-                               (paras.length + 2) * CRAWL_SECONDS_PER_PARAGRAPH);
+                               (paras.length + 1) * CRAWL_SECONDS_PER_PARAGRAPH);
       crawlText.style.setProperty('--crawl-duration', seconds + 's');
       // Restart cleanly if a previous dungeon left the animation on the node.
       crawlText.classList.remove('rolling');
@@ -2515,6 +2527,9 @@
     function resetCrawl() {
       crawlStarted = false;
       if (crawlStage) crawlStage.style.display = '';
+      if (progHeaderText) progHeaderText.textContent = 'Generating Dungeon Assets & Character...';
+      if (progHeaderIcon) progHeaderIcon.textContent = '\u23f3';
+      progSubText.style.display = '';
       pendingBundle = null;
       dungeonStory = null;
       if (crawlText) {
@@ -2543,6 +2558,18 @@
       btnEnterDungeon.textContent = where ? ('ENTER ' + where.toUpperCase()) : 'ENTER THE DUNGEON';
       btnEnterDungeon.disabled = false;
       btnEnterDungeon.classList.add('bg-yellow-100');
+
+      // Nothing is generating any more, so the whole progress readout stops pretending.
+      if (progHeaderText) progHeaderText.textContent = 'Generated!';
+      if (progHeaderIcon) progHeaderIcon.textContent = '\u2705';
+      progStatusText.textContent = 'Done.';
+      progSubText.style.display = 'none';
+
+      if (chkAutoEnter && chkAutoEnter.checked) {
+        const b = pendingBundle;
+        pendingBundle = null;
+        enterDungeon(b);
+      }
     }
 
     if (btnEnterDungeon) {
