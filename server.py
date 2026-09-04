@@ -2325,7 +2325,10 @@ STORY_TYPICAL_TOKENS = 240
 STORY_SYSTEM = (
     "You are the narrator of a 1990s first-person dungeon crawler. "
     "You write in the style of a Star Wars opening crawl: grand, mythic, present tense, "
-    "short declarative sentences. You never break character and you never explain yourself."
+    "short declarative sentences, rising urgency. Every crawl names a real stake - a person, "
+    "a place, or a world the boss is destroying or will destroy - and ends by rallying the "
+    "player to go stop it, second person, direct, like a call to arms before a battle. "
+    "You never break character and you never explain yourself."
 )
 
 _STORY_USER = """A player is about to descend into a generated dungeon. They described it like this:
@@ -2335,7 +2338,15 @@ The player is: {player}
 Their weapon is: {weapon}
 The enemies are: {enemy}
 
-Invent proper names, then write the opening crawl.
+Invent proper names, then write the opening crawl. It must build to something worth
+fighting for and end feeling like the start of a hero's journey, not a warning label:
+
+- Paragraph 1 sets the scene and the danger.
+- Paragraph 2 makes the stakes concrete: what has the BOSS taken, or what will it destroy
+  if nobody stops it? Someone, some place, or everyone - name what is actually at risk.
+  Not vague dread - a real reason to care.
+- Paragraph 3 is a rallying cry. Speak directly to the player ("you"). Make defeating the
+  BOSS feel possible and necessary. End on hope and resolve, not doom.
 
 Reply using EXACTLY these five labels, each on its own line, in this order. No preamble, no
 markdown, no commentary, no asterisks:
@@ -2345,11 +2356,11 @@ HERO: <a 1-3 word proper name for the player>
 FOE: <a 1-3 word proper name for the common enemy>
 BOSS: <a 1-3 word proper name for their champion>
 CRAWL:
-<paragraph one>
+<paragraph one - scene and danger>
 
-<paragraph two>
+<paragraph two - the stakes: what is lost if the boss is not stopped>
 
-<paragraph three>
+<paragraph three - a direct, second-person rallying cry that ends on hope, not doom>
 
 The line "CRAWL:" is required and must appear on its own. Write exactly three paragraphs
 after it, separated by blank lines, each 2 or 3 sentences. Use the names you invented."""
@@ -2499,11 +2510,15 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
                 paragraphs.append(re.sub(r"\s+", " ", para))
 
     if not paragraphs:
+        # Even the degraded fallback earns a rallying ending, not a warning label - the
+        # crawl is meant to send the player in fired up, whether the model wrote it or not.
         paragraphs = [
-            _lead(out["hero"]) + " descends into " + _lead(out["location"], upper=False) + ".",
-            _lead(out["foe"]) + " wait in the dark, and " + _lead(out["boss"], upper=False)
-            + " waits beyond them.",
-            "No one has come back out.",
+            _lead(out["hero"]) + " enters " + _lead(out["location"], upper=False)
+            + ", where the light dies and the old walls remember worse.",
+            _lead(out["boss"]) + " rules here now, and " + _lead(out["foe"], upper=False)
+            + " stand watch over everything it has taken.",
+            "Whatever " + _lead(out["boss"], upper=False) + " is planning ends today - or "
+            "nothing does. Go.",
         ]
     out["crawl"] = paragraphs[:4]
     return out

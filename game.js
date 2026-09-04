@@ -373,22 +373,22 @@
     // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
     // are locked to an uploaded image are left alone.
     const PRESET_IDEAS = {
-      'Windows 95 3D maze': { player: 'guy in a shirt and tie with thick glasses', weapon: 'computer keyboard',     enemy: 'stick of RAM' },
-      'Deep Forest': { player: 'wood elf ranger in leaf armor',              weapon: 'living oak longbow',            enemy: 'moss-covered dire bear' },
+      'Windows 95 3D maze': { player: 'guy in a shirt and tie with thick glasses', weapon: 'computer keyboard',     enemy: 'stick of ram' },
+      'Deep Forest': { player: 'druid in leaf armor',                        weapon: 'living oak staff',              enemy: 'moss-covered dire bear' },
       'Cyber Neon':  { player: 'chrome street samurai in a neon jacket',      weapon: 'glowing plasma katana',        enemy: 'rogue security drone' },
       'Mossy Stone': { player: 'lichen-cloaked stone knight',                weapon: 'moss-covered stone warhammer', enemy: 'crumbling gargoyle golem' },
-      'Candy Cane':  { player: 'gingerbread paladin with frosting armor',    weapon: 'peppermint candy cane staff',  enemy: 'giant gummy bear' },
-      'Tacos':       { player: 'masked luchador chef',                       weapon: 'sizzling cast-iron skillet',   enemy: 'giant walking taco monster' },
-      'Haunted Manor':   { player: 'victorian ghost hunter with a lantern',   weapon: 'silver-tipped cane',           enemy: 'floating poltergeist in a torn dress' },
+      'Candy Cane':  { player: 'gingerbread paladin with frosting armor',    weapon: 'peppermint candy cane staff',  enemy: 'gummy bear' },
+      'Tacos':       { player: 'masked luchador chef',                       weapon: 'sizzling cast-iron skillet',   enemy: 'taco' },
+      'Haunted Manor':   { player: 'victorian ghost hunter',                  weapon: 'silver-tipped cane',           enemy: 'poltergeist in a torn dress' },
       'Volcanic Depths': { player: 'ash-scarred fire dwarf in obsidian mail', weapon: 'molten iron greataxe',         enemy: 'lumbering magma golem' },
-      'Sunken Ruins':    { player: 'coral-armored deep diver',                weapon: 'barnacled bronze trident',     enemy: 'giant tentacled kraken spawn' },
+      'Sunken Ruins':    { player: 'coral-armored deep diver',                weapon: 'barnacled bronze trident',     enemy: 'tentacled kraken spawn' },
       "Pharaoh's Tomb":  { player: 'bandaged tomb raider in linen wraps',     weapon: 'golden khopesh sword',         enemy: 'shambling scarab-covered mummy' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const val = btn.getAttribute('data-val');
-        wallPromptInput.value = val;
+        wallPromptInput.value = val.toLowerCase();
         const idea = PRESET_IDEAS[val];
         if (!idea) return;
         if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
