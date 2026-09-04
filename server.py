@@ -28,6 +28,7 @@ import random
 import threading
 import subprocess
 import uuid
+import wave
 
 PORT = 5555
 COMFY_URL = "http://127.0.0.1:8188"
@@ -2508,6 +2509,61 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Narration: Piper (local neural TTS, CPU-only) reads the crawl aloud
+# ---------------------------------------------------------------------------
+# Runs entirely outside ComfyUI - no GPU, no queue contention with image generation. Model
+# load is the only slow part (~0.3-0.85s) and is cached per process; synthesis itself is
+# ~0.3s per paragraph on CPU, so narrating a whole story costs under two seconds.
+PIPER_VOICES_DIR = os.path.join(PROJECT_DIR, "piper_voices")
+# One narrator is picked per story (not per paragraph) so the voice stays consistent
+# through the whole crawl; alan and kristin were chosen after listening to samples.
+PIPER_VOICE_NAMES = ["en_GB-alan-medium", "en_US-kristin-medium"]
+_piper_voice_cache = {}
+
+
+def _get_piper_voice(name):
+    """Load and cache a Piper voice by name. Returns None (never raises) if piper-tts is
+    not installed or the model files are missing, so narration degrades to silence rather
+    than costing the player their story or their assets."""
+    if name in _piper_voice_cache:
+        return _piper_voice_cache[name]
+    try:
+        from piper import PiperVoice
+        model_path = os.path.join(PIPER_VOICES_DIR, name + ".onnx")
+        voice = PiperVoice.load(model_path)
+    except Exception as e:
+        print(f"[narration] could not load Piper voice '{name}' ({e}) - narration disabled")
+        voice = None
+    _piper_voice_cache[name] = voice
+    return voice
+
+
+def synthesize_narration(texts):
+    """Turn a list of strings into a list of `data:audio/wav;base64,...` clips read by one
+    randomly chosen narrator, in the same order as `texts`. Returns (voice_name, clips) -
+    (None, []) on any failure, so a TTS problem only costs narration, never the story text
+    or the run itself."""
+    texts = [t for t in (texts or []) if t and t.strip()]
+    if not texts:
+        return None, []
+    voice_name = random.choice(PIPER_VOICE_NAMES)
+    voice = _get_piper_voice(voice_name)
+    if voice is None:
+        return None, []
+    try:
+        clips = []
+        for text in texts:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                voice.synthesize_wav(text, wf)
+            clips.append("data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii"))
+        return voice_name, clips
+    except Exception as e:
+        print(f"[narration] synthesis failed ({e}) - narration disabled for this story")
+        return None, []
+
+
 def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, player_image=None):
     """Name the location / hero / foe / boss and write the opening crawl. Never raises - a
     story failure must not cost the player their assets, so it degrades to names derived
@@ -2562,11 +2618,19 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
         story = parse_story_block(raw, wall_style, player_style, enemy_style)
         print(f"[story] '{story['location']}' - {story['hero']} vs {story['foe']} / "
               f"{story['boss']}, {len(story['crawl'])} paragraphs, {time.time()-t0:.1f}s")
-        return story
     except Exception as e:
         print(f"[story Error] {e} - falling back to names from the player's own words")
         PROGRESS.finish_job("story")
-        return parse_story_block("", wall_style, player_style, enemy_style)
+        story = parse_story_block("", wall_style, player_style, enemy_style)
+
+    # Narrate whichever text the player is actually about to see - including the fallback
+    # crawl, which deserves a voice just as much as a model-written one.
+    voice_name, clips = synthesize_narration([story["location"]] + story["crawl"])
+    story["voice"] = voice_name
+    story["audio"] = clips
+    if voice_name:
+        print(f"[narration] {len(clips)} clip(s) read by {voice_name}")
+    return story
 
 
 # Replaced _subject_bleeds_off_edge, which asked "does the subject touch any edge?" with a

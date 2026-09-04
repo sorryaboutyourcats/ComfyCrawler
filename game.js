@@ -144,9 +144,13 @@
       chkAutoEnter.addEventListener('change', () => saveAutoEnter(chkAutoEnter.checked));
     }
 
-    // ---- Intro narration (Web Speech API) ----------------------------------
-    // Uses whatever voices the OS already provides, so there is no model, no download and
-    // no server involvement - narration cannot slow down or block the ComfyUI image queue.
+    // ---- Intro narration (Piper, pre-rendered server-side) -----------------
+    // The server picks one narrator (alan or kristin) per story and ships back one WAV
+    // clip per paragraph as a data URL in bundle.story.audio, in the same order as the
+    // <p> elements startCrawl() builds - title first, then each crawl paragraph. Playback
+    // is just one <audio> element working through that list; no voice picking, no
+    // getVoices()/voiceschanged race, no Chrome pause-queue bug - all of that lived on the
+    // browser-TTS side and none of it applies to a plain audio file.
     // Defaults ON (it is the point of the feature) but is remembered once touched, hence
     // !== '0' rather than === '1'.
     const NARRATE_KEY = 'comfycrawler.narrate';
@@ -157,110 +161,82 @@
       try { localStorage.setItem(NARRATE_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
     }
 
-    const speech = window.speechSynthesis || null;
-    let narrateKeepalive = null;
+    let narrateAudio = null;       // one <audio> element, reused clip to clip
+    let narrateClips = [];         // [{el: <p>, src: dataUrl}, ...] for the active story
+    let narrateIndex = 0;
     let narrateStartCheck = null;
-    let narrateVoice = null;
-
-    // getVoices() usually returns [] on the first call and only fills in after
-    // 'voiceschanged'. The timeout matters: a browser that never fires that event would
-    // otherwise leave narration waiting forever instead of falling back to the default voice.
-    function resolveVoice() {
-      return new Promise(resolve => {
-        if (!speech) return resolve(null);
-        const pick = () => {
-          const voices = speech.getVoices() || [];
-          if (!voices.length) return null;
-          // A dungeon narrator wants gravitas: en-GB first, then the deeper Windows voices.
-          const score = v => {
-            const lang = (v.lang || '').toLowerCase();
-            const name = (v.name || '').toLowerCase();
-            let s = 0;
-            if (lang.startsWith('en-gb')) s += 40;
-            else if (lang.startsWith('en')) s += 20;
-            if (/\bmark\b/.test(name)) s += 12;
-            else if (/\bdavid\b/.test(name)) s += 10;
-            else if (/\bgeorge\b|\bryan\b|\bdaniel\b/.test(name)) s += 8;
-            if (v.localService) s += 3;
-            return s;
-          };
-          return voices.slice().sort((a, b) => score(b) - score(a))[0] || null;
-        };
-        const immediate = pick();
-        if (immediate) return resolve(immediate);
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          speech.removeEventListener('voiceschanged', finish);
-          resolve(pick());
-        };
-        speech.addEventListener('voiceschanged', finish);
-        setTimeout(finish, 1500);
-      });
-    }
 
     function stopNarration() {
-      if (narrateKeepalive) { clearInterval(narrateKeepalive); narrateKeepalive = null; }
       if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
       if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
+      if (narrateAudio) {
+        try { narrateAudio.pause(); } catch (e) {}
+        narrateAudio.removeAttribute('src');
+      }
       if (crawlText) {
         crawlText.classList.remove('narrating');
         crawlText.querySelectorAll('p.speaking').forEach(p => p.classList.remove('speaking'));
       }
-      if (speech) { try { speech.cancel(); } catch (e) { /* nothing queued */ } }
+      narrateClips = [];
+      narrateIndex = 0;
     }
 
-    // One utterance per paragraph rather than one long one. That gives paragraph tracking
-    // for free (each utterance knows its own <p>) and sidesteps Chrome cutting a single
-    // utterance off after ~15s - individual paragraphs run about 8.
-    async function startNarration() {
-      if (!speech || !crawlText) return;
-      if (chkNarrate && !chkNarrate.checked) return;
-      const paras = Array.from(crawlText.querySelectorAll('p'));
-      if (!paras.length) return;
+    function playNarrationClip(i) {
+      narrateIndex = i;
+      narrateClips.forEach((c, idx) => c.el.classList.toggle('speaking', idx === i));
+      if (i >= narrateClips.length) { stopNarration(); return; }
+      narrateAudio.src = narrateClips[i].src;
+      const p = narrateAudio.play();
+      // A rejected promise (autoplay blocked) is handled by the startCheck timeout below,
+      // not here - retrying belongs to a real click, not to code running the instant the
+      // browser said no.
+      if (p && p.catch) p.catch(() => {});
+    }
 
-      stopNarration();
-      if (!narrateVoice) narrateVoice = await resolveVoice();
-      // The player may have unchecked it or left the screen while voices were resolving.
+    function advanceNarration() {
+      if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
+      if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
+      playNarrationClip(narrateIndex + 1);
+    }
+
+    // Called on a real user click when autoplay blocked the first clip. narrateAudio.src
+    // is still set to that same clip - nothing played yet - so this just retries it.
+    function retryNarrationPlay() {
+      if (!narrateAudio) return;
+      if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
+      const p = narrateAudio.play();
+      if (p && p.catch) p.catch(() => {
+        if (btnNarrateManual) btnNarrateManual.classList.remove('hidden');
+      });
+    }
+
+    function startNarration() {
+      if (!crawlText) return;
       if (chkNarrate && !chkNarrate.checked) return;
       if (screenProgress.classList.contains('hidden')) return;
+      const story = dungeonStory;
+      if (!story || !Array.isArray(story.audio) || !story.audio.length) return;
 
+      const paras = Array.from(crawlText.querySelectorAll('p'));
+      const n = Math.min(paras.length, story.audio.length);
+      if (!n) return;
+
+      stopNarration();
       crawlText.classList.add('narrating');
-      let started = false;
+      for (let i = 0; i < n; i++) narrateClips.push({ el: paras[i], src: story.audio[i] });
 
-      paras.forEach((p, i) => {
-        const text = (p.textContent || '').trim();
-        if (!text) return;
-        const u = new SpeechSynthesisUtterance(text);
-        if (narrateVoice) u.voice = narrateVoice;
-        u.rate = 0.92;
-        u.pitch = 0.9;
-        u.onstart = () => {
-          started = true;
-          if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
-          if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
-          p.classList.add('speaking');
-        };
-        u.onend = () => {
-          p.classList.remove('speaking');
-          if (i === paras.length - 1) stopNarration();
-        };
-        u.onerror = () => p.classList.remove('speaking');
-        speech.speak(u);
-      });
+      if (!narrateAudio) {
+        narrateAudio = new Audio();
+        narrateAudio.addEventListener('ended', advanceNarration);
+        narrateAudio.addEventListener('error', advanceNarration);
+      }
+      playNarrationClip(0);
 
-      // Some Chrome builds pause the queue partway through. resume() only - the widespread
-      // pause()/resume() hack audibly glitches the voice.
-      narrateKeepalive = setInterval(() => {
-        if (speech.paused && speech.speaking) { try { speech.resume(); } catch (e) {} }
-      }, 5000);
-
-      // Chrome gates speech on user activation. The CREATE click should cover it, but if
-      // nothing ever starts we must not look simply broken - offer a real click to start.
+      // A blocked autoplay never fires 'play', 'ended' or 'error' - it just silently does
+      // nothing. Without this check a blocked narrator looks identical to a broken one.
       narrateStartCheck = setTimeout(() => {
-        if (!started && btnNarrateManual) btnNarrateManual.classList.remove('hidden');
-      }, 2000);
+        if (narrateAudio.paused && btnNarrateManual) btnNarrateManual.classList.remove('hidden');
+      }, 1500);
     }
 
     if (chkNarrate) {
@@ -273,8 +249,8 @@
     }
     if (btnNarrateManual) {
       btnNarrateManual.addEventListener('click', () => {
-        btnNarrateManual.classList.add('hidden');
-        startNarration();
+        if (narrateClips.length) retryNarrationPlay();
+        else startNarration();
       });
     }
     window.addEventListener('beforeunload', stopNarration);
@@ -2514,18 +2490,31 @@
       return c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
 
-    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95") {
+    // onReady (optional) fires once every requested texture has actually decoded, instead of
+    // the caller assuming that's already true. enterDungeon relies on this to hold the game
+    // screen back until the real art is in wallTexture/ceilingTexture/floorTexture - otherwise
+    // the first render3D() paints whatever was already loaded (the Windows-95 defaults, or the
+    // previous dungeon's art) and the swap to the new textures a moment later reads as a flash.
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", onReady) {
+      const total = [wallUri, ceilUri, floorUri].filter(Boolean).length;
       let loaded = 0;
-      const total = (ceilUri && floorUri) ? 3 : 1;
 
-      function checkDone() {
-        loaded++;
-        if (loaded >= total && activeMode !== 'v1_video') {
+      function finish() {
+        if (activeMode !== 'v1_video') {
           buildLanternWallFromBase(wallTexture, styleName);
           buildDynamicExitSignTexture(styleName, wallTexture);
+        }
+        if (onReady) {
+          onReady();
+        } else {
           render3D();
           drawMinimap();
         }
+      }
+
+      function checkDone() {
+        loaded++;
+        if (loaded >= total) finish();
       }
 
       if (wallUri) {
@@ -2543,6 +2532,8 @@
         imgF.onload = () => { floorTexture = imageToTexture(imgF); checkDone(); };
         imgF.src = floorUri;
       }
+
+      if (total === 0) finish();
     }
 
     // Load a finished bundle into the engine and show the game. Split out of the poll
@@ -2550,7 +2541,7 @@
     // generation happens to finish.
     function enterDungeon(b) {
       if (!b) return;
-      // speechSynthesis keeps going across screen changes; silence it before the game starts.
+      // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
       if (b.player_sprites && b.player_sprites.length > 0) {
         playerSpriteFrames = [];
@@ -2618,20 +2609,26 @@
         combatState.enemy.name = enemyStyleName.toUpperCase();
       }
       pickEnemyVariant();
-      loadAiTextures(
-        b.wall_texture,
-        b.ceiling_texture,
-        b.floor_texture,
-        b.wall_style || currentThemeName
-      );
 
-      screenProgress.classList.add('hidden');
-      screenGame.classList.remove('hidden');
-      if (titleButtons) titleButtons.classList.remove('hidden');
-      appContainer.className = 'win95-box p-1 text-black mode-game';
-      render3D();
-      drawMinimap();
-      updateHUD();
+      const showGameScreen = () => {
+        screenProgress.classList.add('hidden');
+        screenGame.classList.remove('hidden');
+        if (titleButtons) titleButtons.classList.remove('hidden');
+        appContainer.className = 'win95-box p-1 text-black mode-game';
+        render3D();
+        drawMinimap();
+        updateHUD();
+      };
+
+      if (activeMode === 'v1_video') {
+        // Video mode never raycasts these textures, so there's nothing worth blocking on.
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName);
+        showGameScreen();
+      } else {
+        // Hold the game screen (and its first render3D()) until the real wall/ceiling/floor
+        // art has decoded, so the player never sees a frame of stale textures before the swap.
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, showGameScreen);
+      }
     }
 
     // ---- Intro crawl -------------------------------------------------------
@@ -2798,7 +2795,16 @@
             // The story lands minutes ahead of the art - start reading immediately.
             if (p.story && !crawlStarted) startCrawl(p.story);
 
-            const chunkCount = Math.floor((p.percent / 100) * 30);
+            // Classic Win98 install-bar: fixed-pitch blocks sized to the trough's actual
+            // width, so the row always reaches the right edge at 100% instead of a static
+            // chunk count leaving a gap (or, before the trough had a real width, a bar
+            // that could never show any chunks at all).
+            const chunkPitch = 12; // .win95-prog-chunk: 10px wide + 2px margin-right
+            const troughWidth = progBarChunks.parentElement
+              ? progBarChunks.parentElement.clientWidth
+              : 0;
+            const maxChunks = Math.max(1, Math.floor(troughWidth / chunkPitch));
+            const chunkCount = Math.round((p.percent / 100) * maxChunks);
             progBarChunks.innerHTML = '';
             for (let i = 0; i < chunkCount; i++) {
               const ch = document.createElement('div');
