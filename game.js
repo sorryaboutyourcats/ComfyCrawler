@@ -161,12 +161,18 @@
       try { localStorage.setItem(NARRATE_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
     }
 
+    // A beat of silence after the title and after each paragraph, so the crawl reads like
+    // it's being spoken deliberately rather than one clip barging straight into the next.
+    const NARRATE_PAUSE_MS = 700;
+
     let narrateAudio = null;       // one <audio> element, reused clip to clip
     let narrateClips = [];         // [{el: <p>, src: dataUrl}, ...] for the active story
     let narrateIndex = 0;
     let narrateStartCheck = null;
+    let narratePauseTimer = null;
 
     function stopNarration() {
+      if (narratePauseTimer) { clearTimeout(narratePauseTimer); narratePauseTimer = null; }
       if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
       if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
       if (narrateAudio) {
@@ -196,7 +202,15 @@
     function advanceNarration() {
       if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
       if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
-      playNarrationClip(narrateIndex + 1);
+      // Drop the highlight for the pause itself, so the dimming reads as part of the beat
+      // rather than a jump-cut straight to the next line.
+      narrateClips.forEach(c => c.el.classList.remove('speaking'));
+      const next = narrateIndex + 1;
+      if (next >= narrateClips.length) { stopNarration(); return; }
+      narratePauseTimer = setTimeout(() => {
+        narratePauseTimer = null;
+        playNarrationClip(next);
+      }, NARRATE_PAUSE_MS);
     }
 
     // Called on a real user click when autoplay blocked the first clip. narrateAudio.src
@@ -2658,12 +2672,22 @@
         frag.appendChild(p);
       });
 
+      // The closing send-off: one short line, visually set apart from the crawl proper.
+      // Appended last so it lines up with the final clip in story.audio (server order is
+      // title, each crawl paragraph, then the hook).
+      if (story.hook) {
+        const hook = document.createElement('p');
+        hook.className = 'crawl-hook';
+        hook.textContent = story.hook;
+        frag.appendChild(hook);
+      }
+
       crawlText.innerHTML = '';
       crawlText.appendChild(frag);
       if (crawlPending) crawlPending.style.display = 'none';
 
       const seconds = Math.max(CRAWL_MIN_SECONDS,
-                               (paras.length + 1) * CRAWL_SECONDS_PER_PARAGRAPH);
+                               (paras.length + (story.hook ? 2 : 1)) * CRAWL_SECONDS_PER_PARAGRAPH);
       crawlText.style.setProperty('--crawl-duration', seconds + 's');
       // Restart cleanly if a previous dungeon left the animation on the node.
       crawlText.classList.remove('rolling');

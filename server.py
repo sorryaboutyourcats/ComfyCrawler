@@ -2348,7 +2348,17 @@ fighting for and end feeling like the start of a hero's journey, not a warning l
 - Paragraph 3 is a rallying cry. Speak directly to the player ("you"). Make defeating the
   BOSS feel possible and necessary. End on hope and resolve, not doom.
 
-Reply using EXACTLY these five labels, each on its own line, in this order. No preamble, no
+After the three paragraphs, write ONE final line: a short, vivid send-off that puts the
+player through the door right now. A single sentence. Atmospheric, propulsive, in the
+spirit of these (write an ORIGINAL one that fits THIS dungeon - do not reuse these):
+  "Light a torch, draw your blade, and pray whatever took them hasn't finished eating yet."
+  "Let the depths claim whoever they want; tonight, they give them back."
+  "Every second you stand on the threshold, another heartbeat fades below."
+  "The descent begins not with a fall, but with a choice."
+  "You strike the match, step past the threshold, and let the labyrinth swallow you whole."
+  "The stone doors grind shut behind you, and the darkness exhales."
+
+Reply using EXACTLY these six labels, each on its own line, in this order. No preamble, no
 markdown, no commentary, no asterisks:
 
 LOCATION: <a 2-4 word proper name for the dungeon>
@@ -2361,9 +2371,11 @@ CRAWL:
 <paragraph two - the stakes: what is lost if the boss is not stopped>
 
 <paragraph three - a direct, second-person rallying cry that ends on hope, not doom>
+HOOK: <one short, vivid send-off sentence>
 
-The line "CRAWL:" is required and must appear on its own. Write exactly three paragraphs
-after it, separated by blank lines, each 2 or 3 sentences. Use the names you invented."""
+The line "CRAWL:" is required and must appear on its own, and so is "HOOK:". Write exactly
+three paragraphs after CRAWL:, separated by blank lines, each 2 or 3 sentences. Use the
+names you invented."""
 
 
 def _story_prompt(wall_style, player_style, weapon_style, enemy_style, with_image=False):
@@ -2461,6 +2473,31 @@ def _lead(name, upper=True):
     return ("The " if upper else "the ") + name
 
 
+# Original send-offs (not copies of the examples given to the model) for when there is no
+# LLM reply to draw one from - a parse failure or a refusal. One is picked per fallback so
+# repeated failures don't all read identically.
+_STORY_HOOK_FALLBACKS = [
+    "The door will not wait, and neither should you.",
+    "Whatever is down there has had long enough.",
+    "Take a breath. This is the last quiet moment you get.",
+    "The dark does not knock twice.",
+]
+
+
+def _story_hook(raw, fallback):
+    text = _ascii_ify(raw or "").strip().strip(_STORY_STRIP)
+    text = re.sub(r"\s+", " ", text)
+    if not text or len(text) > 200:
+        return fallback
+    return text
+
+
+def _squash(text):
+    """Lowercase, letters-and-digits-only - for comparing two sentences that may differ
+    only in punctuation or capitalization (e.g. a trailing period, "Slick" vs "The Slick")."""
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
 def _story_title(text, fallback):
     text = _ascii_ify(text or "").strip()
     if not text:
@@ -2493,6 +2530,12 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
             last_label_end = max(last_label_end, m.end())
             found += 1
 
+    # HOOK is a single sentence, not a name, so it skips the word-count truncation the
+    # other labels get - only pulled out here so it doesn't get swept into the paragraphs.
+    hook_match = re.search(r"^\s*HOOK\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+    hook_fallback = random.choice(_STORY_HOOK_FALLBACKS)
+    out["hook"] = _story_hook(hook_match.group(1), hook_fallback) if hook_match else hook_fallback
+
     m = re.search(r"^\s*CRAWL\s*:\s*$", text, re.IGNORECASE | re.MULTILINE)
     body = text[m.end():] if m else text[last_label_end:]
 
@@ -2503,8 +2546,8 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
     if found:
         for chunk in re.split(r"\n\s*\n", body):
             lines = [ln.strip().rstrip("\\") for ln in chunk.strip().splitlines()]
-            lines = [ln for ln in lines
-                     if ln and not re.match(r"^(LOCATION|HERO|FOE|BOSS|CRAWL)\s*:", ln, re.IGNORECASE)]
+            lines = [ln for ln in lines if ln and
+                     not re.match(r"^(LOCATION|HERO|FOE|BOSS|CRAWL|HOOK)\s*:", ln, re.IGNORECASE)]
             para = " ".join(lines).strip().strip("*_#")
             if len(para) > 20:
                 paragraphs.append(re.sub(r"\s+", " ", para))
@@ -2520,7 +2563,16 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
             "Whatever " + _lead(out["boss"], upper=False) + " is planning ends today - or "
             "nothing does. Go.",
         ]
-    out["crawl"] = paragraphs[:4]
+    # Capped at 3, matching what the prompt actually asks for. A 4th paragraph the model
+    # over-generates is usually its own attempt at a send-off, which duplicates HOOK.
+    out["crawl"] = paragraphs[:3]
+
+    # The model sometimes reuses its own final paragraph as the HOOK line too, regardless
+    # of paragraph count (seen in testing even with exactly 3 paragraphs) - drop the
+    # duplicate from the crawl rather than reading the same line twice back to back.
+    if out["crawl"] and _squash(out["crawl"][-1]) == _squash(out["hook"]):
+        out["crawl"].pop()
+
     return out
 
 
@@ -2639,8 +2691,10 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
         story = parse_story_block("", wall_style, player_style, enemy_style)
 
     # Narrate whichever text the player is actually about to see - including the fallback
-    # crawl, which deserves a voice just as much as a model-written one.
-    voice_name, clips = synthesize_narration([story["location"]] + story["crawl"])
+    # crawl, which deserves a voice just as much as a model-written one. Order matches the
+    # <p> elements startCrawl() builds in game.js: title, each crawl paragraph, then the
+    # closing hook line last.
+    voice_name, clips = synthesize_narration([story["location"]] + story["crawl"] + [story["hook"]])
     story["voice"] = voice_name
     story["audio"] = clips
     if voice_name:
