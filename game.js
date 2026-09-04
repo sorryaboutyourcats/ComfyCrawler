@@ -42,6 +42,10 @@
     const progPercentText = document.getElementById('progPercentText');
     const progTimer = document.getElementById('progTimer');
     const progSubText = document.getElementById('progSubText');
+    const crawlStage = document.getElementById('crawlStage');
+    const crawlText = document.getElementById('crawlText');
+    const crawlPending = document.getElementById('crawlPending');
+    const btnEnterDungeon = document.getElementById('btnEnterDungeon');
 
     const viewportCanvas = document.getElementById('viewportCanvas');
     const gameVideo = document.getElementById('gameVideo');
@@ -114,6 +118,12 @@
     // at random each time a battle starts. enemySpriteFrames tracks the active one.
     let enemyVariantImgs = {};
     let enemyStyleName = '';
+    // The generated intro: {location, hero, foe, boss, crawl:[...]}. Arrives from
+    // /api/progress minutes before the art does, and names the enemies in combat.
+    let dungeonStory = null;
+    // Set once generation finishes; the player enters on their own schedule, not ours.
+    let pendingBundle = null;
+    let crawlStarted = false;
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
@@ -359,7 +369,11 @@
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
-      e.name = (cfg.tag + (enemyStyleName || 'nightstalker')).toUpperCase();
+      // The champion earned a proper name of its own; the walker and flyer keep the
+      // variant tag in front of the common foe's name.
+      e.name = (key === 'boss' && dungeonStory && dungeonStory.boss)
+        ? dungeonStory.boss.toUpperCase()
+        : (cfg.tag + (enemyStyleName || 'nightstalker')).toUpperCase();
       // Only swap the active sprite when we have a real per-variant set; otherwise leave
       // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
       const img = enemyVariantImgs[key];
@@ -2369,6 +2383,177 @@
       }
     }
 
+    // Load a finished bundle into the engine and show the game. Split out of the poll
+    // loop so the transition is driven by the ENTER button instead of firing the moment
+    // generation happens to finish.
+    function enterDungeon(b) {
+      if (!b) return;
+      if (b.player_sprites && b.player_sprites.length > 0) {
+        playerSpriteFrames = [];
+        b.player_sprites.forEach(src => {
+          const img = new Image();
+          img.src = src;
+          playerSpriteFrames.push(img);
+        });
+        playerSpriteImg = playerSpriteFrames[0];
+      } else if (b.player_sprite) {
+        playerSpriteImg = new Image();
+        playerSpriteImg.src = b.player_sprite;
+        playerSpriteFrames = [playerSpriteImg];
+      }
+      // v5 (krea2): separately generated weapon & shield sprites the rig animates
+      // as overlays. Cleared first so switching back to another mode drops them.
+      weaponSpriteImg = null;
+      shieldSpriteImg = null;
+      if (b.weapon_sprite) {
+        weaponSpriteImg = new Image();
+        weaponSpriteImg.src = b.weapon_sprite;
+      }
+      if (b.shield_sprite) {
+        shieldSpriteImg = new Image();
+        shieldSpriteImg.src = b.shield_sprite;
+      }
+      playerFaceFrames = [];
+      if (b.player_faces && b.player_faces.length > 0) {
+        b.player_faces.forEach(src => {
+          const img = new Image();
+          img.src = src;
+          playerFaceFrames.push(img);
+        });
+        playerFaceImg = playerFaceFrames[0];
+      } else if (b.player_face) {
+        playerFaceImg = new Image();
+        playerFaceImg.src = b.player_face;
+        playerFaceFrames = [playerFaceImg];
+      }
+      enemySpriteFrames = [];
+      enemyVariantImgs = {};
+      // walker / flyer / boss, each its own generated sprite. Older bundles / other
+      // modes only send enemy_sprites - fold that in as the walker.
+      if (b.enemy_variants) {
+        Object.entries(b.enemy_variants).forEach(([key, src]) => {
+          if (!src) return;
+          const img = new Image();
+          img.src = src;
+          enemyVariantImgs[key] = img;
+        });
+      }
+      if (b.enemy_sprites && b.enemy_sprites.length > 0) {
+        b.enemy_sprites.forEach(src => {
+          const img = new Image();
+          img.src = src;
+          enemySpriteFrames.push(img);
+        });
+        if (!enemyVariantImgs.walker) enemyVariantImgs.walker = enemySpriteFrames[0];
+      }
+      // Prefer the name the model invented over the raw phrase the player typed.
+      enemyStyleName = ((dungeonStory && dungeonStory.foe) || b.enemy_style || '').trim();
+      if (enemyStyleName) {
+        combatState.enemy.name = enemyStyleName.toUpperCase();
+      }
+      pickEnemyVariant();
+      loadAiTextures(
+        b.wall_texture,
+        b.ceiling_texture,
+        b.floor_texture,
+        b.wall_style || currentThemeName
+      );
+
+      screenProgress.classList.add('hidden');
+      screenGame.classList.remove('hidden');
+      if (titleButtons) titleButtons.classList.remove('hidden');
+      appContainer.className = 'win95-box p-1 text-black mode-game';
+      render3D();
+      drawMinimap();
+      updateHUD();
+    }
+
+    // ---- Intro crawl -------------------------------------------------------
+    // Rendered as soon as the story lands, while every sprite is still being generated.
+    // The CSS animation runs with fill-mode forwards, so if the text outruns the art it
+    // simply settles on its last frame and holds while the bar keeps moving underneath.
+    const CRAWL_SECONDS_PER_PARAGRAPH = 22;
+    const CRAWL_MIN_SECONDS = 55;
+
+    function startCrawl(story) {
+      if (!story || crawlStarted) return;
+      crawlStarted = true;
+      dungeonStory = story;
+
+      const paras = Array.isArray(story.crawl) ? story.crawl : [];
+      const frag = document.createDocumentFragment();
+
+      const title = document.createElement('p');
+      title.className = 'crawl-title';
+      title.textContent = (story.location || 'THE DUNGEON').toUpperCase();
+      frag.appendChild(title);
+
+      const sub = document.createElement('p');
+      sub.className = 'crawl-sub';
+      sub.textContent = [story.hero, story.foe].filter(Boolean).join('  vs  ');
+      frag.appendChild(sub);
+
+      paras.forEach(text => {
+        const p = document.createElement('p');
+        p.textContent = text;   // textContent, not innerHTML: this string came from a model
+        frag.appendChild(p);
+      });
+
+      crawlText.innerHTML = '';
+      crawlText.appendChild(frag);
+      if (crawlPending) crawlPending.style.display = 'none';
+
+      const seconds = Math.max(CRAWL_MIN_SECONDS,
+                               (paras.length + 2) * CRAWL_SECONDS_PER_PARAGRAPH);
+      crawlText.style.setProperty('--crawl-duration', seconds + 's');
+      // Restart cleanly if a previous dungeon left the animation on the node.
+      crawlText.classList.remove('rolling');
+      void crawlText.offsetWidth;
+      crawlText.classList.add('rolling');
+    }
+
+    function resetCrawl() {
+      crawlStarted = false;
+      if (crawlStage) crawlStage.style.display = '';
+      pendingBundle = null;
+      dungeonStory = null;
+      if (crawlText) {
+        crawlText.classList.remove('rolling');
+        crawlText.innerHTML = '';
+      }
+      if (crawlPending) crawlPending.style.display = '';
+      if (btnEnterDungeon) {
+        btnEnterDungeon.disabled = true;
+        btnEnterDungeon.textContent = 'GENERATING ASSETS';
+      }
+    }
+
+    // Assets are ready, but the player decides when to stop reading.
+    function armEnterDungeon(bundle) {
+      pendingBundle = bundle;
+      if (bundle && bundle.story) {
+        dungeonStory = bundle.story;
+        startCrawl(bundle.story);
+      } else if (!crawlStarted) {
+        // Legacy v1-v4 modes never generate a story; collapse the stage rather than leave
+        // "The chronicle is being written..." sitting there after everything is done.
+        if (crawlStage) crawlStage.style.display = 'none';
+      }
+      const where = (dungeonStory && dungeonStory.location) ? dungeonStory.location : '';
+      btnEnterDungeon.textContent = where ? ('ENTER ' + where.toUpperCase()) : 'ENTER THE DUNGEON';
+      btnEnterDungeon.disabled = false;
+      btnEnterDungeon.classList.add('bg-yellow-100');
+    }
+
+    if (btnEnterDungeon) {
+      btnEnterDungeon.addEventListener('click', () => {
+        if (!pendingBundle) return;
+        const b = pendingBundle;
+        pendingBundle = null;
+        enterDungeon(b);
+      });
+    }
+
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       currentThemeName = wallStyle;
@@ -2380,12 +2565,13 @@
       // damage and held keys into the new dungeon.
       resetCombatForNewDungeon();
 
+      resetCrawl();
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
       if (titleButtons) titleButtons.classList.add('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
-      progSubText.textContent = `Generating ${numGrids}-grid authentic 3DMaze with FLUX.1 [schnell] (~10s)...`;
+      progSubText.textContent = `Building the ${numGrids}-grid maze while ComfyUI works...`;
 
       generateAuthentic3DMaze(numGrids);
       buildDynamicExitSignTexture(wallStyle, wallTexture);
@@ -2422,6 +2608,12 @@
 
             progStatusText.textContent = p.status_message;
             progPercentText.textContent = p.percent + "%";
+            // Live sub-job detail ("slash2 - step 5/8"). This element used to be written
+            // once at submit time and then never again.
+            if (p.phase) progSubText.textContent = p.phase;
+
+            // The story lands minutes ahead of the art - start reading immediately.
+            if (p.story && !crawlStarted) startCrawl(p.story);
 
             const chunkCount = Math.floor((p.percent / 100) * 30);
             progBarChunks.innerHTML = '';
@@ -2434,89 +2626,12 @@
             if (!p.is_generating && p.completed_bundle) {
               clearInterval(pollInterval);
               clearInterval(timerInterval);
-
-              const b = p.completed_bundle;
-              if (b.player_sprites && b.player_sprites.length > 0) {
-                playerSpriteFrames = [];
-                b.player_sprites.forEach(src => {
-                  const img = new Image();
-                  img.src = src;
-                  playerSpriteFrames.push(img);
-                });
-                playerSpriteImg = playerSpriteFrames[0];
-              } else if (b.player_sprite) {
-                playerSpriteImg = new Image();
-                playerSpriteImg.src = b.player_sprite;
-                playerSpriteFrames = [playerSpriteImg];
-              }
-              // v5 (krea2): separately generated weapon & shield sprites the rig animates
-              // as overlays. Cleared first so switching back to another mode drops them.
-              weaponSpriteImg = null;
-              shieldSpriteImg = null;
-              if (b.weapon_sprite) {
-                weaponSpriteImg = new Image();
-                weaponSpriteImg.src = b.weapon_sprite;
-              }
-              if (b.shield_sprite) {
-                shieldSpriteImg = new Image();
-                shieldSpriteImg.src = b.shield_sprite;
-              }
-              playerFaceFrames = [];
-              if (b.player_faces && b.player_faces.length > 0) {
-                b.player_faces.forEach(src => {
-                  const img = new Image();
-                  img.src = src;
-                  playerFaceFrames.push(img);
-                });
-                playerFaceImg = playerFaceFrames[0];
-              } else if (b.player_face) {
-                playerFaceImg = new Image();
-                playerFaceImg.src = b.player_face;
-                playerFaceFrames = [playerFaceImg];
-              }
-              enemySpriteFrames = [];
-              enemyVariantImgs = {};
-              // walker / flyer / boss, each its own generated sprite. Older bundles / other
-              // modes only send enemy_sprites - fold that in as the walker.
-              if (b.enemy_variants) {
-                Object.entries(b.enemy_variants).forEach(([key, src]) => {
-                  if (!src) return;
-                  const img = new Image();
-                  img.src = src;
-                  enemyVariantImgs[key] = img;
-                });
-              }
-              if (b.enemy_sprites && b.enemy_sprites.length > 0) {
-                b.enemy_sprites.forEach(src => {
-                  const img = new Image();
-                  img.src = src;
-                  enemySpriteFrames.push(img);
-                });
-                if (!enemyVariantImgs.walker) enemyVariantImgs.walker = enemySpriteFrames[0];
-              }
-              enemyStyleName = (b.enemy_style || '').trim();
-              if (enemyStyleName) {
-                combatState.enemy.name = enemyStyleName.toUpperCase();
-              }
-              pickEnemyVariant();
-              loadAiTextures(
-                b.wall_texture,
-                b.ceiling_texture,
-                b.floor_texture,
-                wallStyle
-              );
-
-              screenProgress.classList.add('hidden');
-              screenGame.classList.remove('hidden');
-              if (titleButtons) titleButtons.classList.remove('hidden');
-              appContainer.className = 'win95-box p-1 text-black mode-game';
-              render3D();
-              drawMinimap();
-              updateHUD();
+              armEnterDungeon(p.completed_bundle);
             } else if (p.error) {
               clearInterval(pollInterval);
               clearInterval(timerInterval);
               alert("Error: " + p.error);
+              resetCrawl();
               screenProgress.classList.add('hidden');
               screenSetup.classList.remove('hidden');
               if (titleButtons) titleButtons.classList.remove('hidden');
@@ -2530,6 +2645,7 @@
       } catch (err) {
         clearInterval(timerInterval);
         alert('Server communication error. Make sure server.py is running!');
+        resetCrawl();
         screenProgress.classList.add('hidden');
         screenSetup.classList.remove('hidden');
         if (titleButtons) titleButtons.classList.remove('hidden');

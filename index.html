@@ -94,6 +94,84 @@
       margin-right: 2px;
       display: inline-block;
     }
+
+    /* ---- Star Wars style intro crawl -------------------------------------
+       The stage is the fixed viewport; #crawlText is taller than it and slides up through
+       it under a perspective tilt. animation-fill-mode: forwards is what makes the text
+       settle on its last frame and stay there when it outruns the asset generation. */
+    #crawlStage {
+      position: relative;
+      height: 300px;
+      overflow: hidden;
+      background: #000000;
+      perspective: 320px;
+      perspective-origin: 50% 0%;
+      border: 2px inset #808080;
+    }
+    #crawlViewport {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      /* dissolve into the black horizon at the top */
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 38%, #000 100%);
+      mask-image: linear-gradient(to bottom, transparent 0%, #000 38%, #000 100%);
+    }
+    #crawlText {
+      position: absolute;
+      top: 100%;
+      left: 8%;
+      width: 84%;
+      transform-origin: 50% 0%;
+      transform: rotateX(34deg);
+      color: #ffe81f;
+      text-align: center;
+      font-weight: bold;
+      font-size: 15px;
+      line-height: 1.55;
+      text-shadow: 0 0 6px rgba(255, 232, 31, 0.35);
+    }
+    #crawlText.rolling {
+      animation: crawlUp var(--crawl-duration, 80s) linear forwards;
+    }
+    #crawlText p { margin: 0 0 14px 0; }
+    #crawlText .crawl-title {
+      font-size: 19px;
+      letter-spacing: 2px;
+      margin-bottom: 18px;
+    }
+    #crawlText .crawl-sub {
+      font-size: 12px;
+      letter-spacing: 1px;
+      opacity: 0.75;
+      margin-bottom: 22px;
+    }
+    @keyframes crawlUp {
+      0%   { top: 100%; }
+      100% { top: -260%; }
+    }
+    #crawlPending {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffe81f;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    /* A scrolling wall of text is exactly what this setting exists to suppress. */
+    @media (prefers-reduced-motion: reduce) {
+      #crawlText.rolling { animation: none; }
+      #crawlText { position: relative; top: 0; left: 0; width: 100%; transform: none;
+                   padding: 12px; }
+      #crawlViewport { overflow-y: auto; -webkit-mask-image: none; mask-image: none; }
+      #crawlStage { perspective: none; }
+    }
+    #btnEnterDungeon:disabled {
+      color: #808080;
+      text-shadow: 1px 1px #ffffff;
+      cursor: default;
+    }
     .dpad-btn {
       width: 44px !important;
       height: 44px !important;
@@ -116,8 +194,8 @@
       box-shadow: 0 20px 50px rgba(0,0,0,0.5) !important;
     }
     #appContainer.mode-progress {
-      width: 90% !important;
-      max-width: 480px !important;
+      width: 92% !important;
+      max-width: 720px !important;
       height: auto !important;
       margin: auto !important;
       box-shadow: 0 20px 50px rgba(0,0,0,0.5) !important;
@@ -443,7 +521,7 @@
       </div>
     </div>
 
-    <!-- SCREEN 2: Pre-Generation Progress Screen -->
+    <!-- SCREEN 2: Intro crawl + generation progress -->
     <div id="screenProgress" class="p-5 flex flex-col gap-3 hidden">
       <div class="flex items-center justify-between">
         <span class="font-bold text-xs flex items-center gap-2">
@@ -453,18 +531,29 @@
         <span id="progTimer" class="text-xs font-bold text-blue-800">0.0s</span>
       </div>
 
+      <div id="crawlStage">
+        <div id="crawlViewport">
+          <div id="crawlText"></div>
+        </div>
+        <div id="crawlPending">The chronicle is being written...</div>
+      </div>
+
       <div class="win95-inset h-5 p-0.5 flex items-center overflow-hidden bg-slate-900">
         <div id="progBarChunks" class="h-full flex items-center w-0 transition-all duration-300"></div>
       </div>
 
       <div class="flex justify-between items-center text-xs text-slate-700">
-        <span id="progStatusText" class="truncate max-w-[280px]">Initializing generator...</span>
+        <span id="progStatusText" class="truncate max-w-[420px]">Initializing generator...</span>
         <strong id="progPercentText">0%</strong>
       </div>
 
-      <div id="progSubText" class="text-[11px] text-slate-600 text-center mt-1 border-t border-slate-300 pt-2">
+      <div id="progSubText" class="text-[11px] text-slate-600 text-center border-t border-slate-300 pt-2">
         Generating with ComfyUI.
       </div>
+
+      <button id="btnEnterDungeon" class="win95-btn px-6 py-2 text-sm text-black font-bold w-full justify-center" disabled>
+        GENERATING ASSETS
+      </button>
     </div>
 
     <!-- SCREEN 3: Instant Interactive Game Play Screen -->

@@ -1,1 +1,6 @@
+# Real per-step progress: ComfyUI only pushes node/sampler progress over its websocket,
+# so without this the bar advances once per completed job instead of continuously.
+websocket-client>=1.7
 imageio-ffmpeg>=0.4.9
+pillow>=10.0
+numpy>=1.24

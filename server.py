@@ -27,6 +27,7 @@ import base64
 import random
 import threading
 import subprocess
+import uuid
 
 PORT = 5555
 COMFY_URL = "http://127.0.0.1:8188"
@@ -62,9 +63,249 @@ gen_progress = {
     "total_steps": 2,
     "status_message": "Idle",
     "percent": 0,
+    # Sub-job detail line ("slash2 - step 5/8"), fed by PROGRESS from ComfyUI's socket.
+    "phase": "",
+    # {location, hero, foe, boss, crawl:[...]}. Published as soon as the story job returns,
+    # minutes before completed_bundle, so the frontend can start the crawl while the rest
+    # of the assets are still rendering.
+    "story": None,
     "completed_bundle": None,
     "error": None
 }
+
+# Identifies this server on ComfyUI's websocket. Every /prompt we submit carries it, which
+# is what makes ComfyUI address that job's progress messages back to us.
+COMFY_CLIENT_ID = str(uuid.uuid4())
+
+
+class ProgressTracker:
+    """Drives gen_progress["percent"] from ComfyUI's real per-node progress.
+
+    Per-sampler-step progress is ONLY pushed over the websocket - WebUIProgressHandler in
+    comfy_execution/progress.py emits
+
+        {"type": "progress_state", "data": {"prompt_id": .., "nodes": {id: {value, max, state}}}}
+
+    addressed to the client_id that submitted the job. /history and /api/jobs report status
+    but carry no progress at all, so a polling-only bar can never move mid-job - which is
+    why the old hardcoded bar sat frozen at 50% for the entire krea2 + Kontext stretch, i.e.
+    for nearly the whole wait.
+
+    A run declares every job up front via begin_plan([(key, label, weight, units)]):
+
+      weight  rough wall-clock cost, used to pace the phases against each other
+      units   that job's expected progress units (total sampler steps, or max tokens for
+              the story job), used as the DENOMINATOR for the live fraction
+
+    `units` has to be declared rather than summed from the socket: progress_state only
+    reports nodes that have already started, so a running job's observed total grows as it
+    goes and self-normalising against it would peg every job at ~100% immediately.
+
+    With no websocket (library missing, ComfyUI restarted) the fraction simply stays 0 and
+    the bar advances a step per completed job - coarse, but still honest and still far
+    better than the fixed 18/50/92 it replaces.
+    """
+
+    CAP = 97  # the last few points belong to packaging, after the final ComfyUI job
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._labels = {}
+        self._weights = {}
+        self._units = {}
+        self._order = []
+        self._done = set()
+        self._current = None
+        self._fraction = 0.0
+        self._detail = ""
+        self._floor = 0
+        self._active = False
+        self.connected = False
+        self._thread = None
+
+    # ---- plan ----------------------------------------------------------
+    def begin_plan(self, jobs):
+        with self._lock:
+            self._order = [j[0] for j in jobs]
+            self._labels = {j[0]: j[1] for j in jobs}
+            self._weights = {j[0]: max(1.0, float(j[2])) for j in jobs}
+            self._units = {j[0]: max(1.0, float(j[3])) for j in jobs}
+            self._done = set()
+            self._current = None
+            self._fraction = 0.0
+            self._detail = ""
+            self._floor = 0
+            self._active = True
+        self._publish()
+
+    def add_job(self, key, label, weight, units):
+        """Register a job that only happens sometimes - the portrait regeneration pass
+        fires only when Kontext's edit barely moved the face."""
+        with self._lock:
+            if not self._active or key in self._weights:
+                return
+            self._order.append(key)
+            self._labels[key] = label
+            self._weights[key] = max(1.0, float(weight))
+            self._units[key] = max(1.0, float(units))
+        self._publish()
+
+    def begin_job(self, key):
+        if key is None:
+            return
+        with self._lock:
+            if not self._active:
+                return
+            if self._current is not None and self._current != key:
+                self._done.add(self._current)
+            self._current = key
+            self._fraction = 0.0
+            self._detail = ""
+        self._publish()
+
+    def finish_job(self, key=None):
+        with self._lock:
+            if not self._active:
+                return
+            k = key or self._current
+            if k:
+                self._done.add(k)
+            self._current = None
+            self._fraction = 0.0
+            self._detail = ""
+        self._publish()
+
+    def end_plan(self):
+        with self._lock:
+            self._active = False
+            self._current = None
+
+    # ---- percent -------------------------------------------------------
+    def _publish(self):
+        with self._lock:
+            if not self._active:
+                return
+            total = sum(self._weights.values())
+            if total <= 0:
+                return
+            acc = sum(self._weights.get(k, 0.0) for k in self._done)
+            cur = self._current
+            if cur and cur not in self._done:
+                acc += self._weights.get(cur, 0.0) * self._fraction
+            pct = int(min(self.CAP, round(acc / total * self.CAP)))
+            # A lazily added job grows the denominator mid-run; never walk backwards.
+            if pct < self._floor:
+                pct = self._floor
+            self._floor = pct
+            label = self._labels.get(cur)
+            detail = self._detail
+        gen_progress["percent"] = pct
+        if label:
+            gen_progress["status_message"] = label
+        gen_progress["phase"] = detail
+
+    # ---- socket --------------------------------------------------------
+    def start(self):
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        try:
+            import websocket  # websocket-client
+        except ImportError:
+            print("[progress] websocket-client not installed - the bar will advance per "
+                  "job instead of per step (pip install -r requirements.txt)")
+            return
+        url = "%s/ws?clientId=%s" % (COMFY_URL.replace("https://", "wss://").replace("http://", "ws://"),
+                                     COMFY_CLIENT_ID)
+        announced = False
+        while True:
+            ws = None
+            try:
+                ws = websocket.create_connection(url, timeout=10)
+                ws.settimeout(None)
+                self.connected = True
+                if not announced:
+                    print("[progress] attached to ComfyUI progress socket as %s" % COMFY_CLIENT_ID[:8])
+                    announced = True
+                while True:
+                    raw = ws.recv()
+                    if raw is None or raw == "":
+                        break
+                    if isinstance(raw, (bytes, bytearray)):
+                        continue  # binary frames are latent previews
+                    self._on_message(raw)
+            except Exception as e:
+                if self.connected:
+                    print("[progress] socket dropped (%s) - reconnecting" % e)
+            finally:
+                self.connected = False
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+            time.sleep(2.0)
+
+    _NODE_SUFFIXES = ("_samp", "_dec", "_save", "_mask", "_maskinv", "_pos", "_neg", "_lat")
+
+    def _node_detail(self, node_id, value, mx):
+        if node_id == "story_gen":
+            return "writing - %d words so far" % int(value * 0.75)
+        name = node_id
+        for suffix in self._NODE_SUFFIXES:
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        name = name.replace("enemy_", "").replace("_", " ").strip() or node_id
+        return "%s - step %d/%d" % (name, int(value), int(mx))
+
+    def _on_message(self, raw):
+        try:
+            msg = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+        mtype = msg.get("type")
+        data = msg.get("data") or {}
+
+        if mtype == "progress_state":
+            nodes = data.get("nodes") or {}
+            done_units = 0.0
+            running = None
+            for node_id, st in nodes.items():
+                try:
+                    mx = float(st.get("max") or 0.0)
+                    val = float(st.get("value") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if mx <= 0:
+                    continue
+                done_units += min(val, mx)
+                # Only multi-step nodes (samplers, the text generator) make a useful detail
+                # line. Loaders and text encoders report max=1 and would otherwise flicker
+                # the line to "k vae" / "clip" / "neg" between every real step.
+                if st.get("state") == "running" and val < mx and mx > 1:
+                    running = (node_id, val, mx)
+            with self._lock:
+                cur = self._current
+                if not self._active or cur is None:
+                    return
+                expected = self._units.get(cur, 0.0)
+                if expected > 0:
+                    # Monotonic within the job: progress_state only lists started nodes, so
+                    # the observed total jitters as new ones come online.
+                    self._fraction = max(self._fraction, min(1.0, done_units / expected))
+                if running:
+                    self._detail = self._node_detail(*running)
+            self._publish()
+
+        elif mtype == "executing" and data.get("node") is None:
+            self.finish_job()
+
+
+PROGRESS = ProgressTracker()
 
 
 def make_seamless_4way(img_path, blend_pixels=12):
@@ -540,7 +781,7 @@ def generate_enemy_sprites(enemy_style):
         payload[f"{name}_maskinv"] = {"inputs": {"mask": [f"{name}_mask", 0]}, "class_type": "InvertMask"}
         payload[f"{name}_save"] = {"inputs": {"filename_prefix": f"enemy_{name}_{int(time.time()*1000)}", "images": [f"{name}_dec", 0], "mask": [f"{name}_maskinv", 0]}, "class_type": "SaveImageWithAlpha"}
 
-    data = json.dumps({"prompt": payload}).encode("utf-8")
+    data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
@@ -728,7 +969,7 @@ def generate_player_sprite_ipadapter(player_style, weapon_style=None):
         payload[f"{name}_maskinv"] = {"inputs": {"mask": [f"{name}_mask", 0]}, "class_type": "InvertMask"}
         payload[f"{name}_save"] = {"inputs": {"filename_prefix": f"player_{name}_{int(time.time()*1000)}", "images": [f"{name}_dec", 0], "mask": [f"{name}_maskinv", 0]}, "class_type": "SaveImageWithAlpha"}
 
-    data = json.dumps({"prompt": payload}).encode("utf-8")
+    data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
@@ -1413,7 +1654,7 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
         prompt_payload["p_dec"] = {"inputs": {"samples": ["p_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"}
         prompt_payload["p_save"] = {"inputs": {"filename_prefix": prefix_p, "images": ["p_dec", 0]}, "class_type": "SaveImage"}
 
-    data = json.dumps({"prompt": prompt_payload}).encode("utf-8")
+    data = json.dumps({"prompt": prompt_payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         res_json = json.loads(resp.read().decode("utf-8"))
@@ -1804,7 +2045,8 @@ def _portrait_frame_diff(idle_path, frame_path):
         return 99.0
 
 
-def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False):
+def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False,
+                            job_key="portrait_edits"):
     """One Kontext job: edit the RGB idle image `idle_in` (a filename in COMFY_INPUT_DIR)
     into each expression name in `targets`. `with_idle=True` also emits a background-removed
     copy of the idle itself (matting only, no sampler) so every frame shares the same matte.
@@ -1833,7 +2075,7 @@ def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False):
                              "class_type": "KSampler"}
         b[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
         _kontext_alpha_nodes(b, name, f"{name}_dec", "kxp")
-    return _krea2_submit_and_collect(b, want, timeout=400)
+    return _krea2_submit_and_collect(b, want, timeout=400, job_key=job_key)
 
 
 def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
@@ -1860,7 +2102,7 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
                       "class_type": "KSampler"}
     a["idle_dec"] = {"inputs": {"samples": ["idle_samp", 0], "vae": ["k_vae", 0]}, "class_type": "VAEDecode"}
     a["idle_save"] = {"inputs": {"filename_prefix": f"kxp_src_{int(time.time()*1000)}", "images": ["idle_dec", 0]}, "class_type": "SaveImage"}
-    idle_src = _krea2_submit_and_collect(a, ["idle"])["idle"]
+    idle_src = _krea2_submit_and_collect(a, ["idle"], job_key="portrait_idle")["idle"]
 
     idle_in = f"kxp_src_{int(time.time()*1000)}.png"
     shutil.copy(idle_src, os.path.join(COMFY_INPUT_DIR, idle_in))
@@ -1873,8 +2115,11 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
              if _portrait_frame_diff(paths["idle"], paths[n]) < KONTEXT_PORTRAIT_MIN_DIFF]
     if stuck:
         print(f"[Kontext Portrait] {stuck} barely changed - regenerating at higher guidance")
+        PROGRESS.add_job("portrait_regen", "Re-rolling the portraits that did not move...",
+                         15 * len(stuck), len(stuck) * KONTEXT_STEPS)
         retry = _kontext_expression_job(idle_in, stuck, KONTEXT_PORTRAIT_GUIDANCE + 2.5,
-                                        random.randint(1, 1000000000))
+                                        random.randint(1, 1000000000),
+                                        job_key="portrait_regen")
         paths.update(retry)
 
     frames = [paths[n] if crop_portrait_square(paths[n]) else None for n in PORTRAIT_FRAME_NAMES]
@@ -1904,6 +2149,7 @@ def _save_tight(img_path, thresh=20):
 def generate_flux_surfaces_only(wall_style):
     """Just the wall / ceiling / floor thirds of generate_flux_all_assets. v5 keeps FLUX
     schnell for the tiling environment textures and generates everything else with krea2."""
+    PROGRESS.begin_job("surfaces")
     prefixes = {"w": f"trio_w_{int(time.time()*1000)}",
                 "c": f"trio_c_{int(time.time()*1000)}",
                 "f": f"trio_f_{int(time.time()*1000)}"}
@@ -1929,7 +2175,7 @@ def generate_flux_surfaces_only(wall_style):
     payload.update(_surface("c", ceil_p))
     payload.update(_surface("f", floor_p))
 
-    data = json.dumps({"prompt": payload}).encode("utf-8")
+    data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
@@ -1954,6 +2200,7 @@ def generate_flux_surfaces_only(wall_style):
         make_seamless_4way(w_path, blend_pixels=12)
         make_seamless_4way(c_path, blend_pixels=12)
         make_seamless_4way(f_path, blend_pixels=12)
+        PROGRESS.finish_job("surfaces")
         return w_path, c_path, f_path
 
     raise TimeoutError("FLUX.1 surface texture generation timed out.")
@@ -1993,9 +2240,13 @@ def _krea2_add_branch(payload, name, prompt_text, w, h, steps, seed, prefix):
                                "class_type": "SaveImageWithAlpha"}
 
 
-def _krea2_submit_and_collect(payload, save_keys, timeout=300):
-    """Submit a krea2 prompt, wait for every `<name>_save` in save_keys, return {name: path}."""
-    data = json.dumps({"prompt": payload}).encode("utf-8")
+def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None):
+    """Submit a krea2 prompt, wait for every `<name>_save` in save_keys, return {name: path}.
+
+    `job_key` names this submission in the run's progress plan (see ProgressTracker), so the
+    bar knows which phase the incoming per-step socket updates belong to."""
+    PROGRESS.begin_job(job_key)
+    data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
@@ -2016,8 +2267,306 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300):
         for n in save_keys:
             info = outputs[f"{n}_save"]["images"][0]
             result[n] = os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+        PROGRESS.finish_job(job_key)
         return result
     raise TimeoutError("krea2 turbo generation timed out.")
+
+
+# ---------------------------------------------------------------------------
+# Intro story: Qwen3-VL-4B writes the opening crawl and names the cast
+# ---------------------------------------------------------------------------
+# The text model is the SAME Qwen3-VL-4B already loaded as krea2's text encoder, reached
+# through ComfyUI's core TextGenerate node. Because the CLIPLoader node below is byte
+# identical to _krea2_loaders()["k_clip"], ComfyUI serves it from cache - the story costs
+# no extra VRAM next to the 13GB krea2 UNET. Qwen3VL_4BConfig sets `lm_head = False` ("4B
+# ties word embeddings"), so BaseGenerate falls back to embed_tokens, which is the intended
+# path for this checkpoint; sd.py calls the krea2 encoder "full Qwen3-VL-4B (12-layer tap
+# for conditioning + multimodal generate)".
+#
+# Measured on the 3090: 8-16s for a full reply, ~13 tok/s.
+
+# Per-job progress weights for the v5/v6 runs. `weight` is a rough relative wall-clock cost
+# and only affects how the phases are paced against each other; `units` is that job's
+# expected total sampler steps (tokens for the story) and is the denominator the live
+# per-step fraction from ComfyUI's socket is measured against.
+def _plan_v6(steps):
+    st = int(steps)
+    return [
+        # key,             label,                                                    weight, units
+        ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
+        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
+        ("frames",         "Animating the swing with krea2 turbo (7 frames)...",          70, 8 * st),
+        ("enemy_variants", "Deriving the flyer and the boss with Kontext...",             40, 2 * KONTEXT_STEPS),
+        ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
+        ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
+    ]
+
+
+def _plan_v5(steps):
+    st = int(steps)
+    return [
+        ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
+        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
+        ("frames",         "Forging the character, weapon and shield...",                 40, 4 * st),
+        ("enemy_variants", "Deriving the flyer and the boss with Kontext...",             40, 2 * KONTEXT_STEPS),
+        ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
+        ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
+    ]
+
+
+STORY_MAX_TOKENS = 420
+STORY_TEMPERATURE = 0.9
+# Typical reply length in tokens - used only as the progress denominator for the story job.
+# The model stops on its own well before STORY_MAX_TOKENS, so normalising against the cap
+# would leave the bar stuck at half.
+STORY_TYPICAL_TOKENS = 240
+
+STORY_SYSTEM = (
+    "You are the narrator of a 1990s first-person dungeon crawler. "
+    "You write in the style of a Star Wars opening crawl: grand, mythic, present tense, "
+    "short declarative sentences. You never break character and you never explain yourself."
+)
+
+_STORY_USER = """A player is about to descend into a generated dungeon. They described it like this:
+
+The dungeon looks like: {wall}
+The player is: {player}
+Their weapon is: {weapon}
+The enemies are: {enemy}
+
+Invent proper names, then write the opening crawl.
+
+Reply using EXACTLY these five labels, each on its own line, in this order. No preamble, no
+markdown, no commentary, no asterisks:
+
+LOCATION: <a 2-4 word proper name for the dungeon>
+HERO: <a 1-3 word proper name for the player>
+FOE: <a 1-3 word proper name for the common enemy>
+BOSS: <a 1-3 word proper name for their champion>
+CRAWL:
+<paragraph one>
+
+<paragraph two>
+
+<paragraph three>
+
+The line "CRAWL:" is required and must appear on its own. Write exactly three paragraphs
+after it, separated by blank lines, each 2 or 3 sentences. Use the names you invented."""
+
+
+def _story_prompt(wall_style, player_style, weapon_style, enemy_style, with_image=False):
+    """Hand-built chat template - two subtleties, both of which silently ruin the output.
+
+    1. Krea2Tokenizer replaces the default template with KREA2_TEMPLATE, whose system prompt
+       is "Describe the image by detailing the color, shape, size, texture...". Useless for
+       prose. Opening the string with <|im_start|> makes Qwen3VLTokenizer set skip_template
+       and take our text verbatim instead.
+    2. skip_template ALSO skips the automatic <think></think> suppressor, which lives inside
+       the non-skip branch. Without the empty think block appended here, Qwen3 reasons out
+       loud and the monologue lands in the crawl."""
+    user = _STORY_USER.format(
+        wall=(wall_style or "").strip() or "a forgotten place",
+        player=(player_style or "").strip() or "a nameless wanderer",
+        weapon=(weapon_style or "").strip() or "a rusted blade",
+        enemy=(enemy_style or "").strip() or "things that shamble",
+    )
+    vision = ""
+    if with_image:
+        # The image-pad substitution scans tokenized ids for 151655 regardless of
+        # skip_template, so splicing the vision block in by hand works.
+        vision = "<|vision_start|><|image_pad|><|vision_end|>"
+        user = "This is what the player looks like. Name the hero to suit them.\n\n" + user
+    return (
+        "<|im_start|>system\n" + STORY_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n" + vision + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
+    )
+
+
+def _submit_and_collect_text(payload, out_key, timeout=180, job_key=None):
+    """Sibling of _krea2_submit_and_collect for a text output. PreviewAny is an OUTPUT_NODE
+    returning {"ui": {"text": (value,)}}, so the string lands in history under
+    outputs[out_key]["text"][0] rather than the ["images"][0] shape the image path expects."""
+    PROGRESS.begin_job(job_key)
+    data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
+    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        time.sleep(0.2)
+        hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
+        with urllib.request.urlopen(hist_req) as h_resp:
+            hist_data = json.loads(h_resp.read().decode("utf-8"))
+        if prompt_id not in hist_data:
+            continue
+        entry = hist_data[prompt_id]
+        outputs = entry.get("outputs", {})
+        if out_key in outputs:
+            PROGRESS.finish_job(job_key)
+            return outputs[out_key]["text"][0]
+        if entry.get("status", {}).get("status_str") == "error":
+            raise RuntimeError("ComfyUI rejected the story prompt")
+    raise TimeoutError("intro story generation timed out.")
+
+
+_STORY_SMART = {
+    "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+    "\u2013": "-", "\u2014": " - ", "\u2026": "...", "\u00a0": " ",
+    "\u2022": "-", "\u2032": "'", "\u2033": '"',
+}
+_STORY_STRIP = "*_#\"'` \t"
+_STORY_LABELS = ("location", "hero", "foe", "boss")
+
+
+def _ascii_ify(text):
+    """The UI is a Win95 pastiche - smart quotes and em-dashes look wrong in it, and
+    /api/progress serialises with ensure_ascii=True so they would travel as \\uXXXX noise."""
+    for bad, good in _STORY_SMART.items():
+        text = text.replace(bad, good)
+    return text.encode("ascii", "ignore").decode("ascii")
+
+
+def _story_name(raw, fallback, max_words=4):
+    name = _ascii_ify(raw or "").strip().strip(_STORY_STRIP)
+    name = re.sub(r"^<|>$", "", name).strip()
+    name = re.sub(r"\s+", " ", name)
+    if not name or len(name) > 48:
+        return fallback
+    words = name.split(" ")
+    if len(words) > max_words:
+        name = " ".join(words[:max_words])
+    return name or fallback
+
+
+def _lead(name, upper=True):
+    """Give a name its article unless it brought one. Without this the fallback crawl reads
+    "The The Horde wait in the dark"."""
+    if re.match(r"^(the|a|an)\s", name, re.IGNORECASE):
+        return name
+    return ("The " if upper else "the ") + name
+
+
+def _story_title(text, fallback):
+    text = _ascii_ify(text or "").strip()
+    if not text:
+        return fallback
+    return " ".join(w[:1].upper() + w[1:] for w in text.split())[:48]
+
+
+def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
+    """Pull the four names and the crawl paragraphs out of the model's reply. Never raises.
+
+    The 4B emits the LOCATION/HERO/FOE/BOSS lines reliably but drops the bare "CRAWL:"
+    marker perhaps half the time, so the prose is taken as everything after the last label
+    line rather than requiring the marker to be there."""
+    text = _ascii_ify(text or "")
+    fallbacks = {
+        "location": _story_title(wall_style, "The Dungeon"),
+        "hero": _story_title(player_style, "The Nameless"),
+        "foe": _story_title(enemy_style, "The Horde"),
+        "boss": "The Warden",
+    }
+    out = dict(fallbacks)
+
+    max_words = {"location": 4, "hero": 3, "foe": 3, "boss": 3}
+    last_label_end = 0
+    found = 0
+    for key in _STORY_LABELS:
+        m = re.search(r"^\s*" + key + r"\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            out[key] = _story_name(m.group(1), fallbacks[key], max_words[key])
+            last_label_end = max(last_label_end, m.end())
+            found += 1
+
+    m = re.search(r"^\s*CRAWL\s*:\s*$", text, re.IGNORECASE | re.MULTILINE)
+    body = text[m.end():] if m else text[last_label_end:]
+
+    paragraphs = []
+    # No labels at all means the reply was not in the requested shape - a refusal, a
+    # preamble, a wall of markdown. Trusting the body then ships "I'm sorry, I can't help
+    # with that." as the opening crawl, so treat the whole reply as unusable instead.
+    if found:
+        for chunk in re.split(r"\n\s*\n", body):
+            lines = [ln.strip().rstrip("\\") for ln in chunk.strip().splitlines()]
+            lines = [ln for ln in lines
+                     if ln and not re.match(r"^(LOCATION|HERO|FOE|BOSS|CRAWL)\s*:", ln, re.IGNORECASE)]
+            para = " ".join(lines).strip().strip("*_#")
+            if len(para) > 20:
+                paragraphs.append(re.sub(r"\s+", " ", para))
+
+    if not paragraphs:
+        paragraphs = [
+            _lead(out["hero"]) + " descends into " + _lead(out["location"], upper=False) + ".",
+            _lead(out["foe"]) + " wait in the dark, and " + _lead(out["boss"], upper=False)
+            + " waits beyond them.",
+            "No one has come back out.",
+        ]
+    out["crawl"] = paragraphs[:4]
+    return out
+
+
+def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, player_image=None):
+    """Name the location / hero / foe / boss and write the opening crawl. Never raises - a
+    story failure must not cost the player their assets, so it degrades to names derived
+    from what they typed."""
+    image_name = None
+    if player_image:
+        try:
+            b64 = player_image.split(",", 1)[-1]
+            image_name = f"story_ref_{int(time.time()*1000)}.png"
+            with open(os.path.join(COMFY_INPUT_DIR, image_name), "wb") as f:
+                f.write(base64.b64decode(b64))
+        except Exception as e:
+            print(f"[story] could not stage the player image ({e}) - writing text-only")
+            image_name = None
+
+    payload = {
+        # Byte-identical to _krea2_loaders()["k_clip"] on purpose: any difference in these
+        # inputs forks ComfyUI's cache and loads a second 5.2GB copy of the model.
+        "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                   "class_type": "CLIPLoader"},
+        "story_gen": {
+            "inputs": {
+                "clip": ["k_clip", 0],
+                "prompt": _story_prompt(wall_style, player_style, weapon_style, enemy_style,
+                                        with_image=bool(image_name)),
+                "max_length": STORY_MAX_TOKENS,
+                # DynamicCombo in API format: the parent widget takes the option KEY and the
+                # option's own widgets are dot-prefixed with it. Passing a nested dict makes
+                # ComfyUI drop the input and the node then fails on a missing argument
+                # (see DynamicCombo._expand_schema_for_dynamic in comfy_api/latest/_io.py).
+                "sampling_mode": "on",
+                "sampling_mode.temperature": STORY_TEMPERATURE,
+                "sampling_mode.top_k": 64,
+                "sampling_mode.top_p": 0.95,
+                "sampling_mode.min_p": 0.05,
+                "sampling_mode.repetition_penalty": 1.05,
+                "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                "thinking": False,
+                "use_default_template": False,
+            },
+            "class_type": "TextGenerate",
+        },
+        "story_out": {"inputs": {"source": ["story_gen", 0]}, "class_type": "PreviewAny"},
+    }
+    if image_name:
+        payload["story_img"] = {"inputs": {"image": image_name}, "class_type": "LoadImage"}
+        payload["story_gen"]["inputs"]["image"] = ["story_img", 0]
+
+    try:
+        t0 = time.time()
+        raw = _submit_and_collect_text(payload, "story_out", job_key="story")
+        story = parse_story_block(raw, wall_style, player_style, enemy_style)
+        print(f"[story] '{story['location']}' - {story['hero']} vs {story['foe']} / "
+              f"{story['boss']}, {len(story['crawl'])} paragraphs, {time.time()-t0:.1f}s")
+        return story
+    except Exception as e:
+        print(f"[story Error] {e} - falling back to names from the player's own words")
+        PROGRESS.finish_job("story")
+        return parse_story_block("", wall_style, player_style, enemy_style)
 
 
 # Replaced _subject_bleeds_off_edge, which asked "does the subject touch any edge?" with a
@@ -2183,7 +2732,8 @@ def generate_kontext_enemy_variants(walker_path, size=512):
             b[f"{v}_dec"] = {"inputs": {"samples": [f"{v}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
             _kontext_alpha_nodes(b, v, f"{v}_dec", "kxenemy")
 
-        paths = _krea2_submit_and_collect(b, list(KONTEXT_ENEMY_EDITS), timeout=600)
+        paths = _krea2_submit_and_collect(b, list(KONTEXT_ENEMY_EDITS), timeout=600,
+                                          job_key="enemy_variants")
         for v in KONTEXT_ENEMY_EDITS:
             p = paths[v]
             keep_largest_figure(p, thresh=50)
@@ -2247,7 +2797,7 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
 
     names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in KREA2_DIRECT_ENEMY_VARIANTS)
     t0 = time.time()
-    paths = _krea2_submit_and_collect(payload, names)
+    paths = _krea2_submit_and_collect(payload, names, job_key="frames")
     elapsed = time.time() - t0
 
     keep_largest_figure(paths["player"])
@@ -2333,7 +2883,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
 
     keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in KREA2_DIRECT_ENEMY_VARIANTS]
     t0 = time.time()
-    paths = _krea2_submit_and_collect(payload, keys)
+    paths = _krea2_submit_and_collect(payload, keys, job_key="frames")
     elapsed = time.time() - t0
 
     frame_paths = [paths[n] for n in V6_FRAME_NAMES]
@@ -2357,7 +2907,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
 
 def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT,
-                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
+                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT, player_image=None):
     """v5 krea2 turbo mode: FLUX schnell for the 3 tiling textures, krea2 turbo for the
     player sprite, weapon, shield, enemy and the 4 HUD portrait frames - one pass each."""
     global gen_progress
@@ -2365,7 +2915,10 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["completed_bundle"] = None
     gen_progress["error"] = None
     gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 2
+    gen_progress["total_steps"] = 3
+    gen_progress["story"] = None
+    gen_progress["phase"] = ""
+    PROGRESS.begin_plan(_plan_v5(steps))
 
     def _b64(path):
         with open(path, "rb") as tf:
@@ -2373,17 +2926,20 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
     try:
         gen_progress["current_step"] = 1
-        gen_progress["status_message"] = "Synthesizing dungeon textures with FLUX.1 [schnell]..."
-        gen_progress["percent"] = 20
-        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+        story = generate_intro_story(wall_style, player_style, weapon_style, enemy_style,
+                                     player_image)
+        gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        gen_progress["status_message"] = "Forging character, weapon & foe with krea2 turbo..."
-        gen_progress["percent"] = 55
+        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+
+        gen_progress["current_step"] = 3
         assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
 
+        PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
-        gen_progress["percent"] = 92
+        gen_progress["phase"] = ""
+        gen_progress["percent"] = 98
 
         player_b64 = _b64(assets["player"])
         # idle/attack/block/hurt busts; falls back to the player sprite if the whole set failed.
@@ -2393,6 +2949,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["status_message"] = "krea2 turbo dungeon & character ready!"
         gen_progress["completed_bundle"] = {
             "mode": "v5_krea",
+            "story": story,
             "wall_style": wall_style,
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
@@ -2415,12 +2972,13 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         print(f"[krea2 v5 Error] {e}")
         gen_progress["error"] = str(e)
     finally:
+        PROGRESS.end_plan()
         gen_progress["is_generating"] = False
 
 
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT,
-                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT):
+                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT, player_image=None):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model."""
@@ -2429,25 +2987,33 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["completed_bundle"] = None
     gen_progress["error"] = None
     gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 2
+    gen_progress["total_steps"] = 3
+    gen_progress["story"] = None
+    gen_progress["phase"] = ""
+    PROGRESS.begin_plan(_plan_v6(steps))
 
     def _b64(path):
         with open(path, "rb") as tf:
             return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
 
     try:
+        # The story goes first and is published on its own, minutes ahead of the bundle,
+        # so the frontend can start the crawl while everything else is still rendering.
         gen_progress["current_step"] = 1
-        gen_progress["status_message"] = "Synthesizing dungeon textures with FLUX.1 [schnell]..."
-        gen_progress["percent"] = 18
-        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+        story = generate_intro_story(wall_style, player_style, weapon_style, enemy_style,
+                                     player_image)
+        gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        gen_progress["status_message"] = "Animating the swing with krea2 turbo (7 frames)..."
-        gen_progress["percent"] = 50
+        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+
+        gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
 
+        PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
-        gen_progress["percent"] = 92
+        gen_progress["phase"] = ""
+        gen_progress["percent"] = 98
 
         frames_b64 = [_b64(p) for p in bundle["frames"]]
         # idle/attack/block/hurt busts; falls back to frame 0 if the whole set failed.
@@ -2457,6 +3023,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["status_message"] = "krea2 turbo swing animation & dungeon ready!"
         gen_progress["completed_bundle"] = {
             "mode": "v6_krea",
+            "story": story,
             "wall_style": wall_style,
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
@@ -2479,6 +3046,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         print(f"[krea2 v6 Error] {e}")
         gen_progress["error"] = str(e)
     finally:
+        PROGRESS.end_plan()
         gen_progress["is_generating"] = False
 
 
@@ -2521,57 +3089,76 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/generate_dungeon":
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
-            data = json.loads(body)
-            wall_style = data.get("wall_style", "Windows 95")
-            player_style = data.get("player_style", "")
-            player_image = data.get("player_image", None)
-            weapon_style = data.get("weapon_style", "")
-            enemy_style = data.get("enemy_style", "")
-            mode = data.get("mode", "v3_flux")
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8")
+                data = json.loads(body)
+                wall_style = data.get("wall_style", "Windows 95")
+                player_style = data.get("player_style", "")
+                player_image = data.get("player_image", None)
+                weapon_style = data.get("weapon_style", "")
+                enemy_style = data.get("enemy_style", "")
+                mode = data.get("mode", "v3_flux")
 
-            def _int(v, fallback):
+                def _int(v, fallback):
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        return fallback
+
+                krea_res = _int(data.get("krea_res"), KREA2_RES_DEFAULT)
+                krea_steps = _int(data.get("krea_steps"), KREA2_STEPS_DEFAULT)
+                krea_portrait_res = _int(data.get("krea_portrait_res"), KREA2_PORTRAIT_RES_DEFAULT)
+
+                # Reset progress synchronously
+                gen_progress["is_generating"] = True
+                gen_progress["completed_bundle"] = None
+                gen_progress["error"] = None
+                gen_progress["current_step"] = 1
+                gen_progress["total_steps"] = 2
+                gen_progress["story"] = None
+                gen_progress["phase"] = ""
+                gen_progress["status_message"] = (
+                    "Writing the chronicle with Qwen3-VL..." if mode in ("v5_krea", "v6_krea")
+                    else "Synthesizing 3D Dungeon & Character with FLUX.1 [schnell]...")
+                gen_progress["percent"] = 0
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "message": f"{mode} generation started"}, ensure_ascii=True).encode("utf-8"))
+
+                if mode == "v5_krea":
+                    t = threading.Thread(target=run_batch_v5_krea,
+                                         args=(wall_style, player_style, weapon_style, enemy_style,
+                                               krea_res, krea_steps, krea_portrait_res, player_image),
+                                         daemon=True)
+                elif mode == "v6_krea":
+                    t = threading.Thread(target=run_batch_v6_krea,
+                                         args=(wall_style, player_style, weapon_style, enemy_style,
+                                               krea_res, krea_steps, krea_portrait_res, player_image),
+                                         daemon=True)
+                else:
+                    t = threading.Thread(target=run_batch_v3_flux,
+                                         args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
+                                         daemon=True)
+                t.start()
+                return
+            except Exception as e:
+                print(f"[Request Error] {e}")
+                gen_progress["is_generating"] = False
+                gen_progress["error"] = str(e)
                 try:
-                    return int(v)
-                except (TypeError, ValueError):
-                    return fallback
-
-            krea_res = _int(data.get("krea_res"), KREA2_RES_DEFAULT)
-            krea_steps = _int(data.get("krea_steps"), KREA2_STEPS_DEFAULT)
-            krea_portrait_res = _int(data.get("krea_portrait_res"), KREA2_PORTRAIT_RES_DEFAULT)
-
-            # Reset progress synchronously
-            gen_progress["is_generating"] = True
-            gen_progress["completed_bundle"] = None
-            gen_progress["error"] = None
-            gen_progress["current_step"] = 1
-            gen_progress["total_steps"] = 2
-            gen_progress["status_message"] = (
-                "Synthesizing dungeon & character with krea2 turbo..." if mode in ("v5_krea", "v6_krea")
-                else "Synthesizing 3D Dungeon & Character with FLUX.1 [schnell]...")
-            gen_progress["percent"] = 25
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "message": f"{mode} generation started"}, ensure_ascii=True).encode("utf-8"))
-
-            if mode == "v5_krea":
-                t = threading.Thread(target=run_batch_v5_krea,
-                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps, krea_portrait_res),
-                                     daemon=True)
-            elif mode == "v6_krea":
-                t = threading.Thread(target=run_batch_v6_krea,
-                                     args=(wall_style, player_style, weapon_style, enemy_style, krea_res, krea_steps, krea_portrait_res),
-                                     daemon=True)
-            else:
-                t = threading.Thread(target=run_batch_v3_flux,
-                                     args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
-                                     daemon=True)
-            t.start()
-            return
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)},
+                                                ensure_ascii=True).encode("utf-8"))
+                except Exception:
+                    pass  # client already gone, or headers were sent before the throw
+                return
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -2583,6 +3170,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 def run_server():
     print(f"Starting ComfyCrawler Trio Server on http://127.0.0.1:{PORT}...")
+    PROGRESS.start()
     with socketserver.TCPServer(("", PORT), DungeonHTTPRequestHandler) as httpd:
         httpd.serve_forever()
 
