@@ -677,7 +677,7 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "Change the facial expression to explosive rage: mouth wide open roaring with teeth bared, AND the eyes glaring wide and furious, eyebrows slammed down hard and drawn together, deep angry creases across the forehead and between the brows, the whole upper face contorted with fury. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
+        "Change the facial expression to berserk fury: mouth wide open roaring, teeth bared; the eyes wide and bulging with rage in a wild wide-eyed furious stare with the whites showing, eyebrows slammed straight down and jammed hard together, deep creases gouged into the forehead and between the brows, nostrils flared, the whole face contorted and straining with rage. Keep the exact same face, identity, head shape, hair, skin, any glasses, colours, lighting, pose and framing - change nothing else."
       ]
     },
     {
@@ -757,7 +757,7 @@
         "Node name for S&R": "FluxGuidance"
       },
       "widgets_values": [
-        3.5
+        4.0
       ]
     },
     {
@@ -1044,7 +1044,7 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "Change the facial expression to intense angry focus with the mouth kept closed: jaw clenched, lips pressed into a hard flat line, eyes narrowed and locked forward in a fierce concentrated stare, eyebrows pulled low and together, brow deeply furrowed. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
+        "Change the facial expression to a furious grim glare with the mouth kept shut: jaw clenched hard so the jaw muscles stand out, mouth set in a tense hard grimace with the lips pressed thin and the corners pulled down, eyes narrowed to angry slits glaring dead ahead, eyebrows wrenched down and inward, deep vertical creases between the brows, nostrils flared, chin tucked and head lowered slightly - a braced, aggressive, defiant stare. Keep the exact same face, identity, head shape, hair, skin, any glasses, colours, lighting, pose and framing - change nothing else."
       ]
     },
     {
@@ -1124,7 +1124,7 @@
         "Node name for S&R": "FluxGuidance"
       },
       "widgets_values": [
-        3.5
+        4.0
       ]
     },
     {
@@ -1411,7 +1411,7 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "Change the facial expression to anguished pain and grief: both eyes squeezed tightly shut, eyebrows pulled upward and together into a pained sorrowful knot, the whole face crumpled and grimacing, mouth open and pulled down at the corners as if crying out, forehead and cheeks tense with distress. Keep the exact same face, identity, head shape, hair, skin, colours, lighting, pose and framing - change nothing else."
+        "Change the facial expression to anguished pain and grief: both eyes squeezed tightly shut, eyebrows pulled upward and together into a pained sorrowful knot, the whole face crumpled and grimacing, mouth open and pulled down at the corners as if crying out, forehead and cheeks tense with distress. Keep the exact same face, identity, head shape, hair, skin, any glasses, colours, lighting, pose and framing - change nothing else."
       ]
     },
     {
@@ -1491,7 +1491,7 @@
         "Node name for S&R": "FluxGuidance"
       },
       "widgets_values": [
-        3.5
+        4.0
       ]
     },
     {
@@ -1762,7 +1762,7 @@
         "text": ""
       },
       "widgets_values": [
-        "ComfyCrawler HUD portrait pipeline - Kontext edition (mirrors server.generate_kontext_portrait_set).\n- IDLE group: krea2 makes one bust.  Swap the character in node 10.\n- ATTACK / BLOCK / HURT: FLUX.1 Kontext EDITS the idle image (ReferenceLatent = idle latent).\n  Kontext keeps the face; only the expression changes.  Edit the instruction in nodes 30 / 40 / 50.\n- Runs at 256px (no FluxKontextImageScale) - fine for the ~112px HUD slot and ~5x faster.\n  128px still does the open-mouth attack but drops the subtle block/hurt edits.\n- Knobs: KSampler 'steps' on the Kontext samplers (20 = quality, ~12 = faster), FluxGuidance\n  'guidance' (2.5 default; higher = follows the instruction harder).  cfg stays 1.0.\n- Loads krea2 (13GB) + Kontext (12GB) + t5xxl - ComfyUI swaps them; expect a pause between groups."
+        "ComfyCrawler HUD portrait pipeline - Kontext edition (mirrors server.generate_kontext_portrait_set).\n- IDLE group: krea2 makes one bust.  Swap the character in node 10.\n- ATTACK / BLOCK / HURT: FLUX.1 Kontext EDITS the idle image (ReferenceLatent = idle latent).\n  Kontext keeps the face; only the expression changes.  Edit the instruction in nodes 30 / 40 / 50.\n- Runs at 256px (no FluxKontextImageScale) - fine for the ~112px HUD slot and ~5x faster.\n  128px still does the open-mouth attack but drops the subtle block/hurt edits.\n- Knobs: KSampler 'steps' on the Kontext samplers (20 = quality, ~12 = faster), FluxGuidance\n  'guidance' (4.0 here; higher = follows the instruction harder, up to ~6.5).  cfg stays 1.0.\n- server.py also auto-retries any frame that comes back ~identical to idle at guidance+2.5.\n- Loads krea2 (13GB) + Kontext (12GB) + t5xxl - ComfyUI swaps them; expect a pause between groups."
       ]
     }
   ],

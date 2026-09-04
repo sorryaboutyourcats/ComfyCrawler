@@ -212,13 +212,11 @@
               STYLE
             </span>
           </div>
-          
-          <span class="text-xl font-bold">.</span>
         </div>
 
         <!-- Line 2: Player Style / Upload -->
         <div class="text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
-          <span class="font-bold whitespace-nowrap">The player looks like</span>
+          <span class="font-bold whitespace-nowrap">The player is a</span>
           
           <div class="inline-flex flex-1 min-w-[180px] relative items-center">
             <div class="w-full flex flex-col items-center">
@@ -227,10 +225,10 @@
                 id="playerPromptInput" 
                 class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors disabled:opacity-40 disabled:bg-slate-200 disabled:cursor-not-allowed"
                 value="" 
-                placeholder="fill in player style..."
+                placeholder="fill in character..."
               />
               <span id="playerPromptLabel" class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
-                STYLE
+                CHARACTER
               </span>
             </div>
 
@@ -289,7 +287,7 @@
 
         <!-- Line 4: Enemy Style / Upload -->
         <div class="text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
-          <span class="font-bold whitespace-nowrap">The enemy looks like</span>
+          <span class="font-bold whitespace-nowrap">The enemy is a</span>
 
           <div class="inline-flex flex-1 min-w-[180px] relative items-center">
             <div class="w-full flex flex-col items-center">
@@ -324,8 +322,8 @@
         <!-- Quick Presets -->
         <div class="flex gap-2 mt-1 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
           <span class="text-xs text-slate-600 font-bold">Quick ideas:</span>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Windows 95">
-            <span>🪟 Windows 95</span>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Windows 95 3D maze">
+            <span>💾 Windows 95</span>
           </button>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Deep Forest">
             <span>🌲 Deep Forest</span>
@@ -339,8 +337,20 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Candy Cane">
             <span>🍬 Candy Cane</span>
           </button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="tacos">
-            <span>🌮 tacos</span>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Tacos">
+            <span>🌮 Tacos</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Haunted Manor">
+            <span>👻 Haunted Manor</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Volcanic Depths">
+            <span>🌋 Volcanic Depths</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Sunken Ruins">
+            <span>🐙 Sunken Ruins</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Pharaoh's Tomb">
+            <span>🏺 Pharaoh's Tomb</span>
           </button>
         </div>
       </div>
@@ -352,7 +362,7 @@
         </button>
 
         <button id="btnCreate" class="win95-btn px-6 py-1.5 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200 font-bold">
-          <span>🪄 CREATE</span>
+          <span>✨ CREATE</span>
         </button>
       </div>
     </div>

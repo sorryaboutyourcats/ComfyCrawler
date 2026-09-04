@@ -1596,8 +1596,21 @@ def krea2_shield_prompt(player_style):
 # The three foes built from one typed enemy idea. Every variant keeps the SAME {e} noun so
 # all three read as the same species - a ground fighter, an airborne swooper that stays out
 # of reach, and a hulking champion. The frontend (bundle["enemy_variants"]) sizes and drives
-# each one differently; here they only differ by form/pose wording.
+# each one differently.
 ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
+
+# ONLY the walker is generated directly by krea2. The flyer and the boss are derived from it
+# by FLUX Kontext edits (generate_kontext_enemy_variants), because asking krea2 for either
+# one directly is not survivable on a non-creature subject:
+#   - flyer: "a giant stick of RAM" came back as a plain bird on 4 of 4 seeds - with the
+#     conditional identity wording, without it, and with every mention of birds stripped out.
+#   - boss: the same subject came back as a generic armoured demon knight.
+# In both cases a phrase like "huge wings spread wide, hovering" or "colossal hulking heavily
+# armoured boss" is simply a stronger prior than any amount of "it is literally a RAM stick".
+# Kontext is an instruction-edit model that holds identity - the same property the HUD
+# portraits rely on - so editing the walker sidesteps the argument entirely.
+# Both krea2 prompts are KEPT as the fallback path when a Kontext edit fails.
+KREA2_DIRECT_ENEMY_VARIANTS = ["walker"]
 
 
 def _a_or_an(noun):
@@ -1626,6 +1639,16 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
        Leading with the literal object and letting the animation clause opt out for things
        that aren't alive renders an actual DDR module, verified.
 
+    3. EVERY CLAUSE IS POSITIVE. krea2 runs at cfg 1.0 with a ConditioningZeroOut negative,
+       so there is NO negative guidance - every word in this string is something the model is
+       being asked to draw. An earlier flyer clause read "instead of replacing it with a bird,
+       a bat or any other winged animal" and reliably produced a bird, because "bird" and
+       "bat" were positive conditioning. Nothing here may name a thing we do not want; state
+       only what the picture should contain.
+
+    Per-variant `look` clauses exist so the three foes are told apart at a glance in combat -
+    on one subject the walker and the boss otherwise came back as near-identical images.
+
     `tighten` (0..2) is the retry lever for _krea2_regen_enemy and now only widens the margin
     a little - it never goes back to asking for a small subject."""
     e = enemy_style.strip() if (enemy_style and enemy_style.strip()) else "fearsome dragon with wide outstretched wings"
@@ -1635,40 +1658,45 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
         "a comfortable even margin around it",
     ][min(int(tighten), 2)]
 
+    fill_tb = (f"Drawn LARGE and filling the frame from top to bottom, the top of it near the "
+               f"top edge and the base near the bottom edge, with {margin}")
+
     if variant == "flyer":
-        # The wing clause has to opt out the same way the animation clause does. Asking flatly
-        # for "the flying version of X with wings spread" is a creature instruction, and it
-        # beats the identity wording: "a giant stick of RAM" came back as a bird. Telling the
-        # model to bolt wings ONTO the unchanged subject keeps the RAM stick a RAM stick.
-        role = (f"It is the flying, airborne version, hovering in mid-air clear of the ground "
-                f"with a pair of large wings spread wide and fully outstretched to either "
-                f"side. If {e} is not naturally a winged flying creature, keep {e} itself "
-                f"completely unchanged and simply attach the outspread wings to it, instead "
-                f"of replacing it with a bird, a bat or any other winged animal")
+        # Purely additive phrasing: the wings are an attachment to the unchanged subject. Any
+        # mention of what it must NOT become is conditioning for exactly that (see 3 above).
+        role = (f"A pair of huge wings are attached to {e} itself, spread wide and fully "
+                f"outstretched to either side, and it hovers in mid-air well clear of the "
+                f"ground. {e} keeps its own exact shape, proportions and surface, with the "
+                f"broad outstretched wings simply attached to it")
+        look = (f"Its colouring is lighter and paler than usual, sun-bleached and airy, "
+                f"catching a bright highlight from above")
         fill = (f"Drawn LARGE and filling the frame edge to edge, the wingtips reaching out "
                 f"close to the left and right edges and the body filling the height, with "
                 f"{margin}")
     elif variant == "boss":
-        role = (f"It is the colossal, hulking boss version of {e} - massively built, heavily "
-                f"armoured and battle-scarred, towering and imposing")
-        fill = (f"Drawn LARGE and filling the frame from top to bottom, the top of it near the "
-                f"top edge and the base near the bottom edge, with {margin}")
+        role = (f"It is the colossal, hulking boss form of {e} - massively built, thickset and "
+                f"towering, heavily reinforced with jagged dark metal armour plating bolted "
+                f"across it, looming over the viewer")
+        look = (f"Its colouring is far darker and heavier than usual - blackened, deeply "
+                f"shadowed tones shot through with glowing molten red seams, its surface "
+                f"scorched, cracked, pitted and battle-scarred")
+        fill = fill_tb
     else:
         role = (f"It faces the camera head-on, squarely on the ground in a menacing, "
                 f"combat-ready fighting stance")
-        fill = (f"Drawn LARGE and filling the frame from top to bottom, the top of it near the "
-                f"top edge and the base near the bottom edge, with {margin}")
+        look = (f"Its colouring is its ordinary, natural, everyday one, clean, bright and "
+                f"undamaged")
+        fill = fill_tb
 
     return (
         f"A full-body video game enemy sprite of {e}. The subject is literally {e}, drawn "
         f"exactly as {e} really looks, with the true shape, proportions, colours and details "
         f"of {e}, instantly recognisable as {e} at a glance. It is brought to life as a "
-        f"monster opponent: if {e} is not naturally a living creature, keep its real shape, "
-        f"proportions, colours and surface details exactly as they are and simply animate "
-        f"that object itself - give it eyes and small limbs - without replacing it with an "
-        f"animal, a beast or a humanoid. {role}. {fill}, the whole thing completely inside "
-        f"the picture with nothing cut off at any edge. Dramatic even lighting, sharp "
-        f"detailed textures. Plain solid pure white background, nothing else in frame."
+        f"monster opponent: it keeps the real shape, proportions and surface details of {e} "
+        f"exactly as they are, with the object itself animated and given eyes and small "
+        f"limbs. {role}. {look}. {fill}, the whole thing completely inside the picture with "
+        f"nothing cut off at any edge. Dramatic even lighting, sharp detailed textures. "
+        f"Plain solid pure white background, nothing else in frame."
     )
 
 
@@ -1692,8 +1720,11 @@ FLUX_T5      = "t5xxl_fp8_e4m3fn.safetensors"
 FLUX_CLIP_L  = "clip_l.safetensors"
 FLUX_AE      = "ae.safetensors"
 KONTEXT_STEPS = 20            # Kontext-dev; quality/speed knob (~10s/frame at 256px / 20 steps)
-KONTEXT_GUIDANCE = 3.5        # 2.5 changed mostly the mouth; 3.5 makes the eyes/brow/forehead
-                             # follow the instruction too, without breaking identity
+KONTEXT_GUIDANCE = 3.5        # default for Kontext edits (enemy variants use this)
+KONTEXT_PORTRAIT_GUIDANCE = 4.0   # portraits push harder: at 3.5 the eyes/brow barely moved
+                                  # and a "mouth-closed" block frame often came out == idle
+KONTEXT_PORTRAIT_MIN_DIFF = 4.0   # a reaction frame this close (grey mean-abs, 0-255) to idle
+                                  # is treated as "the edit did nothing" and regenerated once
 # Portrait working resolution. The pipeline deliberately does NOT use FluxKontextImageScale
 # (which snaps to ~1MP and cost ~50s/frame) - the HUD slot is ~112px so it does not need it.
 # 256 is the floor: at 128 Kontext can still do the big change (open-mouth attack) but the
@@ -1703,19 +1734,24 @@ KONTEXT_PORTRAIT_RES = 256
 # One edit instruction per reaction frame. Kontext responds to imperative "change X, keep
 # everything else" phrasing - the long "keep the exact same face..." tail is what pins the
 # identity, so keep it on every edit. Each edit calls out the EYES / BROW / FOREHEAD and
-# the WHOLE face explicitly, not just the mouth - at guidance 2.5 Kontext moved mainly the
-# mouth and left the eyes near-neutral.
-_KEEP = ("Keep the exact same face, identity, head shape, hair, skin, colours, lighting, "
-         "pose and framing - change nothing else.")
+# the WHOLE face explicitly, not just the mouth - at low guidance Kontext moved mainly the
+# mouth and left the eyes near-neutral. `block` also gets visible mouth/jaw TENSION (not
+# just "closed") so it doesn't come back identical to idle on a face whose eyes are hidden
+# behind glasses.
+_KEEP = ("Keep the exact same face, identity, head shape, hair, skin, any glasses, colours, "
+         "lighting, pose and framing - change nothing else.")
 KONTEXT_EXPRESSION_EDITS = {
-    "attack": f"Change the facial expression to explosive rage: mouth wide open roaring with "
-              f"teeth bared, AND the eyes glaring wide and furious, eyebrows slammed down hard "
-              f"and drawn together, deep angry creases across the forehead and between the "
-              f"brows, the whole upper face contorted with fury. {_KEEP}",
-    "block":  f"Change the facial expression to intense angry focus with the mouth kept closed: "
-              f"jaw clenched, lips pressed into a hard flat line, eyes narrowed and locked "
-              f"forward in a fierce concentrated stare, eyebrows pulled low and together, brow "
-              f"deeply furrowed. {_KEEP}",
+    "attack": f"Change the facial expression to berserk fury: mouth wide open roaring, teeth "
+              f"bared; the eyes wide and bulging with rage in a wild wide-eyed furious stare "
+              f"with the whites showing, eyebrows slammed straight down and jammed hard "
+              f"together, deep creases gouged into the forehead and between the brows, nostrils "
+              f"flared, the whole face contorted and straining with rage. {_KEEP}",
+    "block":  f"Change the facial expression to a furious grim glare with the mouth kept shut: "
+              f"jaw clenched hard so the jaw muscles stand out, mouth set in a tense hard "
+              f"grimace with the lips pressed thin and the corners pulled down, eyes narrowed "
+              f"to angry slits glaring dead ahead, eyebrows wrenched down and inward, deep "
+              f"vertical creases between the brows, nostrils flared, chin tucked and head "
+              f"lowered slightly - a braced, aggressive, defiant stare. {_KEEP}",
     "hurt":   f"Change the facial expression to anguished pain and grief: both eyes squeezed "
               f"tightly shut, eyebrows pulled upward and together into a pained sorrowful knot, "
               f"the whole face crumpled and grimacing, mouth open and pulled down at the "
@@ -1743,16 +1779,65 @@ def _kontext_alpha_nodes(payload, name, image_node, prefix):
                                "class_type": "SaveImageWithAlpha"}
 
 
+def _portrait_frame_diff(idle_path, frame_path):
+    """Mean absolute grey difference (0-255) between two RGBA busts, each composited on a
+    flat grey. Near 0 means the Kontext edit changed essentially nothing - which happens on
+    a 'mouth closed' block frame for a face whose eyes are hidden behind glasses."""
+    from PIL import Image
+    import numpy as np
+    def _grey(p):
+        im = Image.open(p).convert("RGBA")
+        bg = Image.new("RGBA", im.size, (128, 128, 128, 255))
+        return np.asarray(Image.alpha_composite(bg, im).convert("L").resize((128, 128)), dtype=float)
+    try:
+        return float(np.abs(_grey(idle_path) - _grey(frame_path)).mean())
+    except Exception as e:
+        print(f"[Portrait Diff Error] {e}")
+        return 99.0
+
+
+def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False):
+    """One Kontext job: edit the RGB idle image `idle_in` (a filename in COMFY_INPUT_DIR)
+    into each expression name in `targets`. `with_idle=True` also emits a background-removed
+    copy of the idle itself (matting only, no sampler) so every frame shares the same matte.
+    Returns {name: path}, each background-removed."""
+    b = {
+        "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
+        "clip": {"inputs": {"clip_name1": FLUX_T5, "clip_name2": FLUX_CLIP_L, "type": "flux"}, "class_type": "DualCLIPLoader"},
+        "vae":  {"inputs": {"vae_name": FLUX_AE}, "class_type": "VAELoader"},
+        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        "load":  {"inputs": {"image": idle_in}, "class_type": "LoadImage"},
+        "enc":   {"inputs": {"pixels": ["load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"},
+    }
+    want = list(targets)
+    if with_idle:
+        _kontext_alpha_nodes(b, "idle", "load", "kxp")
+        want = ["idle"] + want
+    for name in targets:
+        b[f"{name}_pos"] = {"inputs": {"text": KONTEXT_EXPRESSION_EDITS[name], "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
+        b[f"{name}_ref"] = {"inputs": {"conditioning": [f"{name}_pos", 0], "latent": ["enc", 0]}, "class_type": "ReferenceLatent"}
+        b[f"{name}_g"]   = {"inputs": {"conditioning": [f"{name}_ref", 0], "guidance": guidance}, "class_type": "FluxGuidance"}
+        b[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
+        b[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": KONTEXT_STEPS, "cfg": 1.0,
+                                        "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                        "model": ["unet", 0], "positive": [f"{name}_g", 0],
+                                        "negative": [f"{name}_neg", 0], "latent_image": ["enc", 0]},
+                             "class_type": "KSampler"}
+        b[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
+        _kontext_alpha_nodes(b, name, f"{name}_dec", "kxp")
+    return _krea2_submit_and_collect(b, want, timeout=400)
+
+
 def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
     """Four HUD portrait busts: a krea2 idle, then FLUX.1 Kontext expression edits of it.
 
     Job A (krea2): one idle bust at `size` px, plain RGB.
-    Job B (Kontext): load that idle -> VAEEncode (NO FluxKontextImageScale - see
-    KONTEXT_PORTRAIT_RES) -> for each of attack/block/hurt: CLIPTextEncode(edit) ->
-    ReferenceLatent(idle latent) -> FluxGuidance -> KSampler (denoise 1.0) -> decode; the
-    idle itself just passes through BiRefNet so all four share matting and framing. Returns
-    a 4-list in PORTRAIT_FRAME_NAMES order (each background-removed, validated, bad frames
-    fall back to idle); None if even idle fails."""
+    Job B (Kontext, `_kontext_expression_job`): edit the idle into attack/block/hurt (no
+    FluxKontextImageScale - see KONTEXT_PORTRAIT_RES). Any reaction frame that comes back
+    within KONTEXT_PORTRAIT_MIN_DIFF of the idle (the edit did nothing - common for a
+    glasses-wearer's 'mouth closed' block) is regenerated once at a higher guidance + a
+    fresh seed. Returns a 4-list in PORTRAIT_FRAME_NAMES order (each background-removed,
+    bad frames fall back to idle); None if even idle fails."""
     seed = random.randint(1, 1000000000)
 
     # --- Job A: krea2 idle bust (no background removal - Kontext needs the full RGB) ---
@@ -1772,30 +1857,18 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
     idle_in = f"kxp_src_{int(time.time()*1000)}.png"
     shutil.copy(idle_src, os.path.join(COMFY_INPUT_DIR, idle_in))
 
-    # --- Job B: Kontext expression edits ---
-    b = {
-        "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
-        "clip": {"inputs": {"clip_name1": FLUX_T5, "clip_name2": FLUX_CLIP_L, "type": "flux"}, "class_type": "DualCLIPLoader"},
-        "vae":  {"inputs": {"vae_name": FLUX_AE}, "class_type": "VAELoader"},
-        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
-        "load":  {"inputs": {"image": idle_in}, "class_type": "LoadImage"},
-        "enc":   {"inputs": {"pixels": ["load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"},
-    }
-    _kontext_alpha_nodes(b, "idle", "load", "kxp")     # idle: matting only, no edit
-    for name, instr in KONTEXT_EXPRESSION_EDITS.items():
-        b[f"{name}_pos"] = {"inputs": {"text": instr, "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
-        b[f"{name}_ref"] = {"inputs": {"conditioning": [f"{name}_pos", 0], "latent": ["enc", 0]}, "class_type": "ReferenceLatent"}
-        b[f"{name}_g"]   = {"inputs": {"conditioning": [f"{name}_ref", 0], "guidance": KONTEXT_GUIDANCE}, "class_type": "FluxGuidance"}
-        b[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
-        b[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": KONTEXT_STEPS, "cfg": 1.0,
-                                        "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
-                                        "model": ["unet", 0], "positive": [f"{name}_g", 0],
-                                        "negative": [f"{name}_neg", 0], "latent_image": ["enc", 0]},
-                             "class_type": "KSampler"}
-        b[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
-        _kontext_alpha_nodes(b, name, f"{name}_dec", "kxp")
+    # --- Job B: Kontext expression edits (+ retry for any frame that barely moved) ---
+    reactions = [n for n in PORTRAIT_FRAME_NAMES if n != "idle"]
+    paths = _kontext_expression_job(idle_in, reactions, KONTEXT_PORTRAIT_GUIDANCE, seed, with_idle=True)
 
-    paths = _krea2_submit_and_collect(b, PORTRAIT_FRAME_NAMES, timeout=400)
+    stuck = [n for n in reactions
+             if _portrait_frame_diff(paths["idle"], paths[n]) < KONTEXT_PORTRAIT_MIN_DIFF]
+    if stuck:
+        print(f"[Kontext Portrait] {stuck} barely changed - regenerating at higher guidance")
+        retry = _kontext_expression_job(idle_in, stuck, KONTEXT_PORTRAIT_GUIDANCE + 2.5,
+                                        random.randint(1, 1000000000))
+        paths.update(retry)
+
     frames = [paths[n] if crop_portrait_square(paths[n]) else None for n in PORTRAIT_FRAME_NAMES]
     fallback = frames[0] or next((p for p in frames if p), None)
     if not fallback:
@@ -2004,20 +2077,127 @@ def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="wa
 
 
 def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix):
-    """Add a walker / flyer / boss enemy branch to a shared krea2 payload, keyed
-    `enemy_<variant>`. Each gets its own seed - they should look like the same species,
-    not the same pose."""
-    for v in ENEMY_VARIANT_NAMES:
+    """Add the directly-generated enemy branches (walker, boss) to a shared krea2 payload,
+    keyed `enemy_<variant>`. Each gets its own seed - they should look like the same species,
+    not the same pose. The flyer and boss are NOT here; see KREA2_DIRECT_ENEMY_VARIANTS."""
+    for v in KREA2_DIRECT_ENEMY_VARIANTS:
         _krea2_add_branch(payload, f"enemy_{v}", krea2_enemy_prompt(enemy_style, variant=v),
                           sq, sq, steps, random.randint(1, 1000000000), prefix)
 
 
+# Kontext edits that turn the finished walker into the other two variants.
+#
+# The hard-won rule for BOTH: an instruction may only describe a NARROW, LOCAL change, and it
+# must not contain a noun whose own visual prior is a character. "Armour", "plating", "boss",
+# "colossal", "spikes" each summon a humanoid knight, and they do it in krea2 AND in Kontext -
+# an early boss edit ("cover it in thick jagged black armour plating, colossal armoured boss
+# version") turned a green RAM stick into a generic armoured demon, exactly like the direct
+# krea2 boss prompt did. Rewritten to touch only surface and colour, naming no character at
+# all, it keeps the RAM stick and just makes it a scorched, lava-cracked RAM stick.
+#
+# Unlike krea2 (cfg 1.0, no negative guidance, so "don't draw X" draws X), Kontext is a real
+# instruction model with guidance, so explicit "keep / do not change" phrasing works here and
+# is what pins the identity.
+#
+# The wing edit is deliberately neutral about the KIND of wing, so it matches the subject, and
+# explicit about the already-winged case so a dragon gets its own wings spread rather than a
+# second pair.
+#
+# It says "this OBJECT", never "this creature". An earlier version said "this creature" twice
+# and turned a RAM-stick walker into a plain bird in a real run - the noun rule above applies
+# to the thing being edited, not just to what is added, and "creature" is itself a character
+# noun telling the model what to draw. The boss edit alongside it, which says "object", held
+# the same walker's identity in that very same job. Verified after the swap: 3/3 seeds on the
+# exact failing RAM walker came back as winged RAM sticks, and a dog and a dragon both keep
+# their identity, so "object" costs nothing on real creatures.
+KONTEXT_WING_EDIT = (
+    "Add a pair of large wings to this object, spread wide and fully outstretched to the "
+    "left and right. If it already has wings, simply spread those same wings out wide. "
+    "Keep the object completely unchanged - identical shape, colours, markings and "
+    "details - with the wings simply attached to its sides. Plain white background."
+)
+KONTEXT_BOSS_EDIT = (
+    "Recolour this object so it looks scorched and dangerous: blackened and charred all over, "
+    "with bright glowing orange-red lava seams glowing out from deep cracks in its surface. "
+    "Keep the object completely unchanged in shape and form - only its colour and surface "
+    "texture change. Plain white background."
+)
+
+# Per-variant edit plus how much of the padded square the source should occupy. The flyer is
+# given more empty margin because the wings need somewhere to go; the boss edit adds no span,
+# so its source is padded larger, which keeps more of the walker's real resolution.
+KONTEXT_ENEMY_EDITS = {
+    "flyer": {"edit": KONTEXT_WING_EDIT, "h": 0.62, "w": 0.55},
+    "boss":  {"edit": KONTEXT_BOSS_EDIT, "h": 0.78, "w": 0.72},
+}
+
+
+def generate_kontext_enemy_variants(walker_path, size=512):
+    """Derive the flyer and the boss from the finished walker sprite, in ONE Kontext job.
+
+    The walker arrives as a tight RGBA cut-out that is often far taller than it is wide (a
+    RAM stick crops to ~127x512), so for each variant it is composited onto white and padded
+    into a square - that surrounding space is where wings get drawn. Kontext needs full RGB,
+    hence the white composite rather than the alpha PNG.
+
+    Returns {variant: path or None}; None means the caller should fall back to a direct krea2
+    generation for that variant."""
+    from PIL import Image
+    out = {v: None for v in KONTEXT_ENEMY_EDITS}
+    try:
+        b = {
+            "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
+            "clip": {"inputs": {"clip_name1": FLUX_T5, "clip_name2": FLUX_CLIP_L, "type": "flux"}, "class_type": "DualCLIPLoader"},
+            "vae":  {"inputs": {"vae_name": FLUX_AE}, "class_type": "VAELoader"},
+            "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        }
+        src = Image.open(walker_path).convert("RGBA")
+        for v, cfg in KONTEXT_ENEMY_EDITS.items():
+            scale = min((size * cfg["h"]) / src.height, (size * cfg["w"]) / src.width)
+            sub = src.resize((max(1, round(src.width * scale)), max(1, round(src.height * scale))),
+                             Image.LANCZOS)
+            canvas = Image.new("RGB", (size, size), (255, 255, 255))
+            canvas.paste(sub, ((size - sub.width) // 2, (size - sub.height) // 2), sub)
+            infile = f"kxenemy_{v}_{int(time.time()*1000)}.png"
+            canvas.save(os.path.join(COMFY_INPUT_DIR, infile), format="PNG")
+
+            b[f"{v}_load"] = {"inputs": {"image": infile}, "class_type": "LoadImage"}
+            b[f"{v}_enc"] = {"inputs": {"pixels": [f"{v}_load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"}
+            b[f"{v}_pos"] = {"inputs": {"text": cfg["edit"], "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
+            b[f"{v}_ref"] = {"inputs": {"conditioning": [f"{v}_pos", 0], "latent": [f"{v}_enc", 0]}, "class_type": "ReferenceLatent"}
+            b[f"{v}_g"] = {"inputs": {"conditioning": [f"{v}_ref", 0], "guidance": KONTEXT_GUIDANCE}, "class_type": "FluxGuidance"}
+            b[f"{v}_neg"] = {"inputs": {"conditioning": [f"{v}_pos", 0]}, "class_type": "ConditioningZeroOut"}
+            b[f"{v}_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": KONTEXT_STEPS,
+                                         "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
+                                         "denoise": 1.0, "model": ["unet", 0], "positive": [f"{v}_g", 0],
+                                         "negative": [f"{v}_neg", 0], "latent_image": [f"{v}_enc", 0]},
+                              "class_type": "KSampler"}
+            b[f"{v}_dec"] = {"inputs": {"samples": [f"{v}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
+            _kontext_alpha_nodes(b, v, f"{v}_dec", "kxenemy")
+
+        paths = _krea2_submit_and_collect(b, list(KONTEXT_ENEMY_EDITS), timeout=600)
+        for v in KONTEXT_ENEMY_EDITS:
+            p = paths[v]
+            keep_largest_figure(p, thresh=50)
+            problem = _enemy_frame_problem(p)
+            if problem:
+                print(f"[Kontext Enemy] {v} edit came back {problem} - falling back to krea2")
+                continue
+            _save_tight(p, thresh=50)
+            out[v] = p
+        return out
+    except Exception as e:
+        print(f"[Kontext Enemy Error] {e}")
+        return out
+
+
 def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
-    """Post-process the three enemy branches collected into `paths` (keys `enemy_<variant>`):
+    """Post-process the directly-generated enemy branches in `paths` (keys `enemy_<variant>`):
     drop any stray blob / BiRefNet halo, regen a variant that came back too small or clipped,
-    then tight-crop. Returns {variant: path}."""
+    then tight-crop. The flyer is then derived from the finished walker with a Kontext wing
+    edit, falling back to a direct krea2 flyer if that fails. Returns {variant: path}."""
     enemies = {}
-    for v in ENEMY_VARIANT_NAMES:
+    for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker only
         ep = paths[f"enemy_{v}"]
         keep_largest_figure(ep, thresh=50)
         problem = _enemy_frame_problem(ep)
@@ -2027,7 +2207,18 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
                                     clipped=problem.startswith("clipped"))
         _save_tight(ep, thresh=50)
         enemies[v] = ep
-    return enemies
+
+    derived = generate_kontext_enemy_variants(enemies["walker"], size=sq)
+    for v, p in derived.items():
+        if p is None:
+            p = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v, attempts=1)
+        enemies[v] = p
+
+    missing = [v for v in ENEMY_VARIANT_NAMES if not enemies.get(v)]
+    if missing:
+        print(f"[krea2] {prefix} enemy variants missing: {missing} - the frontend will fall "
+              f"back to the walker for those")
+    return {v: enemies[v] for v in ENEMY_VARIANT_NAMES if enemies.get(v)}
 
 
 def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps,
@@ -2046,7 +2237,7 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5")
 
-    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in ENEMY_VARIANT_NAMES)
+    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in KREA2_DIRECT_ENEMY_VARIANTS)
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, names)
     elapsed = time.time() - t0
@@ -2132,7 +2323,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
     _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6")
 
-    keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in ENEMY_VARIANT_NAMES]
+    keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in KREA2_DIRECT_ENEMY_VARIANTS]
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, keys)
     elapsed = time.time() - t0

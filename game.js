@@ -233,12 +233,16 @@
     // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
     // are locked to an uploaded image are left alone.
     const PRESET_IDEAS = {
-      'Windows 95':  { player: 'nerd in a shirt and tie with thick glasses', weapon: 'computer keyboard',            enemy: 'giant stick of RAM' },
+      'Windows 95 3D maze': { player: 'guy in a shirt and tie with thick glasses', weapon: 'computer keyboard',     enemy: 'stick of RAM' },
       'Deep Forest': { player: 'wood elf ranger in leaf armor',              weapon: 'living oak longbow',            enemy: 'moss-covered dire bear' },
       'Cyber Neon':  { player: 'chrome street samurai in a neon jacket',      weapon: 'glowing plasma katana',        enemy: 'rogue security drone' },
       'Mossy Stone': { player: 'lichen-cloaked stone knight',                weapon: 'moss-covered stone warhammer', enemy: 'crumbling gargoyle golem' },
       'Candy Cane':  { player: 'gingerbread paladin with frosting armor',    weapon: 'peppermint candy cane staff',  enemy: 'giant gummy bear' },
-      'tacos':       { player: 'masked luchador chef',                       weapon: 'sizzling cast-iron skillet',   enemy: 'giant walking taco monster' },
+      'Tacos':       { player: 'masked luchador chef',                       weapon: 'sizzling cast-iron skillet',   enemy: 'giant walking taco monster' },
+      'Haunted Manor':   { player: 'victorian ghost hunter with a lantern',   weapon: 'silver-tipped cane',           enemy: 'floating poltergeist in a torn dress' },
+      'Volcanic Depths': { player: 'ash-scarred fire dwarf in obsidian mail', weapon: 'molten iron greataxe',         enemy: 'lumbering magma golem' },
+      'Sunken Ruins':    { player: 'coral-armored deep diver',                weapon: 'barnacled bronze trident',     enemy: 'giant tentacled kraken spawn' },
+      "Pharaoh's Tomb":  { player: 'bandaged tomb raider in linen wraps',     weapon: 'golden khopesh sword',         enemy: 'shambling scarab-covered mummy' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -315,14 +319,19 @@
 
     // walker / flyer / boss - one typed enemy idea, three battlefield roles. Stats and AI
     // differ here; the distinct sprites come from the server (bundle.enemy_variants).
-    //   heightFrac - target on-screen height as a fraction of the 240px combat canvas
+    //   heightFrac - target on-screen height as a fraction of the 240px combat canvas.
+    //                The boss is pinned near the ceiling: its feet sit at GROUND_Y (165), so
+    //                anything above ~0.69 clips off the top of the frame. The size gap is
+    //                therefore made by keeping the walker SMALL rather than the boss bigger -
+    //                0.44 vs 0.68 is a clear 1.5x, and 106px also matches the ~104px the
+    //                original procedural enemy was drawn at.
     //   widthFrac  - hard cap on drawn width as a fraction of the 320px width. Sprites now
     //                fill their generated canvas, so a winged flyer arrives far wider than
     //                it is tall and would otherwise span the whole screen.
     //   cadence    - frames between attacks   telegraph - wind-up lead frames
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.58, widthFrac: 0.60, fly: false, canBlock: true,  slow: false, hover: 0  },
-      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.44, widthFrac: 0.72, fly: true,  canBlock: false, slow: false, hover: 58 },
+      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  slow: false, hover: 0  },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, slow: false, hover: 58 },
       boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: false, slow: true,  hover: 0  },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
