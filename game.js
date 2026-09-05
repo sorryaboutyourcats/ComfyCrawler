@@ -8,6 +8,11 @@
     const victoryModal = document.getElementById('victoryModal');
     const btnPlayAgain = document.getElementById('btnPlayAgain');
     const winMovesCount = document.getElementById('winMovesCount');
+    const defeatModal = document.getElementById('defeatModal');
+    const defeatText = document.getElementById('defeatText');
+    const deadMovesCount = document.getElementById('deadMovesCount');
+    const btnRiseAgain = document.getElementById('btnRiseAgain');
+    const btnDeadNewDungeon = document.getElementById('btnDeadNewDungeon');
 
     const modeSelect = document.getElementById('modeSelect');
     const modeDesc = document.getElementById('modeDesc');
@@ -48,6 +53,7 @@
     const btnEnterDungeon = document.getElementById('btnEnterDungeon');
     const chkAutoEnter = document.getElementById('chkAutoEnter');
     const chkNarrate = document.getElementById('chkNarrate');
+    const chkSfx = document.getElementById('chkSfx');
     const btnNarrateManual = document.getElementById('btnNarrateManual');
     const progHeaderText = document.getElementById('progHeaderText');
     const progHeaderIcon = document.getElementById('progHeaderIcon');
@@ -271,6 +277,177 @@
       });
     }
     window.addEventListener('beforeunload', stopNarration);
+
+    // ---- Sound effects (Stable Audio 3, generated per dungeon) -------------
+    // The server ships bundle.sfx as {name: 'data:audio/wav;base64,...'} - eight one-shots
+    // written from the same typed styles the art comes from, so the footstep matches the
+    // floor and the swing matches the weapon.
+    //
+    // Web Audio rather than <audio> elements (which is what the narration above uses): a
+    // one-shot has to overlap itself and be pitch-varied per hit, and an <audio> element
+    // can do neither. The narration is a single long clip played once, so it keeps its
+    // simpler path.
+    //
+    // Anything missing from the bundle - an older v3/v4/v5 dungeon, a clip that failed the
+    // server's validator, a machine with no audio checkpoint - falls through to synthSfx(),
+    // so the game is never silent and never throws over sound.
+    const SFX_KEY = 'comfycrawler.sfx';
+    function loadSfxOn() {
+      try { return localStorage.getItem(SFX_KEY) !== '0'; } catch (e) { return true; }
+    }
+    function saveSfxOn(on) {
+      try { localStorage.setItem(SFX_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+    }
+
+    let audioCtx = null;
+    let sfxMaster = null;
+    let sfxBank = {};              // name -> AudioBuffer, for whatever the bundle supplied
+    let sfxOn = loadSfxOn();
+
+    function sfxContext() {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        audioCtx = new AC();
+        sfxMaster = audioCtx.createGain();
+        sfxMaster.gain.value = sfxOn ? 0.85 : 0.0;
+        sfxMaster.connect(audioCtx.destination);
+      }
+      // Created suspended under the autoplay policy until a real gesture resumes it. The
+      // first-gesture listener below does that; resuming again here is harmless and covers
+      // a context that got suspended later (backgrounded tab).
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+      return audioCtx;
+    }
+
+    function loadSfxBank(sfx) {
+      // The UI sounds are static and shared across dungeons - carry them over rather than
+      // re-fetching them on every entry.
+      const kept = {};
+      UI_SOUNDS.forEach(n => { if (sfxBank[n]) kept[n] = sfxBank[n]; });
+      sfxBank = kept;
+      if (!sfx) return;            // other modes / a failed pack: synthSfx covers everything
+      const ctx = sfxContext();
+      if (!ctx) return;
+      Object.keys(sfx).forEach(name => {
+        try {
+          const b64 = sfx[name].split(',')[1];
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          // Callback form, not the promise: Safari still ships the old signature.
+          ctx.decodeAudioData(bytes.buffer, buf => { sfxBank[name] = buf; }, () => {});
+        } catch (e) { /* one bad clip must not cost the other seven */ }
+      });
+    }
+
+    // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
+    // percussive envelope - because their whole job is to keep the game audible when the
+    // generated pack is missing, not to compete with it.
+    const SYNTH_SFX = {
+      step:         { f: 620,  q: 1.2, dur: 0.11, type: 'lowpass',  gain: 0.30, sweep: 0.55 },
+      bump:         { f: 180,  q: 1.0, dur: 0.16, type: 'lowpass',  gain: 0.45, sweep: 0.60 },
+      attack:       { f: 2400, q: 0.8, dur: 0.20, type: 'bandpass', gain: 0.35, sweep: 0.30 },
+      block:        { f: 1400, q: 4.0, dur: 0.26, type: 'bandpass', gain: 0.45, sweep: 0.70 },
+      hit_enemy:    { f: 420,  q: 1.4, dur: 0.20, type: 'lowpass',  gain: 0.50, sweep: 0.45 },
+      hit_player:   { f: 300,  q: 1.4, dur: 0.24, type: 'lowpass',  gain: 0.55, sweep: 0.40 },
+      death_enemy:  { f: 260,  q: 2.0, dur: 0.70, type: 'lowpass',  gain: 0.50, sweep: 0.25 },
+      death_player: { f: 200,  q: 2.0, dur: 0.90, type: 'lowpass',  gain: 0.60, sweep: 0.20 }
+    };
+
+    function synthSfx(name, rate) {
+      const ctx = sfxContext();
+      if (!ctx) return;
+      const cfg = SYNTH_SFX[name] || SYNTH_SFX.step;
+      const dur = cfg.dur / (rate || 1);
+      const n = Math.max(1, Math.floor(ctx.sampleRate * dur));
+      const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) {
+        // Noise under an exponential decay - the envelope is what makes it read as a hit
+        // rather than a hiss.
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2.5);
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const filt = ctx.createBiquadFilter();
+      filt.type = cfg.type;
+      filt.Q.value = cfg.q;
+      const f0 = cfg.f * (rate || 1);
+      filt.frequency.setValueAtTime(f0, ctx.currentTime);
+      filt.frequency.exponentialRampToValueAtTime(Math.max(40, f0 * cfg.sweep),
+                                                  ctx.currentTime + dur);
+      const g = ctx.createGain();
+      g.gain.value = cfg.gain;
+      src.connect(filt); filt.connect(g); g.connect(sfxMaster);
+      src.start();
+    }
+
+    // Every in-game sound goes through here. `vary` is the pitch/level jitter that stops a
+    // corridor of footsteps sounding like one sample on a loop.
+    function playSfx(name, opts) {
+      if (!sfxOn) return;
+      const o = opts || {};
+      const vary = o.vary === undefined ? 0.08 : o.vary;
+      const rate = (o.rate || 1) * (1 + (Math.random() * 2 - 1) * vary);
+      const ctx = sfxContext();
+      if (!ctx) return;
+      const buf = sfxBank[name];
+      if (!buf) { synthSfx(name, rate); return; }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate;
+      const g = ctx.createGain();
+      g.gain.value = (o.gain === undefined ? 1.0 : o.gain) * (1 + (Math.random() * 2 - 1) * 0.10);
+      src.connect(g); g.connect(sfxMaster);
+      src.start();
+    }
+
+    // The three theme-independent UI sounds, served as static files from sounds/ rather than
+    // generated per run. Fetched once and decoded into the same bank, so they play through
+    // playSfx like everything else. A 404 (or a checkout without the files) just leaves them
+    // absent, and the procedural bank covers them.
+    const UI_SOUNDS = ['start', 'button', 'end'];
+    function loadUiSounds() {
+      const ctx = sfxContext();
+      if (!ctx) return;
+      UI_SOUNDS.forEach(name => {
+        if (sfxBank[name]) return;
+        fetch(`${SERVER_URL}/sounds/${name}.wav`)
+          .then(r => (r.ok ? r.arrayBuffer() : Promise.reject()))
+          .then(ab => ctx.decodeAudioData(ab, buf => { sfxBank[name] = buf; }, () => {}))
+          .catch(() => { /* falls back to synthSfx */ });
+      });
+    }
+
+    // An AudioContext created outside a user gesture starts suspended, and resume() only
+    // takes inside one. enterDungeon can be reached without a click (the "enter when done
+    // loading" checkbox fires it from the poll timer), so rather than relying on any single
+    // button, unlock on the first gesture of any kind. Once is enough for the session.
+    ['pointerdown', 'keydown'].forEach(evt => {
+      window.addEventListener(evt, () => { sfxContext(); loadUiSounds(); },
+                              { once: true, capture: true });
+    });
+
+    // One delegated click for every Win95 button, rather than a listener per control.
+    // Excluded: the D-pad (its buttons already produce a footstep or a wall thud) and the
+    // battle action bar (already a swing or a block), where a click on top would double up.
+    document.addEventListener('click', (ev) => {
+      const btn = ev.target.closest && ev.target.closest('.win95-btn');
+      if (!btn) return;
+      if (btn.classList.contains('dpad-btn')) return;
+      if (btn.closest('#battleActionBar')) return;
+      playSfx('button', { vary: 0.03, gain: 0.5 });
+    }, true);
+
+    if (chkSfx) {
+      chkSfx.checked = sfxOn;
+      chkSfx.addEventListener('change', () => {
+        sfxOn = chkSfx.checked;
+        saveSfxOn(sfxOn);
+        if (sfxMaster) sfxMaster.gain.value = sfxOn ? 0.85 : 0.0;
+      });
+    }
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
@@ -337,6 +514,7 @@
     function openSetupScreen() {
       screenGame.classList.add('hidden');
       victoryModal.classList.add('hidden');
+      if (defeatModal) defeatModal.classList.add('hidden');
       screenSetup.classList.remove('hidden');
       if (titleButtons) titleButtons.classList.remove('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
@@ -390,7 +568,10 @@
     // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
     // are locked to an uploaded image are left alone.
     const PRESET_IDEAS = {
-      'Windows 95 3D maze': { player: 'guy in a shirt and tie with thick glasses', weapon: 'computer keyboard',     enemy: 'stick of ram' },
+      // "stick of computer RAM", not "stick of ram": lowercase "ram" is a male sheep, and the
+      // generator drew exactly that - a brawny humanoid brute. Verified side by side on the
+      // same prompt: "stick of ram" -> an animal, "stick of computer RAM" -> a DDR module.
+      'Windows 95 3D maze': { player: 'guy in a shirt and tie with thick glasses', weapon: 'computer keyboard',     enemy: 'stick of computer RAM' },
       'Deep Forest': { player: 'druid in leaf armor',                        weapon: 'living oak staff',              enemy: 'moss-covered dire bear' },
       'Cyber Neon':  { player: 'chrome street samurai in a neon jacket',      weapon: 'glowing plasma katana',        enemy: 'rogue security drone' },
       'Mossy Stone': { player: 'lichen-cloaked stone knight',                weapon: 'moss-covered stone warhammer', enemy: 'crumbling gargoyle golem' },
@@ -451,6 +632,7 @@
 
     const combatState = {
       inBattle: false,
+      dead: false,              // set by killPlayer(); freezes combat until Rise / new dungeon
       playerHp: 100,
       playerMaxHp: 100,
       playerStm: 100,
@@ -592,6 +774,47 @@
       keysHeld.block = false;
     }
 
+    // Player defeat. Until this existed playerHp simply floored at 0 in landStrike and the
+    // fight carried on, so there was no moment for a death sound to belong to.
+    function killPlayer() {
+      if (combatState.dead) return;      // several strikes can resolve on the same frame
+      combatState.dead = true;
+      playSfx('death_player');
+      combatState.hurtFrame = 1;
+      combatState.faceState = 'hurt';
+      combatState.faceTimer = 999;
+      releaseHeldKeys();                 // a held block must not survive into the modal
+      if (deadMovesCount) deadMovesCount.textContent = totalMoves;
+      if (defeatText && dungeonStory && dungeonStory.location) {
+        defeatText.textContent = `${dungeonStory.location} keeps what it kills.`;
+      }
+      // A beat before the box, so the death cry and the hurt frame land first.
+      setTimeout(() => { if (defeatModal) defeatModal.classList.remove('hidden'); }, 700);
+    }
+
+    // Second wind: same dungeon, same foe, full bars. Cheaper than making the player sit
+    // through another two-minute generation just because they lost a fight.
+    function revivePlayer() {
+      combatState.dead = false;
+      if (defeatModal) defeatModal.classList.add('hidden');
+      if (combatState.inBattle) toggleBattleMode(false);
+      releaseHeldKeys();
+      combatState.playerHp = combatState.playerMaxHp;
+      combatState.playerStm = combatState.playerMaxStm;
+      combatState.playerX = 0;
+      combatState.vx = 0;
+      combatState.attackFrame = 0;
+      combatState.hurtFrame = 0;
+      combatState.faceState = 'idle';
+      combatState.faceTimer = 0;
+      combatState.shieldProgress = 0;
+      combatState.combatEffects.length = 0;
+      combatState.enemy.hp = combatState.enemy.maxHp;
+    }
+
+    if (btnRiseAgain) btnRiseAgain.addEventListener('click', revivePlayer);
+    if (btnDeadNewDungeon) btnDeadNewDungeon.addEventListener('click', openSetupScreen);
+
     // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
     // attack/hurt frames) carried over from the previous dungeon - so a run started while blocking
     // or mid-fight began the next dungeon at near-zero stamina.
@@ -609,6 +832,8 @@
       combatState.hurtFrame = 0;
       combatState.shieldProgress = 0;
       combatState.combatEffects.length = 0;
+      combatState.dead = false;
+      if (defeatModal) defeatModal.classList.add('hidden');
       pickEnemyVariant();
     }
 
@@ -631,12 +856,16 @@
     }
 
     function combatAttack() {
+      if (combatState.dead) return;
       if (!combatState.inBattle || combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
       if (combatState.playerStm < 15) {
         showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
         return;
       }
       combatState.playerStm = Math.max(0, combatState.playerStm - 15);
+      // The swing, on the windup. The impact sound is separate, on frame 7 where the hit
+      // actually resolves.
+      playSfx('attack');
       combatState.attackFrame = 1;
       combatState.faceState = 'attack';
       combatState.faceTimer = 18;
@@ -710,9 +939,14 @@
             e.stateTimer = 12;
             showFloatingCombatText(guarded ? `BLOCKED! -${dmg}` : `-${dmg} SLASH!`,
               160 + (Math.random() * 30 - 15), 100, guarded ? "#94a3b8" : "#f87171");
+            // The enemy's own guard soaking the blow reads as a block, not as a wound.
+            playSfx(guarded ? 'block' : 'hit_enemy');
 
             if (e.hp <= 0) {
               e.state = 'defeated';
+              // Boss and flyer are the same species as the walker, so one death cry serves
+              // all three; the pitch is dropped for the boss to sell its bulk.
+              playSfx('death_enemy', { rate: cfg.slow ? 0.82 : 1.0 });
               showFloatingCombatText("VICTORY! +50 ESSENCE", 160, 70, "#fde047");
             }
           }
@@ -741,7 +975,7 @@
         combatState.glanceTimer = 60 + Math.floor(Math.random() * 80);
       }
 
-      if (combatState.inBattle && combatState.enemy.hp > 0) {
+      if (combatState.inBattle && combatState.enemy.hp > 0 && !combatState.dead) {
         const e = combatState.enemy;
         const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
         if (e.blockTimer > 0) e.blockTimer--;
@@ -753,6 +987,7 @@
           if (isDodged) {
             showFloatingCombatText(dodgeMsg, 160, 130, "#38bdf8");
           } else if (isGuarded) {
+            playSfx('block');
             showFloatingCombatText(blockMsg, 160, 140, "#a855f7");
             combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
           } else {
@@ -761,6 +996,9 @@
             combatState.faceState = 'hurt';
             combatState.faceTimer = 26;
             showFloatingCombatText(`-${dmg} ${hitLabel}`, 160, 160, "#dc2626");
+            // The guarded branch above floors HP at 1, so this is the only path to 0.
+            if (combatState.playerHp <= 0) killPlayer();
+            else playSfx('hit_player');
           }
         };
 
@@ -2268,6 +2506,7 @@
       const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
       if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
         winMovesCount.textContent = totalMoves;
+        playSfx('end', { vary: 0 });
         victoryModal.classList.remove('hidden');
       }
     }
@@ -2383,8 +2622,10 @@
         player.gridX = nextX;
         player.gridY = nextY;
         totalMoves++;
+        playSfx('step');
         animate3D(nextX + 0.5, nextY + 0.5, player.angle);
       } else {
+        playSfx('bump');
         animateBump(vec.dx, vec.dy);
       }
     }
@@ -2400,8 +2641,10 @@
         player.gridX = nextX;
         player.gridY = nextY;
         totalMoves++;
+        playSfx('step', { rate: 0.94 });
         animate3D(nextX + 0.5, nextY + 0.5, player.angle);
       } else {
+        playSfx('bump');
         animateBump(-vec.dx, -vec.dy);
       }
     }
@@ -2626,6 +2869,10 @@
       if (!b) return;
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
+      // v6 ships bundle.sfx; every other mode leaves it undefined and playSfx falls back to
+      // the procedural bank.
+      loadSfxBank(b.sfx);
+      playSfx('start', { vary: 0 });      // fixed pitch: this one is a signature, not foley
       if (b.player_sprites && b.player_sprites.length > 0) {
         playerSpriteFrames = [];
         b.player_sprites.forEach(src => {

@@ -1883,18 +1883,24 @@ def krea2_shield_prompt(player_style):
 # each one differently.
 ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
 
-# ONLY the walker is generated directly by krea2. The flyer and the boss are derived from it
-# by FLUX Kontext edits (generate_kontext_enemy_variants), because asking krea2 for either
-# one directly is not survivable on a non-creature subject:
-#   - flyer: "a giant stick of RAM" came back as a plain bird on 4 of 4 seeds - with the
-#     conditional identity wording, without it, and with every mention of birds stripped out.
-#   - boss: the same subject came back as a generic armoured demon knight.
-# In both cases a phrase like "huge wings spread wide, hovering" or "colossal hulking heavily
-# armoured boss" is simply a stronger prior than any amount of "it is literally a RAM stick".
-# Kontext is an instruction-edit model that holds identity - the same property the HUD
-# portraits rely on - so editing the walker sidesteps the argument entirely.
-# Both krea2 prompts are KEPT as the fallback path when a Kontext edit fails.
-KREA2_DIRECT_ENEMY_VARIANTS = ["walker"]
+# krea2 generates the walker and a first attempt at the flyer. The BOSS is always a FLUX
+# Kontext edit of the walker, and the flyer falls back to one - see
+# _krea2_finish_enemy_variants for the decision, and _palette_similarity for how drift is
+# detected.
+#
+# Why the flyer is attempted directly at all: for a subject that really can fly, only a fresh
+# generation gives it a proper airborne form. A "rogue security drone" comes back as an actual
+# flying drone; editing wings onto the legged version produced a walking robot with feathered
+# bird wings, which is what the player complained about. For a subject that CANNOT fly, that
+# same prompt abandons the subject (a RAM stick returns a plain bird, on 4 of 4 seeds, with or
+# without identity wording) - so those get the Kontext wing edit instead, which bolts wings
+# onto the real thing.
+#
+# Why the boss is never generated directly: "colossal hulking heavily armoured boss" is a
+# stronger prior than any amount of "it is literally a RAM stick", and returns a generic
+# armoured demon knight. Kontext holds identity - the property the HUD portraits rely on.
+# Both krea2 variant prompts are KEPT as the last-resort fallback.
+KREA2_DIRECT_ENEMY_VARIANTS = ["walker", "flyer"]
 
 
 def _a_or_an(noun):
@@ -1972,15 +1978,19 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
                 f"undamaged")
         fill = fill_tb
 
+    # NOTE there is deliberately no "brought to life as a monster opponent ... given eyes and
+    # small limbs" clause. It used to sit here and it is the same bug as rule 3: "monster" is a
+    # character noun and "eyes and limbs" is creature anatomy, both as positive conditioning.
+    # It passed testing and then turned a RAM stick into a scaly beast in a real run - a coin
+    # flip, not a fix. The enemy-ness comes from the stance clause and from whatever the player
+    # actually typed ("taco monster" still gets a monster); the subject itself is left alone.
     return (
         f"A full-body video game enemy sprite of {e}. The subject is literally {e}, drawn "
         f"exactly as {e} really looks, with the true shape, proportions, colours and details "
-        f"of {e}, instantly recognisable as {e} at a glance. It is brought to life as a "
-        f"monster opponent: it keeps the real shape, proportions and surface details of {e} "
-        f"exactly as they are, with the object itself animated and given eyes and small "
-        f"limbs. {role}. {look}. {fill}, the whole thing completely inside the picture with "
-        f"nothing cut off at any edge. Dramatic even lighting, sharp detailed textures. "
-        f"Plain solid pure white background, nothing else in frame."
+        f"of {e}, instantly recognisable as {e} at a glance. {role}. {look}. {fill}, the "
+        f"whole thing completely inside the picture with nothing cut off at any edge. "
+        f"Dramatic even lighting, sharp detailed textures. Plain solid pure white "
+        f"background, nothing else in frame."
     )
 
 
@@ -2300,11 +2310,14 @@ def _krea2_add_branch(payload, name, prompt_text, w, h, steps, seed, prefix):
                                "class_type": "SaveImageWithAlpha"}
 
 
-def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None):
+def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None, out_key="images"):
     """Submit a krea2 prompt, wait for every `<name>_save` in save_keys, return {name: path}.
 
     `job_key` names this submission in the run's progress plan (see ProgressTracker), so the
-    bar knows which phase the incoming per-step socket updates belong to."""
+    bar knows which phase the incoming per-step socket updates belong to.
+
+    `out_key` is the field a save node reports its files under. Image saves use "images";
+    audio saves (the SFX pack) use "audio" - see SavedAudios.as_dict in comfy_api."""
     PROGRESS.begin_job(job_key)
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
@@ -2325,7 +2338,7 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None):
             continue
         result = {}
         for n in save_keys:
-            info = outputs[f"{n}_save"]["images"][0]
+            info = outputs[f"{n}_save"][out_key][0]
             result[n] = os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
         PROGRESS.finish_job(job_key)
         return result
@@ -2359,6 +2372,9 @@ def _plan_v6(steps):
         ("enemy_variants", "Deriving the flyer and the boss with Kontext...",             40, 2 * KONTEXT_STEPS),
         ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
         ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
+        # v6 only. Cheap next to everything above it - measured ~12s for all eight sounds
+        # including the cold model load, against a ~2min bundle - hence the small weight.
+        ("sfx",            "Foleying the dungeon with Stable Audio 3...",                  8, len(SFX_NAMES) * SFX_STEPS),
     ]
 
 
@@ -2665,6 +2681,62 @@ def _get_piper_voice(name):
     return voice
 
 
+# Piper's phonemizer (espeak-ng) gives a comma only a clipped breath and throws a standalone
+# dash away entirely, which runs dramatic lines together. Rather than fight the phonemizer,
+# the text is cut at those marks, each piece is synthesized on its own, and real silence is
+# spliced between the pieces. Each piece keeps its trailing comma so the model still reads it
+# with continuing (not sentence-final) intonation.
+COMMA_PAUSE_MS = 180
+DASH_PAUSE_MS = 260
+# Only dashes standing alone as punctuation - a hyphen inside "blood-soaked" is part of the
+# word and must not become a pause.
+_DASH_RE = re.compile(r"\s+[-‐-―]+\s+|\s+[-‐-―]+$")
+_COMMA_SPLIT_RE = re.compile(r"(?<=,)\s*")
+
+
+def _split_for_pauses(text):
+    """Cut `text` into (fragment, pause_ms) pairs at commas and standalone dashes. The final
+    fragment carries a 0ms pause."""
+    parts = []
+    # Dashes have no phoneme of their own, so they become commas: the comma supplies the
+    # phrasing and the longer dash silence is spliced in after it.
+    for chunk in _DASH_RE.split(text):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if parts:
+            # The dash itself is dropped; a comma in its place keeps the model reading the
+            # fragment as an unfinished clause instead of ending it flat.
+            lead = parts[-1][0]
+            if not lead.endswith((",", ";", ":", ".", "!", "?")):
+                lead += ","
+            parts[-1] = (lead, DASH_PAUSE_MS)
+        pieces = [p.strip() for p in _COMMA_SPLIT_RE.split(chunk) if p.strip()]
+        for piece in pieces:
+            parts.append((piece, COMMA_PAUSE_MS if piece.endswith(",") else 0))
+    if parts:
+        parts[-1] = (parts[-1][0], 0)
+    return parts
+
+
+def _synthesize_with_pauses(voice, text, wf):
+    """Write `text` to the open wave file `wf`, read by `voice`, with a beat of silence at
+    every comma and standalone dash."""
+    fmt_set = False
+    for fragment, pause_ms in _split_for_pauses(text) or [(text, 0)]:
+        sample_rate = 22050
+        for audio in voice.synthesize(fragment):
+            if not fmt_set:
+                wf.setframerate(audio.sample_rate)
+                wf.setsampwidth(audio.sample_width)
+                wf.setnchannels(audio.sample_channels)
+                fmt_set = True
+            sample_rate = audio.sample_rate
+            wf.writeframes(audio.audio_int16_bytes)
+        if pause_ms and fmt_set:
+            wf.writeframes(b"\x00" * (int(sample_rate * pause_ms / 1000) * wf.getsampwidth() * wf.getnchannels()))
+
+
 def synthesize_narration(texts):
     """Turn a list of strings into a list of `data:audio/wav;base64,...` clips read by one
     randomly chosen narrator, in the same order as `texts`. Returns (voice_name, clips) -
@@ -2682,7 +2754,7 @@ def synthesize_narration(texts):
         for text in texts:
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
-                voice.synthesize_wav(text, wf)
+                _synthesize_with_pauses(voice, text, wf)
             clips.append("data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii"))
         return voice_name, clips
     except Exception as e:
@@ -2759,6 +2831,275 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
     if voice_name:
         print(f"[narration] {len(clips)} clip(s) read by {voice_name}")
     return story
+
+
+# ---------------------------------------------------------------------------
+# Dungeon foley: Stable Audio 3 Small-SFX writes the game's sound effects
+# ---------------------------------------------------------------------------
+# The sounds are generated from the SAME typed strings the art comes from, so a "Mossy
+# Stone" dungeon squelches underfoot and a "Candy Cane" one crunches. v6 only.
+#
+# Why this model and not MiniMax H3: H3 *can* make audio - the `va` in minimax_h3_fl2va is
+# video+audio, and minimax_h3_audio_vae_fp32 is already downloaded - but every sound would
+# cost a full 768-short-edge video render through a 32B text encoder, its trained duration
+# floor is ~5s, and its audio head is trained to sync to VISIBLE action, so with no matching
+# footage it produces ambience rather than a clean isolated hit. Stable Audio 3 Small-SFX is
+# purpose-built for one-shots and is natively supported (comfy/supported_models.py
+# StableAudio3), no custom nodes. Measured: 12.3s for all eight sounds INCLUDING the cold
+# model load, about 1.5s each.
+SFX_CKPT = "stable_audio_3_small_sfx.safetensors"
+SFX_CLIP = "t5gemma_b_b_ul2.safetensors"
+SFX_STEPS = 8
+SFX_CFG = 1.0                  # distilled like krea2 - describe everything positively
+SFX_SAMPLER = "lcm"            # what the Comfy-Org SA3 template uses; core has no pingpong
+SFX_SCHEDULER = "simple"
+SFX_SECONDS = 2.0              # generated length; every clip is trimmed to its transient
+SFX_SR = 22050                 # mono 16-bit at this rate keeps the whole pack near 200KB
+
+SFX_NAMES = ["step", "bump", "attack", "block",
+             "hit_enemy", "hit_player", "death_enemy", "death_player"]
+
+# Per-sound length cap, applied AFTER trimming to the transient. Without one a footstep
+# keeps its reverb tail and runs past a second - measured 1.20s on "wet mossy stone" - which
+# sounds wrong under a 160ms move animation and bloats the bundle. A death cry is allowed to
+# breathe. The fade-out below makes the truncation clean.
+SFX_MAX_SEC = {"step": 0.45, "bump": 0.45, "block": 0.60, "attack": 0.70,
+               "hit_enemy": 0.70, "hit_player": 0.70,
+               "death_enemy": 1.20, "death_player": 1.20}
+
+SFX_ONSET_DB = -35.0    # sensitive, so a soft attack transient is not clipped off the front
+SFX_OFFSET_DB = -28.0   # tighter, so a long reverb tail is cut rather than kept
+SFX_PREROLL = 0.010
+SFX_FADE_IN = 0.003     # declick
+SFX_FADE_OUT = 0.030
+
+# Every prompt ends with this. cfg is 1.0, so exactly as with krea2 there is no negative
+# guidance and every word is something being ASKED for - naming "no music" is a real risk -
+# but measured output was clean one-shots on all seven genuine probes, so the isolation
+# wording is earning its place. If a theme ever starts dragging music in, cut this tail
+# down rather than adding a negative prompt, which would do nothing at this cfg.
+_SFX_TAIL = (" One single short isolated sound effect. Close dry recording, silence before "
+             "and after, mono, no music, no voices, no reverb tail.")
+
+
+def sfx_prompts(wall_style, player_style, weapon_style, enemy_style):
+    """One prompt per entry in SFX_NAMES, built from what the player typed.
+
+    Same fallback convention as krea2_weapon_prompt / krea2_shield_prompt: an empty field
+    becomes a neutral noun rather than an empty hole in the sentence."""
+    d = (wall_style or "").strip() or "old stone dungeon"
+    p = (player_style or "").strip() or "armored warrior"
+    w = (weapon_style or "").strip() or "sword"
+    e = (enemy_style or "").strip() or "monster"
+    out = {
+        # wall_style is the one string describing what the whole dungeon looks like, which
+        # is exactly what the floor underfoot should sound like.
+        "step": f"A single footstep on {d} ground.",
+        "bump": f"A dull heavy thud of a body walking into a solid {d} wall.",
+        "attack": f"{_a_or_an(w)} swung hard and fast through the air and striking.",
+        "block": f"A heavy blow landing on {_a_or_an(p)}'s raised shield, a solid blocked impact.",
+        "hit_enemy": f"A heavy impact striking {_a_or_an(e)}, a short pained grunt.",
+        "hit_player": f"A heavy impact striking {_a_or_an(p)}, a short pained cry.",
+        "death_enemy": f"{_a_or_an(e)}'s final choked cry as it collapses to the ground and dies.",
+        "death_player": f"{_a_or_an(p)}'s last dying gasp as they fall to the ground.",
+    }
+    # The _a_or_an ones open mid-sentence ("an oak longbow swung..."); lead each prompt with
+    # a capital rather than .capitalize(), which would flatten the rest of the line.
+    return {k: v[0].upper() + v[1:] for k, v in out.items()}
+
+
+def _ffmpeg_exe():
+    """Path to the ffmpeg bundled with imageio-ffmpeg (already in requirements.txt).
+
+    Imported lazily so a missing package costs the sound effects and nothing else - the
+    server must still boot and still generate a dungeon."""
+    import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _sfx_decode(path):
+    """FLAC -> mono float32 at SFX_SR."""
+    out = subprocess.run(
+        [_ffmpeg_exe(), "-v", "error", "-i", path,
+         "-f", "s16le", "-ac", "1", "-ar", str(SFX_SR), "-"],
+        capture_output=True, check=True).stdout
+    return np.frombuffer(out, dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _sfx_env(x, frame_ms=20):
+    """RMS envelope -> (env, samples_per_frame). Its shape is what separates a one-shot
+    from ambience."""
+    n = max(1, int(SFX_SR * frame_ms / 1000))
+    if len(x) < n:
+        return np.zeros(1, dtype=np.float32), n
+    f = x[:len(x) // n * n].reshape(-1, n)
+    return np.sqrt((f ** 2).mean(axis=1) + 1e-12), n
+
+
+def _sfx_problem(x):
+    """None | 'empty' | 'continuous' - the audio counterpart of _enemy_frame_problem.
+
+    MUST be given the RAW decoded clip, never a trimmed one. The test asks what fraction of
+    the clip is active, and trimming removes exactly the silence that makes that fraction
+    small - run on trimmed audio it approaches 1.0 by construction and rejects everything.
+    (It did: a perfectly good giant-spider death cry was rejected twice before this moved
+    ahead of the trim.)
+
+    Thresholds measured on real Small-SFX output. Genuine one-shots (footstep on stone,
+    footstep on candy, sword swing, wet impact, shield block, wall thud, both death cries)
+    spanned 5-40% active with a -1 to +16dB head-to-tail decay; a deliberate "continuous
+    ambient dungeon drone" control measured 65% active and -5.4dB, i.e. it BUILT instead of
+    decaying. Both conditions must fire together, so a sustained death cry (40% active,
+    -0.9dB) survives on the length test while the drone does not."""
+    if len(x) < int(0.03 * SFX_SR) or float(np.abs(x).max()) < 0.02:
+        return "empty"
+    env, n = _sfx_env(x)
+    edb = 20 * np.log10(env / (env.max() + 1e-12) + 1e-12)
+    loud = np.where(edb > -20)[0]
+    if not len(loud):
+        return "empty"
+    active_frac = len(loud) * n / len(x)
+    seg = env[loud[0]:loud[-1] + 1]
+    third = max(1, len(seg) // 3)
+    decay_db = 20 * np.log10((seg[:third].mean() + 1e-12) / (seg[-third:].mean() + 1e-12))
+    if active_frac > 0.55 and decay_db < 3.0:
+        return "continuous"
+    return None
+
+
+def _finish_sfx(src, name):
+    """Raw 2s padded FLAC -> a tight, normalised mono WAV data URL.
+
+    Returns (data_url, problem). The transient starts anywhere in the first ~0.3s of the raw
+    clip (measured onsets 0.02-0.28s), so trimming is not optional. Same
+    `data:audio/wav;base64,` shape the Piper narration clips already use."""
+    x = _sfx_decode(src)
+    # Judged BEFORE trimming - see _sfx_problem on why the order is load-bearing.
+    problem = _sfx_problem(x)
+
+    env, n = _sfx_env(x)
+    edb = 20 * np.log10(env / (env.max() + 1e-12) + 1e-12)
+
+    onset = np.where(edb > SFX_ONSET_DB)[0]
+    offset = np.where(edb > SFX_OFFSET_DB)[0]
+    if len(onset):
+        a = max(0, onset[0] * n - int(SFX_PREROLL * SFX_SR))
+        b = min(len(x), ((offset[-1] if len(offset) else onset[-1]) + 1) * n)
+        x = x[a:b]
+    x = x[:int(SFX_MAX_SEC.get(name, 0.8) * SFX_SR)].copy()
+
+    peak = float(np.abs(x).max())
+    if peak > 1e-6:
+        x *= (0.92 / peak)
+    fi = min(len(x), int(SFX_FADE_IN * SFX_SR))
+    fo = min(len(x), int(SFX_FADE_OUT * SFX_SR))
+    if fi:
+        x[:fi] *= np.linspace(0.0, 1.0, fi, dtype=np.float32)
+    if fo:
+        x[-fo:] *= np.linspace(1.0, 0.0, fo, dtype=np.float32)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SFX_SR)
+        wf.writeframes((np.clip(x, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())
+    return "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), problem
+
+
+def _sfx_add_branch(payload, name, text, seed):
+    """One text -> audio branch on a shared payload; the audio twin of _krea2_add_branch."""
+    payload[f"{name}_pos"] = {"inputs": {"text": text + _SFX_TAIL, "clip": ["sfx_clip", 0]},
+                              "class_type": "CLIPTextEncode"}
+    # SA3 is not a ConditioningZeroOut arch like krea2; the reference template wires a plain
+    # empty negative, and at cfg 1.0 it is inert either way.
+    payload[f"{name}_neg"] = {"inputs": {"text": "", "clip": ["sfx_clip", 0]},
+                              "class_type": "CLIPTextEncode"}
+    # EmptyLatentAudio hardcodes Stable Audio 1's 64ch / 2048 ratio, but
+    # comfy.sample.fix_empty_latent_channels rescales an EMPTY latent to the loaded model's
+    # latent_format, so the stock node is correct for SA3's 256ch / 4096. Do NOT add
+    # ConditioningStableAudio - that is an SA1-only node and the SA3 template omits it.
+    payload[f"{name}_lat"] = {"inputs": {"seconds": SFX_SECONDS, "batch_size": 1},
+                              "class_type": "EmptyLatentAudio"}
+    payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": SFX_STEPS, "cfg": SFX_CFG,
+                                          "sampler_name": SFX_SAMPLER, "scheduler": SFX_SCHEDULER,
+                                          "denoise": 1.0, "model": ["sfx_ckpt", 0],
+                                          "positive": [f"{name}_pos", 0],
+                                          "negative": [f"{name}_neg", 0],
+                                          "latent_image": [f"{name}_lat", 0]},
+                               "class_type": "KSampler"}
+    payload[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["sfx_ckpt", 2]},
+                              "class_type": "VAEDecodeAudio"}
+    # SaveAudio is deprecated in favour of SaveAudioAdvanced, but the latter's `format` is a
+    # DynamicCombo that is awkward to drive from the API and FLAC is all we ever want.
+    payload[f"{name}_save"] = {"inputs": {"audio": [f"{name}_dec", 0],
+                                          "filename_prefix": f"sfx/{name}"},
+                               "class_type": "SaveAudio"}
+
+
+def generate_sfx_pack(wall_style, player_style, weapon_style, enemy_style):
+    """The eight gameplay one-shots, in one ComfyUI job. Never raises.
+
+    Returns {name: data_url} for whatever survived, or None. A bad clip is left OUT of the
+    dict rather than faked: the frontend synthesises a procedural stand-in for anything
+    absent, so the game is never silent and a foley failure never costs the player their
+    dungeon - the same bargain synthesize_narration makes with the story."""
+    prompts = sfx_prompts(wall_style, player_style, weapon_style, enemy_style)
+    seed0 = random.randint(1, 2**31 - 1)
+
+    payload = {
+        "sfx_ckpt": {"inputs": {"ckpt_name": SFX_CKPT}, "class_type": "CheckpointLoaderSimple"},
+        # t5gemma is auto-detected as TEModel.T5_GEMMA in comfy/sd.py and routed to
+        # sa3.SAT5GemmaModel, so the declared type only has to name the audio family.
+        "sfx_clip": {"inputs": {"clip_name": SFX_CLIP, "type": "stable_audio", "device": "default"},
+                     "class_type": "CLIPLoader"},
+    }
+    for i, name in enumerate(SFX_NAMES):
+        _sfx_add_branch(payload, name, prompts[name], seed0 + i)
+
+    try:
+        paths = _krea2_submit_and_collect(payload, SFX_NAMES, timeout=300,
+                                          job_key="sfx", out_key="audio")
+    except Exception as e:
+        print(f"[sfx] generation failed ({e}) - the dungeon falls back to procedural sounds")
+        return None
+
+    clips, retry = {}, {}
+    for name in SFX_NAMES:
+        try:
+            url, problem = _finish_sfx(paths[name], name)
+        except Exception as e:
+            print(f"[sfx] {name}: could not process ({e})")
+            continue
+        if problem:
+            retry[name] = problem
+        else:
+            clips[name] = url
+
+    # One re-roll on a fresh seed for the failures only - the same shape as the Kontext
+    # portrait safety net, and for the same reason: it fires on a minority of runs, and a
+    # second 1.5s attempt is far cheaper than shipping a drone where a footstep belongs.
+    if retry:
+        print(f"[sfx] re-rolling {', '.join(f'{k} ({v})' for k, v in retry.items())}")
+        payload2 = {k: payload[k] for k in ("sfx_ckpt", "sfx_clip")}
+        for i, name in enumerate(retry):
+            _sfx_add_branch(payload2, name, prompts[name], seed0 + 977 + i)
+        try:
+            paths2 = _krea2_submit_and_collect(payload2, list(retry), timeout=300, out_key="audio")
+            for name in retry:
+                url, problem = _finish_sfx(paths2[name], name)
+                if problem:
+                    print(f"[sfx] {name}: still {problem} after a re-roll - left to the frontend")
+                else:
+                    clips[name] = url
+        except Exception as e:
+            print(f"[sfx] re-roll failed ({e})")
+
+    if not clips:
+        return None
+    kb = sum(len(v) for v in clips.values()) / 1024
+    print(f"[sfx] {len(clips)}/{len(SFX_NAMES)} sounds ready ({kb:.0f} KB of data URLs)")
+    return clips
 
 
 # Replaced _subject_bleeds_off_edge, which asked "does the subject touch any edge?" with a
@@ -2865,11 +3206,25 @@ KONTEXT_WING_EDIT = (
     "Keep the object completely unchanged - identical shape, colours, markings and "
     "details - with the wings simply attached to its sides. Plain white background."
 )
+# Boss: evil and angry rather than on fire. The lava/molten-red version this replaces read as
+# "burning" more than "menacing". Three things here are load-bearing, each learned from a
+# failed variant:
+#   - the face clause is CONDITIONAL ("if it has a face or eyes"). Made mandatory - "give it a
+#     furious snarling face" - Kontext replaced the RAM stick outright with a demon face.
+#   - the glow is what keeps it READABLE. Pure "much darker, colours drained and cold" with no
+#     glow produced near-black silhouettes (mean luma ~10 on a 0-255 scale) that would be an
+#     unreadable blob at the ~163px the boss is drawn at.
+#   - "original colours still clearly recognisable ... do not darken it into a silhouette" is
+#     needed on top of that, or it still crushes to black.
+# Verified on a RAM stick (still obviously RAM: pins, chips, outline), a dog (black wolf with
+# glowing violet eyes) and a robot drone (rusted and battle-damaged, violet eye).
 KONTEXT_BOSS_EDIT = (
-    "Recolour this object so it looks scorched and dangerous: blackened and charred all over, "
-    "with bright glowing orange-red lava seams glowing out from deep cracks in its surface. "
-    "Keep the object completely unchanged in shape and form - only its colour and surface "
-    "texture change. Plain white background."
+    "Make this object look evil and menacing: dirty its colours and darken them a little, "
+    "add deep scratches, chips and battle damage across its surface, and add a cold sinister "
+    "violet glow seeping from thin cracks in it. If it has a face or eyes, make its "
+    "expression furious and snarling and its eyes glow. Keep the object completely unchanged "
+    "in shape and form, with its original colours still clearly recognisable and every "
+    "detail clearly visible - do not darken it into a silhouette. Plain white background."
 )
 
 # Per-variant edit plus how much of the padded square the source should occupy. The flyer is
@@ -2881,8 +3236,44 @@ KONTEXT_ENEMY_EDITS = {
 }
 
 
-def generate_kontext_enemy_variants(walker_path, size=512):
-    """Derive the flyer and the boss from the finished walker sprite, in ONE Kontext job.
+def _palette_similarity(path_a, path_b, bins=6):
+    """Histogram intersection of two sprites' opaque pixels: 1.0 = identical palette, 0.0 =
+    nothing in common. Used as a cheap "is this still the same creature?" test.
+
+    Measured separation on real output (each flyer against its own walker):
+        drone 0.501 / 0.450, dragon 0.617   - direct generation kept the subject
+        RAM   0.151 / 0.090                 - direct generation drifted into a bird
+    with unrelated subjects (RAM walker vs drone walker) scoring 0.328, so the drifted cases
+    sit BELOW even "two different enemies". FLYER_IDENTITY_MIN splits that gap."""
+    from PIL import Image
+    import numpy as np
+    try:
+        def sig(p):
+            a = np.array(Image.open(p).convert("RGBA"))
+            m = a[:, :, 3] > 80
+            px = a[:, :, :3][m].astype(np.float32)
+            if not len(px):
+                return None
+            idx = np.clip((px / 256.0 * bins).astype(int), 0, bins - 1)
+            h = np.zeros((bins, bins, bins), np.float32)
+            np.add.at(h, (idx[:, 0], idx[:, 1], idx[:, 2]), 1)
+            return h / h.sum()
+        a, b = sig(path_a), sig(path_b)
+        if a is None or b is None:
+            return 0.0
+        return float(np.minimum(a, b).sum())
+    except Exception as e:
+        print(f"[Palette Similarity Error] {e}")
+        return 0.0
+
+
+# Below this, a directly-generated flyer is judged to have drifted off the subject and the
+# Kontext wing edit is used instead. See _palette_similarity for the measured clusters.
+FLYER_IDENTITY_MIN = 0.35
+
+
+def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
+    """Derive the requested variants from the finished walker sprite, in ONE Kontext job.
 
     The walker arrives as a tight RGBA cut-out that is often far taller than it is wide (a
     RAM stick crops to ~127x512), so for each variant it is composited onto white and padded
@@ -2892,7 +3283,10 @@ def generate_kontext_enemy_variants(walker_path, size=512):
     Returns {variant: path or None}; None means the caller should fall back to a direct krea2
     generation for that variant."""
     from PIL import Image
-    out = {v: None for v in KONTEXT_ENEMY_EDITS}
+    wanted = [v for v in (variants or KONTEXT_ENEMY_EDITS) if v in KONTEXT_ENEMY_EDITS]
+    out = {v: None for v in wanted}
+    if not wanted:
+        return out
     try:
         b = {
             "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
@@ -2901,7 +3295,8 @@ def generate_kontext_enemy_variants(walker_path, size=512):
             "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
         }
         src = Image.open(walker_path).convert("RGBA")
-        for v, cfg in KONTEXT_ENEMY_EDITS.items():
+        for v in wanted:
+            cfg = KONTEXT_ENEMY_EDITS[v]
             scale = min((size * cfg["h"]) / src.height, (size * cfg["w"]) / src.width)
             sub = src.resize((max(1, round(src.width * scale)), max(1, round(src.height * scale))),
                              Image.LANCZOS)
@@ -2924,9 +3319,9 @@ def generate_kontext_enemy_variants(walker_path, size=512):
             b[f"{v}_dec"] = {"inputs": {"samples": [f"{v}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
             _kontext_alpha_nodes(b, v, f"{v}_dec", "kxenemy")
 
-        paths = _krea2_submit_and_collect(b, list(KONTEXT_ENEMY_EDITS), timeout=600,
+        paths = _krea2_submit_and_collect(b, wanted, timeout=600,
                                           job_key="enemy_variants")
-        for v in KONTEXT_ENEMY_EDITS:
+        for v in wanted:
             p = paths[v]
             keep_largest_figure(p, thresh=50)
             problem = _enemy_frame_problem(p)
@@ -2944,10 +3339,17 @@ def generate_kontext_enemy_variants(walker_path, size=512):
 def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
     """Post-process the directly-generated enemy branches in `paths` (keys `enemy_<variant>`):
     drop any stray blob / BiRefNet halo, regen a variant that came back too small or clipped,
-    then tight-crop. The flyer is then derived from the finished walker with a Kontext wing
-    edit, falling back to a direct krea2 flyer if that fails. Returns {variant: path}."""
+    then tight-crop.
+
+    The FLYER is decided per subject. krea2 generates one directly, which is what gives a
+    subject that genuinely flies its own proper airborne form - a rogue security drone comes
+    back as an actual flying drone, a dragon as a flying dragon - rather than the ground
+    version with feathers stuck on. For a subject that cannot fly, that same prompt drifts off
+    the subject entirely (a RAM stick returns a bird), and _palette_similarity against the
+    walker catches exactly that; those fall back to the Kontext wing edit, which bolts wings
+    onto the real subject. The BOSS is always a Kontext edit."""
     enemies = {}
-    for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker only
+    for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker, flyer
         ep = paths[f"enemy_{v}"]
         keep_largest_figure(ep, thresh=50)
         problem = _enemy_frame_problem(ep)
@@ -2955,13 +3357,31 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
             print(f"[krea2] {prefix} {v} enemy is {problem} - regenerating it alone")
             ep = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v,
                                     clipped=problem.startswith("clipped"))
-        _save_tight(ep, thresh=50)
+        if ep:
+            _save_tight(ep, thresh=50)
         enemies[v] = ep
 
-    derived = generate_kontext_enemy_variants(enemies["walker"], size=sq)
+    # Did the directly-generated flyer stay on-subject, or wander off into a generic bird?
+    derive = ["boss"]
+    if enemies.get("flyer") and enemies.get("walker"):
+        sim = _palette_similarity(enemies["flyer"], enemies["walker"])
+        if sim >= FLYER_IDENTITY_MIN:
+            print(f"[krea2] {prefix} direct flyer matches the walker ({sim:.2f}) - it can fly "
+                  f"on its own, keeping it")
+        else:
+            print(f"[krea2] {prefix} direct flyer drifted off the subject ({sim:.2f} < "
+                  f"{FLYER_IDENTITY_MIN}) - rebuilding it as a Kontext wing edit")
+            derive.append("flyer")
+    else:
+        derive.append("flyer")
+
+    derived = generate_kontext_enemy_variants(enemies["walker"], size=sq, variants=derive)
     for v, p in derived.items():
         if p is None:
-            p = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v, attempts=1)
+            # The Kontext edit failed. For the flyer, a drifted direct generation is still a
+            # better enemy than nothing, so keep whatever we already had.
+            p = enemies.get(v) or _krea2_regen_enemy(enemy_style, sq, steps, prefix,
+                                                     variant=v, attempts=1)
         enemies[v] = p
 
     missing = [v for v in ENEMY_VARIANT_NAMES if not enemies.get(v)]
@@ -3180,7 +3600,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["completed_bundle"] = None
     gen_progress["error"] = None
     gen_progress["current_step"] = 0
-    gen_progress["total_steps"] = 3
+    gen_progress["total_steps"] = 4
     gen_progress["story"] = None
     gen_progress["phase"] = ""
     PROGRESS.begin_plan(_plan_v6(steps))
@@ -3202,6 +3622,11 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
+
+        # Last, so the 3.5GB of audio weights load after the krea2 UNET and Kontext are done
+        # with the card rather than competing with them.
+        gen_progress["current_step"] = 4
+        sfx = generate_sfx_pack(wall_style, player_style, weapon_style, enemy_style)
 
         PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
@@ -3233,6 +3658,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "enemy_variants": ({v: _b64(p) for v, p in bundle["enemies"].items()}
                                if bundle.get("enemies") else None),
             "enemy_style": (enemy_style or "").strip(),
+            # {name: data:audio/wav;base64,...} for whatever survived, or None. Partial is
+            # fine and expected - game.js synthesises anything missing.
+            "sfx": sfx,
         }
         print("[krea2] v6 bundle complete and packaged!")
 
@@ -3277,6 +3705,26 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content)
                 return
+
+        # The three UI sounds (start / button / end). Unlike the gameplay foley these do not
+        # change with the theme, so they were generated once with the same model and committed
+        # to sounds/ rather than costing time in every run.
+        elif self.path.startswith("/sounds/"):
+            name = os.path.basename(self.path)
+            # Basename alone already defeats "../", but the whitelist keeps this route from
+            # ever becoming a general file server.
+            if name in ("start.wav", "button.wav", "end.wav"):
+                wav_file = os.path.join(PROJECT_DIR, "sounds", name)
+                if os.path.exists(wav_file):
+                    with open(wav_file, "rb") as f:
+                        content = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Cache-Control", "max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(content)
+                    return
 
         self.send_response(404)
         self.end_headers()

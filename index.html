@@ -583,6 +583,11 @@
         <input type="checkbox" id="chkNarrate" class="cursor-pointer">
         <span>Narrate the intro</span>
       </label>
+
+      <label class="flex items-center justify-center gap-2 text-[11px] text-slate-700 select-none cursor-pointer">
+        <input type="checkbox" id="chkSfx" class="cursor-pointer">
+        <span>Sound effects</span>
+      </label>
     </div>
 
     <!-- SCREEN 3: Instant Interactive Game Play Screen -->
@@ -598,6 +603,23 @@
             <video id="gameVideo" playsinline class="w-full h-full object-cover image-rendering-pixelated hidden">
               <source id="videoSource" src="" type="video/mp4">
             </video>
+
+            <div id="defeatModal" class="absolute inset-0 bg-black/70 z-30 flex items-center justify-center p-4 hidden">
+              <div class="win95-box p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-red-700">
+                <div class="text-3xl">💀</div>
+                <h3 class="font-black text-sm text-red-900">YOU DIED!</h3>
+                <p id="defeatText" class="text-xs text-slate-800">The dungeon keeps what it kills.</p>
+                <div class="text-[11px] font-bold text-blue-900 bg-blue-100 px-3 py-1 rounded w-full">
+                  Steps taken: <span id="deadMovesCount">0</span>
+                </div>
+                <button id="btnRiseAgain" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-200 hover:bg-red-300 w-full mt-1">
+                  ⚕️ Rise and Fight On
+                </button>
+                <button id="btnDeadNewDungeon" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full">
+                  ✨ Create New Dungeon
+                </button>
+              </div>
+            </div>
 
             <div id="victoryModal" class="absolute inset-0 bg-black/60 z-30 flex items-center justify-center p-4 hidden">
               <div class="win95-box p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-yellow-400">
