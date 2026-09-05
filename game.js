@@ -131,7 +131,8 @@
     // walker (ground), flyer (swoops from out of reach), boss (big, tanky). One is chosen
     // at random each time a battle starts. enemySpriteFrames tracks the active one.
     let enemyVariantImgs = {};
-    let enemyStyleName = '';
+    let enemyStyleName = '';   // common foe name (walker/flyer)
+    let enemyBossName = '';    // boss's own name (boss variant only)
     // The generated intro: {location, hero, foe, boss, crawl:[...]}. Arrives from
     // /api/progress minutes before the art does, and names the enemies in combat.
     let dungeonStory = null;
@@ -712,9 +713,14 @@
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
-      // Every foe is named after the story's champion, with the variant tag in front:
-      // "GOLEM OF DATA", "FLYING GOLEM OF DATA", "DREAD GOLEM OF DATA".
-      e.name = (cfg.tag + (enemyStyleName || 'nightstalker')).toUpperCase();
+      // The boss variant gets its own name (the story's champion, already titled server-side -
+      // e.g. "Dread The Overclocked" - so the crawl text and the health bar agree); walker/flyer
+      // share the common foe's name instead, so all three read as genuinely different enemies:
+      // "THE HORDE", "FLYING THE HORDE", "DREAD THE OVERCLOCKED".
+      const name = key === 'boss'
+        ? (enemyBossName || (cfg.tag + (enemyStyleName || 'nightstalker')))
+        : (cfg.tag + (enemyStyleName || 'nightstalker'));
+      e.name = name.toUpperCase();
       // Only swap the active sprite when we have a real per-variant set; otherwise leave
       // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
       const img = enemyVariantImgs[key];
@@ -2937,13 +2943,10 @@
         });
         if (!enemyVariantImgs.walker) enemyVariantImgs.walker = enemySpriteFrames[0];
       }
-      // The story's boss is the name every enemy is referred to by, in preference to the
-      // common-foe name or the raw phrase the player typed.
-      enemyStyleName = ((dungeonStory && (dungeonStory.boss || dungeonStory.foe))
-                        || b.enemy_style || '').trim();
-      if (enemyStyleName) {
-        combatState.enemy.name = enemyStyleName.toUpperCase();
-      }
+      // Common foe name (walker/flyer) vs. the boss's own name (boss variant) - see
+      // pickEnemyVariant, which is what actually assigns combatState.enemy.name.
+      enemyStyleName = ((dungeonStory && dungeonStory.foe) || b.enemy_style || '').trim();
+      enemyBossName = ((dungeonStory && dungeonStory.boss) || '').trim();
       pickEnemyVariant();
 
       const showGameScreen = () => {

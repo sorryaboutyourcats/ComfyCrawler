@@ -2416,7 +2416,8 @@ The enemies are: {enemy}
 Invent proper names, then write the opening crawl. It must build to something worth
 fighting for and end feeling like the start of a hero's journey, not a warning label:
 
-- Paragraph 1 sets the scene and the danger.
+- Paragraph 1 sets the scene and the danger. Do not introduce the player by name or
+  describe who they are - that line is added separately, before your paragraph.
 - Paragraph 2 makes the stakes concrete: what has the BOSS taken, or what will it destroy
   if nobody stops it? Someone, some place, or everyone - name what is actually at risk.
   Not vague dread - a real reason to care.
@@ -2438,10 +2439,13 @@ markdown, no commentary, no asterisks:
 
 LOCATION: <a 2-4 word proper name for the dungeon>
 HERO: <a 1-3 word proper name for the player>
-FOE: <a 1-3 word proper name for the common enemy>
-BOSS: <a 1-3 word proper name for their champion>
+FOE: <a 1-3 word proper name for ONE single common enemy - not a group or plural name, so
+  do not end it in "s" unless the word genuinely needs it (e.g. do not invent "Overclockers"
+  for one creature)>
+BOSS: <a 1-3 word proper name for their champion - also one individual, same rule: no
+  trailing "s" unless the word needs it>
 CRAWL:
-<paragraph one - scene and danger>
+<paragraph one - the scene and danger>
 
 <paragraph two - the stakes: what is lost if the boss is not stopped>
 
@@ -2519,6 +2523,22 @@ _STORY_SMART = {
 _STORY_STRIP = "*_#\"'` \t"
 _STORY_LABELS = ("location", "hero", "foe", "boss")
 
+# Prepended to the invented BOSS name to make its combat title, e.g. "The Overclocked" ->
+# "Dread The Overclocked" - matching the tag the boss enemy variant fights under in combat
+# (ENEMY_VARIANTS.boss in game.js). Picked once per story so the crawl text, the HUD, and
+# the health bar all agree on the same title. Varied rather than always "Dread" so bosses
+# across different dungeons don't all sound the same.
+_BOSS_TITLE_PREFIXES = [
+    "Dread", "Ancient", "Corrupted", "Apex", "Undying", "Grim",
+    "Sovereign", "Forsaken", "Hollow", "Doom", "Shattered", "Fallen",
+]
+
+# Safety net for when the small model forgets the name it invented three lines earlier and
+# falls back to a generic "the boss" / "boss" instead - caught and swapped for the real title
+# in parse_story_block's _use_real_boss_name.
+_GENERIC_BOSS_PHRASE_RE = re.compile(r"\bthe\s+boss\b", re.IGNORECASE)
+_GENERIC_BOSS_WORD_RE = re.compile(r"\bboss\b", re.IGNORECASE)
+
 
 def _ascii_ify(text):
     """The UI is a Win95 pastiche - smart quotes and em-dashes look wrong in it, and
@@ -2538,6 +2558,23 @@ def _story_name(raw, fallback, max_words=4):
     if len(words) > max_words:
         name = " ".join(words[:max_words])
     return name or fallback
+
+
+# Suffixes where the trailing "s" is part of the word, not a plural - Atlas, Nemesis, Chaos,
+# Marcus, Achilles, Chess would all get mangled by a naive strip.
+_NAME_NONPLURAL_S = ("as", "is", "os", "us", "es", "ss")
+
+
+def _singular_creature_name(name):
+    """Strip a naive trailing plural "s" from an invented enemy name. FOE/BOSS each name one
+    creature the player fights face to face, so a model-invented "Overclockers" or "Wraiths"
+    reads as a typo once it is standing alone in the arena - trim it to "Overclocker"/"Wraith"."""
+    words = name.split(" ")
+    last = words[-1]
+    if len(last) > 3 and last.lower().endswith("s") and not last.lower().endswith(_NAME_NONPLURAL_S):
+        words[-1] = last[:-1]
+        return " ".join(words)
+    return name
 
 
 def _lead(name, upper=True):
@@ -2602,14 +2639,36 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
         m = re.search(r"^\s*" + key + r"\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
         if m:
             out[key] = _story_name(m.group(1), fallbacks[key], max_words[key])
+            if key in ("foe", "boss"):
+                out[key] = _singular_creature_name(out[key])
             last_label_end = max(last_label_end, m.end())
             found += 1
+
+    # The BOSS line names the champion, e.g. "The Overclocked" - but that's not the name it
+    # fights under. Combat prepends a title (ENEMY_VARIANTS.boss in game.js), so bake the same
+    # title in here and rewrite every mention in the prose to match, rather than let the crawl
+    # say "The Overclocked" while the health bar reads "DREAD THE OVERCLOCKED".
+    bare_boss = out["boss"]
+    boss_re = re.compile(re.escape(bare_boss), re.IGNORECASE) if bare_boss else None
+    out["boss"] = f"{random.choice(_BOSS_TITLE_PREFIXES)} {bare_boss}"
+
+    def _use_real_boss_name(t):
+        """Swap in the boss's actual title wherever the prose names it - both the bare
+        invented name (bare_boss) and, as a safety net for when the model falls back to a
+        generic word instead of the name it invented three lines earlier, "the boss" / "boss"
+        on their own."""
+        if boss_re:
+            t = boss_re.sub(out["boss"], t)
+        t = _GENERIC_BOSS_PHRASE_RE.sub(out["boss"], t)
+        t = _GENERIC_BOSS_WORD_RE.sub(out["boss"], t)
+        return t
 
     # HOOK is a single sentence, not a name, so it skips the word-count truncation the
     # other labels get - only pulled out here so it doesn't get swept into the paragraphs.
     hook_match = re.search(r"^\s*HOOK\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
     hook_fallback = random.choice(_STORY_HOOK_FALLBACKS)
     out["hook"] = _story_hook(hook_match.group(1), hook_fallback) if hook_match else hook_fallback
+    out["hook"] = _use_real_boss_name(out["hook"])
 
     m = re.search(r"^\s*CRAWL\s*:\s*$", text, re.IGNORECASE | re.MULTILINE)
     body = text[m.end():] if m else text[last_label_end:]
@@ -2625,18 +2684,27 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
                      not re.match(r"^(LOCATION|HERO|FOE|BOSS|CRAWL|HOOK)\s*:", ln, re.IGNORECASE)]
             para = " ".join(lines).strip().strip("*_#")
             if len(para) > 20:
+                para = _use_real_boss_name(para)
                 paragraphs.append(re.sub(r"\s+", " ", para))
+
+    # Always used to open paragraph 1 with "You are <name>, <what they are>." - built here,
+    # not left to the model, so it can never come out as the literal word "HERO".
+    player_desc = (player_style or "").strip() or "a nameless wanderer"
+
+    if paragraphs:
+        paragraphs[0] = "You are " + out["hero"] + ", " + player_desc + ". " + paragraphs[0]
 
     if not paragraphs:
         # Even the degraded fallback earns a rallying ending, not a warning label - the
         # crawl is meant to send the player in fired up, whether the model wrote it or not.
+        # out["boss"] is already a full title ("Dread The Overclocked"), so it reads like a
+        # proper name and takes no extra article - unlike _lead(hero)/(location) below.
         paragraphs = [
-            _lead(out["hero"]) + " enters " + _lead(out["location"], upper=False)
+            "You are " + out["hero"] + ", " + player_desc + ". You enter "
+            + _lead(out["location"], upper=False)
             + ", where the light dies and the old walls remember worse.",
-            _lead(out["boss"]) + " rules here now, and " + _lead(out["foe"], upper=False)
-            + " stand watch over everything it has taken.",
-            "Whatever " + _lead(out["boss"], upper=False) + " is planning ends today - or "
-            "nothing does. Go.",
+            out["boss"] + " rules here now, and holds everything it has taken.",
+            "Whatever " + out["boss"] + " is planning ends today - or nothing does. Go.",
         ]
     # Capped at 3, matching what the prompt actually asks for. A 4th paragraph the model
     # over-generates is usually its own attempt at a send-off, which duplicates HOOK.
@@ -2688,14 +2756,15 @@ def _get_piper_voice(name):
 # on its own, and real silence is spliced between the pieces. Each piece keeps its own
 # terminating mark so the model still reads it with the right intonation.
 COMMA_PAUSE_MS = 180
+SEMICOLON_PAUSE_MS = 260
 DASH_PAUSE_MS = 260
 PERIOD_PAUSE_MS = 350
 # Only dashes standing alone as punctuation - a hyphen inside "blood-soaked" is part of the
 # word and must not become a pause.
 _DASH_RE = re.compile(r"\s+[-‐-―]+\s+|\s+[-‐-―]+$")
 # A sentence break needs the following whitespace so "3.5" and "..." stay in one piece; a
-# comma splits either way.
-_MARK_SPLIT_RE = re.compile(r"(?<=,)\s*|(?<=[.!?…])\s+")
+# comma or semicolon splits either way.
+_MARK_SPLIT_RE = re.compile(r"(?<=[,;])\s*|(?<=[.!?…])\s+")
 _SENTENCE_END = (".", "!", "?", "…")
 
 
@@ -2722,6 +2791,8 @@ def _split_for_pauses(text):
                 continue
             if piece.endswith(","):
                 pause = COMMA_PAUSE_MS
+            elif piece.endswith(";"):
+                pause = SEMICOLON_PAUSE_MS
             elif piece.endswith(_SENTENCE_END):
                 pause = PERIOD_PAUSE_MS
             else:
@@ -3220,16 +3291,32 @@ KONTEXT_WING_EDIT = (
     "details - with the wings simply attached to its sides. Plain white background."
 )
 # For a MACHINE, wings are the wrong answer - a legged security drone with feathered wings
-# strapped on looks absurd. It gets a real airborne refit instead: rotors and thrusters, legs
-# tucked up. Note how CONCRETE this is. A vague "make a flying version of this object,
-# adding whatever thrusters, jets, rotors or wings suit it" was tried and Kontext did almost
-# nothing - it returned the subject unchanged and slightly smaller. Kontext acts on specific
-# physical instructions, not on intent. _vlm_is_machine picks between this and the wings.
+# strapped on looks absurd. It gets a real airborne refit instead. Note how CONCRETE this is.
+# A vague "make a flying version of this object, adding whatever thrusters, jets, rotors or
+# wings suit it" was tried and Kontext did almost nothing - it returned the subject unchanged
+# and slightly smaller. Kontext acts on specific physical instructions, not on intent.
+# _vlm_wants_rotors picks between this and the wings.
+#
+# This wording is the survivor of four rounds. What each word is doing:
+#  - "ADD ... to this object", never "convert this into ...". The shipped version opened
+#    "Convert this into its airborne model: ... spinning rotor blades" and turned a RAM stick
+#    into a literal military HELICOPTER, subject gone. A transformation instruction invites
+#    replacement; only the additive form of KONTEXT_WING_EDIT holds identity. "Rotor blades"
+#    is also a whole-helicopter noun - the same trap as "creature" and "armour", so it is out.
+#  - "A PAIR OF LARGE ... attached to its SIDES", mirroring the wing edit, which is the one
+#    structure proven to work on a flat PCB. "Thrusters on the underside" added literally
+#    nothing to a RAM stick twice - a flat board has no underside to mount to.
+#  - "MOUNTED ON SHORT ARMS" holds the hardware OUTBOARD. Flush-mounted thrusters swallowed
+#    the robot's legs; on arms, the whole silhouette survives.
+#  - The GLOW is what reads at the ~100-180px the flyer is drawn at.
+# Verified 6/6 identity-preserving across a RAM stick, a humanoid robot and a drone, 2 seeds
+# each, 5/6 with large clearly visible thrusters.
 KONTEXT_THRUSTER_EDIT = (
-    "Convert this into its airborne model: mount glowing hover thrusters and spinning rotor "
-    "blades onto it so that it hovers in mid-air well above the ground, with bright exhaust "
-    "glowing beneath. Keep the object itself completely unchanged - same shape, colours, "
-    "markings and identity. Plain white background."
+    "Add a pair of large glowing jet thrusters to this object, mounted one on each side on "
+    "short arms, angled downward and firing bright blue-white exhaust flames beneath it so "
+    "that it hovers in mid-air above the ground. Keep the object completely unchanged - "
+    "identical shape, colours, markings and details - with the thrusters simply attached to "
+    "its sides. Plain white background."
 )
 
 # Boss: scorched and angry. An "evil, cold violet glow" version was tried and reverted - its
@@ -3261,33 +3348,50 @@ KONTEXT_ENEMY_EDITS = {
 }
 
 
-def _vlm_is_machine(image_path, timeout=180):
-    """Ask qwen3vl whether the sprite is a powered machine, so the flyer can be given rotors
-    and thrusters instead of wings.
+def _vlm_wants_rotors(image_path, timeout=180):
+    """Ask qwen3vl what to bolt onto the sprite to make it fly, so a machine gets rotors and
+    thrusters instead of wings.
 
     Uses the TextGenerate node, which takes an optional image - and krea2's own text encoder
     IS qwen3vl-4b, a vision model, so this needs no extra model download and reuses one that
-    is already resident. Accuracy was 5/5 on a drone (robot), a RAM stick, a taco, a dog and
-    a dragon.
+    is already resident.
 
-    It will NOT reliably emit a bare YES/NO however much the prompt insists, so the prose is
-    parsed. Most answers end with an explicit "Answer: NO"; when there is no such line the
-    reply is a plain statement ("The object in the image is a robot."). Naive keyword matching
-    does NOT work here - the model echoes the question's own words back inside a negation
-    ("... is a taco, not a robot, drone, aircraft ..."), so the negated forms are checked
-    first. Any failure returns False, i.e. fall back to wings, which is the safe default."""
-    import re
+    ASK FOR THE DECISION, NOT A CLASSIFICATION. The previous version asked "is this a powered
+    machine? answer YES or NO" and let a humanoid robot through as not-a-machine in a real
+    run, which is what put feathered wings on it. The model was right and the PARSE was wrong:
+    it never answers in one word, it writes a paragraph that walks through the question's own
+    wording first - "...is a robot. ... It is not a drone, aircraft, vehicle ... Answer: YES" -
+    so the verdict is the LAST thing generated, and max_length cut it off before the model got
+    there. All that survived was a mid-sentence negation of the question's own words, read as
+    a NO. Whether that happened at all came down to where the token limit landed, which is why
+    it looked fine in testing and then failed in the game.
+
+    Asking directly for ROTORS or WINGS removes the failure entirely, because the answer word
+    now comes FIRST: 12/12 across a humanoid robot, a drone, a RAM stick, a taco, a dog and a
+    dragon, identical on repeat runs. A machine replies "assistant: ROTORS" and nothing else;
+    a creature is the one that rambles ("Wait, I need to be more precise. The object is a
+    dog, which is a living creature..."), and a rambling answer that gets truncated falls
+    through to wings - the answer a creature wanted anyway. Every failure path, this one
+    included, lands on wings.
+
+    Do NOT phrase it as "if it is a machine it should get ROTORS, otherwise WINGS" - that
+    exact wording returned an EMPTY string for all three non-machines, 6/6. The two options
+    have to be spelled out as two symmetrical instructions."""
     try:
-        question = ("Look at this object. Is it a robot, drone, aircraft, vehicle or other "
-                    "powered machine? Answer with the single word YES or the single word NO.")
+        question = ("Look at this object and reply with exactly one word. Reply ROTORS if it "
+                    "is a machine, robot, vehicle, or electronic device. Reply WINGS if it is "
+                    "a living creature, a plant, a food, or any other thing that is not a "
+                    "machine.")
         infile = f"vlmcls_{int(time.time()*1000)}.png"
         shutil.copy(image_path, os.path.join(COMFY_INPUT_DIR, infile))
         payload = {
             "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
                        "class_type": "CLIPLoader"},
             "img": {"inputs": {"image": infile}, "class_type": "LoadImage"},
+            # Long enough that a rambling answer reaches its verdict rather than being cut
+            # off mid-sentence, which is exactly how the old classifier went wrong.
             "gen": {"inputs": {"clip": ["k_clip", 0], "image": ["img", 0], "prompt": question,
-                               "max_length": 48, "sampling_mode": "off",
+                               "max_length": 96, "sampling_mode": "off",
                                "use_default_template": True, "thinking": False},
                     "class_type": "TextGenerate"},
             "prev": {"inputs": {"source": ["gen", 0]}, "class_type": "PreviewAny"},
@@ -3308,21 +3412,16 @@ def _vlm_is_machine(image_path, timeout=180):
                                 hist[pid].get("status", {}).get("completed")):
                 text = " ".join(hist[pid].get("outputs", {}).get("prev", {}).get("text", []))
                 break
-        low = text.lower()
-        if not low.strip():
-            print("[VLM] no answer - defaulting the flyer to wings")
-            return False
-
-        m = re.search(r"answer\s*[:\-]?\s*(yes|no)\b", low)
-        if m:
-            verdict = m.group(1) == "yes"
-        elif re.search(r"\bnot\s+an?\s+(robot|drone|machine|aircraft|vehicle|device)", low):
+        # Whichever option word it reaches FIRST is the answer; neither means wings.
+        up = text.upper()
+        i_rot, i_win = up.find("ROTORS"), up.find("WINGS")
+        if i_rot < 0:
             verdict = False
+        elif i_win < 0:
+            verdict = True
         else:
-            verdict = bool(re.search(
-                r"\b(is|are)\s+an?\s+[^.]{0,40}?(robot|drone|machine|mech|vehicle|aircraft|android)",
-                low))
-        print(f"[VLM] machine={verdict} <- {text.strip()[:110]!r}")
+            verdict = i_rot < i_win
+        print(f"[VLM] rotors={verdict} <- {text.strip()[:110]!r}")
         return verdict
     except Exception as e:
         print(f"[VLM Error] {e} - defaulting the flyer to wings")
@@ -3345,7 +3444,7 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
     hence the white composite rather than the alpha PNG.
 
     The flyer's edit is chosen per subject: a powered machine is refitted with rotors and
-    thrusters, anything else gets wings. See _vlm_is_machine.
+    thrusters, anything else gets wings. See _vlm_wants_rotors.
 
     Returns {variant: path or None}; None means the caller should fall back to a direct krea2
     generation for that variant."""
@@ -3356,7 +3455,7 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
         return out
 
     edits = {v: KONTEXT_ENEMY_EDITS[v]["edit"] for v in wanted}
-    if "flyer" in wanted and _vlm_is_machine(walker_path):
+    if "flyer" in wanted and _vlm_wants_rotors(walker_path):
         print("[Kontext Enemy] subject is a machine - the flyer gets rotors and thrusters")
         edits["flyer"] = KONTEXT_THRUSTER_EDIT
 
@@ -3416,7 +3515,7 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
 
     The flyer and the boss are both Kontext edits of the finished walker, which is what keeps
     them recognisably the same subject. The flyer's edit is chosen per subject - rotors and
-    thrusters for a powered machine, wings for anything else - see _vlm_is_machine."""
+    thrusters for a powered machine, wings for anything else - see _vlm_wants_rotors."""
     enemies = {}
     for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker only
         ep = paths[f"enemy_{v}"]
