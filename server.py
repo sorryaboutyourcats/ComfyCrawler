@@ -1877,30 +1877,249 @@ def krea2_shield_prompt(player_style):
     )
 
 
-# The three foes built from one typed enemy idea. Every variant keeps the SAME {e} noun so
-# all three read as the same species - a ground fighter, an airborne swooper that stays out
-# of reach, and a hulking champion. The frontend (bundle["enemy_variants"]) sizes and drives
-# each one differently.
+# The three foes built from one typed enemy idea. The frontend (bundle["enemy_variants"])
+# sizes and drives each one differently.
 ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
 
-# krea2 generates ONLY the walker. The flyer and the boss are both FLUX Kontext edits of it
-# (generate_kontext_enemy_variants), because asking krea2 for either directly abandons the
-# subject whenever it is not a creature:
-#   - flyer: "a giant stick of RAM" returned a plain bird on 4 of 4 seeds, with the identity
-#     wording, without it, and with every mention of birds stripped out.
-#   - boss: the same subject returned a generic armoured demon knight.
-# "Huge wings spread wide, hovering" and "colossal hulking heavily armoured boss" are simply
-# stronger priors than any amount of "it is literally a RAM stick". Kontext holds identity -
-# the same property the HUD portraits rely on.
+# THREE SEPARATE SPECIES, NOT ONE SUBJECT EDITED TWICE.
 #
-# A middle version that generated the flyer directly and kept it when its palette still
-# matched the walker was tried and removed: it did give a machine a proper airborne form, but
-# rewording it to stop demanding wings ("the flying version ... with whatever thrusters, jets
-# or wings suit it") made krea2 keep the subject and ignore the flying entirely - a RAM stick
-# with no flight mechanism at all, at a 3/4 angle instead of head-on. Choosing the Kontext
-# edit per subject covers the same ground with one fewer generation.
-# Both krea2 variant prompts are KEPT as the last-resort fallback.
-KREA2_DIRECT_ENEMY_VARIANTS = ["walker"]
+# This used to generate the walker and derive the other two as FLUX Kontext edits of it,
+# which held identity perfectly - and that turned out to be the problem. Kontext preserves
+# the subject by construction, so on a gargoyle the "flyer" came back as the SAME gargoyle
+# with wings bolted on and the boss as the same gargoyle recoloured. Correct, and boring.
+#
+# So the LLM that writes the intro crawl now also designs three separate foes from the typed
+# idea (generate_enemy_species) and krea2 draws each one independently. The variety comes
+# from three different subjects rather than from three treatments of one subject.
+#
+# Doing this ALSO removes the reason the derivation existed. Asking krea2 for a flyer used to
+# mean "a flying version of {e}", which returned a plain bird for a RAM stick on 4 of 4 seeds,
+# and asking for a boss meant "colossal hulking armoured boss form of {e}", which returned a
+# generic armoured demon - because those role clauses are stronger priors than any amount of
+# "it is literally a RAM stick". Nothing here asks krea2 to transform anything: it is handed a
+# finished physical description and told only to draw it. The role clauses that lost those
+# arguments are gone, which is why the direct path works now when it did not before.
+#
+# The Kontext derivation is KEPT as the fallback for when the LLM naming call fails, along
+# with krea2_enemy_prompt's per-variant role clauses that feed it.
+KREA2_FALLBACK_DIRECT_VARIANTS = ["walker"]
+
+# Seven short labelled lines. Comfortably over a full reply - the LLM lesson from
+# _vlm_wants_rotors applies here too: a truncated answer loses the LAST labels, and a species
+# set missing its BOSS_LOOK is thrown away entirely by parse_enemy_species.
+ENEMY_SPECIES_MAX_TOKENS = 300
+ENEMY_SPECIES_TEMPERATURE = 0.9
+
+ENEMY_SPECIES_SYSTEM = (
+    "You are the bestiary designer for a 1990s first-person dungeon crawler. You invent "
+    "three distinct foes that clearly belong to one family, and you describe each one as a "
+    "concrete physical thing an artist can draw. "
+    "You never explain yourself and you never break format."
+)
+
+# Rule 5 is not style advice. krea2 runs at cfg 1.0 with a ConditioningZeroOut negative, so
+# there is no negative guidance and every word of a LOOK line gets drawn - a description that
+# says "not a bird" draws a bird. Rule 2 is what keeps a non-creature subject alive: left to
+# itself the model reaches for anatomy, and anatomy on a RAM stick is just a monster again.
+_ENEMY_SPECIES_USER = """A player is about to fight a dungeon full of: {enemy}
+
+Design THREE different foes from that idea. They must read as three DIFFERENT creatures from
+the same family - not one creature drawn three times. Someone who sees all three together
+should think "those are three kinds of {enemy}", never "that is the same one with wings".
+
+- GRUNT: fights on foot on the ground. The plain, common version.
+- FLYER: genuinely airborne. It must look airborne even standing still in a picture.
+- BOSS: the champion, far bigger and heavier than the other two - and it gets that way by
+  having MORE OF ITSELF. Enlarge and multiply its own parts, stack or fuse several of it
+  together, thicken it, raise it up. Bulk it out with its own material, not with a costume.
+
+Rules for the LOOK lines. They are fed straight to an image generator, so:
+
+1. Every LOOK must NAME {enemy} in the sentence and describe THAT thing. Change the build,
+   the silhouette, the extra parts and the colours; never rename it to something else and
+   never describe only the differences. Asked for three dragons, "heavy scaled armour with
+   jagged teeth, standing on two thick legs" is WRONG - it forgot to say dragon.
+2. If {enemy} is an object, a machine or a piece of technology rather than a living creature,
+   then all three stay that object. Give it machinery, mountings, housings and moving parts.
+   Faces, limbs, claws, scales and feathers would replace it with a monster.
+3. Say how the FLYER stays up, with something that suits {enemy} specifically: feathered
+   wings, membrane wings, insect wings, spinning rotor blades, glowing thrusters, a gasbag.
+   Choose ONE and describe it.
+4. Give the three clearly different colours, so a player tells them apart instantly in a
+   dark corridor.
+5. Describe ONLY what is in the picture. NEVER write what a foe is not, or what it lacks, or
+   what it should not look like - every single word you write will be drawn.
+6. One sentence each, under 30 words. Plain physical description: shape, build, materials,
+   colours, parts. No story, no history, no mood words unless they are visibly on the model.
+7. Bulk and menace come from the subject's OWN material and its OWN parts, made bigger,
+   thicker and more numerous. Calling a foe armoured, plated, helmeted, crowned, spiked, or
+   giving it a humanoid torso and shoulders, replaces it with a generic armoured warrior and
+   the subject vanishes - this is the single most common way this job goes wrong.
+
+Reply using EXACTLY these seven labels, each on its own line, in this order. No preamble, no
+markdown, no commentary, no asterisks:
+
+KIND: <copy exactly ONE of these two words and nothing else. Write CREATURE if {enemy} is
+  alive - an animal, a monster, a person, a plant. Write OBJECT if {enemy} is not alive - a
+  thing, a food, a device, a machine, a piece of technology. A food is always OBJECT, however
+  much it walks and fights in this game. Do not answer with the name of the thing; the only
+  two permitted answers are the word CREATURE and the word OBJECT>
+GRUNT_NAME: <1-3 word proper name for this ONE foe, not a plural>
+GRUNT_LOOK: <one sentence>
+FLYER_NAME: <1-3 word proper name, not a plural>
+FLYER_LOOK: <one sentence>
+BOSS_NAME: <1-3 word proper name, not a plural>
+BOSS_LOOK: <one sentence>"""
+
+
+def _enemy_species_prompt(enemy_style):
+    """Same hand-built chat template as _story_prompt - see there for why the <|im_start|>
+    opener and the empty <think> block are both mandatory."""
+    user = _ENEMY_SPECIES_USER.format(
+        enemy=(enemy_style or "").strip() or "things that shamble")
+    return (
+        "<|im_start|>system\n" + ENEMY_SPECIES_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n" + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
+    )
+
+
+_SPECIES_LABELS = {"grunt": "walker", "flyer": "flyer", "boss": "boss"}
+
+# krea2 has no negative guidance, so a LOOK line that says what a foe ISN'T draws exactly
+# that. Rule 5 of the brief forbids it and the model mostly complies, but it still wrote
+# "hovering midair with no visible ground contact" for a drone - which is a request for
+# visible ground contact. Clauses are dropped rather than trusted.
+_SPECIES_NEGATION = re.compile(
+    r"\b(?:no|not|non|none|never|without|lacking|lacks|missing|absent|instead\s+of|"
+    r"rather\s+than|free\s+of|devoid)\b", re.I)
+
+
+# Words whose own visual prior is an armoured humanoid. Applied ONLY when the subject is an
+# OBJECT, because an object has no character prior of its own to survive them: "Massive stick
+# of computer RAM ... armored with cracked gold plating" rendered a red-and-black mecha with
+# no RAM anywhere in it. A CREATURE subject is left alone - a gargoyle boss "crowned with a
+# spiked helmet" stays a gargoyle and looks better for it.
+#
+# Deliberately NARROW. "Legs" is what makes the walker a walker, "spine" and "gold-plated"
+# both appear in descriptions that rendered perfectly, and stripping those would cost more
+# than it saves. Only the costume nouns are listed.
+_SPECIES_HIJACK = re.compile(
+    r"\b(?:armou?red|armou?r|armou?r-plated|pauldrons?|helmets?|helms?|visors?|crowned|"
+    r"crowns?|gauntlets?|greaves?|breastplates?|cuirass|spiked|spikes|humanoid|torso|"
+    r"knights?|warriors?|demons?|colossus|golems?|juggernauts?|behemoths?|warlords?)\b", re.I)
+
+
+def _strip_clauses(look, pattern, why):
+    """Drop any comma-separated clause matching `pattern`. Keeps the original if that would
+    gut the description - a flawed sentence still beats no sentence."""
+    parts = (look or "").split(",")
+    kept = [p for p in parts if not pattern.search(p)]
+    if not kept or len(" ".join(kept).split()) < 3:
+        return look
+    if len(kept) != len(parts):
+        dropped = [p.strip() for p in parts if pattern.search(p)]
+        print(f"[species] dropped {why} clause(s) {dropped}")
+    return ",".join(kept).strip().strip(",").strip()
+
+
+def _strip_negations(look):
+    """krea2 has no negative guidance, so a clause saying what a foe ISN'T draws exactly
+    that."""
+    return _strip_clauses(look, _SPECIES_NEGATION, "negated")
+
+
+def parse_enemy_species(text):
+    """Pull the labels out of the reply. Returns {variant: {"name", "look"}} for the three
+    variants, or None if any of them is missing - a partial set would silently mix a designed
+    foe with a derived one, so it is all three or the fallback path.
+
+    KIND decides whether the costume nouns are stripped (see _SPECIES_HIJACK). A MISSING or
+    unreadable KIND is treated as OBJECT, i.e. strip: the two failures are not symmetric.
+    Stripping a creature's crown costs a slightly plainer gargoyle; not stripping an object's
+    armour costs the subject entirely, which is how a RAM stick became a red mecha."""
+    got = {}
+    kind = ""
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip().strip(_STORY_STRIP)
+        if ":" not in line:
+            continue
+        label, _, value = line.partition(":")
+        key = label.strip().lower()
+        value = value.strip().strip(_STORY_STRIP)
+        if not value:
+            continue
+        if key == "kind":
+            kind = value.strip().lower()
+            continue
+        for src, variant in _SPECIES_LABELS.items():
+            if key == f"{src}_name":
+                got.setdefault(variant, {})["name"] = value[:40]
+            elif key == f"{src}_look":
+                got.setdefault(variant, {})["look"] = value[:300]
+
+    # Match the WORD anywhere in the line, not just at the start - the model likes to answer
+    # "The kind is CREATURE." An unrecognised answer (it once replied with the subject noun
+    # itself, "gargoyle") is treated as OBJECT, the safe direction.
+    is_creature = bool(re.search(r"\bcreature\b", kind)) and not re.search(r"\bobject\b", kind)
+    print(f"[species] kind={kind or '(missing)'!r} -> "
+          f"{'creature, costume nouns kept' if is_creature else 'object, costume nouns stripped'}")
+
+    out = {}
+    for v in ENEMY_VARIANT_NAMES:
+        entry = got.get(v) or {}
+        if not entry.get("look") or not entry.get("name"):
+            return None
+        look = _strip_negations(entry["look"])
+        if not is_creature:
+            look = _strip_clauses(look, _SPECIES_HIJACK, "costume-noun")
+        out[v] = {"name": entry["name"], "look": look}
+    return out
+
+
+def generate_enemy_species(enemy_style):
+    """Design the three foes. Never raises: on any failure returns None and the caller falls
+    back to the walker-plus-Kontext-derivation path, which still produces three usable
+    enemies - just three that look more alike."""
+    payload = {
+        # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+        "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                   "class_type": "CLIPLoader"},
+        "species_gen": {
+            "inputs": {
+                "clip": ["k_clip", 0],
+                "prompt": _enemy_species_prompt(enemy_style),
+                "max_length": ENEMY_SPECIES_MAX_TOKENS,
+                "sampling_mode": "on",
+                "sampling_mode.temperature": ENEMY_SPECIES_TEMPERATURE,
+                "sampling_mode.top_k": 64,
+                "sampling_mode.top_p": 0.95,
+                "sampling_mode.min_p": 0.05,
+                "sampling_mode.repetition_penalty": 1.05,
+                "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                "thinking": False,
+                "use_default_template": False,
+            },
+            "class_type": "TextGenerate",
+        },
+        "species_out": {"inputs": {"source": ["species_gen", 0]}, "class_type": "PreviewAny"},
+    }
+    try:
+        t0 = time.time()
+        raw = _submit_and_collect_text(payload, "species_out", job_key="enemy_species")
+        species = parse_enemy_species(raw)
+        if not species:
+            print(f"[species] reply did not carry all six foe labels - deriving instead\n{raw[:300]}")
+            return None
+        for v in ENEMY_VARIANT_NAMES:
+            print(f"[species] {v:6s} {species[v]['name']!r} - {species[v]['look']}")
+        print(f"[species] three foes designed in {time.time()-t0:.1f}s")
+        return species
+    except Exception as e:
+        print(f"[species Error] {e} - falling back to the Kontext derivation")
+        PROGRESS.finish_job("enemy_species")
+        return None
 
 
 def _a_or_an(noun):
@@ -1991,6 +2210,49 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
         f"whole thing completely inside the picture with nothing cut off at any edge. "
         f"Dramatic even lighting, sharp detailed textures. Plain solid pure white "
         f"background, nothing else in frame."
+    )
+
+
+def krea2_species_prompt(look, enemy_style="", tighten=0):
+    """The prompt for an LLM-designed foe (generate_enemy_species). This is the normal path;
+    krea2_enemy_prompt above is the fallback.
+
+    Deliberately much thinner than krea2_enemy_prompt. That one has to argue a single typed
+    noun into three different roles, which is where every identity failure in this pipeline
+    came from - the role clauses ("a pair of huge wings attached to it", "the colossal
+    hulking boss form of it, heavily reinforced with jagged dark metal armour plating") are
+    strong enough priors to overrule the subject and hand back a bird or an armoured demon.
+    Here the differences between the three foes are already baked into `look`, so there is
+    nothing left to argue and no role clause at all. All this adds is framing, lighting and
+    the fill-the-frame sizing rule that every sprite prompt in this file needs.
+
+    THE TYPED NOUN IS RE-ANCHORED HERE and not left to the description. Asked to design three
+    dragons the LLM wrote "Heavy, scaled armor with jagged teeth and spiked limbs, dark
+    bronze with rust streaks, standing on two thick legs" - a perfectly good description that
+    never says "dragon" once, and would have rendered generic armour. It writes the
+    DIFFERENCES between the three foes and drops the thing they have in common, which is
+    exactly the word the image model most needs. Naming it here costs nothing when the
+    description does mention it; krea2 wants the subject repeated anyway."""
+    subject = (look or "").strip().rstrip(".").strip() or "a shadowy nightstalker demon"
+    e = (enemy_style or "").strip()
+    margin = [
+        "only a thin margin around it",
+        "a modest even margin around it",
+        "a comfortable even margin around it",
+    ][min(int(tighten), 2)]
+    anchor = (f"A full-body video game enemy sprite of {e}. This particular {e} is {subject}. "
+              f"The subject is literally {e}, drawn exactly as described above and instantly "
+              f"recognisable as {e} at a glance."
+              if e else
+              f"A full-body video game enemy sprite of {subject}. The subject is exactly "
+              f"that, drawn precisely as described and instantly recognisable at a glance.")
+    return (
+        # "It STANDS facing the viewer" was tried and softened: it is a ground cue, and the
+        # flyer is meant to be off the ground. Whether it stands or hovers is the LOOK's job.
+        f"{anchor} It faces the viewer, ready to fight. Drawn LARGE and filling the "
+        f"frame edge to edge, with {margin}, the whole thing completely inside the picture "
+        f"with nothing cut off at any edge. Dramatic even lighting, sharp detailed textures. "
+        f"Plain solid pure white background, nothing else in frame."
     )
 
 
@@ -2367,9 +2629,14 @@ def _plan_v6(steps):
     return [
         # key,             label,                                                    weight, units
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
+        ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
-        ("frames",         "Animating the swing with krea2 turbo (7 frames)...",          70, 8 * st),
-        ("enemy_variants", "Deriving the flyer and the boss with Kontext...",             40, 2 * KONTEXT_STEPS),
+        # 7 player poses + the three foes, all in the one krea2 job.
+        ("frames",         "Animating the swing with krea2 turbo (7 frames)...",          80, 10 * st),
+        # "enemy_variants" is NOT here on purpose. It only runs when the species naming
+        # failed and the flyer/boss have to be derived from the walker instead, so it is
+        # registered with PROGRESS.add_job at that point. A planned job that never runs is
+        # dead weight in the denominator and would strand the bar short of 100%.
         ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
         ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
         # v6 only. Cheap next to everything above it - measured ~12s for all eight sounds
@@ -2382,9 +2649,10 @@ def _plan_v5(steps):
     st = int(steps)
     return [
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
+        ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
-        ("frames",         "Forging the character, weapon and shield...",                 40, 4 * st),
-        ("enemy_variants", "Deriving the flyer and the boss with Kontext...",             40, 2 * KONTEXT_STEPS),
+        ("frames",         "Forging the character, weapon and shield...",                 55, 6 * st),
+        # See _plan_v6 for why "enemy_variants" is registered lazily instead of planned.
         ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
         ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
     ]
@@ -2610,6 +2878,17 @@ def _squash(text):
     return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
+def _hero_opener(hero, player_desc):
+    """Build the "You are <name>[, <what they are>]." line that opens paragraph 1. The
+    invented HERO name is often just a title-cased echo of the player's own description
+    ("gingerbread paladin with frosting armor" -> "Gingerbread Paladin"), which would read
+    as "You are Gingerbread Paladin, gingerbread paladin with frosting armor." - so the
+    description is dropped whenever the name already contains it."""
+    if _squash(hero) and _squash(hero) in _squash(player_desc):
+        return f"You are {hero}."
+    return f"You are {hero}, {player_desc}."
+
+
 def _story_title(text, fallback):
     text = _ascii_ify(text or "").strip()
     if not text:
@@ -2691,8 +2970,10 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
     # not left to the model, so it can never come out as the literal word "HERO".
     player_desc = (player_style or "").strip() or "a nameless wanderer"
 
+    hero_opener = _hero_opener(out["hero"], player_desc)
+
     if paragraphs:
-        paragraphs[0] = "You are " + out["hero"] + ", " + player_desc + ". " + paragraphs[0]
+        paragraphs[0] = hero_opener + " " + paragraphs[0]
 
     if not paragraphs:
         # Even the degraded fallback earns a rallying ending, not a warning label - the
@@ -2700,7 +2981,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
         # out["boss"] is already a full title ("Dread The Overclocked"), so it reads like a
         # proper name and takes no extra article - unlike _lead(hero)/(location) below.
         paragraphs = [
-            "You are " + out["hero"] + ", " + player_desc + ". You enter "
+            hero_opener + " You enter "
             + _lead(out["location"], upper=False)
             + ", where the light dies and the old walls remember worse.",
             out["boss"] + " rules here now, and holds everything it has taken.",
@@ -2767,6 +3048,21 @@ _DASH_RE = re.compile(r"\s+[-‐-―]+\s+|\s+[-‐-―]+$")
 _MARK_SPLIT_RE = re.compile(r"(?<=[,;])\s*|(?<=[.!?…])\s+")
 _SENTENCE_END = (".", "!", "?", "…")
 
+# A period after one of these isn't a sentence end - "Dr. Nix" is one name, not "Dr." full
+# stop then "Nix". Checked against the last word before a trailing period, case-insensitive
+# (invented names get title-cased, e.g. "Dr."), so a beat-of-silence pause never lands
+# mid-title.
+_TITLE_ABBREVIATIONS = {
+    "dr", "mr", "mrs", "ms", "st", "jr", "sr", "prof", "capt", "col", "gen",
+    "lt", "sgt", "maj", "cpl", "rev", "fr", "mt", "ft",
+}
+_TRAILING_ABBREV_RE = re.compile(r"(?:^|\s)([A-Za-z]+)\.$")
+
+
+def _ends_with_abbreviation(piece):
+    m = _TRAILING_ABBREV_RE.search(piece)
+    return bool(m) and m.group(1).lower() in _TITLE_ABBREVIATIONS
+
 
 def _split_for_pauses(text):
     """Cut `text` into (fragment, pause_ms) pairs at commas, standalone dashes and sentence
@@ -2785,10 +3081,18 @@ def _split_for_pauses(text):
             if not lead.endswith((",", ";", ":", ".", "!", "?")):
                 lead += ","
             parts[-1] = (lead, DASH_PAUSE_MS)
+        pieces = []
         for piece in _MARK_SPLIT_RE.split(chunk):
             piece = piece.strip()
             if not piece:
                 continue
+            # "Dr." split from "Nix" by the regex above - glue them back into one piece
+            # before pause classification so nothing pauses on the abbreviation's period.
+            if pieces and _ends_with_abbreviation(pieces[-1]):
+                pieces[-1] = pieces[-1] + " " + piece
+            else:
+                pieces.append(piece)
+        for piece in pieces:
             if piece.endswith(","):
                 pause = COMMA_PAUSE_MS
             elif piece.endswith(";"):
@@ -3229,16 +3533,22 @@ def _enemy_frame_problem(img_path, thresh=50):
         return None
 
 
-def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="walker", clipped=False):
+def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="walker",
+                       clipped=False, look=None):
     """Re-generate one enemy variant on its own with a fresh seed, when the batched one came
     back unusable. A CLIPPED subject is retried with a slightly wider margin; a subject that
     merely came out too small is retried on the unchanged fill-the-frame prompt, since that
-    is a bad roll rather than bad wording. Returns the first good frame, else the last try."""
+    is a bad roll rather than bad wording. Returns the first good frame, else the last try.
+
+    `look` is the LLM-designed description for this foe, when there is one - the retry has to
+    ask for the SAME foe it was drawing, not fall back to a generic role prompt."""
     last = None
     for i in range(attempts):
         payload = _krea2_loaders()
         tighten = (i + 1) if clipped else 0
-        _krea2_add_branch(payload, "enemy", krea2_enemy_prompt(enemy_style, variant=variant, tighten=tighten),
+        prompt_text = (krea2_species_prompt(look, enemy_style, tighten=tighten) if look
+                       else krea2_enemy_prompt(enemy_style, variant=variant, tighten=tighten))
+        _krea2_add_branch(payload, "enemy", prompt_text,
                           size, size, steps, random.randint(1, 1000000000), prefix)
         last = _krea2_submit_and_collect(payload, ["enemy"])["enemy"]
         keep_largest_figure(last, thresh=50)
@@ -3250,13 +3560,25 @@ def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="wa
     return last
 
 
-def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix):
-    """Add the directly-generated enemy branches (walker, boss) to a shared krea2 payload,
-    keyed `enemy_<variant>`. Each gets its own seed - they should look like the same species,
-    not the same pose. The flyer and boss are NOT here; see KREA2_DIRECT_ENEMY_VARIANTS."""
-    for v in KREA2_DIRECT_ENEMY_VARIANTS:
-        _krea2_add_branch(payload, f"enemy_{v}", krea2_enemy_prompt(enemy_style, variant=v),
+def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=None):
+    """Add the enemy branches to a shared krea2 payload, keyed `enemy_<variant>`, and return
+    the list of variants added.
+
+    With `species` (the normal path) that is all three, each drawn from its own LLM-written
+    description. Without it the LLM naming failed, so only the walker is drawn here and the
+    other two are derived from it with Kontext - see KREA2_FALLBACK_DIRECT_VARIANTS.
+
+    Every branch gets its OWN seed. Unlike the v6 player frames, which share one seed to hold
+    the character still between poses, these are three separate foes and a shared seed would
+    pull them back towards the same pose and composition."""
+    added = []
+    for v in (ENEMY_VARIANT_NAMES if species else KREA2_FALLBACK_DIRECT_VARIANTS):
+        prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style) if species
+                       else krea2_enemy_prompt(enemy_style, variant=v))
+        _krea2_add_branch(payload, f"enemy_{v}", prompt_text,
                           sq, sq, steps, random.randint(1, 1000000000), prefix)
+        added.append(v)
+    return added
 
 
 # Kontext edits that turn the finished walker into the other two variants.
@@ -3454,6 +3776,11 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
     if not wanted:
         return out
 
+    # Only reached when the species naming failed, so the stage is registered now rather than
+    # planned up front - see _plan_v6.
+    PROGRESS.add_job("enemy_variants", "Deriving the flyer and the boss with Kontext...",
+                     40, len(wanted) * KONTEXT_STEPS)
+
     edits = {v: KONTEXT_ENEMY_EDITS[v]["edit"] for v in wanted}
     if "flyer" in wanted and _vlm_wants_rotors(walker_path):
         print("[Kontext Enemy] subject is a machine - the flyer gets rotors and thrusters")
@@ -3508,36 +3835,41 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
         return out
 
 
-def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
-    """Post-process the directly-generated enemy branches in `paths` (keys `enemy_<variant>`):
-    drop any stray blob / BiRefNet halo, regen a variant that came back too small or clipped,
-    then tight-crop.
+def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=None,
+                                 generated=None):
+    """Post-process the generated enemy branches in `paths` (keys `enemy_<variant>`): drop any
+    stray blob / BiRefNet halo, regen a variant that came back too small or clipped, then
+    tight-crop.
 
-    The flyer and the boss are both Kontext edits of the finished walker, which is what keeps
-    them recognisably the same subject. The flyer's edit is chosen per subject - rotors and
-    thrusters for a powered machine, wings for anything else - see _vlm_wants_rotors."""
+    `generated` is what _krea2_add_enemy_variants actually put in the payload. With `species`
+    that is all three foes and there is nothing to derive - each was drawn from its own
+    description. Without it, only the walker was drawn and the other two are Kontext edits of
+    it (flyer mechanism chosen per subject - see _vlm_wants_rotors)."""
+    generated = generated or (ENEMY_VARIANT_NAMES if species else KREA2_FALLBACK_DIRECT_VARIANTS)
     enemies = {}
-    for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker only
+    for v in generated:
         ep = paths[f"enemy_{v}"]
         keep_largest_figure(ep, thresh=50)
         problem = _enemy_frame_problem(ep)
         if problem:
             print(f"[krea2] {prefix} {v} enemy is {problem} - regenerating it alone")
+            look = species[v]["look"] if species else None
             ep = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v,
-                                    clipped=problem.startswith("clipped"))
+                                    clipped=problem.startswith("clipped"), look=look)
         if ep:
             _save_tight(ep, thresh=50)
         enemies[v] = ep
 
-    derived = generate_kontext_enemy_variants(enemies["walker"], size=sq,
-                                              variants=["flyer", "boss"])
-    for v, p in derived.items():
-        if p is None:
-            # The Kontext edit failed. For the flyer, a drifted direct generation is still a
-            # better enemy than nothing, so keep whatever we already had.
-            p = enemies.get(v) or _krea2_regen_enemy(enemy_style, sq, steps, prefix,
-                                                     variant=v, attempts=1)
-        enemies[v] = p
+    todo = [v for v in ENEMY_VARIANT_NAMES if v not in enemies or not enemies.get(v)]
+    if todo and enemies.get("walker"):
+        derived = generate_kontext_enemy_variants(enemies["walker"], size=sq, variants=todo)
+        for v, p in derived.items():
+            if p is None:
+                # The Kontext edit failed too. A drifted direct generation is still a better
+                # enemy than nothing, so keep whatever we already had.
+                p = enemies.get(v) or _krea2_regen_enemy(enemy_style, sq, steps, prefix,
+                                                         variant=v, attempts=1)
+            enemies[v] = p
 
     missing = [v for v in ENEMY_VARIANT_NAMES if not enemies.get(v)]
     if missing:
@@ -3556,13 +3888,15 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     sq = _round16(res)
     ww = _round16(res * 0.5)                              # narrow canvas for the upright weapon
 
+    species = generate_enemy_species(enemy_style)
+
     payload = _krea2_loaders()
     _krea2_add_branch(payload, "player", krea2_player_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "weapon", krea2_weapon_prompt(weapon_style, player_style), ww, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
-    _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5")
+    added = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5", species=species)
 
-    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in KREA2_DIRECT_ENEMY_VARIANTS)
+    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in added)
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, names, job_key="frames")
     elapsed = time.time() - t0
@@ -3570,9 +3904,11 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     keep_largest_figure(paths["player"])
     _save_tight(paths["player"])
 
-    enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v5")
+    enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v5",
+                                           species=species, generated=added)
     paths["enemies"] = enemies
     paths["enemy"] = enemies["walker"]
+    paths["enemy_names"] = ({v: species[v]["name"] for v in species} if species else None)
 
     for n in ("weapon", "shield"):
         _save_tight(paths[n])
@@ -3642,13 +3978,15 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     sq = _round16(res)
     frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
 
+    species = generate_enemy_species(enemy_style)
+
     payload = _krea2_loaders()
     frame_prompts = krea2_frame_prompts(player_style, weapon_style)
     for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
-    _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6")
+    added = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6", species=species)
 
-    keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in KREA2_DIRECT_ENEMY_VARIANTS]
+    keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in added]
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, keys, job_key="frames")
     elapsed = time.time() - t0
@@ -3663,12 +4001,14 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     _planted = [V6_FRAME_NAMES.index(n) for n in ("idle", "block")]
     crop_frames_to_common_bbox(frame_paths, bbox_indices=_planted)
 
-    enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v6")
+    enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v6",
+                                           species=species, generated=added)
     portraits = generate_kontext_portrait_set(player_style)
 
     print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
           f"character {sq}x{sq}, Kontext portrait set, {int(steps)} steps, krea2 {elapsed:.1f}s")
     return {"frames": frame_paths, "enemy": enemies["walker"], "enemies": enemies,
+            "enemy_names": ({v: species[v]["name"] for v in species} if species else None),
             "portrait": portraits[0] if portraits else None, "portraits": portraits}
 
 
@@ -3732,6 +4072,8 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # walker / flyer / boss - the frontend picks one at random on each battle entry.
             "enemy_variants": ({v: _b64(p) for v, p in assets["enemies"].items()}
                                if assets.get("enemies") else None),
+            # Each foe's own invented name, when the LLM designed them (generate_enemy_species).
+            "enemy_names": assets.get("enemy_names"),
             "enemy_style": (enemy_style or "").strip(),
         }
         print("[krea2] v5 bundle complete and packaged!")
@@ -3812,6 +4154,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # walker / flyer / boss - the frontend picks one at random on each battle entry.
             "enemy_variants": ({v: _b64(p) for v, p in bundle["enemies"].items()}
                                if bundle.get("enemies") else None),
+            # Each foe's own invented name, when the LLM designed them (generate_enemy_species).
+            "enemy_names": bundle.get("enemy_names"),
             "enemy_style": (enemy_style or "").strip(),
             # {name: data:audio/wav;base64,...} for whatever survived, or None. Partial is
             # fine and expected - game.js synthesises anything missing.

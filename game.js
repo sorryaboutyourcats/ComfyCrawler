@@ -133,6 +133,10 @@
     let enemyVariantImgs = {};
     let enemyStyleName = '';   // common foe name (walker/flyer)
     let enemyBossName = '';    // boss's own name (boss variant only)
+    // Each foe's own invented name (server bundle.enemy_names), when the three were designed
+    // as separate species rather than derived from one another. Takes precedence over the
+    // tag+common-name fallback below, because these really are three different creatures.
+    let enemyVariantNames = {};
     // The generated intro: {location, hero, foe, boss, crawl:[...]}. Arrives from
     // /api/progress minutes before the art does, and names the enemies in combat.
     let dungeonStory = null;
@@ -713,13 +717,17 @@
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
-      // The boss variant gets its own name (the story's champion, already titled server-side -
-      // e.g. "Dread The Overclocked" - so the crawl text and the health bar agree); walker/flyer
-      // share the common foe's name instead, so all three read as genuinely different enemies:
+      // Each foe is its own species with its own invented name ("Gravewing Shrike"), so use
+      // that when the server sent one - no "FLYING " tag, because a flyer that was designed
+      // to fly is not a tagged version of the walker.
+      // Without them (older bundle, or the naming call failed and the three were derived from
+      // one sprite) fall back to the tag + the story's common foe name, with the boss taking
+      // the story's champion title so the crawl text and the health bar agree:
       // "THE HORDE", "FLYING THE HORDE", "DREAD THE OVERCLOCKED".
-      const name = key === 'boss'
+      const ownName = (enemyVariantNames && enemyVariantNames[key] || '').trim();
+      const name = ownName || (key === 'boss'
         ? (enemyBossName || (cfg.tag + (enemyStyleName || 'nightstalker')))
-        : (cfg.tag + (enemyStyleName || 'nightstalker'));
+        : (cfg.tag + (enemyStyleName || 'nightstalker')));
       e.name = name.toUpperCase();
       // Only swap the active sprite when we have a real per-variant set; otherwise leave
       // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
@@ -2947,6 +2955,7 @@
       // pickEnemyVariant, which is what actually assigns combatState.enemy.name.
       enemyStyleName = ((dungeonStory && dungeonStory.foe) || b.enemy_style || '').trim();
       enemyBossName = ((dungeonStory && dungeonStory.boss) || '').trim();
+      enemyVariantNames = (b.enemy_names && typeof b.enemy_names === 'object') ? b.enemy_names : {};
       pickEnemyVariant();
 
       const showGameScreen = () => {
