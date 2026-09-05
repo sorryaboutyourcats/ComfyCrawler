@@ -1910,6 +1910,34 @@ KREA2_FALLBACK_DIRECT_VARIANTS = ["walker"]
 ENEMY_SPECIES_MAX_TOKENS = 300
 ENEMY_SPECIES_TEMPERATURE = 0.9
 
+# Per-variant animation frames. Every foe gets an attack frame; only the two that fight on
+# the ground get a block frame - the flyer never guards (ENEMY_VARIANTS.flyer.canBlock is
+# false in game.js, it stays out of reach instead). "idle" must stay first: it is the frame
+# the others are registered and scaled against, on both sides.
+ENEMY_VARIANT_FRAMES = {
+    "walker": ["idle", "attack", "block"],
+    "flyer":  ["idle", "attack"],
+    "boss":   ["idle", "attack", "block"],
+}
+ENEMY_FRAME_FALLBACK = ["idle"]          # what a Kontext-derived variant has
+
+
+def _enemy_frame_count():
+    """Total enemy sprites in the shared krea2 job - the progress denominator."""
+    return sum(len(f) for f in ENEMY_VARIANT_FRAMES.values())
+
+# Pose clauses for krea2_species_prompt. Written to work on a subject with no anatomy at all:
+# a RAM stick has no arms to raise, so the block pose talks about the whole body drawing back
+# rather than about a guard. Same positive-only rule as everything else in this file - these
+# describe a posture, never what the foe is not doing.
+ENEMY_FRAME_POSES = {
+    "idle":   "It faces the viewer, ready to fight",
+    "attack": ("It surges forward at the viewer in mid-attack, lunging into the camera with "
+               "its whole body committed and its leading edge thrust out toward you"),
+    "block":  ("It braces hard against an incoming blow, hunched down and drawn back with "
+               "everything pulled in tight and angled to take the hit"),
+}
+
 ENEMY_SPECIES_SYSTEM = (
     "You are the bestiary designer for a 1990s first-person dungeon crawler. You invent "
     "three distinct foes that clearly belong to one family, and you describe each one as a "
@@ -2213,7 +2241,7 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
     )
 
 
-def krea2_species_prompt(look, enemy_style="", tighten=0):
+def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle"):
     """The prompt for an LLM-designed foe (generate_enemy_species). This is the normal path;
     krea2_enemy_prompt above is the fallback.
 
@@ -2246,10 +2274,13 @@ def krea2_species_prompt(look, enemy_style="", tighten=0):
               if e else
               f"A full-body video game enemy sprite of {subject}. The subject is exactly "
               f"that, drawn precisely as described and instantly recognisable at a glance.")
+    # "It STANDS facing the viewer" was tried and softened: it is a ground cue, and the flyer
+    # is meant to be off the ground. Whether it stands or hovers is the LOOK's job. The rest
+    # of the pose (attack / block) comes from ENEMY_FRAME_POSES; all frames of one foe share a
+    # seed, so the pose clause is the only thing that differs between them.
+    stance = ENEMY_FRAME_POSES.get(pose) or ENEMY_FRAME_POSES["idle"]
     return (
-        # "It STANDS facing the viewer" was tried and softened: it is a ground cue, and the
-        # flyer is meant to be off the ground. Whether it stands or hovers is the LOOK's job.
-        f"{anchor} It faces the viewer, ready to fight. Drawn LARGE and filling the "
+        f"{anchor} {stance}. Drawn LARGE and filling the "
         f"frame edge to edge, with {margin}, the whole thing completely inside the picture "
         f"with nothing cut off at any edge. Dramatic even lighting, sharp detailed textures. "
         f"Plain solid pure white background, nothing else in frame."
@@ -2631,8 +2662,8 @@ def _plan_v6(steps, sound_mode="music_and_sound"):
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
-        # 7 player poses + the three foes, all in the one krea2 job.
-        ("frames",         "Animating the swing with krea2 turbo (7 frames)...",          80, 10 * st),
+        # Every player pose + every frame of all three foes, all in the one krea2 job.
+        ("frames",         "Animating the swing and the walk with krea2 turbo...",        80, (len(V6_FRAME_NAMES) + _enemy_frame_count()) * st),
         # "enemy_variants" is NOT here on purpose. It only runs when the species naming
         # failed and the flyer/boss have to be derived from the walker instead, so it is
         # registered with PROGRESS.add_job at that point. A planned job that never runs is
@@ -2659,7 +2690,7 @@ def _plan_v5(steps):
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
-        ("frames",         "Forging the character, weapon and shield...",                 55, 6 * st),
+        ("frames",         "Forging the character, weapon and shield...",                 55, (3 + _enemy_frame_count()) * st),
         # See _plan_v6 for why "enemy_variants" is registered lazily instead of planned.
         ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
         ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
@@ -3270,7 +3301,8 @@ SFX_NAMES = ["step", "bump", "turn", "attack", "miss_enemy", "block", "miss_play
 SFX_MAX_SEC = {"step": 0.45, "bump": 0.45, "turn": 0.35, "block": 0.60, "attack": 0.70,
                "miss_enemy": 0.55, "miss_player": 0.55,
                "hit_enemy": 0.70, "hit_player": 0.70,
-               "death_enemy": 1.20, "death_player": 1.20}
+               "death_enemy": 1.20, "death_player": 1.20,
+               "ready": 1.00}
 
 SFX_ONSET_DB = -35.0    # sensitive, so a soft attack transient is not clipped off the front
 SFX_OFFSET_DB = -28.0   # tighter, so a long reverb tail is cut rather than kept
@@ -3622,13 +3654,17 @@ def _finish_music(src, name):
     return "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), problem
 
 
-def _music_add_branch(payload, name, text, seed):
-    """One text -> audio branch on a shared payload; the music twin of _sfx_add_branch."""
+def _music_add_branch(payload, name, text, seed, seconds=None):
+    """One text -> audio branch on a shared payload; the music twin of _sfx_add_branch.
+
+    `seconds` defaults to MUSIC_SECONDS (the per-dungeon tracks); the static menu music asset
+    below passes its own, shorter length instead."""
     payload[f"{name}_pos"] = {"inputs": {"text": text, "clip": ["music_clip", 0]},
                               "class_type": "CLIPTextEncode"}
     payload[f"{name}_neg"] = {"inputs": {"text": "", "clip": ["music_clip", 0]},
                               "class_type": "CLIPTextEncode"}
-    payload[f"{name}_lat"] = {"inputs": {"seconds": MUSIC_SECONDS, "batch_size": 1},
+    payload[f"{name}_lat"] = {"inputs": {"seconds": MUSIC_SECONDS if seconds is None else seconds,
+                                         "batch_size": 1},
                               "class_type": "EmptyLatentAudio"}
     payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": MUSIC_STEPS, "cfg": MUSIC_CFG,
                                           "sampler_name": MUSIC_SAMPLER,
@@ -3701,6 +3737,81 @@ def generate_music_pack(wall_style):
     kb = sum(len(v) for v in clips.values()) / 1024
     print(f"[music] {len(clips)}/{len(MUSIC_NAMES)} tracks ready ({kb:.0f} KB of data URLs)")
     return clips
+
+
+# ---------------------------------------------------------------------------
+# Static one-off audio: the main menu music loop and the loading-complete chime
+# ---------------------------------------------------------------------------
+# Unlike sfx/music above, these are NOT per-dungeon - the main menu is the same for every
+# player, so there is nothing to theme them off of. Generated once with the same models and
+# committed to sounds/, same as the start/button/end UI sounds. Not called at server runtime;
+# run `python server.py --gen-static-audio` (see the __main__ block) whenever either needs to
+# be re-rolled, and commit the result.
+MENU_MUSIC_SECONDS = 15.0
+MENU_MUSIC_PROMPT = (
+    "Atmospheric heroic fantasy title screen music for a retro 1990s dungeon crawler video "
+    "game, mysterious and inviting, moderate steady tempo, orchestral and synth textures."
+) + _MUSIC_TAIL
+
+READY_CHIME_PROMPT = (
+    "A bright cheerful two-note magical chime bell, one clean isolated cue sound announcing "
+    "that something is ready and complete."
+)
+
+
+def generate_menu_music_asset():
+    """Renders sounds/menu_music.wav - the fixed, short-looping main menu track. Prints and
+    returns False on failure rather than raising, matching the rest of the audio pipeline."""
+    seed = random.randint(1, 2**31 - 1)
+    payload = {
+        "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
+        "music_clip": {"inputs": {"clip_name": MUSIC_CLIP, "type": "stable_audio", "device": "default"},
+                       "class_type": "CLIPLoader"},
+    }
+    _music_add_branch(payload, "menu", MENU_MUSIC_PROMPT, seed, seconds=MENU_MUSIC_SECONDS)
+    try:
+        paths = _krea2_submit_and_collect(payload, ["menu"], timeout=300, out_key="audio")
+        url, problem = _finish_music(paths["menu"], "menu")
+    except Exception as e:
+        print(f"[menu music] generation failed ({e})")
+        return False
+    if problem:
+        print(f"[menu music] {problem} - try again (a fresh seed each run)")
+        return False
+    data = base64.b64decode(url.split(",", 1)[1])
+    out_path = os.path.join(PROJECT_DIR, "sounds", "menu_music.wav")
+    with open(out_path, "wb") as f:
+        f.write(data)
+    print(f"[menu music] saved {out_path} ({len(data) / 1024:.0f} KB)")
+    return True
+
+
+def generate_ready_chime_asset():
+    """Renders sounds/ready.wav - the fixed "assets are ready" cue played once loading
+    finishes. game.js pitch-varies it per playthrough via playSfx's usual jitter, so the one
+    static take still sounds a little different each run."""
+    seed = random.randint(1, 2**31 - 1)
+    payload = {
+        "sfx_ckpt": {"inputs": {"ckpt_name": SFX_CKPT}, "class_type": "CheckpointLoaderSimple"},
+        "sfx_clip": {"inputs": {"clip_name": SFX_CLIP, "type": "stable_audio", "device": "default"},
+                     "class_type": "CLIPLoader"},
+    }
+    _sfx_add_branch(payload, "ready", READY_CHIME_PROMPT, seed)
+    try:
+        paths = _krea2_submit_and_collect(payload, ["ready"], timeout=120, out_key="audio")
+        url, problem = _finish_sfx(paths["ready"], "ready")
+    except Exception as e:
+        print(f"[ready chime] generation failed ({e})")
+        return False
+    if problem:
+        print(f"[ready chime] {problem} - try again (a fresh seed each run)")
+        return False
+    data = base64.b64decode(url.split(",", 1)[1])
+    out_path = os.path.join(PROJECT_DIR, "sounds", "ready.wav")
+    with open(out_path, "wb") as f:
+        f.write(data)
+    print(f"[ready chime] saved {out_path} ({len(data) / 1024:.0f} KB)")
+    return True
 
 
 # Replaced _subject_bleeds_off_edge, which asked "does the subject touch any edge?" with a
@@ -3781,16 +3892,21 @@ def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=N
     description. Without it the LLM naming failed, so only the walker is drawn here and the
     other two are derived from it with Kontext - see KREA2_FALLBACK_DIRECT_VARIANTS.
 
-    Every branch gets its OWN seed. Unlike the v6 player frames, which share one seed to hold
-    the character still between poses, these are three separate foes and a shared seed would
-    pull them back towards the same pose and composition."""
-    added = []
+    Each FOE gets its own seed, and all of that foe's frames SHARE it - the same trick the v6
+    player frames use. Across foes a shared seed would drag three separate species back
+    towards one pose and composition; within a foe it is what holds the design still while
+    only the pose clause changes. Branches are keyed `enemy_<variant>_<frame>`.
+
+    Returns {variant: [frames]} so the caller knows what to collect."""
+    added = {}
     for v in (ENEMY_VARIANT_NAMES if species else KREA2_FALLBACK_DIRECT_VARIANTS):
-        prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style) if species
-                       else krea2_enemy_prompt(enemy_style, variant=v))
-        _krea2_add_branch(payload, f"enemy_{v}", prompt_text,
-                          sq, sq, steps, random.randint(1, 1000000000), prefix)
-        added.append(v)
+        seed = random.randint(1, 1000000000)
+        frames = ENEMY_VARIANT_FRAMES.get(v, ENEMY_FRAME_FALLBACK) if species else ENEMY_FRAME_FALLBACK
+        for f in frames:
+            prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style, pose=f) if species
+                           else krea2_enemy_prompt(enemy_style, variant=v))
+            _krea2_add_branch(payload, f"enemy_{v}_{f}", prompt_text, sq, sq, steps, seed, prefix)
+        added[v] = list(frames)
     return added
 
 
@@ -4054,40 +4170,78 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
     stray blob / BiRefNet halo, regen a variant that came back too small or clipped, then
     tight-crop.
 
-    `generated` is what _krea2_add_enemy_variants actually put in the payload. With `species`
-    that is all three foes and there is nothing to derive - each was drawn from its own
-    description. Without it, only the walker was drawn and the other two are Kontext edits of
-    it (flyer mechanism chosen per subject - see _vlm_wants_rotors)."""
-    generated = generated or (ENEMY_VARIANT_NAMES if species else KREA2_FALLBACK_DIRECT_VARIANTS)
-    enemies = {}
-    for v in generated:
-        ep = paths[f"enemy_{v}"]
-        keep_largest_figure(ep, thresh=50)
-        problem = _enemy_frame_problem(ep)
-        if problem:
-            print(f"[krea2] {prefix} {v} enemy is {problem} - regenerating it alone")
-            look = species[v]["look"] if species else None
-            ep = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v,
-                                    clipped=problem.startswith("clipped"), look=look)
-        if ep:
-            _save_tight(ep, thresh=50)
-        enemies[v] = ep
+    `generated` is {variant: [frames]} as _krea2_add_enemy_variants actually built it. With
+    `species` that is all three foes, each with its own frames, and there is nothing to derive
+    - each was drawn from its own description. Without it, only the walker's idle was drawn
+    and the other two are Kontext edits of it (flyer mechanism chosen per subject - see
+    _vlm_wants_rotors), which yields an idle frame only.
 
-    todo = [v for v in ENEMY_VARIANT_NAMES if v not in enemies or not enemies.get(v)]
-    if todo and enemies.get("walker"):
-        derived = generate_kontext_enemy_variants(enemies["walker"], size=sq, variants=todo)
+    Returns {variant: {frame: path}}.
+
+    Only the IDLE frame is quality-gated and regenerated, because it is the one the others are
+    measured against and the one shown most of the time. An attack or block frame that comes
+    back broken is simply dropped: the frontend falls back to idle for that pose, which is the
+    behaviour before this feature existed."""
+    generated = generated or {v: ENEMY_FRAME_FALLBACK
+                              for v in (ENEMY_VARIANT_NAMES if species
+                                        else KREA2_FALLBACK_DIRECT_VARIANTS)}
+    enemies = {}
+    for v, frames in generated.items():
+        got = {}
+        for f in frames:
+            fp = paths.get(f"enemy_{v}_{f}")
+            if not fp:
+                continue
+            keep_largest_figure(fp, thresh=50)
+            problem = _enemy_frame_problem(fp)
+            if problem and f == "idle":
+                print(f"[krea2] {prefix} {v} idle enemy is {problem} - regenerating it alone")
+                look = species[v]["look"] if species else None
+                fp = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v,
+                                        clipped=problem.startswith("clipped"), look=look)
+            elif problem:
+                print(f"[krea2] {prefix} {v} {f} frame is {problem} - dropping it, "
+                      f"the frontend will use idle for that pose")
+                continue
+            if fp:
+                got[f] = fp
+        # Register every frame of this foe against ONE box so it holds still when the sprite
+        # swaps mid-fight. The box is the UNION, so an attack lunge is not clipped - the
+        # frontend then scales all frames by the IDLE frame's content, which keeps the idle at
+        # its intended size and lets the lunge genuinely reach further. A regenerated idle can
+        # be a different canvas size, so only crop when the frames still agree.
+        if len(got) > 1:
+            sizes = {Image.open(p).size for p in got.values()}
+            if len(sizes) == 1:
+                crop_frames_to_common_bbox(list(got.values()))
+            else:
+                print(f"[krea2] {prefix} {v} frames differ in size {sizes} - cropping separately")
+                for p in got.values():
+                    _save_tight(p, thresh=50)
+        elif got:
+            _save_tight(next(iter(got.values())), thresh=50)
+        if got.get("idle"):
+            enemies[v] = got
+
+    todo = [v for v in ENEMY_VARIANT_NAMES if not enemies.get(v)]
+    if todo and enemies.get("walker", {}).get("idle"):
+        derived = generate_kontext_enemy_variants(enemies["walker"]["idle"], size=sq,
+                                                  variants=todo)
         for v, p in derived.items():
             if p is None:
                 # The Kontext edit failed too. A drifted direct generation is still a better
                 # enemy than nothing, so keep whatever we already had.
-                p = enemies.get(v) or _krea2_regen_enemy(enemy_style, sq, steps, prefix,
-                                                         variant=v, attempts=1)
-            enemies[v] = p
+                p = (enemies.get(v) or {}).get("idle") or _krea2_regen_enemy(
+                    enemy_style, sq, steps, prefix, variant=v, attempts=1)
+            if p:
+                enemies[v] = {"idle": p}
 
     missing = [v for v in ENEMY_VARIANT_NAMES if not enemies.get(v)]
     if missing:
         print(f"[krea2] {prefix} enemy variants missing: {missing} - the frontend will fall "
               f"back to the walker for those")
+    for v, fr in enemies.items():
+        print(f"[krea2] {prefix} {v}: {sorted(fr)}")
     return {v: enemies[v] for v in ENEMY_VARIANT_NAMES if enemies.get(v)}
 
 
@@ -4109,7 +4263,8 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
     added = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5", species=species)
 
-    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}" for v in added)
+    names = ("player", "weapon", "shield") + tuple(f"enemy_{v}_{f}"
+                                                   for v, fs in added.items() for f in fs)
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, names, job_key="frames")
     elapsed = time.time() - t0
@@ -4120,7 +4275,9 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v5",
                                            species=species, generated=added)
     paths["enemies"] = enemies
-    paths["enemy"] = enemies["walker"]
+    # Legacy single-sprite field for older frontend paths. Guarded because losing the whole
+    # bundle to a KeyError over one missing enemy would be a poor trade.
+    paths["enemy"] = (enemies.get("walker") or {}).get("idle")
     paths["enemy_names"] = ({v: species[v]["name"] for v in species} if species else None)
 
     for n in ("weapon", "shield"):
@@ -4138,12 +4295,23 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
 # purely by text with one shared seed holding the character/weapon/framing steady between
 # frames (the same lever v4 leaned on alongside its OpenPose skeletons). The frontend's
 # existing multi-frame path swaps these during block / attack / hurt.
-V6_FRAME_NAMES = ["idle", "block", "windup", "slash1", "slash2", "slash3", "hurt"]
+# APPEND-ONLY. The frontend indexes this list by number (V6_*_FRAME_INDEX below, and the
+# matching literals in game.js), so a new pose goes on the END - inserting one in the middle
+# silently reassigns every frame after it.
+V6_FRAME_NAMES = ["idle", "block", "windup", "slash1", "slash2", "slash3", "hurt",
+                  "walk1", "walk2"]
 
 # Attack progress (0..1) -> index into V6_FRAME_NAMES. windup, then the three swing frames.
 V6_ATTACK_FRAME_INDICES = [2, 3, 4, 5]
 V6_BLOCK_FRAME_INDEX = 1
 V6_HURT_FRAME_INDEX = 6
+# The two halves of the walk cycle, alternated by the frontend while the player strafes.
+# NOT a left-step and a right-step: krea2 will not reliably draw one versus the other (both
+# wordings tried came back with the two frames leaning the SAME way, 0/4 seeds - directional
+# left/right is a known weak spot for diffusion models). Opposite phases of one stride are
+# something it can do, the two frames measure 0.42-0.57 apart by silhouette, and the direction
+# of travel is already unambiguous from the character sliding across the screen.
+V6_WALK_FRAME_INDICES = [7, 8]
 
 
 def krea2_frame_prompts(player_style, weapon_style):
@@ -4178,6 +4346,18 @@ def krea2_frame_prompts(player_style, weapon_style):
         "slash2": f"Full follow-through: the {w} swung all the way down and across the body, arms extended, motion blur.",
         "slash3": f"Recovering from the swing: the {w} trailing low across the far side, weight settling back to centre.",
         "hurt":   f"Staggering backward off balance, recoiling from a hit, the {w} and shield flung wide.",
+        # The two opposite phases of one stride - see V6_WALK_FRAME_INDICES for why this is a
+        # walk CYCLE and not a left-step / right-step pair. Described as a planted mid-stride
+        # rather than "walking", which on a back view tends to come back as a figure wandering
+        # away from the camera into the distance. Whether the model honours which leg leads
+        # does not matter; the cycle only needs the two frames to be opposite each other.
+        "walk1": (f"Mid-stride, caught in the middle of a step: one leg swung forward and "
+                  f"planted with the weight rolling onto it, the other stretched out long "
+                  f"behind, the body leaning into the movement, the {w} swinging with it."),
+        "walk2": (f"Mid-stride on the opposite step, legs fully scissored the other way: the "
+                  f"leg that was trailing now swung forward and planted, the other stretched "
+                  f"out long behind it, the body leaning into the movement, the {w} swinging "
+                  f"back the other way."),
     }
     return [base + actions[n] for n in V6_FRAME_NAMES]
 
@@ -4199,7 +4379,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
     added = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6", species=species)
 
-    keys = V6_FRAME_NAMES + [f"enemy_{v}" for v in added]
+    keys = V6_FRAME_NAMES + [f"enemy_{v}_{f}" for v, fs in added.items() for f in fs]
     t0 = time.time()
     paths = _krea2_submit_and_collect(payload, keys, job_key="frames")
     elapsed = time.time() - t0
@@ -4208,10 +4388,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     for fp in frame_paths:
         keep_largest_figure(fp)
     # One shared bounding box so the character holds still between frames instead of rescaling on
-    # every swap. Build it from the planted stances only (idle / block) - the slash, windup and
-    # hurt frames fling the weapon and arms well past the body, and letting those into the union
-    # blew the box out sideways and left the character tiny and floating in every frame.
-    _planted = [V6_FRAME_NAMES.index(n) for n in ("idle", "block")]
+    # every swap. Build it from the planted stances only - the slash, windup and hurt frames fling
+    # the weapon and arms well past the body, and letting those into the union blew the box out
+    # sideways and left the character tiny and floating in every frame. The two walk frames ARE
+    # planted (a stride reaches much less far than a swing) and they are included, so a leading
+    # foot is not cropped off at the edge of the frame.
+    _planted = [V6_FRAME_NAMES.index(n) for n in ("idle", "block", "walk1", "walk2")]
     crop_frames_to_common_bbox(frame_paths, bbox_indices=_planted)
 
     enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v6",
@@ -4220,7 +4402,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
 
     print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
           f"character {sq}x{sq}, Kontext portrait set, {int(steps)} steps, krea2 {elapsed:.1f}s")
-    return {"frames": frame_paths, "enemy": enemies["walker"], "enemies": enemies,
+    return {"frames": frame_paths, "enemy": (enemies.get("walker") or {}).get("idle"),
+            "enemies": enemies,
             "enemy_names": ({v: species[v]["name"] for v in species} if species else None),
             "portrait": portraits[0] if portraits else None, "portraits": portraits}
 
@@ -4283,7 +4466,10 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "shield_sprite": _b64(assets["shield"]) if assets.get("shield") else None,
             "enemy_sprites": [_b64(assets["enemy"])] if assets.get("enemy") else [],
             # walker / flyer / boss - the frontend picks one at random on each battle entry.
-            "enemy_variants": ({v: _b64(p) for v, p in assets["enemies"].items()}
+            # {variant: {frame: dataurl}} - idle/attack for every foe, plus block for the two
+            # that fight on the ground. Always an object, never a bare string.
+            "enemy_variants": ({v: {f: _b64(p) for f, p in fr.items()}
+                                for v, fr in assets["enemies"].items()}
                                if assets.get("enemies") else None),
             # Each foe's own invented name, when the LLM designed them (generate_enemy_species).
             "enemy_names": assets.get("enemy_names"),
@@ -4371,7 +4557,10 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "shield_sprite": None,
             "enemy_sprites": [_b64(bundle["enemy"])] if bundle.get("enemy") else [],
             # walker / flyer / boss - the frontend picks one at random on each battle entry.
-            "enemy_variants": ({v: _b64(p) for v, p in bundle["enemies"].items()}
+            # {variant: {frame: dataurl}} - idle/attack for every foe, plus block for the two
+            # that fight on the ground. Always an object, never a bare string.
+            "enemy_variants": ({v: {f: _b64(p) for f, p in fr.items()}
+                                for v, fr in bundle["enemies"].items()}
                                if bundle.get("enemies") else None),
             # Each foe's own invented name, when the LLM designed them (generate_enemy_species).
             "enemy_names": bundle.get("enemy_names"),
@@ -4427,14 +4616,16 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
-        # The three UI sounds (start / button / end). Unlike the gameplay foley these do not
-        # change with the theme, so they were generated once with the same model and committed
-        # to sounds/ rather than costing time in every run.
+        # The static UI sounds (start / button / end), the main menu music loop, and the
+        # loading-complete chime. Unlike the gameplay foley these do not change with the
+        # theme, so they were generated once (see generate_menu_music_asset /
+        # generate_ready_chime_asset) and committed to sounds/ rather than costing time in
+        # every run.
         elif self.path.startswith("/sounds/"):
             name = os.path.basename(self.path)
             # Basename alone already defeats "../", but the whitelist keeps this route from
             # ever becoming a general file server.
-            if name in ("start.wav", "button.wav", "end.wav"):
+            if name in ("start.wav", "button.wav", "end.wav", "menu_music.wav", "ready.wav"):
                 wav_file = os.path.join(PROJECT_DIR, "sounds", name)
                 if os.path.exists(wav_file):
                     with open(wav_file, "rb") as f:
@@ -4541,4 +4732,14 @@ def run_server():
         httpd.serve_forever()
 
 if __name__ == "__main__":
-    run_server()
+    # One-off static audio asset generation - see generate_menu_music_asset /
+    # generate_ready_chime_asset. Does not touch PORT or start the HTTP server.
+    if "--gen-static-audio" in sys.argv:
+        generate_menu_music_asset()
+        generate_ready_chime_asset()
+    elif "--gen-menu-music" in sys.argv:
+        generate_menu_music_asset()
+    elif "--gen-ready-chime" in sys.argv:
+        generate_ready_chime_asset()
+    else:
+        run_server()

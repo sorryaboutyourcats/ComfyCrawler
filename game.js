@@ -131,7 +131,10 @@
     // The three foes generated from one typed enemy idea (server bundle.enemy_variants):
     // walker (ground), flyer (swoops from out of reach), boss (big, tanky). One is chosen
     // at random each time a battle starts. enemySpriteFrames tracks the active one.
+    // {variant: {idle, attack, block}} of Images. Every foe has idle+attack; only the two
+    // that fight on the ground have block. enemyFrames below points at the active foe's set.
     let enemyVariantImgs = {};
+    let enemyFrames = null;
     let enemyStyleName = '';   // common foe name (walker/flyer)
     let enemyBossName = '';    // boss's own name (boss variant only)
     // Each foe's own invented name (server bundle.enemy_names), when the three were designed
@@ -187,6 +190,7 @@
     let narratePauseTimer = null;
 
     function stopNarration() {
+      restoreMenuMusic();       // no-op unless narration actually ducked it
       if (narratePauseTimer) { clearTimeout(narratePauseTimer); narratePauseTimer = null; }
       if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
       if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
@@ -251,6 +255,8 @@
       if (!n) return;
 
       stopNarration();
+      duckMenuMusic();          // narration is about to actually speak - see stopNarration
+                                 // above for the matching restore when it finishes
       crawlText.classList.add('narrating');
       for (let i = 0; i < n; i++) narrateClips.push({ el: paras[i], src: story.audio[i] });
 
@@ -409,6 +415,107 @@
       });
     }
 
+    // ---- Main menu music (static, generated once, NOT per-dungeon) -------------
+    // sounds/menu_music.wav is a fixed short loop, unlike explore/battle which are themed
+    // per playthrough - see generate_menu_music_asset in server.py. Plays from the moment
+    // the title screen is usable through the whole loading screen, ducking under the intro
+    // narration and stopping for good once assets are ready and the "ready" chime plays.
+    let menuMusicBuf = null;
+    let menuMusicLoading = false;
+    let menuMusicNode = null;      // { src, gain } while actually playing
+    let menuMusicStopped = false;  // true once the ready chime has silenced it for this run
+    let menuMusicDucked = false;
+
+    function _spawnMenuMusicNode(initialGain) {
+      const ctx = sfxContext();
+      if (!ctx || !menuMusicBuf) return null;
+      const src = ctx.createBufferSource();
+      src.buffer = menuMusicBuf;
+      src.loop = true;
+      const g = ctx.createGain();
+      g.gain.value = initialGain;
+      src.connect(g); g.connect(musicMaster);
+      src.start();
+      return { src, gain: g };
+    }
+
+    function loadMenuMusic() {
+      if (menuMusicBuf || menuMusicLoading) return;
+      const ctx = sfxContext();
+      if (!ctx) return;
+      menuMusicLoading = true;
+      fetch(`${SERVER_URL}/sounds/menu_music.wav`)
+        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject()))
+        .then(ab => ctx.decodeAudioData(ab, buf => {
+          menuMusicBuf = buf;
+          menuMusicLoading = false;
+          if (!menuMusicNode && !menuMusicStopped) menuMusicNode = _spawnMenuMusicNode(1);
+        }, () => { menuMusicLoading = false; }))
+        .catch(() => { menuMusicLoading = false; /* menu just plays without music */ });
+    }
+
+    function stopMenuMusicLoop() {
+      if (!menuMusicNode) return;
+      const node = menuMusicNode;
+      menuMusicNode = null;
+      try { node.src.stop(); } catch (e) {}
+      try { node.src.disconnect(); node.gain.disconnect(); } catch (e) {}
+    }
+
+    // Fires once, when the dungeon finishes generating - the menu's job is done, the dungeon's
+    // own explore/battle loops take over once the player actually enters.
+    function stopMenuMusicForLoadingComplete() {
+      menuMusicStopped = true;
+      menuMusicDucked = false;
+      if (!menuMusicNode) return;
+      const ctx = sfxContext();
+      const now = ctx ? ctx.currentTime : 0;
+      const node = menuMusicNode;
+      node.gain.gain.cancelScheduledValues(now);
+      node.gain.gain.setValueAtTime(node.gain.gain.value, now);
+      node.gain.gain.linearRampToValueAtTime(0, now + 0.6);
+      menuMusicNode = null;
+      setTimeout(() => {
+        try { node.src.stop(); node.src.disconnect(); node.gain.disconnect(); } catch (e) {}
+      }, 700);
+    }
+
+    // Ducks under the intro narration. A no-op if narration is off (never called), if the
+    // menu music failed to load, or if the loading-complete chime already stopped it for good.
+    function duckMenuMusic() {
+      if (!menuMusicNode || menuMusicStopped || menuMusicDucked) return;
+      menuMusicDucked = true;
+      const ctx = sfxContext();
+      const now = ctx.currentTime;
+      menuMusicNode.gain.gain.cancelScheduledValues(now);
+      menuMusicNode.gain.gain.setValueAtTime(menuMusicNode.gain.gain.value, now);
+      menuMusicNode.gain.gain.linearRampToValueAtTime(0.15, now + 0.6);
+    }
+
+    function restoreMenuMusic() {
+      if (!menuMusicNode || menuMusicStopped || !menuMusicDucked) return;
+      menuMusicDucked = false;
+      const ctx = sfxContext();
+      const now = ctx.currentTime;
+      menuMusicNode.gain.gain.cancelScheduledValues(now);
+      menuMusicNode.gain.gain.setValueAtTime(menuMusicNode.gain.gain.value, now);
+      menuMusicNode.gain.gain.linearRampToValueAtTime(1, now + 0.6);
+    }
+
+    // Win, lose, or quit back to the title screen: the dungeon's own music must stop, and the
+    // menu loop restarts from silence and eases back up rather than snapping to full volume.
+    function returnToMenuMusic() {
+      stopMusic();
+      stopMenuMusicLoop();
+      menuMusicStopped = false;
+      menuMusicDucked = false;
+      if (!menuMusicBuf) { loadMenuMusic(); return; }
+      menuMusicNode = _spawnMenuMusicNode(0);
+      if (!menuMusicNode) return;
+      const ctx = sfxContext();
+      menuMusicNode.gain.gain.linearRampToValueAtTime(1, ctx.currentTime + 3.0);
+    }
+
     // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
     // percussive envelope - because their whole job is to keep the game audible when the
     // generated pack is missing, not to compete with it.
@@ -478,7 +585,7 @@
     // generated per run. Fetched once and decoded into the same bank, so they play through
     // playSfx like everything else. A 404 (or a checkout without the files) just leaves them
     // absent, and the procedural bank covers them.
-    const UI_SOUNDS = ['start', 'button', 'end'];
+    const UI_SOUNDS = ['start', 'button', 'end', 'ready'];
     function loadUiSounds() {
       const ctx = sfxContext();
       if (!ctx) return;
@@ -496,7 +603,7 @@
     // loading" checkbox fires it from the poll timer), so rather than relying on any single
     // button, unlock on the first gesture of any kind. Once is enough for the session.
     ['pointerdown', 'keydown'].forEach(evt => {
-      window.addEventListener(evt, () => { sfxContext(); loadUiSounds(); },
+      window.addEventListener(evt, () => { sfxContext(); loadUiSounds(); loadMenuMusic(); },
                               { once: true, capture: true });
     });
 
@@ -580,6 +687,7 @@
       screenSetup.classList.remove('hidden');
       if (titleButtons) titleButtons.classList.remove('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+      returnToMenuMusic();     // win, lose, or quit - the dungeon's music stops, menu fades in
     }
 
     btnClose.addEventListener('click', () => {
@@ -746,10 +854,15 @@
     // same three sprites and stats read as one species at three sizes, so the ear does the
     // rest: the flyer sounds small and quick, the boss sounds huge and slow. 1.0 = walker's
     // own recorded pitch, unchanged.
+    // canBlock/blockOdds/blockHold: the two foes that fight on the ground guard, and they have
+    // a generated block frame to show for it (server ENEMY_VARIANT_FRAMES). The flyer does not
+    // - it stays out of reach instead, which is its whole defence, and it has no block frame.
+    // The boss guards less often than the walker but holds it far longer: with 240hp and a
+    // slow cadence, a frequent short guard would just stall the fight.
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  slow: false, hover: 0,  sfxRate: 1.00 },
-      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, slow: false, hover: 58, sfxRate: 1.35 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: false, slow: true,  hover: 0,  sfxRate: 0.72 },
+      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.006, blockHold: 75,  slow: false, hover: 0,  sfxRate: 1.00 },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,     blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.004, blockHold: 110, slow: true,  hover: 0,  sfxRate: 0.72 },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
 
@@ -758,7 +871,8 @@
     function pickEnemyVariant(forceKey) {
       // Only roll the full set when we actually have distinct sprites for it (v5/v6 krea);
       // other modes ship one enemy, so they stay on the walker.
-      const haveVariants = ENEMY_VARIANT_KEYS.filter(k => enemyVariantImgs[k]).length >= 2;
+      const haveVariants = ENEMY_VARIANT_KEYS.filter(k => enemyVariantImgs[k] &&
+                                                          enemyVariantImgs[k].idle).length >= 2;
       const key = forceKey || (haveVariants
         ? ENEMY_VARIANT_KEYS[Math.floor(Math.random() * ENEMY_VARIANT_KEYS.length)]
         : 'walker');
@@ -790,8 +904,11 @@
       e.name = name.toUpperCase();
       // Only swap the active sprite when we have a real per-variant set; otherwise leave
       // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
-      const img = enemyVariantImgs[key];
-      if (img && haveVariants) enemySpriteFrames = [img];
+      const set = enemyVariantImgs[key];
+      if (set && set.idle && haveVariants) {
+        enemyFrames = set;
+        enemySpriteFrames = [set.idle];
+      }
       return key;
     }
 
@@ -1131,10 +1248,12 @@
             if (e.stateTimer <= 0) e.state = 'idle';
           } else {
             e.attackTimer--;
-            // A walker occasionally raises its guard between attacks (see the player-strike
-            // resolution, where e.blockTimer soaks most of a hit).
-            if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0 && Math.random() < 0.006) {
-              e.blockTimer = 75;
+            // A grounded foe occasionally raises its guard between attacks (see the player-strike
+            // resolution, where e.blockTimer soaks most of a hit). While blockTimer runs, the
+            // renderer swaps in that foe's generated block frame.
+            if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0
+                && Math.random() < (cfg.blockOdds || 0)) {
+              e.blockTimer = cfg.blockHold || 75;
               showFloatingCombatText("ENEMY GUARDS", 160 + e.x, 78, "#94a3b8");
             }
             if (e.attackTimer === cfg.telegraph) {
@@ -1576,9 +1695,18 @@
     // aspect ratios vary enormously with the subject: a RAM stick comes back 141x512 and a
     // dragon with its wingspan 503x187. Sizing on height alone would draw that dragon ~285px
     // wide on a 320px screen.
-    function drawEnemyContent(c, img, cx, bottomY, targetH, maxW) {
+    // `sizeRef`, when given, is the frame whose measured content decides the scale - pass the
+    // idle frame for every frame of a foe so it holds one size while its pose changes. The
+    // server crops a foe's frames to a shared box first, so they stay registered and a lunge
+    // simply extends past the idle outline instead of rescaling the whole sprite.
+    function drawEnemyContent(c, img, cx, bottomY, targetH, maxW, sizeRef) {
       const aspect = img.naturalWidth / img.naturalHeight;
-      const box = solidContentBox(img);
+      // Only borrow the reference box when the two frames really are the same canvas - the
+      // box is in normalised coordinates, so it means nothing against a different-sized frame
+      // (which happens if the server had to crop a regenerated idle on its own).
+      const ref = (sizeRef && sizeRef.complete && sizeRef.naturalWidth === img.naturalWidth
+                   && sizeRef.naturalHeight === img.naturalHeight) ? sizeRef : img;
+      const box = solidContentBox(ref);
       if (!box) {
         let h = targetH, w = targetH * aspect;
         if (maxW && w > maxW) { h *= maxW / w; w = maxW; }
@@ -1633,6 +1761,9 @@
       // --- MULTI-FRAME AI SPRITE SHEET MODE (v4: 5 frames / v6: 7-frame swing) ---
       if (playerSpriteFrames && playerSpriteFrames.length > 1) {
         const v6Frames = playerSpriteFrames.length >= 7;
+        // The two walk-cycle frames (7, 8) only exist on bundles generated after they were
+        // added; an older 7-frame v6 bundle keeps its standing idle while strafing.
+        const haveWalk = playerSpriteFrames.length >= 9;
         let currentFrame = playerSpriteFrames[0];
         if (hurtFrame > 0) {
           // v6: idle, block, windup, slash1, slash2, slash3, hurt -> hurt is frame 6.
@@ -1651,9 +1782,21 @@
           }
         } else if (shieldProgress > 0.3) {
           currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
+        } else if (haveWalk && isMoving) {
+          // Frames 7 and 8 are opposite phases of one stride, alternated in phase with the
+          // existing walk bob so the foot-plant and the bob agree. They are NOT a left-step
+          // and a right-step: krea2 would not reliably draw one versus the other (see
+          // V6_WALK_FRAME_INDICES in server.py), and the direction of travel already reads
+          // from the character sliding across the screen.
+          currentFrame = playerSpriteFrames[Math.sin(Date.now() / 90) >= 0 ? 7 : 8]
+                         || playerSpriteFrames[0];
         }
 
         if (currentFrame && currentFrame.complete && currentFrame.naturalWidth > 0) {
+          // A side-step is ONE frame per direction, not a cycle, so it would otherwise sit
+          // perfectly still while the player strafes. The existing walk bob supplies the
+          // missing up-down; the pose frame supplies the stride.
+          if (haveWalk && isMoving && attFrame <= 0 && hurtFrame <= 0) c.translate(0, walkBob * 0.6);
           // Size the character by its measured opaque height and plant its feet just past the
           // bottom edge, so a loose frame crop or a faint ground-shadow blob can't leave the
           // sprite floating in mid-scene. py is already the canvas bottom, so footY is +18.
@@ -1754,9 +1897,25 @@
       // Falls through to the procedural enemy below when no sprites were generated, so an enemy
       // that failed to generate (or a dungeon made before this existed) still has an opponent.
       if (enemySpriteFrames && enemySpriteFrames.length > 0) {
-        let frame = enemySpriteFrames[0];
-        if (e.state === 'hurt') frame = enemySpriteFrames[2] || frame;
-        else if (e.state === 'attack' || e.state === 'telegraph') frame = enemySpriteFrames[1] || frame;
+        // Per-variant frame set (idle / attack / block) when the bundle has one; otherwise the
+        // legacy flat [idle, attack, hurt] array from v3/v4.
+        let frame, sizeRef = null;
+        if (enemyFrames && enemyFrames.idle) {
+          frame = enemyFrames.idle;
+          // Attack wins over block: the AI clears blockTimer when it commits to a strike, so
+          // these do not overlap in practice, but the strike is the one that must read.
+          if (e.state === 'attack' || e.state === 'telegraph') frame = enemyFrames.attack || frame;
+          else if (e.blockTimer > 0) frame = enemyFrames.block || frame;
+          // Scale EVERY frame by the idle's content box. Sizing each frame on its own box
+          // would shrink the whole foe whenever it lunged, since a thrust-out limb measures
+          // bigger; anchoring on the idle keeps it a constant size and lets the attack frame
+          // genuinely reach further than the idle silhouette.
+          sizeRef = enemyFrames.idle;
+        } else {
+          frame = enemySpriteFrames[0];
+          if (e.state === 'hurt') frame = enemySpriteFrames[2] || frame;
+          else if (e.state === 'attack' || e.state === 'telegraph') frame = enemySpriteFrames[1] || frame;
+        }
 
         if (frame && frame.complete && frame.naturalWidth > 0) {
           // Size by MEASURED solid content, not the raw frame - a small generation still fills
@@ -1777,10 +1936,10 @@
           if (e.state === 'hurt') { c.translate((Math.random() * 8 - 4), 0); c.globalAlpha = 0.9; }
           else if (e.blockTimer > 0) { c.globalAlpha = 0.94; }
 
-          drawEnemyContent(c, frame, ex, bottomY, targetH, maxW);
+          drawEnemyContent(c, frame, ex, bottomY, targetH, maxW, sizeRef);
           c.globalAlpha = 1;
 
-          // Walker guard flash.
+          // Grounded-foe guard flash, on top of the block frame.
           if (e.blockTimer > 0) {
             c.strokeStyle = 'rgba(148,163,184,0.9)'; c.lineWidth = 3;
             c.beginPath(); c.arc(ex, bottomY - targetH * 0.5, targetH * 0.34, -0.4, Math.PI + 0.4); c.stroke();
@@ -2955,6 +3114,10 @@
       if (!b) return;
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
+      // Belt-and-braces: armEnterDungeon already stopped the menu loop when loading finished,
+      // but nothing should still be playing it once the dungeon itself starts.
+      menuMusicStopped = true;
+      stopMenuMusicLoop();
       // v6 ships bundle.sfx; every other mode leaves it undefined and playSfx falls back to
       // the procedural bank.
       loadSfxBank(b.sfx);
@@ -3002,14 +3165,23 @@
       }
       enemySpriteFrames = [];
       enemyVariantImgs = {};
-      // walker / flyer / boss, each its own generated sprite. Older bundles / other
-      // modes only send enemy_sprites - fold that in as the walker.
+      enemyFrames = null;
+      // walker / flyer / boss, each with its own {idle, attack, block?} sprites. A bundle
+      // generated before the extra frames existed sends a bare data URL per variant, so
+      // accept that shape too and treat it as an idle-only foe. Older modes send only
+      // enemy_sprites - fold that in as the walker.
       if (b.enemy_variants) {
-        Object.entries(b.enemy_variants).forEach(([key, src]) => {
-          if (!src) return;
-          const img = new Image();
-          img.src = src;
-          enemyVariantImgs[key] = img;
+        Object.entries(b.enemy_variants).forEach(([key, val]) => {
+          if (!val) return;
+          const srcs = (typeof val === 'string') ? { idle: val } : val;
+          const set = {};
+          Object.entries(srcs).forEach(([frame, src]) => {
+            if (!src) return;
+            const img = new Image();
+            img.src = src;
+            set[frame] = img;
+          });
+          if (set.idle) enemyVariantImgs[key] = set;
         });
       }
       if (b.enemy_sprites && b.enemy_sprites.length > 0) {
@@ -3018,7 +3190,7 @@
           img.src = src;
           enemySpriteFrames.push(img);
         });
-        if (!enemyVariantImgs.walker) enemyVariantImgs.walker = enemySpriteFrames[0];
+        if (!enemyVariantImgs.walker) enemyVariantImgs.walker = { idle: enemySpriteFrames[0] };
       }
       // Common foe name (walker/flyer) vs. the boss's own name (boss variant) - see
       // pickEnemyVariant, which is what actually assigns combatState.enemy.name.
@@ -3126,6 +3298,10 @@
 
     // Assets are ready, but the player decides when to stop reading.
     function armEnterDungeon(bundle) {
+      // Loading is done - announce it once, then the menu music's job is over. The dungeon's
+      // own explore/battle loops (if any) take over once the player actually enters.
+      playSfx('ready');
+      stopMenuMusicForLoadingComplete();
       pendingBundle = bundle;
       if (bundle && bundle.story) {
         dungeonStory = bundle.story;
