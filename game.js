@@ -420,6 +420,8 @@
     // per playthrough - see generate_menu_music_asset in server.py. Plays from the moment
     // the title screen is usable through the whole loading screen, ducking under the intro
     // narration and stopping for good once assets are ready and the "ready" chime plays.
+    const MENU_MUSIC_VOLUME = 0.75;        // 25% quieter than the dungeon music's full gain
+    const MENU_MUSIC_DUCK_VOLUME = MENU_MUSIC_VOLUME * 0.2;
     let menuMusicBuf = null;
     let menuMusicLoading = false;
     let menuMusicNode = null;      // { src, gain } while actually playing
@@ -449,7 +451,7 @@
         .then(ab => ctx.decodeAudioData(ab, buf => {
           menuMusicBuf = buf;
           menuMusicLoading = false;
-          if (!menuMusicNode && !menuMusicStopped) menuMusicNode = _spawnMenuMusicNode(1);
+          if (!menuMusicNode && !menuMusicStopped) menuMusicNode = _spawnMenuMusicNode(MENU_MUSIC_VOLUME);
         }, () => { menuMusicLoading = false; }))
         .catch(() => { menuMusicLoading = false; /* menu just plays without music */ });
     }
@@ -489,7 +491,7 @@
       const now = ctx.currentTime;
       menuMusicNode.gain.gain.cancelScheduledValues(now);
       menuMusicNode.gain.gain.setValueAtTime(menuMusicNode.gain.gain.value, now);
-      menuMusicNode.gain.gain.linearRampToValueAtTime(0.15, now + 0.6);
+      menuMusicNode.gain.gain.linearRampToValueAtTime(MENU_MUSIC_DUCK_VOLUME, now + 0.6);
     }
 
     function restoreMenuMusic() {
@@ -499,7 +501,7 @@
       const now = ctx.currentTime;
       menuMusicNode.gain.gain.cancelScheduledValues(now);
       menuMusicNode.gain.gain.setValueAtTime(menuMusicNode.gain.gain.value, now);
-      menuMusicNode.gain.gain.linearRampToValueAtTime(1, now + 0.6);
+      menuMusicNode.gain.gain.linearRampToValueAtTime(MENU_MUSIC_VOLUME, now + 0.6);
     }
 
     // Win, lose, or quit back to the title screen: the dungeon's own music must stop, and the
@@ -513,7 +515,7 @@
       menuMusicNode = _spawnMenuMusicNode(0);
       if (!menuMusicNode) return;
       const ctx = sfxContext();
-      menuMusicNode.gain.gain.linearRampToValueAtTime(1, ctx.currentTime + 3.0);
+      menuMusicNode.gain.gain.linearRampToValueAtTime(MENU_MUSIC_VOLUME, ctx.currentTime + 3.0);
     }
 
     // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
@@ -857,12 +859,21 @@
     // canBlock/blockOdds/blockHold: the two foes that fight on the ground guard, and they have
     // a generated block frame to show for it (server ENEMY_VARIANT_FRAMES). The flyer does not
     // - it stays out of reach instead, which is its whole defence, and it has no block frame.
-    // The boss guards less often than the walker but holds it far longer: with 240hp and a
-    // slow cadence, a frequent short guard would just stall the fight.
+    //
+    // blockOdds is rolled ONCE PER FRAME, but only while idle (not mid-attack, wind-up or
+    // stagger) and only when no guard is already up, so the raw number is much smaller than
+    // the behaviour it produces. Simulated over 10 minutes of combat, guard uptime / guards
+    // per minute:
+    //   walker  0.006/75  -> 23%, 12.7    now 0.018/90  -> 52%, 23.3
+    //   boss    0.004/110 -> 24%,  8.6    now 0.030/150 -> 74%, 19.5
+    // Those are upper bounds: the sim does not model the player, and a landed hit always
+    // breaks the guard (damage drops to 25% and blockTimer clears), so real uptime is lower.
+    // That break is also why even the boss's near-permanent guard costs the player a weakened
+    // swing rather than stalling the fight - but it does roughly halve effective DPS on it.
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.006, blockHold: 75,  slow: false, hover: 0,  sfxRate: 1.00 },
+      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.018, blockHold: 90,  slow: false, hover: 0,  sfxRate: 1.00 },
       flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,     blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.004, blockHold: 110, slow: true,  hover: 0,  sfxRate: 0.72 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030, blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72 },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
 
@@ -1103,7 +1114,9 @@
 
         if (keysHeld.block && combatState.playerStm > 2) {
           combatState.shieldProgress = Math.min(1.0, combatState.shieldProgress + 0.2);
-          combatState.playerStm = Math.max(0, combatState.playerStm - 0.12);
+          // Holding guard costs stamina; shuffling around while guarding costs much more.
+          const guardMoving = keysHeld.left || keysHeld.right;
+          combatState.playerStm = Math.max(0, combatState.playerStm - (guardMoving ? 0.85 : 0.3));
           combatState.faceState = 'block';
         } else {
           combatState.shieldProgress = Math.max(0.0, combatState.shieldProgress - 0.2);
@@ -1191,6 +1204,9 @@
             playSfx('block');
             showFloatingCombatText(blockMsg, 160, 140, "#a855f7");
             combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
+            // Absorbing a blow on the shield barely dents HP but takes a huge bite of stamina -
+            // block too many hits without spacing out and the guard breaks.
+            combatState.playerStm = Math.max(0, combatState.playerStm - (dmg * 1.5 + 10));
           } else {
             combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
             combatState.hurtFrame = 1;
