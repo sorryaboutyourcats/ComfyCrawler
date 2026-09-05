@@ -678,10 +678,14 @@
     //                fill their generated canvas, so a winged flyer arrives far wider than
     //                it is tall and would otherwise span the whole screen.
     //   cadence    - frames between attacks   telegraph - wind-up lead frames
+    // sfxRate pitches every sound this variant causes (hit_enemy, block, death_enemy) - the
+    // same three sprites and stats read as one species at three sizes, so the ear does the
+    // rest: the flyer sounds small and quick, the boss sounds huge and slow. 1.0 = walker's
+    // own recorded pitch, unchanged.
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  slow: false, hover: 0  },
-      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, slow: false, hover: 58 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: false, slow: true,  hover: 0  },
+      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  slow: false, hover: 0,  sfxRate: 1.00 },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, slow: false, hover: 58, sfxRate: 1.35 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: false, slow: true,  hover: 0,  sfxRate: 0.72 },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
 
@@ -940,13 +944,15 @@
             showFloatingCombatText(guarded ? `BLOCKED! -${dmg}` : `-${dmg} SLASH!`,
               160 + (Math.random() * 30 - 15), 100, guarded ? "#94a3b8" : "#f87171");
             // The enemy's own guard soaking the blow reads as a block, not as a wound.
-            playSfx(guarded ? 'block' : 'hit_enemy');
+            // Pitched by cfg.sfxRate - see ENEMY_VARIANTS - so the same clip reads as the
+            // flyer's yelp or the boss's boom depending on who is actually getting hit.
+            playSfx(guarded ? 'block' : 'hit_enemy', { rate: cfg.sfxRate });
 
             if (e.hp <= 0) {
               e.state = 'defeated';
-              // Boss and flyer are the same species as the walker, so one death cry serves
-              // all three; the pitch is dropped for the boss to sell its bulk.
-              playSfx('death_enemy', { rate: cfg.slow ? 0.82 : 1.0 });
+              // Same species, three sizes: one death cry serves all three variants, pitched
+              // by cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
+              playSfx('death_enemy', { rate: cfg.sfxRate });
               showFloatingCombatText("VICTORY! +50 ESSENCE", 160, 70, "#fde047");
             }
           }

@@ -1883,24 +1883,24 @@ def krea2_shield_prompt(player_style):
 # each one differently.
 ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
 
-# krea2 generates the walker and a first attempt at the flyer. The BOSS is always a FLUX
-# Kontext edit of the walker, and the flyer falls back to one - see
-# _krea2_finish_enemy_variants for the decision, and _palette_similarity for how drift is
-# detected.
+# krea2 generates ONLY the walker. The flyer and the boss are both FLUX Kontext edits of it
+# (generate_kontext_enemy_variants), because asking krea2 for either directly abandons the
+# subject whenever it is not a creature:
+#   - flyer: "a giant stick of RAM" returned a plain bird on 4 of 4 seeds, with the identity
+#     wording, without it, and with every mention of birds stripped out.
+#   - boss: the same subject returned a generic armoured demon knight.
+# "Huge wings spread wide, hovering" and "colossal hulking heavily armoured boss" are simply
+# stronger priors than any amount of "it is literally a RAM stick". Kontext holds identity -
+# the same property the HUD portraits rely on.
 #
-# Why the flyer is attempted directly at all: for a subject that really can fly, only a fresh
-# generation gives it a proper airborne form. A "rogue security drone" comes back as an actual
-# flying drone; editing wings onto the legged version produced a walking robot with feathered
-# bird wings, which is what the player complained about. For a subject that CANNOT fly, that
-# same prompt abandons the subject (a RAM stick returns a plain bird, on 4 of 4 seeds, with or
-# without identity wording) - so those get the Kontext wing edit instead, which bolts wings
-# onto the real thing.
-#
-# Why the boss is never generated directly: "colossal hulking heavily armoured boss" is a
-# stronger prior than any amount of "it is literally a RAM stick", and returns a generic
-# armoured demon knight. Kontext holds identity - the property the HUD portraits rely on.
+# A middle version that generated the flyer directly and kept it when its palette still
+# matched the walker was tried and removed: it did give a machine a proper airborne form, but
+# rewording it to stop demanding wings ("the flying version ... with whatever thrusters, jets
+# or wings suit it") made krea2 keep the subject and ignore the flying entirely - a RAM stick
+# with no flight mechanism at all, at a 3/4 angle instead of head-on. Choosing the Kontext
+# edit per subject covers the same ground with one fewer generation.
 # Both krea2 variant prompts are KEPT as the last-resort fallback.
-KREA2_DIRECT_ENEMY_VARIANTS = ["walker", "flyer"]
+KREA2_DIRECT_ENEMY_VARIANTS = ["walker"]
 
 
 def _a_or_an(noun):
@@ -2681,22 +2681,27 @@ def _get_piper_voice(name):
     return voice
 
 
-# Piper's phonemizer (espeak-ng) gives a comma only a clipped breath and throws a standalone
-# dash away entirely, which runs dramatic lines together. Rather than fight the phonemizer,
-# the text is cut at those marks, each piece is synthesized on its own, and real silence is
-# spliced between the pieces. Each piece keeps its trailing comma so the model still reads it
-# with continuing (not sentence-final) intonation.
+# Piper's phonemizer (espeak-ng) gives a comma only a clipped breath, throws a standalone
+# dash away entirely, and butts sentences straight up against each other (it synthesizes one
+# chunk per sentence and concatenates them with no gap), which runs dramatic lines together.
+# Rather than fight the phonemizer, the text is cut at those marks, each piece is synthesized
+# on its own, and real silence is spliced between the pieces. Each piece keeps its own
+# terminating mark so the model still reads it with the right intonation.
 COMMA_PAUSE_MS = 180
 DASH_PAUSE_MS = 260
+PERIOD_PAUSE_MS = 350
 # Only dashes standing alone as punctuation - a hyphen inside "blood-soaked" is part of the
 # word and must not become a pause.
 _DASH_RE = re.compile(r"\s+[-‐-―]+\s+|\s+[-‐-―]+$")
-_COMMA_SPLIT_RE = re.compile(r"(?<=,)\s*")
+# A sentence break needs the following whitespace so "3.5" and "..." stay in one piece; a
+# comma splits either way.
+_MARK_SPLIT_RE = re.compile(r"(?<=,)\s*|(?<=[.!?…])\s+")
+_SENTENCE_END = (".", "!", "?", "…")
 
 
 def _split_for_pauses(text):
-    """Cut `text` into (fragment, pause_ms) pairs at commas and standalone dashes. The final
-    fragment carries a 0ms pause."""
+    """Cut `text` into (fragment, pause_ms) pairs at commas, standalone dashes and sentence
+    ends. The final fragment carries a 0ms pause."""
     parts = []
     # Dashes have no phoneme of their own, so they become commas: the comma supplies the
     # phrasing and the longer dash silence is spliced in after it.
@@ -2711,9 +2716,17 @@ def _split_for_pauses(text):
             if not lead.endswith((",", ";", ":", ".", "!", "?")):
                 lead += ","
             parts[-1] = (lead, DASH_PAUSE_MS)
-        pieces = [p.strip() for p in _COMMA_SPLIT_RE.split(chunk) if p.strip()]
-        for piece in pieces:
-            parts.append((piece, COMMA_PAUSE_MS if piece.endswith(",") else 0))
+        for piece in _MARK_SPLIT_RE.split(chunk):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if piece.endswith(","):
+                pause = COMMA_PAUSE_MS
+            elif piece.endswith(_SENTENCE_END):
+                pause = PERIOD_PAUSE_MS
+            else:
+                pause = 0
+            parts.append((piece, pause))
     if parts:
         parts[-1] = (parts[-1][0], 0)
     return parts
@@ -2721,7 +2734,7 @@ def _split_for_pauses(text):
 
 def _synthesize_with_pauses(voice, text, wf):
     """Write `text` to the open wave file `wf`, read by `voice`, with a beat of silence at
-    every comma and standalone dash."""
+    every comma, standalone dash and sentence end."""
     fmt_set = False
     for fragment, pause_ms in _split_for_pauses(text) or [(text, 0)]:
         sample_rate = 22050
@@ -3206,70 +3219,121 @@ KONTEXT_WING_EDIT = (
     "Keep the object completely unchanged - identical shape, colours, markings and "
     "details - with the wings simply attached to its sides. Plain white background."
 )
-# Boss: evil and angry rather than on fire. The lava/molten-red version this replaces read as
-# "burning" more than "menacing". Three things here are load-bearing, each learned from a
-# failed variant:
-#   - the face clause is CONDITIONAL ("if it has a face or eyes"). Made mandatory - "give it a
-#     furious snarling face" - Kontext replaced the RAM stick outright with a demon face.
-#   - the glow is what keeps it READABLE. Pure "much darker, colours drained and cold" with no
-#     glow produced near-black silhouettes (mean luma ~10 on a 0-255 scale) that would be an
-#     unreadable blob at the ~163px the boss is drawn at.
-#   - "original colours still clearly recognisable ... do not darken it into a silhouette" is
-#     needed on top of that, or it still crushes to black.
-# Verified on a RAM stick (still obviously RAM: pins, chips, outline), a dog (black wolf with
-# glowing violet eyes) and a robot drone (rusted and battle-damaged, violet eye).
+# For a MACHINE, wings are the wrong answer - a legged security drone with feathered wings
+# strapped on looks absurd. It gets a real airborne refit instead: rotors and thrusters, legs
+# tucked up. Note how CONCRETE this is. A vague "make a flying version of this object,
+# adding whatever thrusters, jets, rotors or wings suit it" was tried and Kontext did almost
+# nothing - it returned the subject unchanged and slightly smaller. Kontext acts on specific
+# physical instructions, not on intent. _vlm_is_machine picks between this and the wings.
+KONTEXT_THRUSTER_EDIT = (
+    "Convert this into its airborne model: mount glowing hover thrusters and spinning rotor "
+    "blades onto it so that it hovers in mid-air well above the ground, with bright exhaust "
+    "glowing beneath. Keep the object itself completely unchanged - same shape, colours, "
+    "markings and identity. Plain white background."
+)
+
+# Boss: scorched and angry. An "evil, cold violet glow" version was tried and reverted - its
+# conditional face clause ("if it has a face or eyes, make its expression furious") kept
+# hijacking the whole subject, replacing a RAM stick and then a taco outright with a floating
+# demon face. There is NO face clause here for that reason; the menace comes purely from
+# surface treatment, which cannot run away with the silhouette.
+#
+# Still load-bearing from that round: the GLOW is what keeps the sprite readable at the ~163px
+# the boss is drawn at (a darken-only edit produced near-black silhouettes, mean luma ~10/255),
+# and the explicit "still clearly recognisable, every detail visible" is needed on top of it.
+# Verified on a taco (charred shell, glowing filling - still obviously a taco), a RAM stick
+# (embers glowing between the chips) and a drone (rusted, glowing red eye).
 KONTEXT_BOSS_EDIT = (
-    "Make this object look evil and menacing: dirty its colours and darken them a little, "
-    "add deep scratches, chips and battle damage across its surface, and add a cold sinister "
-    "violet glow seeping from thin cracks in it. If it has a face or eyes, make its "
-    "expression furious and snarling and its eyes glow. Keep the object completely unchanged "
-    "in shape and form, with its original colours still clearly recognisable and every "
-    "detail clearly visible - do not darken it into a silhouette. Plain white background."
+    "Recolour this object so it looks angry and dangerous: darkened and scorched, its surface "
+    "cracked, chipped and battle-damaged, with hot glowing orange-red embers burning in the "
+    "cracks. Keep the object completely unchanged in shape and form, still clearly "
+    "recognisable, with every detail visible - only its colour and surface texture change. "
+    "Plain white background."
 )
 
 # Per-variant edit plus how much of the padded square the source should occupy. The flyer is
-# given more empty margin because the wings need somewhere to go; the boss edit adds no span,
-# so its source is padded larger, which keeps more of the walker's real resolution.
+# given more empty margin because wings/rotors need somewhere to go; the boss edit adds no
+# span, so its source is padded larger, keeping more of the walker's real resolution.
+# The flyer's edit is chosen per subject at run time - see generate_kontext_enemy_variants.
 KONTEXT_ENEMY_EDITS = {
     "flyer": {"edit": KONTEXT_WING_EDIT, "h": 0.62, "w": 0.55},
     "boss":  {"edit": KONTEXT_BOSS_EDIT, "h": 0.78, "w": 0.72},
 }
 
 
-def _palette_similarity(path_a, path_b, bins=6):
-    """Histogram intersection of two sprites' opaque pixels: 1.0 = identical palette, 0.0 =
-    nothing in common. Used as a cheap "is this still the same creature?" test.
+def _vlm_is_machine(image_path, timeout=180):
+    """Ask qwen3vl whether the sprite is a powered machine, so the flyer can be given rotors
+    and thrusters instead of wings.
 
-    Measured separation on real output (each flyer against its own walker):
-        drone 0.501 / 0.450, dragon 0.617   - direct generation kept the subject
-        RAM   0.151 / 0.090                 - direct generation drifted into a bird
-    with unrelated subjects (RAM walker vs drone walker) scoring 0.328, so the drifted cases
-    sit BELOW even "two different enemies". FLYER_IDENTITY_MIN splits that gap."""
-    from PIL import Image
-    import numpy as np
+    Uses the TextGenerate node, which takes an optional image - and krea2's own text encoder
+    IS qwen3vl-4b, a vision model, so this needs no extra model download and reuses one that
+    is already resident. Accuracy was 5/5 on a drone (robot), a RAM stick, a taco, a dog and
+    a dragon.
+
+    It will NOT reliably emit a bare YES/NO however much the prompt insists, so the prose is
+    parsed. Most answers end with an explicit "Answer: NO"; when there is no such line the
+    reply is a plain statement ("The object in the image is a robot."). Naive keyword matching
+    does NOT work here - the model echoes the question's own words back inside a negation
+    ("... is a taco, not a robot, drone, aircraft ..."), so the negated forms are checked
+    first. Any failure returns False, i.e. fall back to wings, which is the safe default."""
+    import re
     try:
-        def sig(p):
-            a = np.array(Image.open(p).convert("RGBA"))
-            m = a[:, :, 3] > 80
-            px = a[:, :, :3][m].astype(np.float32)
-            if not len(px):
-                return None
-            idx = np.clip((px / 256.0 * bins).astype(int), 0, bins - 1)
-            h = np.zeros((bins, bins, bins), np.float32)
-            np.add.at(h, (idx[:, 0], idx[:, 1], idx[:, 2]), 1)
-            return h / h.sum()
-        a, b = sig(path_a), sig(path_b)
-        if a is None or b is None:
-            return 0.0
-        return float(np.minimum(a, b).sum())
+        question = ("Look at this object. Is it a robot, drone, aircraft, vehicle or other "
+                    "powered machine? Answer with the single word YES or the single word NO.")
+        infile = f"vlmcls_{int(time.time()*1000)}.png"
+        shutil.copy(image_path, os.path.join(COMFY_INPUT_DIR, infile))
+        payload = {
+            "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                       "class_type": "CLIPLoader"},
+            "img": {"inputs": {"image": infile}, "class_type": "LoadImage"},
+            "gen": {"inputs": {"clip": ["k_clip", 0], "image": ["img", 0], "prompt": question,
+                               "max_length": 48, "sampling_mode": "off",
+                               "use_default_template": True, "thinking": False},
+                    "class_type": "TextGenerate"},
+            "prev": {"inputs": {"source": ["gen", 0]}, "class_type": "PreviewAny"},
+        }
+        data = json.dumps({"prompt": payload}).encode("utf-8")
+        req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            pid = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+
+        start = time.time()
+        text = ""
+        while time.time() - start < timeout:
+            time.sleep(0.5)
+            with urllib.request.urlopen(f"{COMFY_URL}/history/{pid}") as h:
+                hist = json.loads(h.read().decode("utf-8"))
+            if pid in hist and (hist[pid].get("outputs") or
+                                hist[pid].get("status", {}).get("completed")):
+                text = " ".join(hist[pid].get("outputs", {}).get("prev", {}).get("text", []))
+                break
+        low = text.lower()
+        if not low.strip():
+            print("[VLM] no answer - defaulting the flyer to wings")
+            return False
+
+        m = re.search(r"answer\s*[:\-]?\s*(yes|no)\b", low)
+        if m:
+            verdict = m.group(1) == "yes"
+        elif re.search(r"\bnot\s+an?\s+(robot|drone|machine|aircraft|vehicle|device)", low):
+            verdict = False
+        else:
+            verdict = bool(re.search(
+                r"\b(is|are)\s+an?\s+[^.]{0,40}?(robot|drone|machine|mech|vehicle|aircraft|android)",
+                low))
+        print(f"[VLM] machine={verdict} <- {text.strip()[:110]!r}")
+        return verdict
     except Exception as e:
-        print(f"[Palette Similarity Error] {e}")
-        return 0.0
+        print(f"[VLM Error] {e} - defaulting the flyer to wings")
+        return False
 
 
-# Below this, a directly-generated flyer is judged to have drifted off the subject and the
-# Kontext wing edit is used instead. See _palette_similarity for the measured clusters.
-FLYER_IDENTITY_MIN = 0.35
+# The palette-similarity gate that used to live here (keep a direct krea2 flyer when its
+# colours still matched the walker, else re-do it as a Kontext edit) is GONE, along with
+# FLYER_IDENTITY_MIN. It existed only because krea2 was generating the flyer directly. Both
+# the flyer and the boss are Kontext edits of the walker now, which preserves identity by
+# construction, so there is nothing left to gate.
 
 
 def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
@@ -3280,6 +3344,9 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
     into a square - that surrounding space is where wings get drawn. Kontext needs full RGB,
     hence the white composite rather than the alpha PNG.
 
+    The flyer's edit is chosen per subject: a powered machine is refitted with rotors and
+    thrusters, anything else gets wings. See _vlm_is_machine.
+
     Returns {variant: path or None}; None means the caller should fall back to a direct krea2
     generation for that variant."""
     from PIL import Image
@@ -3287,6 +3354,12 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
     out = {v: None for v in wanted}
     if not wanted:
         return out
+
+    edits = {v: KONTEXT_ENEMY_EDITS[v]["edit"] for v in wanted}
+    if "flyer" in wanted and _vlm_is_machine(walker_path):
+        print("[Kontext Enemy] subject is a machine - the flyer gets rotors and thrusters")
+        edits["flyer"] = KONTEXT_THRUSTER_EDIT
+
     try:
         b = {
             "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
@@ -3307,7 +3380,7 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
 
             b[f"{v}_load"] = {"inputs": {"image": infile}, "class_type": "LoadImage"}
             b[f"{v}_enc"] = {"inputs": {"pixels": [f"{v}_load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"}
-            b[f"{v}_pos"] = {"inputs": {"text": cfg["edit"], "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
+            b[f"{v}_pos"] = {"inputs": {"text": edits[v], "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
             b[f"{v}_ref"] = {"inputs": {"conditioning": [f"{v}_pos", 0], "latent": [f"{v}_enc", 0]}, "class_type": "ReferenceLatent"}
             b[f"{v}_g"] = {"inputs": {"conditioning": [f"{v}_ref", 0], "guidance": KONTEXT_GUIDANCE}, "class_type": "FluxGuidance"}
             b[f"{v}_neg"] = {"inputs": {"conditioning": [f"{v}_pos", 0]}, "class_type": "ConditioningZeroOut"}
@@ -3341,15 +3414,11 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
     drop any stray blob / BiRefNet halo, regen a variant that came back too small or clipped,
     then tight-crop.
 
-    The FLYER is decided per subject. krea2 generates one directly, which is what gives a
-    subject that genuinely flies its own proper airborne form - a rogue security drone comes
-    back as an actual flying drone, a dragon as a flying dragon - rather than the ground
-    version with feathers stuck on. For a subject that cannot fly, that same prompt drifts off
-    the subject entirely (a RAM stick returns a bird), and _palette_similarity against the
-    walker catches exactly that; those fall back to the Kontext wing edit, which bolts wings
-    onto the real subject. The BOSS is always a Kontext edit."""
+    The flyer and the boss are both Kontext edits of the finished walker, which is what keeps
+    them recognisably the same subject. The flyer's edit is chosen per subject - rotors and
+    thrusters for a powered machine, wings for anything else - see _vlm_is_machine."""
     enemies = {}
-    for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker, flyer
+    for v in KREA2_DIRECT_ENEMY_VARIANTS:                      # walker only
         ep = paths[f"enemy_{v}"]
         keep_largest_figure(ep, thresh=50)
         problem = _enemy_frame_problem(ep)
@@ -3361,21 +3430,8 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix):
             _save_tight(ep, thresh=50)
         enemies[v] = ep
 
-    # Did the directly-generated flyer stay on-subject, or wander off into a generic bird?
-    derive = ["boss"]
-    if enemies.get("flyer") and enemies.get("walker"):
-        sim = _palette_similarity(enemies["flyer"], enemies["walker"])
-        if sim >= FLYER_IDENTITY_MIN:
-            print(f"[krea2] {prefix} direct flyer matches the walker ({sim:.2f}) - it can fly "
-                  f"on its own, keeping it")
-        else:
-            print(f"[krea2] {prefix} direct flyer drifted off the subject ({sim:.2f} < "
-                  f"{FLYER_IDENTITY_MIN}) - rebuilding it as a Kontext wing edit")
-            derive.append("flyer")
-    else:
-        derive.append("flyer")
-
-    derived = generate_kontext_enemy_variants(enemies["walker"], size=sq, variants=derive)
+    derived = generate_kontext_enemy_variants(enemies["walker"], size=sq,
+                                              variants=["flyer", "boss"])
     for v, p in derived.items():
         if p is None:
             # The Kontext edit failed. For the flyer, a drifted direct generation is still a
