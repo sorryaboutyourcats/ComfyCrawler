@@ -2624,9 +2624,9 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None, out
 # and only affects how the phases are paced against each other; `units` is that job's
 # expected total sampler steps (tokens for the story) and is the denominator the live
 # per-step fraction from ComfyUI's socket is measured against.
-def _plan_v6(steps):
+def _plan_v6(steps, sound_mode="music_and_sound"):
     st = int(steps)
-    return [
+    plan = [
         # key,             label,                                                    weight, units
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
@@ -2639,10 +2639,18 @@ def _plan_v6(steps):
         # dead weight in the denominator and would strand the bar short of 100%.
         ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
         ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
-        # v6 only. Cheap next to everything above it - measured ~12s for all eight sounds
-        # including the cold model load, against a ~2min bundle - hence the small weight.
-        ("sfx",            "Foleying the dungeon with Stable Audio 3...",                  8, len(SFX_NAMES) * SFX_STEPS),
     ]
+    # Both audio jobs are skippable via sound_mode - a planned-but-skipped step is the same
+    # "dead weight in the denominator" problem noted above, so only plan what will actually run.
+    if sound_mode != "skip":
+        # Cheap next to everything above it - measured ~12s for all eight sounds including the
+        # cold model load, against a ~2min bundle - hence the small weight.
+        plan.append(("sfx", "Foleying the dungeon with Stable Audio 3...", 8, len(SFX_NAMES) * SFX_STEPS))
+    if sound_mode == "music_and_sound":
+        # Unmeasured weight - two 30s/40-step generations will run far longer than the sfx
+        # pack's eight 2s/8-step ones; correct this once a real run has been timed.
+        plan.append(("music", "Composing dungeon music with Stable Audio 3...", 30, len(MUSIC_NAMES) * MUSIC_STEPS))
+    return plan
 
 
 def _plan_v5(steps):
@@ -2791,6 +2799,12 @@ _STORY_SMART = {
 _STORY_STRIP = "*_#\"'` \t"
 _STORY_LABELS = ("location", "hero", "foe", "boss")
 
+# Markdown marks the model sometimes drops mid-sentence ("the *cursed* blade", "a #1 threat")
+# - _STORY_STRIP only trims these off the ends of a string, so one wrapped around a word in
+# the middle of a paragraph survived into the crawl text and, worse, got read by Piper as its
+# literal name: "the asterisk cursed asterisk blade". Stripped everywhere, not just the ends.
+_MARKDOWN_SYMBOL_RE = re.compile(r"[*_#`]")
+
 # Prepended to the invented BOSS name to make its combat title, e.g. "The Overclocked" ->
 # "Dread The Overclocked" - matching the tag the boss enemy variant fights under in combat
 # (ENEMY_VARIANTS.boss in game.js). Picked once per story so the crawl text, the HUD, and
@@ -2810,9 +2824,11 @@ _GENERIC_BOSS_WORD_RE = re.compile(r"\bboss\b", re.IGNORECASE)
 
 def _ascii_ify(text):
     """The UI is a Win95 pastiche - smart quotes and em-dashes look wrong in it, and
-    /api/progress serialises with ensure_ascii=True so they would travel as \\uXXXX noise."""
+    /api/progress serialises with ensure_ascii=True so they would travel as \\uXXXX noise.
+    Also drops stray markdown symbols anywhere in the text - see _MARKDOWN_SYMBOL_RE."""
     for bad, good in _STORY_SMART.items():
         text = text.replace(bad, good)
+    text = _MARKDOWN_SYMBOL_RE.sub("", text)
     return text.encode("ascii", "ignore").decode("ascii")
 
 
@@ -3244,14 +3260,15 @@ SFX_SCHEDULER = "simple"
 SFX_SECONDS = 2.0              # generated length; every clip is trimmed to its transient
 SFX_SR = 22050                 # mono 16-bit at this rate keeps the whole pack near 200KB
 
-SFX_NAMES = ["step", "bump", "attack", "block",
+SFX_NAMES = ["step", "bump", "turn", "attack", "miss_enemy", "block", "miss_player",
              "hit_enemy", "hit_player", "death_enemy", "death_player"]
 
 # Per-sound length cap, applied AFTER trimming to the transient. Without one a footstep
 # keeps its reverb tail and runs past a second - measured 1.20s on "wet mossy stone" - which
 # sounds wrong under a 160ms move animation and bloats the bundle. A death cry is allowed to
 # breathe. The fade-out below makes the truncation clean.
-SFX_MAX_SEC = {"step": 0.45, "bump": 0.45, "block": 0.60, "attack": 0.70,
+SFX_MAX_SEC = {"step": 0.45, "bump": 0.45, "turn": 0.35, "block": 0.60, "attack": 0.70,
+               "miss_enemy": 0.55, "miss_player": 0.55,
                "hit_enemy": 0.70, "hit_player": 0.70,
                "death_enemy": 1.20, "death_player": 1.20}
 
@@ -3269,6 +3286,20 @@ SFX_FADE_OUT = 0.030
 _SFX_TAIL = (" One single short isolated sound effect. Close dry recording, silence before "
              "and after, mono, no music, no voices, no reverb tail.")
 
+# Used instead of _SFX_TAIL for the sounds below that are supposed to carry a human
+# vocalization (a grunt, cry or gasp) mixed with the foley. At cfg 1.0 there is no negative
+# guidance, so "no voices" was fighting the "grunt"/"cry" wording already in these prompts on
+# equal footing - the vocal element mostly averaged out to a plain thud instead of coming
+# through. Dropping "no voices" for just these names is what makes them sometimes actually
+# sound like a person.
+_SFX_TAIL_VOICE = (" One single short isolated sound effect. Close dry recording, silence "
+                    "before and after, mono, no music, no reverb tail.")
+# Enemy vocal sounds (hit_enemy, death_enemy) intentionally keep _SFX_TAIL as-is: the enemy
+# can be anything the player typed, including a non-creature (see the ambiguous-enemy-nouns
+# case, e.g. "a stick of RAM"), so forcing a human voice onto it would be wrong more often
+# than it would be right.
+_SFX_VOICE_NAMES = {"bump", "attack", "hit_player", "death_player"}
+
 
 def sfx_prompts(wall_style, player_style, weapon_style, enemy_style):
     """One prompt per entry in SFX_NAMES, built from what the player typed.
@@ -3283,13 +3314,21 @@ def sfx_prompts(wall_style, player_style, weapon_style, enemy_style):
         # wall_style is the one string describing what the whole dungeon looks like, which
         # is exactly what the floor underfoot should sound like.
         "step": f"A single footstep on {d} ground.",
-        "bump": f"A dull heavy thud of a body walking into a solid {d} wall.",
-        "attack": f"{_a_or_an(w)} swung hard and fast through the air and striking.",
+        "bump": f"{_a_or_an(p)} grunting an 'oof' of surprise as they walk chest-first into "
+                f"a solid {d} wall, a dull heavy thud.",
+        "turn": f"A quick shuffling footstep as {_a_or_an(p)} pivots in place on {d} ground.",
+        "attack": f"{_a_or_an(p)} grunting with effort as {_a_or_an(w)} is swung hard and "
+                  f"fast through the air, striking.",
+        "miss_enemy": f"{_a_or_an(w)} swung hard through empty air and missing entirely, a "
+                      f"whooshing near miss with no impact.",
         "block": f"A heavy blow landing on {_a_or_an(p)}'s raised shield, a solid blocked impact.",
+        "miss_player": f"{_a_or_an(e)}'s heavy blow swinging through empty air, missing "
+                       f"{_a_or_an(p)} entirely, a whooshing near miss with no impact.",
         "hit_enemy": f"A heavy impact striking {_a_or_an(e)}, a short pained grunt.",
-        "hit_player": f"A heavy impact striking {_a_or_an(p)}, a short pained cry.",
+        "hit_player": f"A heavy impact striking {_a_or_an(p)}, a short pained human cry of pain.",
         "death_enemy": f"{_a_or_an(e)}'s final choked cry as it collapses to the ground and dies.",
-        "death_player": f"{_a_or_an(p)}'s last dying gasp as they fall to the ground.",
+        "death_player": f"{_a_or_an(p)}'s last dying gasp, a human cry of pain as they fall to "
+                        f"the ground.",
     }
     # The _a_or_an ones open mid-sentence ("an oak longbow swung..."); lead each prompt with
     # a capital rather than .capitalize(), which would flatten the rest of the line.
@@ -3397,7 +3436,8 @@ def _finish_sfx(src, name):
 
 def _sfx_add_branch(payload, name, text, seed):
     """One text -> audio branch on a shared payload; the audio twin of _krea2_add_branch."""
-    payload[f"{name}_pos"] = {"inputs": {"text": text + _SFX_TAIL, "clip": ["sfx_clip", 0]},
+    tail = _SFX_TAIL_VOICE if name in _SFX_VOICE_NAMES else _SFX_TAIL
+    payload[f"{name}_pos"] = {"inputs": {"text": text + tail, "clip": ["sfx_clip", 0]},
                               "class_type": "CLIPTextEncode"}
     # SA3 is not a ConditioningZeroOut arch like krea2; the reference template wires a plain
     # empty negative, and at cfg 1.0 it is inert either way.
@@ -3487,6 +3527,179 @@ def generate_sfx_pack(wall_style, player_style, weapon_style, enemy_style):
         return None
     kb = sum(len(v) for v in clips.values()) / 1024
     print(f"[sfx] {len(clips)}/{len(SFX_NAMES)} sounds ready ({kb:.0f} KB of data URLs)")
+    return clips
+
+
+# ---------------------------------------------------------------------------
+# Dungeon music: Stable Audio 3's base checkpoint writes two looping beds
+# ---------------------------------------------------------------------------
+# Same wall_style theming as the sfx pack above, but a different checkpoint and a different
+# shape of output. stable_audio_3_small_sfx_base.safetensors is the pre-SFX-finetune Stable
+# Audio 3 Small checkpoint - downloaded alongside the SFX one but never used until now - and is
+# the better bet for sustained melodic content than a checkpoint finetuned toward short
+# percussive one-shots. v6 only, same as sfx.
+#
+# MUSIC_STEPS/MUSIC_CFG/MUSIC_SAMPLER are an unmeasured starting guess, not a tuned setting
+# like SFX_STEPS/SFX_CFG/SFX_SAMPLER are: SFX's lcm/cfg=1.0/8-steps is right for a checkpoint
+# distilled for one-shots, but this is the checkpoint from BEFORE that distillation, so a real
+# sampler at a real cfg is the more reasonable bet for melodic coherence. Listen to real output
+# before trusting these numbers.
+MUSIC_CKPT = "stable_audio_3_small_sfx_base.safetensors"
+MUSIC_CLIP = SFX_CLIP           # same t5gemma text encoder file, independent of the checkpoint
+MUSIC_STEPS = 40
+MUSIC_CFG = 4.0
+MUSIC_SAMPLER = "euler"
+MUSIC_SCHEDULER = "simple"
+MUSIC_SECONDS = 30.0
+MUSIC_SR = 32000
+MUSIC_XFADE_SEC = 1.5            # loop-seam crossfade length, tune by ear against real output
+MUSIC_NAMES = ["explore", "battle"]
+
+# Opposite framing from _SFX_TAIL above: that one exists to keep music OUT of one-shots, this
+# one exists to make sure the loop point is inaudible and nothing fades or ends.
+_MUSIC_TAIL = (" Loopable instrumental background music for a video game, seamless continuous "
+               "loop, steady consistent tempo throughout, no vocals, no spoken words, no sound "
+               "effects, no fade in, no fade out, no silence, no tempo change, no ending.")
+
+
+def music_prompts(wall_style):
+    """One prompt per entry in MUSIC_NAMES, themed off the same wall_style string the sfx and
+    art prompts use."""
+    d = (wall_style or "").strip() or "old stone dungeon"
+    out = {
+        "explore": f"Atmospheric ambient exploration music for a {d} dungeon, mysterious and "
+                   f"slow, sparse instrumentation.",
+        "battle": f"Intense driving battle music for a {d} dungeon, fast aggressive percussion "
+                  f"and rising tension.",
+    }
+    return {k: v + _MUSIC_TAIL for k, v in out.items()}
+
+
+def _music_decode(path):
+    """FLAC -> mono float32 at MUSIC_SR."""
+    out = subprocess.run(
+        [_ffmpeg_exe(), "-v", "error", "-i", path,
+         "-f", "s16le", "-ac", "1", "-ar", str(MUSIC_SR), "-"],
+        capture_output=True, check=True).stdout
+    return np.frombuffer(out, dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _music_problem(x):
+    """None | 'empty' - unlike _sfx_problem, sustained non-decaying energy is exactly what a
+    good loop is, so there is no 'continuous' rejection here."""
+    if len(x) < int(1.0 * MUSIC_SR) or float(np.abs(x).max()) < 0.01:
+        return "empty"
+    return None
+
+
+def _finish_music(src, name):
+    """Raw decoded FLAC -> a looping, normalised mono WAV data URL.
+
+    Returns (data_url, problem). The loop-seam crossfade splices the clip's true tail into its
+    own opening (equal-power sin/cos blend) so the sample that plays right after the clip wraps
+    is a blend of "true end" and "true start" instead of a hard cut. Same
+    data:audio/wav;base64, shape _finish_sfx and the Piper narration clips already use."""
+    x = _music_decode(src)
+    problem = _music_problem(x)
+
+    xf = int(MUSIC_XFADE_SEC * MUSIC_SR)
+    if not problem and len(x) > 2 * xf:
+        t = np.linspace(0, np.pi / 2, xf, dtype=np.float32)
+        fade_in, fade_out = np.sin(t), np.cos(t)
+        head = x[:xf] * fade_in + x[-xf:] * fade_out
+        x = np.concatenate([head, x[xf:-xf]])
+
+    peak = float(np.abs(x).max())
+    if peak > 1e-6:
+        x = x * (0.9 / peak)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(MUSIC_SR)
+        wf.writeframes((np.clip(x, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())
+    return "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), problem
+
+
+def _music_add_branch(payload, name, text, seed):
+    """One text -> audio branch on a shared payload; the music twin of _sfx_add_branch."""
+    payload[f"{name}_pos"] = {"inputs": {"text": text, "clip": ["music_clip", 0]},
+                              "class_type": "CLIPTextEncode"}
+    payload[f"{name}_neg"] = {"inputs": {"text": "", "clip": ["music_clip", 0]},
+                              "class_type": "CLIPTextEncode"}
+    payload[f"{name}_lat"] = {"inputs": {"seconds": MUSIC_SECONDS, "batch_size": 1},
+                              "class_type": "EmptyLatentAudio"}
+    payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": MUSIC_STEPS, "cfg": MUSIC_CFG,
+                                          "sampler_name": MUSIC_SAMPLER,
+                                          "scheduler": MUSIC_SCHEDULER,
+                                          "denoise": 1.0, "model": ["music_ckpt", 0],
+                                          "positive": [f"{name}_pos", 0],
+                                          "negative": [f"{name}_neg", 0],
+                                          "latent_image": [f"{name}_lat", 0]},
+                               "class_type": "KSampler"}
+    payload[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["music_ckpt", 2]},
+                              "class_type": "VAEDecodeAudio"}
+    payload[f"{name}_save"] = {"inputs": {"audio": [f"{name}_dec", 0],
+                                          "filename_prefix": f"music/{name}"},
+                               "class_type": "SaveAudio"}
+
+
+def generate_music_pack(wall_style):
+    """The two dungeon music beds (explore, battle), in one ComfyUI job. Never raises.
+
+    Returns {name: data_url} for whatever survived, or None. Same never-block-the-dungeon
+    bargain as generate_sfx_pack - the frontend just runs without music for anything missing."""
+    prompts = music_prompts(wall_style)
+    seed0 = random.randint(1, 2**31 - 1)
+
+    payload = {
+        "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
+        "music_clip": {"inputs": {"clip_name": MUSIC_CLIP, "type": "stable_audio", "device": "default"},
+                       "class_type": "CLIPLoader"},
+    }
+    for i, name in enumerate(MUSIC_NAMES):
+        _music_add_branch(payload, name, prompts[name], seed0 + i)
+
+    try:
+        paths = _krea2_submit_and_collect(payload, MUSIC_NAMES, timeout=300,
+                                          job_key="music", out_key="audio")
+    except Exception as e:
+        print(f"[music] generation failed ({e}) - the dungeon falls back to no music")
+        return None
+
+    clips, retry = {}, {}
+    for name in MUSIC_NAMES:
+        try:
+            url, problem = _finish_music(paths[name], name)
+        except Exception as e:
+            print(f"[music] {name}: could not process ({e})")
+            continue
+        if problem:
+            retry[name] = problem
+        else:
+            clips[name] = url
+
+    if retry:
+        print(f"[music] re-rolling {', '.join(f'{k} ({v})' for k, v in retry.items())}")
+        payload2 = {k: payload[k] for k in ("music_ckpt", "music_clip")}
+        for i, name in enumerate(retry):
+            _music_add_branch(payload2, name, prompts[name], seed0 + 977 + i)
+        try:
+            paths2 = _krea2_submit_and_collect(payload2, list(retry), timeout=300, out_key="audio")
+            for name in retry:
+                url, problem = _finish_music(paths2[name], name)
+                if problem:
+                    print(f"[music] {name}: still {problem} after a re-roll - left to the frontend")
+                else:
+                    clips[name] = url
+        except Exception as e:
+            print(f"[music] re-roll failed ({e})")
+
+    if not clips:
+        return None
+    kb = sum(len(v) for v in clips.values()) / 1024
+    print(f"[music] {len(clips)}/{len(MUSIC_NAMES)} tracks ready ({kb:.0f} KB of data URLs)")
     return clips
 
 
@@ -4088,10 +4301,14 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       res=KREA2_RES_DEFAULT, steps=KREA2_STEPS_DEFAULT,
-                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT, player_image=None):
+                      portrait_res=KREA2_PORTRAIT_RES_DEFAULT, player_image=None,
+                      sound_mode="music_and_sound"):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
-    v4 did it, on the stronger model."""
+    v4 did it, on the stronger model.
+
+    sound_mode is one of "music_and_sound" (default), "sound_only" (sfx but no music, the
+    original always-on behavior) or "skip" (no audio generation at all, fastest)."""
     global gen_progress
     gen_progress["is_generating"] = True
     gen_progress["completed_bundle"] = None
@@ -4100,7 +4317,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["total_steps"] = 4
     gen_progress["story"] = None
     gen_progress["phase"] = ""
-    PROGRESS.begin_plan(_plan_v6(steps))
+    PROGRESS.begin_plan(_plan_v6(steps, sound_mode))
 
     def _b64(path):
         with open(path, "rb") as tf:
@@ -4120,10 +4337,12 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
 
-        # Last, so the 3.5GB of audio weights load after the krea2 UNET and Kontext are done
-        # with the card rather than competing with them.
+        # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
+        # card rather than competing with them. Both calls are skippable via sound_mode.
         gen_progress["current_step"] = 4
-        sfx = generate_sfx_pack(wall_style, player_style, weapon_style, enemy_style)
+        sfx = (generate_sfx_pack(wall_style, player_style, weapon_style, enemy_style)
+               if sound_mode != "skip" else None)
+        music = generate_music_pack(wall_style) if sound_mode == "music_and_sound" else None
 
         PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
@@ -4160,6 +4379,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # {name: data:audio/wav;base64,...} for whatever survived, or None. Partial is
             # fine and expected - game.js synthesises anything missing.
             "sfx": sfx,
+            # {"explore": data:audio/wav;base64,..., "battle": ...} or None (sound_mode wasn't
+            # "music_and_sound", or generation failed) - game.js just runs without music.
+            "music": music,
         }
         print("[krea2] v6 bundle complete and packaged!")
 
@@ -4240,6 +4462,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 weapon_style = data.get("weapon_style", "")
                 enemy_style = data.get("enemy_style", "")
                 mode = data.get("mode", "v3_flux")
+                # v6-only; v5/v3/v4 ignore this. Matches the setup screen's default option.
+                sound_mode = data.get("sound_mode", "music_and_sound")
 
                 def _int(v, fallback):
                     try:
@@ -4278,7 +4502,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 elif mode == "v6_krea":
                     t = threading.Thread(target=run_batch_v6_krea,
                                          args=(wall_style, player_style, weapon_style, enemy_style,
-                                               krea_res, krea_steps, krea_portrait_res, player_image),
+                                               krea_res, krea_steps, krea_portrait_res, player_image,
+                                               sound_mode),
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,

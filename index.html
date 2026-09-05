@@ -530,6 +530,18 @@
             <div class="text-[10px] text-slate-500 font-bold">Lower all three for faster generation. 512&nbsp;px / 8&nbsp;steps is the current baseline; bump to 768&ndash;896 for more detail. Four portrait frames (idle / attack / block / hurt) are generated at the portrait res &ndash; 128 holds up fine in the ~112&nbsp;px HUD slot.</div>
           </div>
 
+          <div id="soundModeRow" class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800">
+              Sound Generation (v6 only):
+            </label>
+            <select id="soundModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+              <option value="music_and_sound" selected>Generated music and sound</option>
+              <option value="sound_only">Generated sound (no music)</option>
+              <option value="skip">Skip sound generation</option>
+            </select>
+            <div class="text-[10px] text-slate-500 font-bold">Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+          </div>
+
           <div class="flex justify-end mt-2">
             <button id="btnSaveSettings" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
               OK
@@ -582,11 +594,6 @@
       <label class="flex items-center justify-center gap-2 text-[11px] text-slate-700 select-none cursor-pointer">
         <input type="checkbox" id="chkNarrate" class="cursor-pointer">
         <span>Narrate the intro</span>
-      </label>
-
-      <label class="flex items-center justify-center gap-2 text-[11px] text-slate-700 select-none cursor-pointer">
-        <input type="checkbox" id="chkSfx" class="cursor-pointer">
-        <span>Sound effects</span>
       </label>
     </div>
 

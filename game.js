@@ -19,6 +19,8 @@
     const krea2ResInput = document.getElementById('krea2ResInput');
     const krea2StepsInput = document.getElementById('krea2StepsInput');
     const krea2PortraitResInput = document.getElementById('krea2PortraitResInput');
+    const soundModeRow = document.getElementById('soundModeRow');
+    const soundModeSelect = document.getElementById('soundModeSelect');
     const gridCountInput = document.getElementById('gridCountInput');
     const gridCountSlider = document.getElementById('gridCountSlider');
     const gridDesc = document.getElementById('gridDesc');
@@ -53,7 +55,6 @@
     const btnEnterDungeon = document.getElementById('btnEnterDungeon');
     const chkAutoEnter = document.getElementById('chkAutoEnter');
     const chkNarrate = document.getElementById('chkNarrate');
-    const chkSfx = document.getElementById('chkSfx');
     const btnNarrateManual = document.getElementById('btnNarrateManual');
     const progHeaderText = document.getElementById('progHeaderText');
     const progHeaderIcon = document.getElementById('progHeaderIcon');
@@ -296,18 +297,17 @@
     // Anything missing from the bundle - an older v3/v4/v5 dungeon, a clip that failed the
     // server's validator, a machine with no audio checkpoint - falls through to synthSfx(),
     // so the game is never silent and never throws over sound.
-    const SFX_KEY = 'comfycrawler.sfx';
-    function loadSfxOn() {
-      try { return localStorage.getItem(SFX_KEY) !== '0'; } catch (e) { return true; }
-    }
-    function saveSfxOn(on) {
-      try { localStorage.setItem(SFX_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
-    }
-
+    // No mute UI - both always play. Web Audio still respects the OS/browser volume, and a
+    // silent-by-preference player can just mute the tab.
     let audioCtx = null;
     let sfxMaster = null;
     let sfxBank = {};              // name -> AudioBuffer, for whatever the bundle supplied
-    let sfxOn = loadSfxOn();
+    const sfxOn = true;
+
+    let musicMaster = null;
+    const musicOn = true;
+    let musicBank = {};            // 'explore'/'battle' -> AudioBuffer
+    let musicNodes = {};           // 'explore'/'battle' -> { src, gain }
 
     function sfxContext() {
       if (!audioCtx) {
@@ -315,8 +315,11 @@
         if (!AC) return null;
         audioCtx = new AC();
         sfxMaster = audioCtx.createGain();
-        sfxMaster.gain.value = sfxOn ? 0.85 : 0.0;
+        sfxMaster.gain.value = 0.85;
         sfxMaster.connect(audioCtx.destination);
+        musicMaster = audioCtx.createGain();
+        musicMaster.gain.value = 0.6;
+        musicMaster.connect(audioCtx.destination);
       }
       // Created suspended under the autoplay policy until a real gesture resumes it. The
       // first-gesture listener below does that; resuming again here is harmless and covers
@@ -346,14 +349,77 @@
       });
     }
 
+    // ---- Background music (Stable Audio 3, generated per dungeon, v6-only) -------------
+    // The server ships bundle.music as {explore: 'data:audio/wav;base64,...', battle: ...} -
+    // two ~30s tracks pre-crossfaded at their own loop seam server-side. Unlike sfx one-shots,
+    // each track is a single long-lived looping AudioBufferSourceNode; toggleBattleMode
+    // crossfades between them via setMusicMode rather than starting/stopping nodes.
+
+    function stopMusic() {
+      Object.values(musicNodes).forEach(node => {
+        try { node.src.stop(); } catch (e) { /* already stopped */ }
+        try { node.src.disconnect(); node.gain.disconnect(); } catch (e) { /* already gone */ }
+      });
+      musicNodes = {};
+      musicBank = {};
+    }
+
+    function loadMusicBank(music) {
+      stopMusic();                 // always tear down the previous dungeon's loops first
+      if (!music) return;          // sound_mode wasn't "music_and_sound", or generation failed
+      const ctx = sfxContext();
+      if (!ctx) return;
+      ['explore', 'battle'].forEach(name => {
+        if (!music[name]) return;
+        try {
+          const b64 = music[name].split(',')[1];
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          ctx.decodeAudioData(bytes.buffer, buf => {
+            musicBank[name] = buf;
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.loop = true;
+            const g = ctx.createGain();
+            // Read combat state at the moment playback actually starts, not a hardcoded
+            // default - a battle toggle could in principle land between request and decode.
+            g.gain.value = ((name === 'battle') === combatState.inBattle) ? 1 : 0;
+            src.connect(g); g.connect(musicMaster);
+            src.start();
+            musicNodes[name] = { src, gain: g };
+          }, () => {});
+        } catch (e) { /* one missing track must not cost the other */ }
+      });
+    }
+
+    // Single call site drives both directions of the explore/battle crossfade.
+    function setMusicMode(inBattle) {
+      const ctx = sfxContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const dur = 1.5;
+      ['explore', 'battle'].forEach(name => {
+        const node = musicNodes[name];
+        if (!node) return;
+        const target = ((name === 'battle') === inBattle) ? 1 : 0;
+        node.gain.gain.cancelScheduledValues(now);
+        node.gain.gain.setValueAtTime(node.gain.gain.value, now);   // anchor before ramping
+        node.gain.gain.linearRampToValueAtTime(target, now + dur);
+      });
+    }
+
     // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
     // percussive envelope - because their whole job is to keep the game audible when the
     // generated pack is missing, not to compete with it.
     const SYNTH_SFX = {
       step:         { f: 620,  q: 1.2, dur: 0.11, type: 'lowpass',  gain: 0.30, sweep: 0.55 },
       bump:         { f: 180,  q: 1.0, dur: 0.16, type: 'lowpass',  gain: 0.45, sweep: 0.60 },
+      turn:         { f: 500,  q: 1.0, dur: 0.08, type: 'lowpass',  gain: 0.18, sweep: 0.65 },
       attack:       { f: 2400, q: 0.8, dur: 0.20, type: 'bandpass', gain: 0.35, sweep: 0.30 },
+      miss_enemy:   { f: 1800, q: 0.6, dur: 0.24, type: 'bandpass', gain: 0.28, sweep: 0.20 },
       block:        { f: 1400, q: 4.0, dur: 0.26, type: 'bandpass', gain: 0.45, sweep: 0.70 },
+      miss_player:  { f: 1600, q: 0.6, dur: 0.26, type: 'bandpass', gain: 0.28, sweep: 0.20 },
       hit_enemy:    { f: 420,  q: 1.4, dur: 0.20, type: 'lowpass',  gain: 0.50, sweep: 0.45 },
       hit_player:   { f: 300,  q: 1.4, dur: 0.24, type: 'lowpass',  gain: 0.55, sweep: 0.40 },
       death_enemy:  { f: 260,  q: 2.0, dur: 0.70, type: 'lowpass',  gain: 0.50, sweep: 0.25 },
@@ -444,15 +510,6 @@
       if (btn.closest('#battleActionBar')) return;
       playSfx('button', { vary: 0.03, gain: 0.5 });
     }, true);
-
-    if (chkSfx) {
-      chkSfx.checked = sfxOn;
-      chkSfx.addEventListener('change', () => {
-        sfxOn = chkSfx.checked;
-        saveSfxOn(sfxOn);
-        if (sfxMaster) sfxMaster.gain.value = sfxOn ? 0.85 : 0.0;
-      });
-    }
     // HUD portrait expressions, in PORTRAIT_FRAME_NAMES order: idle, attack, block, hurt.
     let playerFaceFrames = [];
     let rig = { swordX: 24, swordY: -30, shieldX: -28, shieldY: -32 };
@@ -565,6 +622,8 @@
     const syncModeDesc = () => {
       if (modeDesc && MODE_DESCRIPTIONS[modeSelect.value]) modeDesc.innerHTML = MODE_DESCRIPTIONS[modeSelect.value];
       if (krea2Settings) krea2Settings.classList.toggle('hidden', !KREA2_MODES.includes(modeSelect.value));
+      // sfx/music generation is v6-only, unlike krea2Settings above which v5 uses too.
+      if (soundModeRow) soundModeRow.classList.toggle('hidden', modeSelect.value !== 'v6_krea');
     };
     modeSelect.addEventListener('change', syncModeDesc);
     syncModeDesc();
@@ -742,6 +801,7 @@
       } else {
         combatState.inBattle = !combatState.inBattle;
       }
+      setMusicMode(combatState.inBattle);
 
       if (combatState.inBattle) {
         if (battleModeBadge) {
@@ -947,6 +1007,9 @@
           const outOfReach = cfg.fly && e.altitude > 34;
           const guarded = e.blockTimer > 0;
           if (outOfReach) {
+            // The weapon whooshing through air, not a sound the enemy makes - no cfg.sfxRate
+            // pitch, unlike hit_enemy/block/death_enemy below.
+            playSfx('miss_enemy');
             showFloatingCombatText("OUT OF REACH!", 160, 90, "#93c5fd");
           } else {
             let dmg = 24 + Math.floor(Math.random() * 12);
@@ -1005,6 +1068,7 @@
           const isDodged = Math.abs(combatState.playerX - e.x) > 44;
           const isGuarded = combatState.shieldProgress > 0.6;
           if (isDodged) {
+            playSfx('miss_player');
             showFloatingCombatText(dodgeMsg, 160, 130, "#38bdf8");
           } else if (isGuarded) {
             playSfx('block');
@@ -2672,12 +2736,14 @@
     function rotateLeft() {
       if (player.isAnimating) { queuedAction = 'LEFT'; return; }
       player.dirIndex = (player.dirIndex + 3) % 4;
+      playSfx('turn');
       animate3D(player.posX, player.posY, player.angle - Math.PI / 2);
     }
 
     function rotateRight() {
       if (player.isAnimating) { queuedAction = 'RIGHT'; return; }
       player.dirIndex = (player.dirIndex + 1) % 4;
+      playSfx('turn');
       animate3D(player.posX, player.posY, player.angle + Math.PI / 2);
     }
 
@@ -2893,6 +2959,9 @@
       // the procedural bank.
       loadSfxBank(b.sfx);
       playSfx('start', { vary: 0 });      // fixed pitch: this one is a signature, not foley
+      // v6 with sound_mode "music_and_sound" ships bundle.music; everything else leaves it
+      // undefined and loadMusicBank just tears down the previous dungeon's loops.
+      loadMusicBank(b.music);
       if (b.player_sprites && b.player_sprites.length > 0) {
         playerSpriteFrames = [];
         b.player_sprites.forEach(src => {
@@ -3136,7 +3205,8 @@
             mode: activeMode,
             krea_res: krea2ResInput ? parseInt(krea2ResInput.value) || 512 : 512,
             krea_steps: krea2StepsInput ? parseInt(krea2StepsInput.value) || 8 : 8,
-            krea_portrait_res: krea2PortraitResInput ? parseInt(krea2PortraitResInput.value) || 128 : 128
+            krea_portrait_res: krea2PortraitResInput ? parseInt(krea2PortraitResInput.value) || 128 : 128,
+            sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound'
           })
         });
 
