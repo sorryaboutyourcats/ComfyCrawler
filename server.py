@@ -3747,7 +3747,7 @@ def generate_music_pack(wall_style):
 # committed to sounds/, same as the start/button/end UI sounds. Not called at server runtime;
 # run `python server.py --gen-static-audio` (see the __main__ block) whenever either needs to
 # be re-rolled, and commit the result.
-MENU_MUSIC_SECONDS = 15.0
+MENU_MUSIC_SECONDS = 180.0
 MENU_MUSIC_PROMPT = (
     "Atmospheric heroic fantasy title screen music for a retro 1990s dungeon crawler video "
     "game, mysterious and inviting, moderate steady tempo, orchestral and synth textures."
@@ -3760,8 +3760,9 @@ READY_CHIME_PROMPT = (
 
 
 def generate_menu_music_asset():
-    """Renders sounds/menu_music.wav - the fixed, short-looping main menu track. Prints and
-    returns False on failure rather than raising, matching the rest of the audio pipeline."""
+    """Renders sounds/menu_music.wav - the fixed, looping main menu track. 3 minutes long so
+    the loop isn't noticeably repetitive; the first cut at 15s looped too obviously. Prints
+    and returns False on failure rather than raising, matching the rest of the audio pipeline."""
     seed = random.randint(1, 2**31 - 1)
     payload = {
         "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
@@ -3770,7 +3771,7 @@ def generate_menu_music_asset():
     }
     _music_add_branch(payload, "menu", MENU_MUSIC_PROMPT, seed, seconds=MENU_MUSIC_SECONDS)
     try:
-        paths = _krea2_submit_and_collect(payload, ["menu"], timeout=300, out_key="audio")
+        paths = _krea2_submit_and_collect(payload, ["menu"], timeout=1800, out_key="audio")
         url, problem = _finish_music(paths["menu"], "menu")
     except Exception as e:
         print(f"[menu music] generation failed ({e})")

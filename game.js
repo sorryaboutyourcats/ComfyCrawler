@@ -980,19 +980,58 @@
       keysHeld.block = false;
     }
 
+    // Twenty ways to say the run ended. {hero} / {area} / {enemy} are filled from the current
+    // story and foe when the player goes down - see deathEpitaph().
+    const DEATH_MESSAGES = [
+      "{hero} fell in {area}, cut down by the {enemy}.",
+      "The {enemy} stands over {hero}'s body. {area} claims another.",
+      "Here lies {hero}, who thought {area} could be tamed. The {enemy} knew better.",
+      "{area} swallowed {hero} whole. The {enemy} barely slowed to feed.",
+      "{hero}'s torch went out in {area}. The {enemy} did the rest.",
+      "They'll tell stories in {area} about the day the {enemy} broke {hero}.",
+      "{hero} came to {area} chasing glory and found the {enemy} instead.",
+      "No one will find {hero} in {area}. The {enemy} made sure of that.",
+      "The {enemy} had already forgotten {hero}'s name before it left {area}.",
+      "{hero} bled out on the cold stone of {area}, the {enemy} already turning away.",
+      "{area} has a new decoration: whatever the {enemy} left of {hero}.",
+      "{hero} raised a shield. The {enemy} raised the stakes. {area} kept the difference.",
+      "Somewhere far from {area}, someone still waits for {hero}. The {enemy} isn't sorry.",
+      "The {enemy} has killed better than {hero} in {area}, but not many.",
+      "{hero} took one wrong step in {area}. The {enemy} took everything else.",
+      "Last line of {hero}'s journal: 'The {area} is quiet. I think the {enemy}—'",
+      "The {enemy} of {area} adds {hero} to a very long list.",
+      "{hero} died as they lived: underprepared, and in {area}. The {enemy} obliged.",
+      "{area} did not mourn {hero}. Neither did the {enemy}.",
+      "The {enemy} howled through {area}. {hero} did not answer.",
+    ];
+
+    function deathEpitaph() {
+      const hero = (dungeonStory && dungeonStory.hero || '').trim() || 'The warrior';
+      const area = (dungeonStory && dungeonStory.location || '').trim() || 'this place';
+      const enemy = (combatState.enemy && combatState.enemy.name || '').trim() || 'beast';
+      const line = DEATH_MESSAGES[Math.floor(Math.random() * DEATH_MESSAGES.length)];
+      return line.replace(/\{hero\}/g, hero).replace(/\{area\}/g, area).replace(/\{enemy\}/g, enemy);
+    }
+
     // Player defeat. Until this existed playerHp simply floored at 0 in landStrike and the
     // fight carried on, so there was no moment for a death sound to belong to.
     function killPlayer() {
       if (combatState.dead) return;      // several strikes can resolve on the same frame
       combatState.dead = true;
       playSfx('death_player');
+      // Drop the foe back to a neutral pose so its celebration hop isn't frozen mid-swing.
+      if (combatState.enemy) {
+        combatState.enemy.state = 'idle';
+        combatState.enemy.stateTimer = 0;
+        combatState.enemy.blockTimer = 0;
+      }
       combatState.hurtFrame = 1;
       combatState.faceState = 'hurt';
       combatState.faceTimer = 999;
       releaseHeldKeys();                 // a held block must not survive into the modal
       if (deadMovesCount) deadMovesCount.textContent = totalMoves;
-      if (defeatText && dungeonStory && dungeonStory.location) {
-        defeatText.textContent = `${dungeonStory.location} keeps what it kills.`;
+      if (defeatText) {
+        defeatText.textContent = deathEpitaph();
       }
       // A beat before the box, so the death cry and the hurt frame land first.
       setTimeout(() => { if (defeatModal) defeatModal.classList.remove('hidden'); }, 700);
@@ -1774,6 +1813,15 @@
       c.translate(px, py);
       c.rotate(tilt);
 
+      // Death pose: keel the whole rig over 90 degrees so the character reads as face-down on
+      // the ground. Applied at the shared save/translate so every render path below (sprite
+      // sheet, single sprite, procedural rig) tips over together. The translate nudges the
+      // now-horizontal body back onto the floor line instead of leaving it pivoted in the air.
+      if (combatState.dead) {
+        c.rotate(Math.PI / 2);
+        c.translate(-18, 46);
+      }
+
       // --- MULTI-FRAME AI SPRITE SHEET MODE (v4: 5 frames / v6: 7-frame swing) ---
       if (playerSpriteFrames && playerSpriteFrames.length > 1) {
         const v6Frames = playerSpriteFrames.length >= 7;
@@ -1902,12 +1950,14 @@
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
       const GROUND_Y = 165;                       // where a grounded enemy's feet sit
       const ex = width / 2 + (e.x || 0);
-      const ey = (GROUND_Y - 70) - (e.altitude || 0) + Math.sin(Date.now() / 200) * 4;
+      // The winner's dance: once the player is down, the enemy bounces straight up and down on
+      // the spot, celebrating. Negative = higher on the canvas; abs(sin) so it only ever leaves
+      // the ground and lands, never sinks through it.
+      const victoryHop = combatState.dead ? -Math.abs(Math.sin(Date.now() / 130)) * 24 : 0;
+      const ey = (GROUND_Y - 70) - (e.altitude || 0) + Math.sin(Date.now() / 200) * 4 + victoryHop;
 
-      if (e.state === 'telegraph') {
-        c.fillStyle = 'rgba(239, 68, 68, 0.4)';
-        c.beginPath(); c.arc(ex, ey, 60, 0, Math.PI * 2); c.fill();
-      }
+      // No telegraph circle - the attack frame shows the wind-up, and the "ENEMY WIND-UP!"
+      // floating text still calls it.
 
       // --- AI ENEMY SPRITE (idle / attack / hurt) ---
       // Falls through to the procedural enemy below when no sprites were generated, so an enemy
@@ -1939,7 +1989,7 @@
           const targetH = Math.round(height * cfg.heightFrac);
           const maxW = Math.round(width * (cfg.widthFrac || 0.7));
           const bob = cfg.fly ? Math.sin(Date.now() / 110) * 4 : Math.sin(Date.now() / 220) * 3;
-          const bottomY = GROUND_Y - (e.altitude || 0) + bob;
+          const bottomY = GROUND_Y - (e.altitude || 0) + bob + victoryHop;
 
           c.save();
           // Ground shadow - fades and shrinks as a flyer climbs.
@@ -1955,16 +2005,10 @@
           drawEnemyContent(c, frame, ex, bottomY, targetH, maxW, sizeRef);
           c.globalAlpha = 1;
 
-          // Grounded-foe guard flash, on top of the block frame.
-          if (e.blockTimer > 0) {
-            c.strokeStyle = 'rgba(148,163,184,0.9)'; c.lineWidth = 3;
-            c.beginPath(); c.arc(ex, bottomY - targetH * 0.5, targetH * 0.34, -0.4, Math.PI + 0.4); c.stroke();
-          }
-          // Boss aura.
-          if (cfg.slow) {
-            c.strokeStyle = 'rgba(220,38,38,0.35)'; c.lineWidth = 2;
-            c.beginPath(); c.ellipse(ex, bottomY - targetH * 0.5, targetH * 0.42, targetH * 0.56, 0, 0, Math.PI * 2); c.stroke();
-          }
+          // The guard arc and the boss aura that used to be stroked over the sprite here are
+          // gone, along with the telegraph circle above. They were standing in for poses the
+          // sprites could not show; each foe now has its own generated block and attack frame,
+          // so the pose carries it and the shapes on top just obscured the art.
           c.restore();
           drawEnemyHpBar(c, width, e);
           return;
@@ -2935,11 +2979,15 @@
 
       if (e.code === 'Space') {
         e.preventDefault();
+        // Dead means dead: Space must not flip battle mode (or anything else) until the player
+        // Rises Again or leaves for a new dungeon.
+        if (combatState.dead) return;
         toggleBattleMode();
         return;
       }
 
       if (combatState.inBattle) {
+        if (combatState.dead) return;   // no dodging, guarding or swinging from beyond the grave
         if (['KeyA', 'ArrowLeft'].includes(e.code)) {
           e.preventDefault();
           keysHeld.left = true;
