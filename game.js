@@ -109,6 +109,9 @@
     let floorTexture = null;
     let wallLanternTexture = null;
     let exitSignTexture = null;
+    // AI-generated wall fixture (torch/lantern/lamp) matted onto wallLanternTexture in
+    // buildLanternWallFromBase. Null falls back to the procedural shapes drawn there.
+    let aiLanternImg = null;
 
     let playerSpriteImg = null;
     let playerFaceImg = null;
@@ -1671,7 +1674,61 @@
       c.fillStyle = radGrad;
       c.fillRect(18, 0, 220, 220);
 
-      if (isWin95) {
+      if (aiLanternImg && aiLanternImg.complete && aiLanternImg.naturalWidth > 0) {
+        // AI-generated fixture themed to this dungeon's own style (see lantern_p in
+        // server.py's get_surface_prompts) - matted onto the wall the same way the
+        // background-removed weapon/shield sprites are, bottom-anchored over the bracket
+        // position the procedural shapes below used.
+        //
+        // The model is only asked WHAT the object is, never to render it lit: FLUX schnell at
+        // 4 steps returns a convincing themed object but renders actual emission maybe half the
+        // time (a haunted manor came back with glowing windows, a taco came back looking like
+        // lunch), and BiRefNet crops off any halo it does draw. So the "lit" half is done here
+        // instead, where it is deterministic and every theme gets it.
+        //
+        // Sizing matches the footprint the procedural crystal sconce below used to occupy
+        // (roughly 36x96 of the 256x256 texture).
+        const maxW = 60, maxH = 100;
+        const scale = Math.min(maxW / aiLanternImg.naturalWidth, maxH / aiLanternImg.naturalHeight, 1);
+        const dw = aiLanternImg.naturalWidth * scale;
+        const dh = aiLanternImg.naturalHeight * scale;
+        const dx = 128 - dw / 2;
+        const dy = 146 - dh;
+        const gx = dx + dw / 2;
+        const gy = dy + dh / 2;
+
+        // Outer bloom first, additive, so light appears to spill from the fixture onto the wall.
+        const bloom = c.createRadialGradient(gx, gy, 2, gx, gy, Math.max(dw, dh) * 0.95);
+        bloom.addColorStop(0, 'rgba(255, 236, 160, 0.80)');
+        bloom.addColorStop(0.45, 'rgba(255, 176, 60, 0.32)');
+        bloom.addColorStop(1, 'rgba(255, 140, 0, 0)');
+        c.globalCompositeOperation = 'lighter';
+        c.fillStyle = bloom;
+        c.fillRect(dx - dw, dy - dh * 0.5, dw * 3, dh * 2.2);
+        c.globalCompositeOperation = 'source-over';
+
+        // Then the sprite, pre-lit on its own canvas. 'source-atop' confines the warm wash to
+        // the sprite's own alpha, so the transparent margin never picks up a rectangular haze.
+        const lg = document.createElement('canvas');
+        lg.width = Math.max(1, Math.ceil(dw));
+        lg.height = Math.max(1, Math.ceil(dh));
+        const lc = lg.getContext('2d');
+        lc.imageSmoothingEnabled = true;
+        lc.drawImage(aiLanternImg, 0, 0, lg.width, lg.height);
+        const inner = lc.createRadialGradient(lg.width / 2, lg.height / 2, 1,
+                                              lg.width / 2, lg.height / 2,
+                                              Math.max(lg.width, lg.height) * 0.7);
+        inner.addColorStop(0, 'rgba(255, 245, 200, 0.72)');
+        inner.addColorStop(0.6, 'rgba(255, 190, 80, 0.40)');
+        inner.addColorStop(1, 'rgba(255, 150, 40, 0.16)');
+        lc.globalCompositeOperation = 'source-atop';
+        lc.fillStyle = inner;
+        lc.fillRect(0, 0, lg.width, lg.height);
+
+        c.imageSmoothingEnabled = true;
+        c.drawImage(lg, dx, dy);
+        c.imageSmoothingEnabled = false;
+      } else if (isWin95) {
         // Windows 95 Logo Lantern
         c.fillStyle = '#18181b'; c.fillRect(122, 112, 12, 30);
         c.strokeStyle = '#000000'; c.lineWidth = 4;
@@ -1688,6 +1745,7 @@
         c.strokeStyle = '#09090b'; c.lineWidth = 3;
         c.strokeRect(112, 72, 32, 32);
       } else {
+        // Fallback when no AI lantern art came back (generation failure, older bundle, etc).
         // Classic Dungeon Glowing Crystal Sconce
         // Iron Bracket
         c.fillStyle = '#18181b';
@@ -2509,8 +2567,12 @@
     // screen back until the real art is in wallTexture/ceilingTexture/floorTexture - otherwise
     // the first render3D() paints whatever was already loaded (the Windows-95 defaults, or the
     // previous dungeon's art) and the swap to the new textures a moment later reads as a flash.
-    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", onReady) {
-      const total = [wallUri, ceilUri, floorUri].filter(Boolean).length;
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady) {
+      // Cleared unconditionally: a dungeon with no lantern art (e.g. the Windows 95 style,
+      // which keeps its procedural logo gag - see get_surface_prompts) must not keep showing
+      // the PREVIOUS dungeon's AI fixture.
+      aiLanternImg = null;
+      const total = [wallUri, ceilUri, floorUri, lanternUri].filter(Boolean).length;
       let loaded = 0;
 
       function finish() {
@@ -2545,6 +2607,13 @@
         const imgF = new Image();
         imgF.onload = () => { floorTexture = imageToTexture(imgF); checkDone(); };
         imgF.src = floorUri;
+      }
+      if (lanternUri) {
+        const imgL = new Image();
+        // Kept as an Image (not converted via imageToTexture) - buildLanternWallFromBase
+        // drawImage()s it directly so its alpha channel survives the composite.
+        imgL.onload = () => { aiLanternImg = imgL; checkDone(); };
+        imgL.src = lanternUri;
       }
 
       if (total === 0) finish();
@@ -2636,12 +2705,13 @@
 
       if (activeMode === 'v1_video') {
         // Video mode never raycasts these textures, so there's nothing worth blocking on.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture);
         showGameScreen();
       } else {
-        // Hold the game screen (and its first render3D()) until the real wall/ceiling/floor
-        // art has decoded, so the player never sees a frame of stale textures before the swap.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, showGameScreen);
+        // Hold the game screen (and its first render3D()) until the real wall/ceiling/floor/
+        // lantern art has decoded, so the player never sees a frame of stale textures before
+        // the swap.
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen);
       }
     }
 

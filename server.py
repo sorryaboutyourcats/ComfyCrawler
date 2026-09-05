@@ -1466,58 +1466,85 @@ def match_word(pattern, text):
     import re
     return bool(re.search(r'' + pattern + r'', text, re.IGNORECASE))
 
+# Shared tail for every lantern_p below: forces a single isolated object on a clean white
+# ground, so the frontend's BiRefNet cutout has an actual plain background to cut around (a
+# busy/patterned background doesn't get removed, and the whole square comes back opaque).
+#
+# NEVER name a light fixture here - not "bulb", not "lamp", not "light source". These prompts
+# run on FLUX schnell at cfg 1.0, so the negative conditioning is inert and every exclusion has
+# to live in the POSITIVE prompt as a "zero X" phrase. That works for vague scene elements
+# ("zero sky") but backfires on a strong concrete noun: a previous version of this tail said
+# "zero light bulb, zero incandescent filament bulb" and the model, which cannot negate, drew
+# exactly an incandescent filament bulb every single time. The fix is silence - describe the
+# THEME OBJECT as the subject and light only as something it emits.
+_LANTERN_TAIL = ("Exactly one object, centered, front view, isolated on a plain flat pure white "
+                 "background, sharp focus, no room, no scenery, no people, no text.")
+
+
 def get_surface_prompts(wall_style):
     ui = wall_style.lower()
-    
+
     if any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship', 'future']):
         wall_p = "A flat 2D game texture map of a dark sci-fi spaceship hull wall with glowing cyan neon panel lines, flat orthographic front view, zero perspective, purely flat material."
         ceil_p = "A flat 2D game texture map of a dark sci-fi spaceship ceiling with glowing blue and white light panels, directly overhead 90 degree view."
         floor_p = "A flat 2D game texture map of dark metal spaceship deck floor grating with glowing cyan lights, directly 90 degree bird's-eye top-down view, flat terrain texture."
+        lantern_p = f"A dark angular metal wall plate with a brilliant glowing cyan energy core set into its centre, blazing cyan light pouring out of the core, sci-fi hardware. {_LANTERN_TAIL}"
 
     elif any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
         wall_p = "Authentic Windows 95 3D maze screensaver wall texture, bold chunky crimson red bricks with thick stark white mortar lines, flat straight-on orthographic view, seamless repeating 2D pattern, retro 90s low-poly CGI, bright uniform lighting, zero shadows, no borders."
         ceil_p = "Authentic Windows 95 acoustic drop ceiling tile texture, bright white and speckled grey mineral fiber surface with clean metal grid seams, flat straight-on view, seamless repeating 2D pattern, retro 90s computer graphics."
         floor_p = "Authentic Windows 95 parquet wood floor texture, seamless repeating golden honey oak wood tiles with subtle woodgrain, directly 90 degree top-down view, uniform flat lighting, zero shadows, zero perspective, perfectly repeating 2D floor pattern."
-    
+        # Keeps its procedural logo-lantern gag instead (see buildLanternWallFromBase in
+        # game.js) - that joke doesn't survive being re-prompted through an image model.
+        lantern_p = None
+
     elif any(k in ui for k in ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']):
         wall_p = "A flat 2D game texture map of rough mossy tree bark and vertical redwood trunk surface, close-up flat orthographic front view, retro 90s video game wall texture, zero horizon, zero sky, zero perspective, pure flat vertical material."
         ceil_p = "A flat 2D game texture map of dense fine-grained green leafy foliage and pine canopy, directly 90 degree overhead view looking straight up, seamless tileable canopy, zero trunks."
         floor_p = "A flat 2D game texture map of dense fine-grained mossy ground cover, uniform rich dark earth covered evenly with seamless small green moss patches and tiny pine needles, fine-grained isotropic texture, directly 90 degree bird's-eye top-down view, uniform repeating ground surface, zero large focal objects, zero trees, zero sky, zero horizon, zero perspective, flat albedo terrain map."
+        lantern_p = f"A bundle of wooden sticks bound with twine and wrapped in green moss and vines, a bright orange flame burning fiercely at the top, warm firelight. {_LANTERN_TAIL}"
 
     elif any(k in ui for k in ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']):
         wall_p = "A flat 2D wallpaper texture of crispy golden corn taco shells filled with seasoned meat, diced tomatoes, lettuce, and shredded cheese, colorful repeating 90s video game graphic pattern, flat 2D orthographic view, no room, no borders."
         ceil_p = "A flat 2D acoustic drop ceiling texture with warm golden corn tortilla grid panels, directly overhead 90 degree top-down view."
         floor_p = "A flat 2D game texture map of toasted warm corn meal and golden crushed tortilla chip crumbs ground terrain, directly 90 degree bird's-eye top-down view, uniform flat ground material, zero large objects, pure flat terrain."
+        lantern_p = f"One crispy golden corn taco shell standing upright and empty, brilliant warm golden light blazing out from inside the shell, the shell edges lit translucent glowing orange, radiant light spilling from its opening. Just the single taco shell, no filling, no meat, no toppings. {_LANTERN_TAIL}"
 
     elif match_word('ladies', ui) or match_word('lady', ui) or match_word('women', ui) or match_word('woman', ui) or match_word('girls', ui) or match_word('girl', ui):
         wall_p = "A flat 2D pop-art wallpaper texture filled with dense repeating colorful comic book character portraits and faces of women, colorful 90s video game graphic collage, flat 2D repeating pattern, bright saturated colors, no text, no magazines, no room, no borders, clean repeating wallpaper."
         ceil_p = "A flat 2D drop ceiling tile texture with purple and gold geometric grid lines, directly overhead 90 degree top-down view, clean repeating square tiles."
         floor_p = "A flat 2D game texture map of magenta and purple checkered velvet carpet floor tiles with gold diamond geometric pattern, directly 90 degree bird's-eye top-down view, clean flat floor material, zero people on floor, zero standing figures, zero horizon, pure flat floor texture."
-    
+        lantern_p = f"An ornate art deco wall sconce of purple enamel and polished gold, a bright flame burning above it, warm light glowing across the gold. {_LANTERN_TAIL}"
+
     elif match_word('people', ui) or match_word('person', ui) or match_word('crowd', ui) or match_word('characters', ui) or match_word('men', ui) or match_word('man', ui) or match_word('guys', ui):
         wall_p = "Retro 90s video game wallpaper texture filled with a dense crowd of colorful illustrated comic book character portraits and faces, vibrant pop-art character collage, flat 2D repeating pattern, bright saturated colors, no text, no room, no borders."
         ceil_p = "Retro 90s gaming acoustic drop ceiling tile texture with blue and white grid panels, flat overhead view."
         floor_p = "Retro 90s video game floor texture, rich navy blue and cobalt checkered carpet floor tiles with gold seams, directly 90 degree top-down view, clean flat floor material, zero people on floor."
+        lantern_p = f"A wall sconce of navy blue metal with gold trim, a bright flame burning above it, warm light glowing across the metal. {_LANTERN_TAIL}"
 
     elif any(k in ui for k in ['cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
         wall_p = "A flat 2D texture map of dark metal cyber panels with glowing cyan and electric purple neon circuit conduits, flat orthographic front view, zero perspective."
         ceil_p = "A flat 2D texture map of dark steel ceiling plates with illuminated cyan neon grates, directly overhead 90 degree view."
         floor_p = "A flat 2D texture map of dark hexagonal metal floor tiles with pulsing cyan neon seams, directly 90 degree bird's-eye top-down view, zero horizon, zero perspective, pure flat floor material."
-    
+        lantern_p = f"A curved glass neon tube blazing electric cyan and magenta, mounted on a small dark metal bracket, vivid neon glow. {_LANTERN_TAIL}"
+
     elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
         wall_p = "A flat 2D texture map of weathered grey dungeon castle stone blocks with green moss in mortar cracks, flat orthographic front view, zero perspective."
         ceil_p = "A flat 2D texture map of ancient dark stone ceiling slabs with green moss patches, directly overhead 90 degree view."
         floor_p = "A flat 2D texture map of weathered grey cobblestone flagstones with dirt seams, directly 90 degree bird's-eye top-down view, zero walls, zero sky, zero horizon, pure flat ground texture."
-    
+        lantern_p = f"A wrought iron bracket clutching a jagged amber crystal shard that blazes with warm golden light, magical radiance pouring from the crystal. {_LANTERN_TAIL}"
+
     elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']):
         wall_p = "A flat 2D wallpaper texture of red and white peppermint candy cane stripes and gingerbread cookie pattern with white icing, bold saturated colors, flat straight-on view, zero perspective."
         ceil_p = "A flat 2D texture of pastel pink cotton candy and marshmallow clouds with rainbow sprinkles, directly overhead 90 degree view."
         floor_p = "A flat 2D texture map of dark chocolate cookie crumb ground tiles with caramel glaze seams, directly 90 degree bird's-eye top-down view, zero horizon, pure flat ground material."
-    
+        lantern_p = f"One red and white striped candy cane, brilliant warm light blazing out from inside it, the sugar lit translucent and glowing, radiant candy. {_LANTERN_TAIL}"
+
     elif any(k in ui for k in ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']):
         wall_p = f"Retro 90s video game wallpaper texture filled with a dense crowd of colorful illustrated cute {wall_style} faces, vibrant colorful pop-art pattern, flat 2D repeating wallpaper, no text, no room, no borders."
         ceil_p = f"Retro 90s acoustic ceiling tiles with subtle cream and white paw print motifs, directly overhead 90 degree view."
         floor_p = f"Retro 90s warm honey oak wood parquet floor tiles with subtle cute paw prints, directly 90 degree bird's-eye top-down view, uniform flat lighting, zero 3D figures on floor."
+        lantern_p = f"A cute rounded cat paw print emblem blazing with warm golden light, the whole paw shape lit up and radiantly glowing. {_LANTERN_TAIL}"
 
     else:
         # No era clamp on the generic path: the named presets above are deliberately retro because
@@ -1535,8 +1562,15 @@ def get_surface_prompts(wall_style):
         # interior style came back as dirt and undergrowth. Ask for a FLOOR - a built, walked-on
         # surface - and let the style decide whether that is boards, flagstone or carpet.
         floor_p = f"A flat 2D seamless tileable floor material texture, the floor surface of {wall_style}, uniform repeating walked-on material such as floorboards, flagstones, tiles or carpet, fine even grain across the whole frame, camera pointing straight down at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero grass, zero soil, zero outdoor landscape, zero furniture, zero people, zero large focal objects, edge to edge material."
-    
-    return wall_p, ceil_p, floor_p
+        # No keyword bucket to fall back on, so this has to work for anything typed in. The
+        # theme is the SUBJECT and light is only something it emits - naming any fixture
+        # ("lamp", "lantern", "light source") hands the model a shape prior strong enough to
+        # override the theme entirely, which is how this path used to return plain light bulbs.
+        lantern_p = (f"A single object made of {wall_style}, blazing with brilliant warm golden "
+                    f"light from within, lit up and radiantly glowing, the light spilling out "
+                    f"across its surface. {_LANTERN_TAIL}")
+
+    return wall_p, ceil_p, floor_p, lantern_p
 
 
 
@@ -1548,8 +1582,8 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
     prefix_f = f"trio_f_{int(time.time()*1000)}"
     prefix_p = f"player_{int(time.time()*1000)}"
     prefix_face = f"face_{int(time.time()*1000)}"
-    
-    wall_p, ceil_p, floor_p = get_surface_prompts(wall_style)
+
+    wall_p, ceil_p, floor_p, _lantern_p = get_surface_prompts(wall_style)
 
     # v4_flux with no attached reference photo uses the separate SDXL-Lightning + IPAdapter
     # pipeline (generate_player_sprite_ipadapter) for consistent multi-frame character sprites
@@ -2153,8 +2187,9 @@ def generate_flux_surfaces_only(wall_style):
     PROGRESS.begin_job("surfaces")
     prefixes = {"w": f"trio_w_{int(time.time()*1000)}",
                 "c": f"trio_c_{int(time.time()*1000)}",
-                "f": f"trio_f_{int(time.time()*1000)}"}
-    wall_p, ceil_p, floor_p = get_surface_prompts(wall_style)
+                "f": f"trio_f_{int(time.time()*1000)}",
+                "l": f"trio_l_{int(time.time()*1000)}"}
+    wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style)
 
     def _surface(tag, prompt_text):
         return {
@@ -2176,13 +2211,31 @@ def generate_flux_surfaces_only(wall_style):
     payload.update(_surface("c", ceil_p))
     payload.update(_surface("f", floor_p))
 
+    # Lantern is an isolated object, not a tiling material, so it gets its own square canvas
+    # and a BiRefNet cutout (the same node the krea2 weapon/shield/enemy sprites use - see
+    # _krea2_add_branch) instead of the plain opaque SaveImage the three surfaces get.
+    if lantern_p:
+        payload["bg_model"] = {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"}
+        payload["l_lat"] = {"inputs": {"width": 384, "height": 384, "batch_size": 1}, "class_type": "EmptyLatentImage"}
+        payload["l_pos"] = {"inputs": {"text": lantern_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
+        payload["l_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+                                        "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                        "model": ["1", 0], "positive": ["l_pos", 0], "negative": ["neg", 0],
+                                        "latent_image": ["l_lat", 0]}, "class_type": "KSampler"}
+        payload["l_dec"] = {"inputs": {"samples": ["l_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"}
+        payload["l_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["l_dec", 0]}, "class_type": "RemoveBackground"}
+        payload["l_maskinv"] = {"inputs": {"mask": ["l_mask", 0]}, "class_type": "InvertMask"}
+        payload["l_save"] = {"inputs": {"filename_prefix": prefixes["l"], "images": ["l_dec", 0], "mask": ["l_maskinv", 0]},
+                             "class_type": "SaveImageWithAlpha"}
+
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
 
+    expected = ("w_save", "c_save", "f_save") + (("l_save",) if lantern_p else ())
     start_time = time.time()
-    while time.time() - start_time < 90:
+    while time.time() - start_time < 120:
         time.sleep(0.1)
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
@@ -2190,7 +2243,7 @@ def generate_flux_surfaces_only(wall_style):
         if prompt_id not in hist_data:
             continue
         outputs = hist_data[prompt_id].get("outputs", {})
-        if not all(k in outputs for k in ("w_save", "c_save", "f_save")):
+        if not all(k in outputs for k in expected):
             continue
 
         def _p(key):
@@ -2201,8 +2254,14 @@ def generate_flux_surfaces_only(wall_style):
         make_seamless_4way(w_path, blend_pixels=12)
         make_seamless_4way(c_path, blend_pixels=12)
         make_seamless_4way(f_path, blend_pixels=12)
+
+        l_path = None
+        if lantern_p:
+            l_path = _p("l_save")
+            _save_tight(l_path)
+
         PROGRESS.finish_job("surfaces")
-        return w_path, c_path, f_path
+        return w_path, c_path, f_path, l_path
 
     raise TimeoutError("FLUX.1 surface texture generation timed out.")
 
@@ -3064,7 +3123,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+        w_path, c_path, f_path, l_path = generate_flux_surfaces_only(wall_style)
 
         gen_progress["current_step"] = 3
         assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
@@ -3087,6 +3146,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
+            "lantern_texture": _b64(l_path) if l_path else None,
             "player_sprite": player_b64,
             "player_sprites": [player_b64],
             "player_face": faces_b64[0],
@@ -3138,7 +3198,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path = generate_flux_surfaces_only(wall_style)
+        w_path, c_path, f_path, l_path = generate_flux_surfaces_only(wall_style)
 
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
@@ -3161,6 +3221,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
+            "lantern_texture": _b64(l_path) if l_path else None,
             "player_sprite": frames_b64[0],
             "player_sprites": frames_b64,
             "player_face": faces_b64[0],
