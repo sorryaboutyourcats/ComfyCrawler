@@ -27,12 +27,44 @@
     // Maze size is a three-way difficulty pick, not a free slider - one knob with three
     // meanings instead of a number nobody knows how to read. 111 is the new ceiling
     // (generateAuthentic3DMaze used to clamp at 100).
+    // `grids` is now the CARVED corridor count, not the finished tile count - the loop passes in
+    // braidMaze() turn walls into floor on top of it. Measured over 500 mazes each, the three
+    // settings below finish at about 36 / 74 / 123 walkable tiles. The HUD's "x/y Tiles" badge
+    // reads passagesList, so it always shows the real number.
     const DIFFICULTIES = {
-      easy:   { grids: 33,  desc: 'Easy: 33 corridors - a short labyrinth with a nearby Exit.' },
-      medium: { grids: 66,  desc: 'Medium: 66 corridors with branching paths, lanterns and a distant Exit.' },
-      hard:   { grids: 111, desc: 'Hard: 111 corridors - a sprawling maze with a long, well-gated route to the Exit.' }
+      easy:   { grids: 33,  desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit.' },
+      medium: { grids: 66,  desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns and a distant Exit.' },
+      hard:   { grids: 111, desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit.' }
     };
     const MAX_GRIDS = 111;
+
+    // How the maze is SHAPED, as opposed to how big it is. The generator used to emit a PERFECT
+    // maze - a spanning tree, exactly one route between any two tiles - which plays as a single
+    // hallway you follow, flipping whatever switch you happen to walk past, until it ends. These
+    // three knobs make it MULTICURSAL: real loops, real junctions, real route choices.
+    const MAZE = {
+      // Fraction of carve steps that grow from a RANDOM frontier cell instead of the newest
+      // one. 0 is a pure recursive backtracker: it commits to one direction until it runs out
+      // of room, which makes long snaking corridors. Raising it grows several corridors at once
+      // - bushier, more forks, but much shorter passages.
+      //
+      // It defaults to 0 because it turned out to be a bad way to buy junctions. Measured over
+      // 250 hard mazes, raising it to 0.28 took the start->exit walk from 92 steps to 42 (a
+      // shallower carve tree puts the furthest cell much nearer the spawn) and bought only ~5
+      // extra junctions - while the braid knobs below buy ~19 junctions for ~29 steps. Left in
+      // as a knob because it is the only lever on corridor LENGTH, but turn it up knowing it
+      // shortens the whole dungeon.
+      branchChance: 0,
+      // Fraction of dead ends given a second opening. This is the classic braid, and it is what
+      // actually creates loops: the corridor that led to the tip becomes a circuit. Deliberately
+      // below 1 - placeGatesAndSwitches scores dead ends highest when hiding a lever, so braiding
+      // them all away leaves it nowhere out-of-the-way to mount one.
+      braidDeadEnds: 0.70,
+      // Extra wall knock-outs between two already-connected cells, as a fraction of cell count.
+      // Dead-end braiding only ties off the tips; these cut across the middle of long corridors,
+      // which is what gives a route a choice partway along it instead of only at its end.
+      extraLoops: 0.18
+    };
     let selectedDifficulty = 'medium';
     const wallPromptInput = document.getElementById('wallPromptInput');
     const playerPromptInput = document.getElementById('playerPromptInput');
@@ -2843,7 +2875,18 @@
     // ==========================================
     function _tileKey(x, y) { return x + ',' + y; }
 
-    const _ORTHO = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+    // In-place Fisher-Yates. braidMaze picks which loops to carve by shuffling the full
+    // candidate list and taking a prefix, rather than sampling at random with replacement -
+    // the same wall can't be drawn twice, so a budget of N carves really is N carves.
+    function _shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+      }
+      return arr;
+    }
+
+    const _ORTHO =[{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
     const _NEIGHBORS8 = _ORTHO.concat([
       { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }, { dx: 1, dy: 1 }
     ]);
@@ -2913,25 +2956,29 @@
       return out;
     }
 
-    // Place 1-3 locked doors on the start->exit path and, for each, one wall switch that the
-    // player can PROVABLY reach before that door (sequential gating). The maze is a spanning
-    // tree so its start->exit path is unique; odd path indices are the connector tiles a door
-    // can sit on. Guarantee: switch_k lies in the region reachable with doors 0..k-1 open, so
-    // the player opens them in order and always finishes. Fills doorList / switchList and
-    // stamps MAP (3 = closed door, 4 = switch OFF).
-    function placeGatesAndSwitches() {
-      doorList = [];
-      switchList = [];
-
+    // Phase 1 of gating: choose WHERE the 1-3 locked doors go, while the maze is still a
+    // spanning tree and the start->exit path is therefore unique. That uniqueness is what makes
+    // "evenly spaced along the route" mean anything, so this has to run before braidMaze() adds
+    // loops. Returns null when the maze is too small to gate (the caller then places no doors
+    // and no switches, exactly as before), otherwise a plan braidMaze() must protect and
+    // placeGatesAndSwitches() then stamps.
+    function planGates() {
       const path = _bfsPath(startRoom, exitRoom);
-      if (!path || path.length < 2) return;
-      const pathTiles = new Set(path.map((c) => _tileKey(c.x, c.y)));
+      if (!path || path.length < 2) return null;
       const L = path.length - 1;
-      if (L < 8) return;                                  // too short to gate comfortably
+      if (L < 8) return null;                             // too short to gate comfortably
 
+      // Roughly one gate per 30 steps of route, still capped at 3 and still bounded by how many
+      // connector tiles there are to sit on. This used to be a flat min(3, ...), which handed a
+      // 33-tile Easy maze the same three doors as a 111-tile Hard one - a gate every ten tiles.
+      // That matters more than it looks: braidMaze can only carve loops WITHIN a gate region, so
+      // three doors chop a small maze into four ~4-cell pockets with no room for a loop in any of
+      // them. Measured over 400 Easy mazes, three gates left 37% of them still perfect (zero
+      // loops); one gate leaves 3%. Medium and Hard are big enough that it barely moves them
+      // (12.0 vs 12.8 loops on Hard), so this is really about not over-gating the small maps.
       const connectorCount = Math.floor(L / 2);
-      let N = Math.min(3, Math.floor(connectorCount / 2));
-      if (N < 1) return;
+      let N = Math.min(3, Math.floor(connectorCount / 2), Math.max(1, Math.round(L / 30)));
+      if (N < 1) return null;
 
       // door path-indices: evenly spaced, odd (connector tiles), strictly increasing with a
       // gap >= 2, and at least one cell of slack before the first / after the last.
@@ -2951,26 +2998,223 @@
           doorIdx.push(t);
         }
       }
-      N = doorIdx.length;
-      if (N < 1) return;
+      if (!doorIdx.length) return null;
+
+      const gates = doorIdx.map((t, k) => {
+        const prevC = path[t - 1], nextC = path[t + 1];
+        return {
+          tile: path[t],
+          // The path cell the player stands on when this gate blocks them. Switch hosts are
+          // scored by distance from here, so a lever never sits in the cell facing its door.
+          approach: prevC,
+          // Seed for the region the player is confined to until this gate opens: the start for
+          // the first door, the cell just past the previous door for the rest.
+          seed: (k === 0) ? path[0] : path[doorIdx[k - 1] + 1],
+          // Which way the corridor runs through this connector - prevC and nextC are exactly
+          // the two cells it joins. Same y (differ in x): an east-west corridor, so the door's
+          // OWN plane spans north-south - axis 'y'. Same x: plane spans east-west - axis 'x'.
+          // Used by the open-gate render pass to draw the doorway as a properly oriented
+          // segment instead of a camera-facing billboard, so it foreshortens correctly (and
+          // looks edge-on, not full-width) when glimpsed from a crossing passage. Braiding
+          // cannot invalidate this: a connector tile's other two neighbours are (even,even)
+          // corner tiles, which nothing ever carves.
+          axis: (prevC.y === nextC.y) ? 'y' : 'x',
+          // Slice of `path` strictly between this gate's region seed and the gate itself, for
+          // the last-resort switch host below.
+          lowIdx: (k === 0) ? 2 : doorIdx[k - 1] + 1,
+          hiIdx: t - 1
+        };
+      });
+
+      // Region 0 is everything before door 0; region k+1 starts at the cell just past door k.
+      // braidMaze() uses these to label the maze before it carves anything.
+      const regionSeeds = [path[0]].concat(doorIdx.map((t) => path[t + 1]));
+      return { path, gates, regionSeeds };
+    }
+
+    // Phase 2: turn the spanning tree into a MULTICURSAL maze by knocking out extra walls, so
+    // corridors rejoin each other instead of every passage having exactly one way in and out.
+    // Two passes - dead-end braiding (give a tip a second exit, which makes the corridor that
+    // led there into a circuit) and a scatter of cross-corridor shortcuts, which is what stops
+    // a long snaking passage from still being a long snaking passage once its tips are tied off.
+    //
+    // The one thing braiding must NOT do is hand the player a way around a locked gate. Every
+    // planned door tile is a cut tile of the tree: it separates the region the player is stuck
+    // in from everything past it. So label every floor cell with its gate region (doors treated
+    // as walls), then only ever carve BETWEEN TWO CELLS OF THE SAME REGION. Adding edges inside
+    // a region can never connect one region to another, so all N doors stay mandatory and
+    // placeGatesAndSwitches' solvability proof survives unchanged.
+    // Returns the region label map, which relocateExit() needs to keep the Exit behind the
+    // last gate.
+    function braidMaze(cellRows, cellCols, plan) {
+      const regionOf = new Map();
+      if (plan) {
+        const blocked = new Set(plan.gates.map((g) => _tileKey(g.tile.x, g.tile.y)));
+        plan.regionSeeds.forEach((seed, id) => {
+          _flood(seed, (x, y) => MAP[y][x] === 0 && !blocked.has(_tileKey(x, y)))
+            .forEach((e, key) => { if (!regionOf.has(key)) regionOf.set(key, id); });
+        });
+      }
+      const sameRegion = (a, b) => {
+        if (!plan) return true;
+        const ra = regionOf.get(_tileKey(a.x, a.y));
+        return ra !== undefined && ra === regionOf.get(_tileKey(b.x, b.y));
+      };
+      // The Exit stays a cul-de-sac in both passes: a shortcut opening straight into it would
+      // both shorten the run and cost the arrival its "you found it" beat.
+      const isExit = (x, y) => x === exitRoom.x && y === exitRoom.y;
+
+      // Every wall sitting between two carved cells that could legally come out. Only down and
+      // right are considered so each wall is enumerated exactly once.
+      const candidates = [];
+      const byCell = new Map();
+      let cellCount = 0;
+      for (let r = 0; r < cellRows; r++) {
+        for (let c = 0; c < cellCols; c++) {
+          const y = r * 2 + 1, x = c * 2 + 1;
+          if (MAP[y][x] !== 0) continue;                  // a cell the carve never reached
+          cellCount++;
+          for (const d of [{ dr: 1, dc: 0 }, { dr: 0, dc: 1 }]) {
+            const nr = r + d.dr, nc = c + d.dc;
+            if (nr >= cellRows || nc >= cellCols) continue;
+            const ny = nr * 2 + 1, nx = nc * 2 + 1;
+            if (MAP[ny][nx] !== 0) continue;              // ditto for the neighbour
+            const wy = y + d.dr, wx = x + d.dc;
+            if (MAP[wy][wx] !== 1) continue;              // that wall is already an opening
+            const a = { x, y }, b = { x: nx, y: ny };
+            if (!sameRegion(a, b)) continue;              // would bypass a gate - never carve
+            const cand = { wx, wy, a, b };
+            candidates.push(cand);
+            for (const key of [_tileKey(x, y), _tileKey(nx, ny)]) {
+              if (!byCell.has(key)) byCell.set(key, []);
+              byCell.get(key).push(cand);
+            }
+          }
+        }
+      }
+
+      const floorNbCount = (x, y) => {
+        let n = 0;
+        for (const d of _ORTHO) {
+          const ny = y + d.dy, nx = x + d.dx;
+          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) n++;
+        }
+        return n;
+      };
+
+      // Pass 1 - dead ends. A cell with one open neighbour is a tip; opening a second wall
+      // turns the passage that led to it into a loop. Capped at MAZE.braidDeadEnds so enough
+      // tips survive for placeGatesAndSwitches to hide levers down.
+      const deadEnds = [];
+      for (let r = 0; r < cellRows; r++) {
+        for (let c = 0; c < cellCols; c++) {
+          const y = r * 2 + 1, x = c * 2 + 1;
+          if (MAP[y][x] === 0 && !isExit(x, y) && floorNbCount(x, y) <= 1) deadEnds.push({ x, y });
+        }
+      }
+      _shuffle(deadEnds);
+      const braidTarget = Math.round(deadEnds.length * MAZE.braidDeadEnds);
+      let braided = 0;
+      for (const de of deadEnds) {
+        if (braided >= braidTarget) break;
+        if (floorNbCount(de.x, de.y) > 1) continue;       // an earlier braid already opened it
+        const opts = (byCell.get(_tileKey(de.x, de.y)) || [])
+          .filter((o) => MAP[o.wy][o.wx] === 1 && !isExit(o.a.x, o.a.y) && !isExit(o.b.x, o.b.y));
+        if (!opts.length) continue;
+        const pick = opts[Math.floor(Math.random() * opts.length)];
+        MAP[pick.wy][pick.wx] = 0;
+        braided++;
+      }
+
+      // Pass 2 - shortcuts across the middle of long corridors, which is what gives a route a
+      // choice partway along it rather than only where a dead end used to be.
+      _shuffle(candidates);
+      let cut = 0;
+      const extraTarget = Math.round(cellCount * MAZE.extraLoops);
+      for (const cand of candidates) {
+        if (cut >= extraTarget) break;
+        if (MAP[cand.wy][cand.wx] !== 1) continue;        // pass 1 already took this one
+        if (isExit(cand.a.x, cand.a.y) || isExit(cand.b.x, cand.b.y)) continue;
+        MAP[cand.wy][cand.wx] = 0;
+        cut++;
+      }
+      return regionOf;
+    }
+
+    // The Exit is meant to be the hardest tile in the maze to get to, and up to here it is
+    // whichever cell the carve reached last by tree depth. Braiding invalidates that: a
+    // shortcut between two corridors can cut a big chunk off the walk without touching the
+    // exit cell itself, and measured over 250 hard mazes that alone knocked the start->exit
+    // route from 92 steps down to 67. So re-pick it on the FINISHED map - the tile genuinely
+    // furthest from the spawn now that every loop exists.
+    //
+    // Restricted to the region past the last gate, which is what keeps all N doors standing
+    // between the player and the Exit; the gates were planned against the old exit, and moving
+    // it around inside the final region cannot put it in front of any of them.
+    function relocateExit(plan, regionOf) {
+      const lastId = plan ? plan.regionSeeds.length - 1 : 0;
+      // Doors are not stamped yet, so this floods the maze as it will be with every gate open -
+      // i.e. the real walking distance once the player has earned their way through.
+      const dist = _flood(startRoom, (x, y) => MAP[y][x] === 0);
+      let best = null, bestScore = -1;
+      dist.forEach((e, key) => {
+        if (e.x % 2 !== 1 || e.y % 2 !== 1) return;         // cells only, never a connector
+        if (plan && regionOf.get(key) !== lastId) return;
+        let floorNb = 0;
+        for (const d of _ORTHO) {
+          const nx = e.x + d.dx, ny = e.y + d.dy;
+          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) floorNb++;
+        }
+        // Distance is the point; the dead-end nudge only breaks ties between tiles that are
+        // already about as far out as each other, so the Exit still tends to sit at the end of
+        // something rather than in the middle of a thoroughfare.
+        const score = e.dist * 4 + (floorNb <= 1 ? 6 : 0);
+        if (score > bestScore) { bestScore = score; best = { x: e.x, y: e.y }; }
+      });
+      if (best) exitRoom = best;
+    }
+
+    // Phase 3: stamp the planned doors and, for each, find one wall switch the player can
+    // PROVABLY reach before that door (sequential gating). Guarantee: switch_k lies in the
+    // region reachable with doors 0..k-1 open, so the player opens them in order and always
+    // finishes. Braiding does not weaken this - it only ever adds corridors WITHIN a region,
+    // which can make a switch easier to walk to but never moves it behind its own gate. Fills
+    // doorList / switchList and stamps MAP (3 = closed door, 4 = switch OFF).
+    function placeGatesAndSwitches(plan) {
+      doorList = [];
+      switchList = [];
+      if (!plan) return;
+
+      const gates = plan.gates;
+      const N = gates.length;
+
+      // The route the player actually walks now that the maze has loops in it. Every gate tile
+      // is still a cut tile (see braidMaze), so this passes through all of them in order - but
+      // it is no longer the pre-braid path, and it is THIS one the host scorer has to treat as
+      // "the main route", or a lever scored as off-path could land on the corridor the player
+      // was going to take anyway.
+      const path = plan.path;
+      const route = _bfsPath(startRoom, exitRoom) || path;
+      const pathTiles = new Set(route.map((c) => _tileKey(c.x, c.y)));
 
       const usedCells = new Set();
 
       for (let k = 0; k < N; k++) {
-        const d = path[doorIdx[k]];
-        const seed = (k === 0) ? path[0] : path[doorIdx[k - 1] + 1];
+        const g = gates[k];
+        const d = g.tile;
+        const seed = g.seed;
 
         // doors k..N-1 are still shut in this state; earlier doors are stamped MAP===3 and
         // therefore also block the flood, which only tightens the region (still safe).
         const blocked = new Set();
-        for (let j = k; j < N; j++) blocked.add(_tileKey(path[doorIdx[j]].x, path[doorIdx[j]].y));
+        for (let j = k; j < N; j++) blocked.add(_tileKey(gates[j].tile.x, gates[j].tile.y));
         const region = _flood(seed, (x, y) => MAP[y][x] === 0 && !blocked.has(_tileKey(x, y)));
 
         // Distance of every region tile from the door's approach tile (the path cell the
         // player stands on when the gate blocks them). Used to push the switch away from
         // the gate it opens - a lever mounted in the cell facing the door is no puzzle,
         // the player never has to leave the corridor to find it.
-        const approach = path[doorIdx[k] - 1];
+        const approach = g.approach;
         const doorDist = _flood(approach, (x, y) => MAP[y][x] === 0 && !blocked.has(_tileKey(x, y)));
 
         // host cell: an (odd,odd) floor tile in the region, not start/exit, unused, with a
@@ -3015,8 +3259,7 @@
         // fallback: a path cell strictly between the seed and this door, furthest from the
         // door first for the same reason.
         if (!best) {
-          const lowT = (k === 0) ? 2 : doorIdx[k - 1] + 1;
-          for (let t = lowT; t <= doorIdx[k] - 1; t++) {
+          for (let t = g.lowIdx; t <= g.hiIdx; t++) {
             const c = path[t];
             if (c.x % 2 !== 1 || c.y % 2 !== 1) continue;
             if (usedCells.has(_tileKey(c.x, c.y))) continue;
@@ -3054,17 +3297,9 @@
         MAP[d.y][d.x] = 3;
         MAP[wall.y][wall.x] = 4;
 
-        // Which way the corridor runs through this tile - path[doorIdx[k]-1] and +1 are
-        // exactly the two cells this connector joins. Same y (differ in x): an east-west
-        // corridor, so the door's OWN plane (what you'd see face-on) spans north-south -
-        // axis 'y'. Same x: a north-south corridor, plane spans east-west - axis 'x'. Used
-        // by the open-gate render pass to draw the doorway as a properly oriented segment
-        // instead of a camera-facing billboard, so it foreshortens correctly (and looks
-        // edge-on, not full-width) when glimpsed from a crossing passage.
-        const prevC = path[doorIdx[k] - 1], nextC = path[doorIdx[k] + 1];
-        const axis = (prevC.y === nextC.y) ? 'y' : 'x';
-
-        doorList.push({ x: d.x, y: d.y, index: k, opened: false, axis });
+        // Doorway orientation was worked out by planGates from the two cells this connector
+        // joins - see the `axis` note there for what it means and why braiding cannot change it.
+        doorList.push({ x: d.x, y: d.y, index: k, opened: false, axis: g.axis });
         switchList.push({
           x: wall.x, y: wall.y, cellX: best.x, cellY: best.y, doorIndex: k, on: false
         });
@@ -3111,7 +3346,14 @@
       const distances = Array(cellRows).fill(0).map(() => Array(cellCols).fill(0));
 
       while (stack.length > 0 && visitedCount < targetCells) {
-        const current = stack[stack.length - 1];
+        // Growing-tree selection (see MAZE.branchChance). Always taking the newest frontier
+        // cell IS the recursive backtracker; taking a random one some of the time keeps several
+        // corridors advancing at once, so the finished maze has junctions spread through it
+        // rather than one committed passage that only forks when it hits a wall.
+        const pick = (stack.length > 1 && Math.random() < MAZE.branchChance)
+          ? Math.floor(Math.random() * stack.length)
+          : stack.length - 1;
+        const current = stack[pick];
         const neighbors = [];
 
         const deltas = [
@@ -3150,17 +3392,28 @@
 
           stack.push({ r: next.r, c: next.c });
         } else {
-          stack.pop();
+          stack.splice(pick, 1);          // not necessarily the top any more - see `pick` above
         }
       }
 
       startRoom = { x: startC * 2 + 1, y: startR * 2 + 1 };
       exitRoom = { x: furthestCell.c * 2 + 1, y: furthestCell.r * 2 + 1 };
 
-      // Locked gates go in BEFORE the lantern pass (which only touches MAP===1, so it skips
-      // our door/switch tiles) and BEFORE passagesList is built (so a closed door is correctly
-      // excluded from the walkable-tile count).
-      placeGatesAndSwitches();
+      // Gating and loop-carving are interleaved, and the order is load-bearing:
+      //   planGates()  picks the door tiles while the maze is still a tree and the start->exit
+      //                route is therefore unique - which is what "evenly spaced along it" means.
+      //   braidMaze()  adds the loops that make the maze multicursal, refusing any carve that
+      //                would join two different gate regions, so every planned door stays a
+      //                mandatory cut tile rather than something you can walk around.
+      //   placeGates.. stamps the doors and hunts down switch hosts on the FINISHED map, so a
+      //                lever is scored against the route the player will really take.
+      // All three run BEFORE the lantern pass (which only touches MAP===1, so it skips our
+      // door/switch tiles) and BEFORE passagesList is built (so a closed door is correctly
+      // excluded from the walkable-tile count, and the loop tiles are correctly included).
+      const gatePlan = planGates();
+      const gateRegions = braidMaze(cellRows, cellCols, gatePlan);
+      relocateExit(gatePlan, gateRegions);
+      placeGatesAndSwitches(gatePlan);
 
       // Add Lanterns to Walls - never beside a door or switch (see _nearGateOrSwitch above).
       for (let y = 1; y < MAP_HEIGHT - 1; y++) {

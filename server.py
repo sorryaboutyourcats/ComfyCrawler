@@ -1464,7 +1464,7 @@ def make_sprite_transparent(img_path):
 
 def match_word(pattern, text):
     import re
-    return bool(re.search(r'' + pattern + r'', text, re.IGNORECASE))
+    return bool(re.search(r'\b' + pattern + r'\b', text, re.IGNORECASE))
 
 # Shared tail for every lantern_p below: forces a single isolated object on a clean white
 # ground, so the frontend's BiRefNet cutout has an actual plain background to cut around (a
@@ -1595,10 +1595,16 @@ def get_gate_prompts(wall_style):
     earlier version generated ONE switch image and had the client fake the other state with a
     tint or a lit indicator lamp, which is exactly the "light/colour tells them apart" look
     this now avoids; the two prompts exist so the pose itself is the only difference, in art
-    that was actually drawn that way rather than edited to look that way."""
+    that was actually drawn that way rather than edited to look that way.
+
+    Buckets mirror get_surface_prompts' (same keywords, same relative order, so an ambiguous
+    style resolves to the same theme on both sides) - every style get_surface_prompts special-
+    cases gets a matching door/switch here now; previously only four of its ten buckets did; a
+    style whose wall got the taco or forest treatment but fell through to the generic gate
+    branch is exactly how a door ends up looking unrelated to the corridor it's set in."""
     ui = wall_style.lower()
 
-    # Every branch below follows the same two rules:
+    # Every branch below follows three rules:
     #   1. The archway/frame is described with the SAME material words as get_surface_prompts'
     #      wall_p for that bucket, so the door sits in a frame that visibly belongs to the
     #      corridor instead of reading as a different building dropped into it.
@@ -1607,6 +1613,11 @@ def get_gate_prompts(wall_style):
     #      brick door; "made of candy cane" literally asked FLUX for a door built from a thin
     #      curved candy stick, which is why one bucket needs a concrete, door-shaped noun -
     #      "gingerbread door" - rather than the wall's own pattern name).
+    #   3. The switch is a DIFFERENT concrete object than that bucket's lantern_p in
+    #      get_surface_prompts, but from the same object family/material - a taco lantern gets a
+    #      nacho switch, not another taco (that just repeats the one landmark object twice) and
+    #      not a bare "themed as X" lever (too abstract for FLUX schnell to draw well - see the
+    #      generic branch's own note below for what that failure mode looks like).
     # Every door_p also explicitly forbids empty/black background: this is a full-frame OPAQUE
     # image (no BiRefNet cutout, unlike the switch/lantern), so whatever the model doesn't draw
     # as door or archway shows up as literal black margins on the wall in-game - "fills the
@@ -1618,7 +1629,24 @@ def get_gate_prompts(wall_style):
     # light" heads off both failure modes at once.
     UNLIT = "exactly the same colours as its resting state, no glow, no light, nothing lit up, no colour change"
 
-    if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
+    if any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship',
+                             'future', 'cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
+        door_p = (f"A sealed dark sci-fi blast door - a heavy round airlock hatch with a glowing "
+                  f"cyan viewport ring and warning stripes - set into a surrounding wall of the "
+                  f"same dark riveted brushed-metal panels with glowing cyan seams as the "
+                  f"corridor, fully closed, flat straight-on orthographic front view, "
+                  f"{NO_MARGINS}, zero perspective, zero horizon, zero sky.")
+        # Lantern (get_surface_prompts) is a glowing energy-core wall plate - the switch is a
+        # separate recessed toggle on its own panel, not another core, so the two fixtures
+        # don't read as the same object twice down the corridor.
+        switch_off_p = ("A dark angular metal wall panel with one large recessed toggle lever "
+                         "switch, sci-fi hardware, unpowered and unlit, the handle in its "
+                         "resting position. " + _GATE_TAIL)
+        switch_on_p = (f"A dark angular metal wall panel with one large recessed toggle lever "
+                        f"switch, sci-fi hardware, the same handle now flipped up into its "
+                        f"thrown position, still unpowered and unlit, {UNLIT}. " + _GATE_TAIL)
+
+    elif any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
         door_p = (f"Authentic Windows 95 3D maze screensaver style, a heavy closed door set into "
                   f"an archway built from the same bold chunky crimson red bricks and thick stark "
                   f"white mortar lines as the corridor wall, the door itself a dark iron-bound "
@@ -1633,19 +1661,61 @@ def get_gate_prompts(wall_style):
                         f"into the thrown position, Windows 95 low-poly CGI look, bright even "
                         f"lighting, {UNLIT}. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship',
-                               'future', 'cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
-        door_p = (f"A sealed dark sci-fi blast door - a heavy round airlock hatch with a glowing "
-                  f"cyan viewport ring and warning stripes - set into a surrounding wall of the "
-                  f"same dark riveted brushed-metal panels with glowing cyan seams as the "
-                  f"corridor, fully closed, flat straight-on orthographic front view, "
-                  f"{NO_MARGINS}, zero perspective, zero horizon, zero sky.")
-        switch_off_p = ("A dark angular metal wall panel with one large recessed lever switch, "
-                         "sci-fi hardware, unpowered and unlit, the handle in its resting "
-                         "position. " + _GATE_TAIL)
-        switch_on_p = (f"A dark angular metal wall panel with one large recessed lever switch, "
-                        f"sci-fi hardware, the same handle now flipped up into its thrown "
-                        f"position, still unpowered and unlit, {UNLIT}. " + _GATE_TAIL)
+    elif any(k in ui for k in ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']):
+        door_p = (f"A rustic door built from thick bound branches and woven vines, set into a "
+                  f"surrounding archway of the same rough mossy tree bark and redwood trunk "
+                  f"surface as the corridor wall, flat straight-on orthographic front view, "
+                  f"{NO_MARGINS}, zero horizon, zero sky, zero perspective.")
+        # Lantern is a bound bundle of sticks used as a torch - the switch is a single forked
+        # branch used as a lever, a related but distinctly different piece of the same forest.
+        switch_off_p = ("A small forked wooden branch used as a lever handle, bound with a "
+                         "strip of green vine, mounted on a flat slab of bark, the branch "
+                         "resting down. " + _GATE_TAIL)
+        switch_on_p = (f"A small forked wooden branch used as a lever handle, bound with a "
+                        f"strip of green vine, mounted on a flat slab of bark, the same branch "
+                        f"now thrown up, {UNLIT}. " + _GATE_TAIL)
+
+    elif any(k in ui for k in ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']):
+        door_p = (f"A closed door that is one giant folded cheese quesadilla, grill-marked and "
+                  f"steaming, set into a surrounding archway of the same crispy golden corn "
+                  f"taco shells filled with seasoned meat, tomatoes, lettuce and cheese as the "
+                  f"corridor wall, flat straight-on orthographic front view, {NO_MARGINS}, "
+                  f"bright saturated colors, zero shadows, zero perspective.")
+        # Lantern is a single glowing taco shell - the switch is a nacho: same snack family,
+        # a different landmark object, exactly the "related but not identical" pairing asked for.
+        switch_off_p = ("A small wall-mounted lever switch styled as one big golden tortilla "
+                         "chip nacho piled with melted cheese, resting down on a small plate. "
+                         + _GATE_TAIL)
+        switch_on_p = (f"A small wall-mounted lever switch styled as one big golden tortilla "
+                        f"chip nacho piled with melted cheese, the same nacho now thrown up, "
+                        f"{UNLIT}. " + _GATE_TAIL)
+
+    elif match_word('ladies', ui) or match_word('lady', ui) or match_word('women', ui) or match_word('woman', ui) or match_word('girls', ui) or match_word('girl', ui):
+        door_p = (f"A closed double door of purple enamel and polished gold with a bold art "
+                  f"deco sunburst pattern, set into a surrounding frame styled with the same "
+                  f"colorful pop-art collage pattern as the corridor wall, flat straight-on "
+                  f"orthographic front view, {NO_MARGINS}, bright saturated colors, zero "
+                  f"perspective.")
+        # Lantern is a purple-and-gold art deco wall sconce - the switch reuses that palette on
+        # a different art deco object (a folding fan) instead of a second sconce.
+        switch_off_p = ("A small polished gold lever switch shaped like a folding hand fan, "
+                         "mounted on a purple enamel plate, art deco style, the fan folded "
+                         "down. " + _GATE_TAIL)
+        switch_on_p = (f"A small polished gold lever switch shaped like a folding hand fan, "
+                        f"mounted on a purple enamel plate, art deco style, the same fan now "
+                        f"opened up, {UNLIT}. " + _GATE_TAIL)
+
+    elif match_word('people', ui) or match_word('person', ui) or match_word('crowd', ui) or match_word('characters', ui) or match_word('men', ui) or match_word('man', ui) or match_word('guys', ui):
+        door_p = (f"A heavy closed double door of navy blue metal with polished gold trim and "
+                  f"rivets, set into a surrounding frame styled with the same colorful pop-art "
+                  f"character collage pattern as the corridor wall, flat straight-on "
+                  f"orthographic front view, {NO_MARGINS}, bright saturated colors, zero "
+                  f"perspective.")
+        switch_off_p = ("A small polished gold lever switch on a navy blue enamel plate, "
+                         "bright saturated colors, the handle resting down. " + _GATE_TAIL)
+        switch_on_p = (f"A small polished gold lever switch on a navy blue enamel plate, "
+                        f"bright saturated colors, the same handle now thrown up, {UNLIT}. "
+                        + _GATE_TAIL)
 
     elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
         door_p = (f"A massive closed dungeon door of weathered oak planks bound with rusted iron "
@@ -1665,12 +1735,29 @@ def get_gate_prompts(wall_style):
                   f"with white icing piping trim and a round candy button for a handle, warm "
                   f"bakery colors, flat straight-on orthographic front view, {NO_MARGINS}, "
                   f"bright saturated colors, zero shadows, zero perspective.")
-        switch_off_p = ("A small wall-mounted lever switch styled as a striped candy cane handle "
-                         "on a white iced gingerbread cookie plate, bright bakery colors, the "
-                         "handle resting down. " + _GATE_TAIL)
-        switch_on_p = (f"A small wall-mounted lever switch styled as a striped candy cane handle "
-                        f"on a white iced gingerbread cookie plate, bright bakery colors, the "
-                        f"same handle now thrown up, {UNLIT}. " + _GATE_TAIL)
+        # Lantern is a glowing candy cane - the switch used to be styled as a candy cane too
+        # (the same landmark object as the lantern); a lollipop keeps the candy-shop family
+        # without repeating the one thing the corridor is already lit by.
+        switch_off_p = ("A small wall-mounted lever switch styled as a swirled peppermint "
+                         "lollipop handle on a white iced gingerbread cookie plate, bright "
+                         "bakery colors, the handle resting down. " + _GATE_TAIL)
+        switch_on_p = (f"A small wall-mounted lever switch styled as a swirled peppermint "
+                        f"lollipop handle on a white iced gingerbread cookie plate, bright "
+                        f"bakery colors, the same handle now thrown up, {UNLIT}. " + _GATE_TAIL)
+
+    elif any(k in ui for k in ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']):
+        door_p = (f"A chunky wooden doghouse-style door with a rounded arched pet-door flap, "
+                  f"set into a surrounding frame styled with the same colorful cute cartoon "
+                  f"{wall_style} pattern as the corridor wall, flat straight-on orthographic "
+                  f"front view, {NO_MARGINS}, bright saturated colors, zero perspective.")
+        # Lantern is a glowing paw print - the switch is a bone: same cute-pet icon family,
+        # a different specific charm.
+        switch_off_p = ("A small wall-mounted lever switch shaped like a cute cartoon dog "
+                         "bone, mounted on a small plate, bright saturated colors, resting "
+                         "down. " + _GATE_TAIL)
+        switch_on_p = (f"A small wall-mounted lever switch shaped like a cute cartoon dog "
+                        f"bone, mounted on a small plate, bright saturated colors, the same "
+                        f"bone now thrown up, {UNLIT}. " + _GATE_TAIL)
 
     else:
         # No preset bucket for this style, so the archway is DESCRIBED as {wall_style} (matching
@@ -1684,12 +1771,20 @@ def get_gate_prompts(wall_style):
                   f"slab with a round iron ring handle, sturdy and firmly shut, flat "
                   f"straight-on orthographic front view, {NO_MARGINS}, zero perspective, zero "
                   f"horizon, zero sky, no room around it, no text.")
-        switch_off_p = (f"A single wall-mounted lever switch themed as {wall_style}, a mechanical "
+        # No lantern_p text is available here to react to (the generic lantern prompt is built
+        # independently, from the same {wall_style} words, and might resolve to anything) - the
+        # best this branch can do is ask for a DIFFERENT kind of object than a light fixture,
+        # rather than the bare "a mechanical handle themed as {wall_style}" this used to say,
+        # which gave FLUX nothing concrete to draw and is the same failure mode "made of
+        # {wall_style}" was for the door (see the comment above).
+        switch_off_p = (f"A single small hand-sized object fitting the theme of {wall_style} - "
+                         f"not a lamp, torch or light fixture - repurposed as a lever switch "
                          f"handle on a small mounting plate, the handle resting in its neutral "
                          f"position. " + _GATE_TAIL)
-        switch_on_p = (f"A single wall-mounted lever switch themed as {wall_style}, the same "
-                        f"mechanical handle on the same small mounting plate now flipped into "
-                        f"its active thrown position, {UNLIT}. " + _GATE_TAIL)
+        switch_on_p = (f"A single small hand-sized object fitting the theme of {wall_style} - "
+                        f"not a lamp, torch or light fixture - repurposed as a lever switch "
+                        f"handle on the same small mounting plate, the same handle now flipped "
+                        f"into its active thrown position, {UNLIT}. " + _GATE_TAIL)
 
     return door_p, switch_off_p, switch_on_p
 
