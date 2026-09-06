@@ -209,6 +209,13 @@
       font-size: 16px;
       font-weight: bold;
     }
+    .combat-btn {
+      height: 44px;
+      font-size: 11px;
+      line-height: 1.1;
+      text-align: center;
+      padding: 2px 3px;
+    }
     canvas, img, svg {
       image-rendering: pixelated !important;
     }
@@ -252,10 +259,10 @@
       gap: 4px !important;
     }
     .viewport-frame {
-      /* 190px = body padding + title bar + panel padding + the location bar + the battle
-         action bar. The battle bar has to be in that budget even while it is hidden, or
-         entering battle pushes the last two rows out through the bottom of the window. */
-      height: clamp(260px, calc(100vh - 190px), calc((100vw - 270px) * 0.75)) !important;
+      /* 160px = body padding + title bar + panel padding + the location bar. The combat
+         controls live in the sidebar, so nothing is ever appended under the viewport and
+         this budget holds in battle too. */
+      height: clamp(260px, calc(100vh - 160px), calc((100vw - 270px) * 0.75)) !important;
       aspect-ratio: 4 / 3 !important;
       position: relative !important;
       overflow: hidden !important;
@@ -657,22 +664,6 @@
               </button>
             </div>
           </div>
-
-          <!-- Battle Action Bar (Shown in battle mode) -->
-          <div id="battleActionBar" class="hidden win95-box p-1 mt-1 bg-amber-50 border border-amber-400 flex items-center justify-around gap-1 text-[11px] font-bold">
-            <button id="btnCombatDodgeL" class="win95-btn flex-1 py-1 text-xs bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Left (Hold A / Left)">
-              ⬅️ Strafe L (A)
-            </button>
-            <button id="btnCombatAttack" class="win95-btn flex-1 py-1 text-xs bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-900 font-black" title="Attack / Slash (Z / Up / W)">
-              ⚔️ Strike (Z)
-            </button>
-            <button id="btnCombatBlock" class="win95-btn flex-1 py-1 text-xs bg-blue-100 hover:bg-blue-200 active:bg-blue-300 text-blue-900 font-black" title="Shield Guard (Hold X / S)">
-              🛡️ Block (X)
-            </button>
-            <button id="btnCombatDodgeR" class="win95-btn flex-1 py-1 text-xs bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Right (Hold D / Right)">
-              ➡️ Strafe R (D)
-            </button>
-          </div>
         </div>
 
         <!-- Controls & Minimap Column -->
@@ -724,7 +715,7 @@
           <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
             <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS (Space: Battle, E: Use):</div>
 
-            <div class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
+            <div id="dpadGrid" class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>
               <button id="btnUp" class="win95-btn dpad-btn" title="Move Forward (W / Up)">▲</button>
               <button id="btnAction" class="win95-btn dpad-btn" title="Use switch / door (E)">E</button>
@@ -732,6 +723,24 @@
               <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">◀</button>
               <button id="btnDown" class="win95-btn dpad-btn" title="Move Backward (S / Down)">▼</button>
               <button id="btnRight" class="win95-btn dpad-btn" title="Rotate Right 90° (D / Right)">▶</button>
+            </div>
+
+            <!-- Battle Action Bar: takes the D-pad's slot during a fight rather than adding a
+                 row under the viewport, so the window is exactly as tall in battle as out of
+                 it. Same 2-row footprint as the D-pad it replaces. -->
+            <div id="battleActionBar" class="hidden grid grid-cols-2 gap-1.5 w-full my-auto text-[10px] font-bold">
+              <button id="btnCombatAttack" class="win95-btn combat-btn bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-900 font-black" title="Attack / Slash (Z / Up / W)">
+                ⚔️ Strike (Z)
+              </button>
+              <button id="btnCombatBlock" class="win95-btn combat-btn bg-blue-100 hover:bg-blue-200 active:bg-blue-300 text-blue-900 font-black" title="Shield Guard (Hold X / S)">
+                🛡️ Block (X)
+              </button>
+              <button id="btnCombatDodgeL" class="win95-btn combat-btn bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Left (Hold A / Left)">
+                ⬅️ Strafe (A)
+              </button>
+              <button id="btnCombatDodgeR" class="win95-btn combat-btn bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Right (Hold D / Right)">
+                Strafe (D) ➡️
+              </button>
             </div>
           </div>
 

@@ -1581,18 +1581,21 @@ _GATE_TAIL = ("Exactly one object, centered, front view, isolated on a plain fla
 
 
 def get_gate_prompts(wall_style):
-    """(door_p, switch_p) themed to the dungeon style. Kept separate from get_surface_prompts
-    so that function's 4-tuple signature and call sites stay untouched.
+    """(door_p, switch_off_p, switch_on_p) themed to the dungeon style. Kept separate from
+    get_surface_prompts so that function's 4-tuple signature and call sites stay untouched.
 
     FLUX schnell at cfg 1.0 - the negative is inert, so these are POSITIVE-ONLY. Name the
     object literally, force flat orthographic framing, isolate on white (see _LANTERN_TAIL
     notes above for why naming unwanted things backfires).
 
-    Both are single-state art. The switch is the OFF fixture - resting handle, nothing lit -
-    because buildSwitchWallTextures composites the ON state from these exact pixels by lighting
-    an indicator lamp over them, so a lever that comes back already glowing leaves the two
-    states looking identical. For the same reason the door is only ever generated CLOSED:
-    buildOpenDoorTexture derives the open gate from the closed door's own pixels."""
+    The door is single-state art (only ever generated CLOSED - buildOpenDoorTexture derives the
+    open gate from the closed door's own pixels), but the switch is genuinely TWO separate
+    images: switch_off_p and switch_on_p describe the exact same plate and materials with the
+    handle down vs. thrown, and nothing else - no colour, no light, no glow in either. An
+    earlier version generated ONE switch image and had the client fake the other state with a
+    tint or a lit indicator lamp, which is exactly the "light/colour tells them apart" look
+    this now avoids; the two prompts exist so the pose itself is the only difference, in art
+    that was actually drawn that way rather than edited to look that way."""
     ui = wall_style.lower()
 
     # Every branch below follows the same two rules:
@@ -1609,6 +1612,11 @@ def get_gate_prompts(wall_style):
     # as door or archway shows up as literal black margins on the wall in-game - "fills the
     # frame edge to edge" alone wasn't reliable enough at cfg 1.0 to prevent that.
     NO_MARGINS = "the door and its archway completely fill the frame edge to edge with zero empty background and zero black margins"
+    # Appended to every switch_on_p: the ONE thing separate generation can't guarantee on its
+    # own is that the model won't decide "on" means "lit up" - candy and sci-fi in particular
+    # have an associative pull toward glow. Spelling out "no colour change" as well as "no
+    # light" heads off both failure modes at once.
+    UNLIT = "exactly the same colours as its resting state, no glow, no light, nothing lit up, no colour change"
 
     if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
         door_p = (f"Authentic Windows 95 3D maze screensaver style, a heavy closed door set into "
@@ -1617,9 +1625,13 @@ def get_gate_prompts(wall_style):
                   f"wood door slab with a big round iron ring handle, flat straight-on "
                   f"orthographic front view, {NO_MARGINS}, retro 90s low-poly CGI, bright "
                   f"uniform lighting, zero shadows, zero perspective.")
-        switch_p = ("A chunky retro 1990s wall-mounted lever switch on a grey steel plate bolted "
-                    "to a red brick wall, a big red handle resting in the down position, Windows "
-                    "95 low-poly CGI look, bright even lighting. " + _GATE_TAIL)
+        switch_off_p = ("A chunky retro 1990s wall-mounted lever switch on a grey steel plate "
+                         "bolted to a red brick wall, a big red handle resting in the down "
+                         "position, Windows 95 low-poly CGI look, bright even lighting. " + _GATE_TAIL)
+        switch_on_p = (f"A chunky retro 1990s wall-mounted lever switch on a grey steel plate "
+                        f"bolted to a red brick wall, the same big red handle now flipped up "
+                        f"into the thrown position, Windows 95 low-poly CGI look, bright even "
+                        f"lighting, {UNLIT}. " + _GATE_TAIL)
 
     elif any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship',
                                'future', 'cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
@@ -1628,9 +1640,12 @@ def get_gate_prompts(wall_style):
                   f"same dark riveted brushed-metal panels with glowing cyan seams as the "
                   f"corridor, fully closed, flat straight-on orthographic front view, "
                   f"{NO_MARGINS}, zero perspective, zero horizon, zero sky.")
-        switch_p = ("A dark angular metal wall panel with one large recessed lever switch, "
-                    "sci-fi hardware, unpowered and unlit, the handle in its resting position. "
-                    + _GATE_TAIL)
+        switch_off_p = ("A dark angular metal wall panel with one large recessed lever switch, "
+                         "sci-fi hardware, unpowered and unlit, the handle in its resting "
+                         "position. " + _GATE_TAIL)
+        switch_on_p = (f"A dark angular metal wall panel with one large recessed lever switch, "
+                        f"sci-fi hardware, the same handle now flipped up into its thrown "
+                        f"position, still unpowered and unlit, {UNLIT}. " + _GATE_TAIL)
 
     elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
         door_p = (f"A massive closed dungeon door of weathered oak planks bound with rusted iron "
@@ -1638,8 +1653,10 @@ def get_gate_prompts(wall_style):
                   f"the same grey mossy dungeon stone blocks as the corridor wall, flat "
                   f"straight-on orthographic front view, {NO_MARGINS}, zero perspective, zero "
                   f"horizon.")
-        switch_p = ("A wrought iron wall lever on a rusted metal plate bolted to grey stone, the "
-                    "handle resting down. " + _GATE_TAIL)
+        switch_off_p = ("A wrought iron wall lever on a rusted metal plate bolted to grey stone, "
+                         "the handle resting down. " + _GATE_TAIL)
+        switch_on_p = (f"A wrought iron wall lever on a rusted metal plate bolted to grey stone, "
+                        f"the same handle now thrown up, {UNLIT}. " + _GATE_TAIL)
 
     elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']):
         door_p = (f"A closed door set into a surrounding archway of the same red and white "
@@ -1648,9 +1665,12 @@ def get_gate_prompts(wall_style):
                   f"with white icing piping trim and a round candy button for a handle, warm "
                   f"bakery colors, flat straight-on orthographic front view, {NO_MARGINS}, "
                   f"bright saturated colors, zero shadows, zero perspective.")
-        switch_p = ("A small wall-mounted lever switch styled as a striped candy cane handle on "
-                    "a white iced gingerbread cookie plate, bright bakery colors, the handle "
-                    "resting down. " + _GATE_TAIL)
+        switch_off_p = ("A small wall-mounted lever switch styled as a striped candy cane handle "
+                         "on a white iced gingerbread cookie plate, bright bakery colors, the "
+                         "handle resting down. " + _GATE_TAIL)
+        switch_on_p = (f"A small wall-mounted lever switch styled as a striped candy cane handle "
+                        f"on a white iced gingerbread cookie plate, bright bakery colors, the "
+                        f"same handle now thrown up, {UNLIT}. " + _GATE_TAIL)
 
     else:
         # No preset bucket for this style, so the archway is DESCRIBED as {wall_style} (matching
@@ -1664,11 +1684,14 @@ def get_gate_prompts(wall_style):
                   f"slab with a round iron ring handle, sturdy and firmly shut, flat "
                   f"straight-on orthographic front view, {NO_MARGINS}, zero perspective, zero "
                   f"horizon, zero sky, no room around it, no text.")
-        switch_p = (f"A single wall-mounted lever switch themed as {wall_style}, a mechanical "
-                    f"handle on a small mounting plate, the handle resting in its neutral "
-                    f"position. " + _GATE_TAIL)
+        switch_off_p = (f"A single wall-mounted lever switch themed as {wall_style}, a mechanical "
+                         f"handle on a small mounting plate, the handle resting in its neutral "
+                         f"position. " + _GATE_TAIL)
+        switch_on_p = (f"A single wall-mounted lever switch themed as {wall_style}, the same "
+                        f"mechanical handle on the same small mounting plate now flipped into "
+                        f"its active thrown position, {UNLIT}. " + _GATE_TAIL)
 
-    return door_p, switch_p
+    return door_p, switch_off_p, switch_on_p
 
 
 
@@ -2591,9 +2614,10 @@ def generate_flux_surfaces_only(wall_style):
                 "f": f"trio_f_{int(time.time()*1000)}",
                 "l": f"trio_l_{int(time.time()*1000)}",
                 "d": f"trio_d_{int(time.time()*1000)}",
-                "s": f"trio_s_{int(time.time()*1000)}"}
+                "s": f"trio_s_{int(time.time()*1000)}",
+                "so": f"trio_so_{int(time.time()*1000)}"}
     wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style)
-    door_p, switch_p = get_gate_prompts(wall_style)
+    door_p, switch_off_p, switch_on_p = get_gate_prompts(wall_style)
 
     def _surface(tag, prompt_text):
         return {
@@ -2623,10 +2647,12 @@ def generate_flux_surfaces_only(wall_style):
     payload["bg_model"] = {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"}
 
     # Switch is an isolated object (a wall lever), matted onto the wall on the client the same
-    # way the lantern is - so it gets its own square canvas + BiRefNet cutout. Always generated
-    # (get_gate_prompts never returns None).
+    # way the lantern is - so it gets its own square canvas + BiRefNet cutout. Generated TWICE
+    # (s_* = off/resting, so_* = on/thrown) from the two prompts get_gate_prompts returns, each
+    # with its own random seed - two independent renders of the same fixture, not one image
+    # edited into a second state. Always generated (get_gate_prompts never returns None).
     payload["s_lat"] = {"inputs": {"width": 384, "height": 384, "batch_size": 1}, "class_type": "EmptyLatentImage"}
-    payload["s_pos"] = {"inputs": {"text": switch_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
+    payload["s_pos"] = {"inputs": {"text": switch_off_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
     payload["s_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
                                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
                                     "model": ["1", 0], "positive": ["s_pos", 0], "negative": ["neg", 0],
@@ -2636,6 +2662,18 @@ def generate_flux_surfaces_only(wall_style):
     payload["s_maskinv"] = {"inputs": {"mask": ["s_mask", 0]}, "class_type": "InvertMask"}
     payload["s_save"] = {"inputs": {"filename_prefix": prefixes["s"], "images": ["s_dec", 0], "mask": ["s_maskinv", 0]},
                          "class_type": "SaveImageWithAlpha"}
+
+    payload["so_lat"] = {"inputs": {"width": 384, "height": 384, "batch_size": 1}, "class_type": "EmptyLatentImage"}
+    payload["so_pos"] = {"inputs": {"text": switch_on_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
+    payload["so_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+                                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                     "model": ["1", 0], "positive": ["so_pos", 0], "negative": ["neg", 0],
+                                     "latent_image": ["so_lat", 0]}, "class_type": "KSampler"}
+    payload["so_dec"] = {"inputs": {"samples": ["so_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"}
+    payload["so_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["so_dec", 0]}, "class_type": "RemoveBackground"}
+    payload["so_maskinv"] = {"inputs": {"mask": ["so_mask", 0]}, "class_type": "InvertMask"}
+    payload["so_save"] = {"inputs": {"filename_prefix": prefixes["so"], "images": ["so_dec", 0], "mask": ["so_maskinv", 0]},
+                          "class_type": "SaveImageWithAlpha"}
 
     # Lantern is an isolated object, not a tiling material, so it gets its own square canvas
     # and a BiRefNet cutout (the same node the krea2 weapon/shield/enemy sprites use - see
@@ -2658,7 +2696,7 @@ def generate_flux_surfaces_only(wall_style):
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
 
-    expected = ("w_save", "c_save", "f_save", "d_save", "s_save") + (("l_save",) if lantern_p else ())
+    expected = ("w_save", "c_save", "f_save", "d_save", "s_save", "so_save") + (("l_save",) if lantern_p else ())
     start_time = time.time()
     while time.time() - start_time < 120:
         time.sleep(0.1)
@@ -2682,9 +2720,12 @@ def generate_flux_surfaces_only(wall_style):
 
         # Door: a single full-cell surface - NOT tiled, so no make_seamless_4way.
         d_path = _p("d_save")
-        # Switch: BiRefNet cutout, trimmed to its alpha box like the lantern.
+        # Switch: two independent BiRefNet cutouts (off/on), each trimmed to its own alpha
+        # box like the lantern.
         s_path = _p("s_save")
         _save_tight(s_path)
+        so_path = _p("so_save")
+        _save_tight(so_path)
 
         l_path = None
         if lantern_p:
@@ -2692,7 +2733,7 @@ def generate_flux_surfaces_only(wall_style):
             _save_tight(l_path)
 
         PROGRESS.finish_job("surfaces")
-        return w_path, c_path, f_path, l_path, d_path, s_path
+        return w_path, c_path, f_path, l_path, d_path, s_path, so_path
 
     raise TimeoutError("FLUX.1 surface texture generation timed out.")
 
@@ -4593,7 +4634,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style)
+        w_path, c_path, f_path, l_path, d_path, s_path, so_path = generate_flux_surfaces_only(wall_style)
 
         gen_progress["current_step"] = 3
         assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
@@ -4619,6 +4660,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "lantern_texture": _b64(l_path) if l_path else None,
             "door_texture": _b64(d_path) if d_path else None,
             "switch_texture": _b64(s_path) if s_path else None,
+            "switch_on_texture": _b64(so_path) if so_path else None,
             "player_sprite": player_b64,
             "player_sprites": [player_b64],
             "player_face": faces_b64[0],
@@ -4679,7 +4721,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style)
+        w_path, c_path, f_path, l_path, d_path, s_path, so_path = generate_flux_surfaces_only(wall_style)
 
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
@@ -4712,6 +4754,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "lantern_texture": _b64(l_path) if l_path else None,
             "door_texture": _b64(d_path) if d_path else None,
             "switch_texture": _b64(s_path) if s_path else None,
+            "switch_on_texture": _b64(so_path) if so_path else None,
             "player_sprite": frames_b64[0],
             "player_sprites": frames_b64,
             "player_face": faces_b64[0],

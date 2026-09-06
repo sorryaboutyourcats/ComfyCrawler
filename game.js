@@ -131,9 +131,12 @@
 
     // Door / switch textures - built the same way as wallLanternTexture (a full-cell wall
     // texture, selected in render3D's wall dispatch by MAP tile value: 3=closed door,
-    // 4=switch OFF, 5=switch ON; 6=opened door, which is walkable and drawn as a sprite). The aiDoorImg / aiSwitchImg are the style-matched cutouts the builders
-    // composite in; null falls back to procedural shapes. See buildDoorTexture /
-    // buildSwitchWallTextures.
+    // 4=switch OFF, 5=switch ON; 6=opened door, which is walkable and drawn as a sprite). The
+    // aiDoorImg / aiSwitchImg / aiSwitchOnImg are the style-matched cutouts the builders
+    // composite in; null falls back to procedural shapes. Off and on are two SEPARATELY
+    // generated images (see get_gate_prompts on the server), not one derived from the other -
+    // the fixture just has a different pose in each, no colour or lighting difference. See
+    // buildDoorTexture / buildSwitchWallTextures.
     let doorTexture = null;
     // The open gate (MAP tile 6) is a see-through billboard, not a wall texture - see
     // buildOpenDoorTexture and the open-gate pass at the end of render3D.
@@ -143,6 +146,7 @@
     let switchWallOnTexture = null;
     let aiDoorImg = null;
     let aiSwitchImg = null;
+    let aiSwitchOnImg = null;
 
     let playerSpriteImg = null;
     let playerFaceImg = null;
@@ -910,6 +914,9 @@
     const doomFaceCtx = doomFaceCanvas ? doomFaceCanvas.getContext('2d') : null;
     const btnToggleBattle = document.getElementById('btnToggleBattle');
     const battleActionBar = document.getElementById('battleActionBar');
+    // The battle bar and the D-pad share one slot in the controls panel - exactly one of them
+    // is on screen at a time, which keeps the sidebar (and so the window) a fixed height.
+    const dpadGrid = document.getElementById('dpadGrid');
     const battleModeBadge = document.getElementById('battleModeBadge');
     // Replaced with the story's hero name as soon as the crawl lands; falls back to the
     // generic label for legacy modes that never generate a story.
@@ -1072,11 +1079,13 @@
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white animate-pulse";
         }
         if (battleActionBar) battleActionBar.classList.remove('hidden');
-        if (controlsHeader) controlsHeader.textContent = "COMBAT: A/D (Strafe), Z (Strike), X (Block)";
-        if (btnToggleBattle) {
-          btnToggleBattle.innerHTML = "🏃 <span>FLEE (Space)</span>";
-          btnToggleBattle.className = "win95-btn px-2 py-0.5 text-[10px] font-bold text-slate-800 bg-slate-200 hover:bg-slate-300";
-        }
+        // The D-pad's arrows still called moveForward/rotate mid-fight, walking the player
+        // around behind the combat view. Swapping it out for the combat buttons settles that
+        // and costs no height, since the two grids are the same size.
+        if (dpadGrid) dpadGrid.classList.add('hidden');
+        if (controlsHeader) controlsHeader.textContent = "COMBAT: A/D Strafe, Z Strike, X Block, Space Flee";
+        // No on-screen FLEE button: Space is the way out, and the status bar stays clean.
+        if (btnToggleBattle) btnToggleBattle.classList.add('hidden');
 
         combatState.playerX = 0;
         combatState.vx = 0;
@@ -1094,6 +1103,7 @@
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800";
         }
         if (battleActionBar) battleActionBar.classList.add('hidden');
+        if (dpadGrid) dpadGrid.classList.remove('hidden');
         if (controlsHeader) controlsHeader.textContent = "CONTROLS (Space: Battle):";
         if (btnToggleBattle) {
           btnToggleBattle.innerHTML = "⚔️ <span>BATTLE (Space)</span>";
@@ -2741,64 +2751,52 @@
       doorOpenTexture = c.getImageData(0, 0, DOOR_SPR_W, DOOR_SPR_H);
     }
 
-    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). Both poses are built
-    // independently from a fresh copy of the wall - NOT one derived by filtering the other -
-    // because that (a rotated, darkened copy of the ON art) is what made the old OFF read as
-    // a glitchy duplicate instead of a resting switch. OFF and ON draw the fixture in the
-    // EXACT same place, same size, same pose - a real switch on a wall doesn't relocate
-    // itself - and differ only by recolouring the handle green when thrown (a flat tint on
-    // the fixture's own pixels, not a light/bloom - an earlier version rotated the whole
-    // fixture out to the side and lit up the wall around it, which read as "the switch is
-    // gone" rather than "the switch is on").
+    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). No colour and no light tell
+    // them apart - not a tint on the fixture, not a lamp/indicator dot, nothing additive.
+    // The only difference is the fixture's own pose, from two SEPARATELY generated pieces of
+    // art (aiSwitchImg / aiSwitchOnImg - see get_gate_prompts on the server, which asks for
+    // the same plate and materials with the handle down vs. thrown, explicitly unlit in
+    // both). If either failed to decode, BOTH poses fall back to one procedural rendering
+    // path together (never mixing a real photo for one state with a drawn shape for the
+    // other) - a fixed plate and pivot with a lever that swings between two fully contained
+    // positions, drawn in the exact same colour regardless of state.
     //
     // The fixture is deliberately small and chunky - the AI cutout is downsampled to SWITCH_SRC
     // px before being blown back up with smoothing off - so it sits in the wall at roughly
     // lantern scale and at the wall texture's own resolution, instead of floating over it as a
     // smooth high-res decal.
     function buildSwitchWallTextures(baseWallImageData, styleName = "Windows 95") {
-      const haveArt = aiSwitchImg && aiSwitchImg.complete && aiSwitchImg.naturalWidth > 0;
+      const haveOff = aiSwitchImg && aiSwitchImg.complete && aiSwitchImg.naturalWidth > 0;
+      const haveOn = aiSwitchOnImg && aiSwitchOnImg.complete && aiSwitchOnImg.naturalWidth > 0;
+      const haveArt = haveOff && haveOn;
       const isWin95 = styleName.toLowerCase().includes('windows');
 
       const cx = 128;                 // fixture centre on the wall
       const baseY = 142;              // where the fixture's bottom edge sits
       const maxW = 34, maxH = 56;     // fixture footprint
       const SWITCH_SRC = 24;          // chunky-pixel source size for the AI cutout
-      const lampX = cx, lampY = baseY + 9, lampR = 4;
-      const ON_TINT = 'rgba(74, 222, 128, 0.6)';
 
-      // AI cutout, downsampled once to its own small alpha-matted canvas - both poses draw
-      // it (or a tinted copy of it) at the identical destination rect below.
-      let fw = maxW, fh = maxH, small = null, smallOn = null;
-      if (haveArt) {
-        const scale = Math.min(maxW / aiSwitchImg.naturalWidth, maxH / aiSwitchImg.naturalHeight, 1);
-        fw = Math.max(1, Math.round(aiSwitchImg.naturalWidth * scale));
-        fh = Math.max(1, Math.round(aiSwitchImg.naturalHeight * scale));
+      // Downsamples one pose's AI cutout to its own small canvas, fit to the SAME maxW/maxH
+      // box the other pose uses - so two independently generated images with slightly
+      // different framing still land at a matched scale.
+      function prepArt(img) {
+        const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+        const fw = Math.max(1, Math.round(img.naturalWidth * scale));
+        const fh = Math.max(1, Math.round(img.naturalHeight * scale));
         const longest = Math.max(fw, fh);
         const sw = Math.max(1, Math.round(SWITCH_SRC * (fw / longest)));
         const sh = Math.max(1, Math.round(SWITCH_SRC * (fh / longest)));
-        small = document.createElement('canvas');
+        const small = document.createElement('canvas');
         small.width = sw; small.height = sh;
         const sc = small.getContext('2d');
         sc.imageSmoothingEnabled = true;
-        sc.drawImage(aiSwitchImg, 0, 0, sw, sh);
-
-        // Green-tinted copy for ON. Tinting a copy of the small alpha-matted cutout (rather
-        // than a rect on the full wall canvas) keeps the colour confined to the fixture's own
-        // silhouette instead of painting a green box over the wall around it.
-        smallOn = document.createElement('canvas');
-        smallOn.width = sw; smallOn.height = sh;
-        const sc2 = smallOn.getContext('2d');
-        sc2.drawImage(small, 0, 0);
-        sc2.globalCompositeOperation = 'source-atop';
-        sc2.fillStyle = ON_TINT;
-        sc2.fillRect(0, 0, sw, sh);
-      } else {
-        fw = 22; fh = 30;
+        sc.drawImage(img, 0, 0, sw, sh);
+        return { small, fw, fh };
       }
 
-      // Renders one pose onto a fresh wall canvas: the fixture at its one fixed position,
-      // recoloured (AI art) or drawn in its ON colour (procedural), plus a flat-filled
-      // indicator lamp - no rotation, no glow, both states occupy identical pixels.
+      const offArt = haveArt ? prepArt(aiSwitchImg) : null;
+      const onArt = haveArt ? prepArt(aiSwitchOnImg) : null;
+
       function renderPose(on) {
         const c = document.createElement('canvas');
         c.width = c.height = TEX_SIZE;
@@ -2807,30 +2805,31 @@
         if (baseWallImageData) ctx2.putImageData(baseWallImageData, 0, 0);
 
         if (haveArt) {
-          ctx2.drawImage(on ? smallOn : small, cx - fw / 2, baseY - fh, fw, fh);
+          const art = on ? onArt : offArt;
+          ctx2.drawImage(art.small, cx - art.fw / 2, baseY - art.fh, art.fw, art.fh);
         } else {
+          // Fixed plate + pivot, identical for both states.
           ctx2.fillStyle = isWin95 ? '#94a3b8' : '#27272a';
           ctx2.fillRect(cx - 11, baseY - 34, 22, 34);
           ctx2.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
           ctx2.lineWidth = 2;
           ctx2.strokeRect(cx - 11, baseY - 34, 22, 34);
 
+          // Lever: one colour in both states, resting down-left for OFF and thrown up-right
+          // for ON around the same pivot - position is the only thing that changes.
           const pivotY = baseY - 17;
-          ctx2.strokeStyle = on ? '#22c55e' : (isWin95 ? '#b91c1c' : '#a1a1aa');
+          const leverColor = isWin95 ? '#b91c1c' : '#a1a1aa';
+          const tipX = on ? cx + 9 : cx - 9;
+          const tipY = on ? pivotY - 13 : pivotY + 13;
+          ctx2.strokeStyle = leverColor;
           ctx2.lineWidth = 5;
-          ctx2.beginPath(); ctx2.moveTo(cx, pivotY); ctx2.lineTo(cx - 9, pivotY - 13); ctx2.stroke();
-          ctx2.fillStyle = on ? '#4ade80' : (isWin95 ? '#dc2626' : '#71717a');
-          ctx2.beginPath(); ctx2.arc(cx - 9, pivotY - 13, 4, 0, Math.PI * 2); ctx2.fill();
+          ctx2.beginPath(); ctx2.moveTo(cx, pivotY); ctx2.lineTo(tipX, tipY); ctx2.stroke();
+          ctx2.fillStyle = leverColor;
+          ctx2.beginPath(); ctx2.arc(tipX, tipY, 4, 0, Math.PI * 2); ctx2.fill();
 
           ctx2.fillStyle = '#52525b';
           ctx2.beginPath(); ctx2.arc(cx, pivotY, 4, 0, Math.PI * 2); ctx2.fill();
         }
-
-        // Indicator lamp - flat colour swap, no radial glow.
-        ctx2.fillStyle = isWin95 ? '#64748b' : '#3f3f46';
-        ctx2.beginPath(); ctx2.arc(lampX, lampY, lampR + 2, 0, Math.PI * 2); ctx2.fill();
-        ctx2.fillStyle = on ? '#22c55e' : '#3f3f46';
-        ctx2.beginPath(); ctx2.arc(lampX, lampY, lampR, 0, Math.PI * 2); ctx2.fill();
 
         return ctx2.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
       }
@@ -3385,8 +3384,8 @@
         const sideShade = side === 1 ? 0.82 : 1.0;
         const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
         const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
-        // No switchGlow term here - an ON switch is shaded like any other wall tile now; the
-        // tinted handle in its texture is the only difference from OFF, per buildSwitchWallTextures.
+        // No switchGlow term here - an ON switch is shaded like any other wall tile; the
+        // fixture's pose is the only difference from OFF, per buildSwitchWallTextures.
         const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
 
         // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
@@ -3998,14 +3997,15 @@
     // screen back until the real art is in wallTexture/ceilingTexture/floorTexture - otherwise
     // the first render3D() paints whatever was already loaded (the Windows-95 defaults, or the
     // previous dungeon's art) and the swap to the new textures a moment later reads as a flash.
-    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady, doorUri, switchUri) {
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady, doorUri, switchUri, switchOnUri) {
       // Cleared unconditionally: a dungeon with no lantern art (e.g. the Windows 95 style,
       // which keeps its procedural logo gag - see get_surface_prompts) must not keep showing
       // the PREVIOUS dungeon's AI fixture. Same for the door/switch cutouts.
       aiLanternImg = null;
       aiDoorImg = null;
       aiSwitchImg = null;
-      const total = [wallUri, ceilUri, floorUri, lanternUri, doorUri, switchUri].filter(Boolean).length;
+      aiSwitchOnImg = null;
+      const total = [wallUri, ceilUri, floorUri, lanternUri, doorUri, switchUri, switchOnUri].filter(Boolean).length;
       let loaded = 0;
 
       function finish() {
@@ -4060,6 +4060,11 @@
         const imgS = new Image();
         imgS.onload = () => { aiSwitchImg = imgS; checkDone(); };
         imgS.src = switchUri;
+      }
+      if (switchOnUri) {
+        const imgSO = new Image();
+        imgSO.onload = () => { aiSwitchOnImg = imgSO; checkDone(); };
+        imgSO.src = switchOnUri;
       }
 
       if (total === 0) finish();
@@ -4185,13 +4190,13 @@
 
       if (activeMode === 'v1_video') {
         // Video mode never raycasts these textures, so there's nothing worth blocking on.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, null, b.door_texture, b.switch_texture);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, null, b.door_texture, b.switch_texture, b.switch_on_texture);
         showGameScreen();
       } else {
         // Hold the game screen (and its first render3D()) until the real wall/ceiling/floor/
         // lantern art has decoded, so the player never sees a frame of stale textures before
         // the swap.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen, b.door_texture, b.switch_texture);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen, b.door_texture, b.switch_texture, b.switch_on_texture);
       }
     }
 
