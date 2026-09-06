@@ -63,7 +63,6 @@
     const crawlText = document.getElementById('crawlText');
     const crawlPending = document.getElementById('crawlPending');
     const btnEnterDungeon = document.getElementById('btnEnterDungeon');
-    const chkAutoEnter = document.getElementById('chkAutoEnter');
     const btnNarrateManual = document.getElementById('btnNarrateManual');
     const progHeaderText = document.getElementById('progHeaderText');
     const progHeaderIcon = document.getElementById('progHeaderIcon');
@@ -173,20 +172,6 @@
     let pendingBundle = null;
     let crawlStarted = false;
 
-    // Remembered across sessions: skip the ENTER button and drop straight into the
-    // dungeon the moment generation finishes.
-    const AUTO_ENTER_KEY = 'comfycrawler.autoEnter';
-    function loadAutoEnter() {
-      try { return localStorage.getItem(AUTO_ENTER_KEY) === '1'; } catch (e) { return false; }
-    }
-    function saveAutoEnter(on) {
-      try { localStorage.setItem(AUTO_ENTER_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
-    }
-    if (chkAutoEnter) {
-      chkAutoEnter.checked = loadAutoEnter();
-      chkAutoEnter.addEventListener('change', () => saveAutoEnter(chkAutoEnter.checked));
-    }
-
     // ---- Intro narration (Piper, pre-rendered server-side) -----------------
     // The server picks one narrator (alan or kristin) per story and ships back one WAV
     // clip per paragraph as a data URL in bundle.story.audio, in the same order as the
@@ -209,7 +194,7 @@
     let narratePauseTimer = null;
 
     function stopNarration() {
-      restoreMenuMusic();       // no-op unless narration actually ducked it
+      restoreMenuMusic();       // no-op unless narration actually faded it out
       if (narratePauseTimer) { clearTimeout(narratePauseTimer); narratePauseTimer = null; }
       if (narrateStartCheck) { clearTimeout(narrateStartCheck); narrateStartCheck = null; }
       if (btnNarrateManual) btnNarrateManual.classList.add('hidden');
@@ -287,8 +272,8 @@
       if (!n) return;
 
       stopNarration();
-      duckMenuMusic();          // narration is about to actually speak - see stopNarration
-                                 // above for the matching restore when it finishes
+      fadeOutMenuMusicForNarration();   // narration is about to actually speak - see stopNarration
+                                        // above for the matching restore when it finishes
       crawlText.classList.add('narrating');
       for (let i = 0; i < n; i++) narrateClips.push({ el: paras[i], src: story.audio[i] });
 
@@ -458,15 +443,14 @@
     // ---- Main menu music (static, generated once, NOT per-dungeon) -------------
     // sounds/menu_music.wav is a fixed short loop, unlike explore/battle which are themed
     // per playthrough - see generate_menu_music_asset in server.py. Plays from the moment
-    // the title screen is usable through the whole loading screen, ducking under the intro
+    // the title screen is usable through the whole loading screen, fading out under the intro
     // narration and stopping for good once assets are ready and the "ready" chime plays.
     const MENU_MUSIC_VOLUME = 0.4125;     // was 0.75, then lowered 45% - much quieter than dungeon music
-    const MENU_MUSIC_DUCK_VOLUME = MENU_MUSIC_VOLUME * 0.2;
     let menuMusicBuf = null;
     let menuMusicLoading = false;
     let menuMusicNode = null;      // { src, gain } while actually playing
     let menuMusicStopped = false;  // true once the ready chime has silenced it for this run
-    let menuMusicDucked = false;
+    let menuMusicFaded = false;    // true while narration has faded it out (node kept alive for restore)
 
     function _spawnMenuMusicNode(initialGain) {
       const ctx = sfxContext();
@@ -509,7 +493,7 @@
     // is what the menu loop hands off to, and it never comes back until returnToMenuMusic().
     function stopMenuMusicForLoadingComplete() {
       menuMusicStopped = true;
-      menuMusicDucked = false;
+      menuMusicFaded = false;
       if (!menuMusicNode) return;
       const ctx = sfxContext();
       const now = ctx ? ctx.currentTime : 0;
@@ -523,21 +507,23 @@
       }, 700);
     }
 
-    // Ducks under the intro narration. A no-op if narration is off (never called), if the
-    // menu music failed to load, or if the loading-complete chime already stopped it for good.
-    function duckMenuMusic() {
-      if (!menuMusicNode || menuMusicStopped || menuMusicDucked) return;
-      menuMusicDucked = true;
+    // Fades the menu music all the way out for the intro narration - the loop keeps running
+    // silently so restoreMenuMusic() can bring it back if the narration is skipped. A no-op if
+    // narration is off (never called), if the menu music failed to load, or if the
+    // loading-complete chime already stopped it for good.
+    function fadeOutMenuMusicForNarration() {
+      if (!menuMusicNode || menuMusicStopped || menuMusicFaded) return;
+      menuMusicFaded = true;
       const ctx = sfxContext();
       const now = ctx.currentTime;
       menuMusicNode.gain.gain.cancelScheduledValues(now);
       menuMusicNode.gain.gain.setValueAtTime(menuMusicNode.gain.gain.value, now);
-      menuMusicNode.gain.gain.linearRampToValueAtTime(MENU_MUSIC_DUCK_VOLUME, now + 0.6);
+      menuMusicNode.gain.gain.linearRampToValueAtTime(0, now + 1.5);
     }
 
     function restoreMenuMusic() {
-      if (!menuMusicNode || menuMusicStopped || !menuMusicDucked) return;
-      menuMusicDucked = false;
+      if (!menuMusicNode || menuMusicStopped || !menuMusicFaded) return;
+      menuMusicFaded = false;
       const ctx = sfxContext();
       const now = ctx.currentTime;
       menuMusicNode.gain.gain.cancelScheduledValues(now);
@@ -554,7 +540,7 @@
       stopScreenMusic(2.0);
       stopMenuMusicLoop();
       menuMusicStopped = false;
-      menuMusicDucked = false;
+      menuMusicFaded = false;
       if (!menuMusicBuf) { loadMenuMusic(); return; }
       menuMusicNode = _spawnMenuMusicNode(0);
       if (!menuMusicNode) return;
@@ -2682,12 +2668,15 @@
       doorOpenTexture = c.getImageData(0, 0, DOOR_SPR_W, DOOR_SPR_H);
     }
 
-    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). OFF is the plain themed fixture -
-    // the style-matched AI lever (aiSwitchImg), or a procedural plate when no art came back -
-    // mounted on the wall in its resting pose. ON is then built by redrawing THAT SAME OFF
-    // CANVAS and lighting it: the indicator lamp comes on and a green bloom spills onto the
-    // wall around the fixture. The lever itself never moves or tilts between the two, so they
-    // read as one fixture switched on rather than two different props.
+    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). Both poses are built
+    // independently from a fresh copy of the wall - NOT one derived by filtering the other -
+    // because that (a rotated, darkened copy of the ON art) is what made the old OFF read as
+    // a glitchy duplicate instead of a resting switch. OFF and ON draw the fixture in the
+    // EXACT same place, same size, same pose - a real switch on a wall doesn't relocate
+    // itself - and differ only by recolouring the handle green when thrown (a flat tint on
+    // the fixture's own pixels, not a light/bloom - an earlier version rotated the whole
+    // fixture out to the side and lit up the wall around it, which read as "the switch is
+    // gone" rather than "the switch is on").
     //
     // The fixture is deliberately small and chunky - the AI cutout is downsampled to SWITCH_SRC
     // px before being blown back up with smoothing off - so it sits in the wall at roughly
@@ -2699,93 +2688,82 @@
 
       const cx = 128;                 // fixture centre on the wall
       const baseY = 142;              // where the fixture's bottom edge sits
-      const maxW = 34, maxH = 56;     // fixture footprint (was 52x92)
+      const maxW = 34, maxH = 56;     // fixture footprint
       const SWITCH_SRC = 24;          // chunky-pixel source size for the AI cutout
       const lampX = cx, lampY = baseY + 9, lampR = 4;
+      const ON_TINT = 'rgba(74, 222, 128, 0.6)';
 
-      // ---- OFF: the themed fixture, unlit ------------------------------------------------
-      const off = document.createElement('canvas');
-      off.width = off.height = TEX_SIZE;
-      const oc = off.getContext('2d');
-      oc.imageSmoothingEnabled = false;
-      if (baseWallImageData) oc.putImageData(baseWallImageData, 0, 0);
-
-      let fw = maxW, fh = maxH;       // actual fixture size, reused for the ON bloom
+      // AI cutout, downsampled once to its own small alpha-matted canvas - both poses draw
+      // it (or a tinted copy of it) at the identical destination rect below.
+      let fw = maxW, fh = maxH, small = null, smallOn = null;
       if (haveArt) {
         const scale = Math.min(maxW / aiSwitchImg.naturalWidth, maxH / aiSwitchImg.naturalHeight, 1);
         fw = Math.max(1, Math.round(aiSwitchImg.naturalWidth * scale));
         fh = Math.max(1, Math.round(aiSwitchImg.naturalHeight * scale));
-
         const longest = Math.max(fw, fh);
         const sw = Math.max(1, Math.round(SWITCH_SRC * (fw / longest)));
         const sh = Math.max(1, Math.round(SWITCH_SRC * (fh / longest)));
-        const small = document.createElement('canvas');
+        small = document.createElement('canvas');
         small.width = sw; small.height = sh;
         const sc = small.getContext('2d');
         sc.imageSmoothingEnabled = true;
         sc.drawImage(aiSwitchImg, 0, 0, sw, sh);
 
-        oc.imageSmoothingEnabled = false;
-        oc.drawImage(small, cx - fw / 2, baseY - fh, fw, fh);
+        // Green-tinted copy for ON. Tinting a copy of the small alpha-matted cutout (rather
+        // than a rect on the full wall canvas) keeps the colour confined to the fixture's own
+        // silhouette instead of painting a green box over the wall around it.
+        smallOn = document.createElement('canvas');
+        smallOn.width = sw; smallOn.height = sh;
+        const sc2 = smallOn.getContext('2d');
+        sc2.drawImage(small, 0, 0);
+        sc2.globalCompositeOperation = 'source-atop';
+        sc2.fillStyle = ON_TINT;
+        sc2.fillRect(0, 0, sw, sh);
       } else {
-        // Procedural fallback, drawn once in its resting pose - the ON state below lights it
-        // rather than redrawing the lever somewhere else.
-        oc.fillStyle = isWin95 ? '#94a3b8' : '#27272a';
-        oc.fillRect(cx - 11, baseY - 30, 22, 30);
-        oc.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
-        oc.lineWidth = 2;
-        oc.strokeRect(cx - 11, baseY - 30, 22, 30);
-        oc.fillStyle = '#52525b';
-        oc.beginPath(); oc.arc(cx, baseY - 15, 4, 0, Math.PI * 2); oc.fill();
-        oc.strokeStyle = isWin95 ? '#b91c1c' : '#a1a1aa';
-        oc.lineWidth = 5;
-        oc.beginPath();
-        oc.moveTo(cx, baseY - 15);
-        oc.lineTo(cx - 9, baseY - 2);
-        oc.stroke();
-        oc.fillStyle = isWin95 ? '#dc2626' : '#71717a';
-        oc.beginPath(); oc.arc(cx - 9, baseY - 2, 4, 0, Math.PI * 2); oc.fill();
         fw = 22; fh = 30;
       }
 
-      // Indicator lamp on the mounting plate, dark. This is the one part that changes state,
-      // so it is drawn in the same place in both textures.
-      oc.fillStyle = isWin95 ? '#64748b' : '#3f3f46';
-      oc.beginPath(); oc.arc(lampX, lampY, lampR + 2, 0, Math.PI * 2); oc.fill();
-      oc.fillStyle = '#3f3f46';
-      oc.beginPath(); oc.arc(lampX, lampY, lampR, 0, Math.PI * 2); oc.fill();
+      // Renders one pose onto a fresh wall canvas: the fixture at its one fixed position,
+      // recoloured (AI art) or drawn in its ON colour (procedural), plus a flat-filled
+      // indicator lamp - no rotation, no glow, both states occupy identical pixels.
+      function renderPose(on) {
+        const c = document.createElement('canvas');
+        c.width = c.height = TEX_SIZE;
+        const ctx2 = c.getContext('2d');
+        ctx2.imageSmoothingEnabled = false;
+        if (baseWallImageData) ctx2.putImageData(baseWallImageData, 0, 0);
 
-      switchWallOffTexture = oc.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+        if (haveArt) {
+          ctx2.drawImage(on ? smallOn : small, cx - fw / 2, baseY - fh, fw, fh);
+        } else {
+          ctx2.fillStyle = isWin95 ? '#94a3b8' : '#27272a';
+          ctx2.fillRect(cx - 11, baseY - 34, 22, 34);
+          ctx2.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
+          ctx2.lineWidth = 2;
+          ctx2.strokeRect(cx - 11, baseY - 34, 22, 34);
 
-      // ---- ON: that same fixture, lit ----------------------------------------------------
-      const on = document.createElement('canvas');
-      on.width = on.height = TEX_SIZE;
-      const nc = on.getContext('2d');
-      nc.imageSmoothingEnabled = false;
-      nc.drawImage(off, 0, 0);                                  // the OFF switch, verbatim
+          const pivotY = baseY - 17;
+          ctx2.strokeStyle = on ? '#22c55e' : (isWin95 ? '#b91c1c' : '#a1a1aa');
+          ctx2.lineWidth = 5;
+          ctx2.beginPath(); ctx2.moveTo(cx, pivotY); ctx2.lineTo(cx - 9, pivotY - 13); ctx2.stroke();
+          ctx2.fillStyle = on ? '#4ade80' : (isWin95 ? '#dc2626' : '#71717a');
+          ctx2.beginPath(); ctx2.arc(cx - 9, pivotY - 13, 4, 0, Math.PI * 2); ctx2.fill();
 
-      nc.fillStyle = '#bbf7d0';
-      nc.beginPath(); nc.arc(lampX, lampY, lampR, 0, Math.PI * 2); nc.fill();
-      nc.fillStyle = '#22c55e';
-      nc.beginPath(); nc.arc(lampX, lampY, lampR - 1.5, 0, Math.PI * 2); nc.fill();
+          ctx2.fillStyle = '#52525b';
+          ctx2.beginPath(); ctx2.arc(cx, pivotY, 4, 0, Math.PI * 2); ctx2.fill();
+        }
 
-      nc.globalCompositeOperation = 'lighter';
-      const lit = nc.createRadialGradient(cx, baseY - fh * 0.45, 2,
-                                          cx, baseY - fh * 0.45, Math.max(fw, fh) * 1.6);
-      lit.addColorStop(0, 'rgba(74, 222, 128, 0.5)');
-      lit.addColorStop(0.45, 'rgba(34, 197, 94, 0.2)');
-      lit.addColorStop(1, 'rgba(22, 163, 74, 0)');
-      nc.fillStyle = lit;
-      nc.fillRect(cx - fw * 2, baseY - fh * 2.2, fw * 4, fh * 3.2);
+        // Indicator lamp - flat colour swap, no radial glow.
+        ctx2.fillStyle = isWin95 ? '#64748b' : '#3f3f46';
+        ctx2.beginPath(); ctx2.arc(lampX, lampY, lampR + 2, 0, Math.PI * 2); ctx2.fill();
+        ctx2.fillStyle = on ? '#22c55e' : '#3f3f46';
+        ctx2.beginPath(); ctx2.arc(lampX, lampY, lampR, 0, Math.PI * 2); ctx2.fill();
 
-      const lampGlow = nc.createRadialGradient(lampX, lampY, 1, lampX, lampY, 24);
-      lampGlow.addColorStop(0, 'rgba(134, 239, 172, 0.7)');
-      lampGlow.addColorStop(1, 'rgba(34, 197, 94, 0)');
-      nc.fillStyle = lampGlow;
-      nc.fillRect(lampX - 24, lampY - 24, 48, 48);
-      nc.globalCompositeOperation = 'source-over';
+        return ctx2.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      }
 
-      switchWallOnTexture = nc.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      switchWallOffTexture = renderPose(false);
+      switchWallOnTexture = renderPose(true);
     }
 
     // ==========================================
@@ -2986,7 +2964,18 @@
 
         MAP[d.y][d.x] = 3;
         MAP[wall.y][wall.x] = 4;
-        doorList.push({ x: d.x, y: d.y, index: k, opened: false });
+
+        // Which way the corridor runs through this tile - path[doorIdx[k]-1] and +1 are
+        // exactly the two cells this connector joins. Same y (differ in x): an east-west
+        // corridor, so the door's OWN plane (what you'd see face-on) spans north-south -
+        // axis 'y'. Same x: a north-south corridor, plane spans east-west - axis 'x'. Used
+        // by the open-gate render pass to draw the doorway as a properly oriented segment
+        // instead of a camera-facing billboard, so it foreshortens correctly (and looks
+        // edge-on, not full-width) when glimpsed from a crossing passage.
+        const prevC = path[doorIdx[k] - 1], nextC = path[doorIdx[k] + 1];
+        const axis = (prevC.y === nextC.y) ? 'y' : 'x';
+
+        doorList.push({ x: d.x, y: d.y, index: k, opened: false, axis });
         switchList.push({
           x: wall.x, y: wall.y, cellX: best.x, cellY: best.y, doorIndex: k, on: false
         });
@@ -3306,8 +3295,9 @@
         const sideShade = side === 1 ? 0.82 : 1.0;
         const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
         const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
-        const switchGlow = (hit === 5) ? 0.22 : 0;
-        const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow + switchGlow);
+        // No switchGlow term here - an ON switch is shaded like any other wall tile now; the
+        // tinted handle in its texture is the only difference from OFF, per buildSwitchWallTextures.
+        const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
 
         // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
         // unchanged), but are now only WALL_HEIGHT tall - so squeezing the whole texture in
@@ -3381,55 +3371,56 @@
         }
       }
 
-      // Open gates (MAP tile 6). Billboards rather than wall tiles, because the tile has to
-      // stay walkable and see-through. A door only ever sits in a one-tile connector with solid
-      // walls on both flanks, so it is only ever visible from along its own corridor - which
-      // makes a camera-facing quad indistinguishable from a fixed doorway here. Sorted far ->
-      // near and z-tested per stripe like the sign above; alpha fades out as the camera reaches
-      // the threshold so stepping through does not smear the leaf across the whole view.
+      // Open gates (MAP tile 6): a fixed planar segment across the doorway, NOT a camera-
+      // facing billboard - a billboard always shows its full face no matter the viewing
+      // angle, which looked wrong (rotated 90deg from how a real doorway would read) when
+      // glimpsed from a crossing passage instead of straight down the door's own corridor.
+      // Each screen column intersects the ray it already cast against the door's world-space
+      // segment directly - same per-column exactness as the DDA wall pass above, so this
+      // foreshortens correctly (full width head-on, edge-on from the side) with no fisheye
+      // distortion and no affine texture warp to approximate away.
       if (doorOpenTexture && doorList.length) {
-        const gates = [];
+        const gData = doorOpenTexture.data;
+        const NEAR = 0.2;
+
         for (const d of doorList) {
           if (!d.opened) continue;
-          const sx = (d.x + 0.5) - posX, sy = (d.y + 0.5) - posY;
-          gates.push({ sx, sy, d2: sx * sx + sy * sy });
-        }
-        gates.sort((a, b) => b.d2 - a.d2);
+          // Segment endpoints from the axis computed in placeGatesAndSwitches: 'x' spans
+          // east-west across the tile at its vertical midline, 'y' spans north-south at its
+          // horizontal midline.
+          const p1x = d.axis === 'x' ? d.x : d.x + 0.5;
+          const p1y = d.axis === 'x' ? d.y + 0.5 : d.y;
+          const ex = d.axis === 'x' ? 1 : 0;
+          const ey = d.axis === 'x' ? 0 : 1;
+          const Ax = p1x - posX, Ay = p1y - posY;
 
-        const gData = doorOpenTexture.data;
-        const invDet = 1.0 / (planeX * dirY - dirX * planeY);
-        const halfCell = screenWidth / (4 * Math.tan(halfFov));   // half a cell wide at dist 1
+          for (let x = 0; x < screenWidth; x++) {
+            const cameraX = 2 * x / screenWidth - 1;
+            const rdx = dirX + planeX * cameraX;
+            const rdy = dirY + planeY * cameraX;
 
-        for (const g of gates) {
-          const transformX = invDet * (dirY * g.sx - dirX * g.sy);
-          const transformY = invDet * (-planeY * g.sx + planeX * g.sy);
-          if (transformY < 0.35) continue;
-          const fade = Math.min(1, (transformY - 0.35) / 0.5);
-          if (fade <= 0.02) continue;
+            // Ray (posX,posY)+t*(rdx,rdy) meets segment p1+s*(ex,ey): solve the 2x2 system.
+            const det = ex * rdy - ey * rdx;
+            if (Math.abs(det) < 1e-6) continue;             // ray runs parallel to the door
+            const t = (-Ax * ey + ex * Ay) / det;
+            if (t <= NEAR || t >= zBuffer[x]) continue;     // behind camera, or wall-occluded
+            const s = (rdx * Ay - rdy * Ax) / det;
+            if (s < 0 || s > 1) continue;                   // ray misses the doorway's extent
 
-          const spriteScreenX = (screenWidth / 2) * (1 + transformX / transformY);
-          const spriteH = (screenHeight * WALL_HEIGHT) / transformY;   // same as a wall column
-          const spriteW = (halfCell * 2) / transformY;
-          const topY = screenHeight / 2 - spriteH / 2;
-          const leftX = spriteScreenX - spriteW / 2;
+            const texX = Math.min(DOOR_SPR_W - 1, Math.max(0, Math.floor(s * DOOR_SPR_W)));
+            const spriteH = (screenHeight * WALL_HEIGHT) / t;   // same formula as a wall column
+            const topY = screenHeight / 2 - spriteH / 2;
+            const startY = Math.max(0, Math.floor(topY));
+            const endY = Math.min(screenHeight - 1, Math.ceil(topY + spriteH));
+            const shade = 1.0 / (1.0 + t * 0.38);
 
-          const startX = Math.max(0, Math.floor(leftX));
-          const endX = Math.min(screenWidth - 1, Math.ceil(leftX + spriteW));
-          const startY = Math.max(0, Math.floor(topY));
-          const endY = Math.min(screenHeight - 1, Math.ceil(topY + spriteH));
-          const shade = 1.0 / (1.0 + transformY * 0.38);
-
-          for (let stripe = startX; stripe <= endX; stripe++) {
-            if (transformY >= zBuffer[stripe]) continue;
-            const texX = Math.floor(((stripe - leftX) * DOOR_SPR_W) / spriteW);
-            if (texX < 0 || texX >= DOOR_SPR_W) continue;
             for (let y = startY; y <= endY; y++) {
               const texY = Math.floor(((y - topY) * DOOR_SPR_H) / spriteH);
               if (texY < 0 || texY >= DOOR_SPR_H) continue;
               const sIdx = (texY * DOOR_SPR_W + texX) * 4;
-              const alpha = (gData[sIdx + 3] / 255) * fade;
+              const alpha = gData[sIdx + 3] / 255;
               if (alpha <= 0.05) continue;
-              const pIdx = (y * screenWidth + stripe) * 4;
+              const pIdx = (y * screenWidth + x) * 4;
               buffer[pIdx]     = Math.min(255, buffer[pIdx]     * (1 - alpha) + gData[sIdx]     * shade * alpha);
               buffer[pIdx + 1] = Math.min(255, buffer[pIdx + 1] * (1 - alpha) + gData[sIdx + 1] * shade * alpha);
               buffer[pIdx + 2] = Math.min(255, buffer[pIdx + 2] * (1 - alpha) + gData[sIdx + 2] * shade * alpha);
@@ -3444,28 +3435,17 @@
       drawCombatEnemy(ctx, screenWidth, screenHeight);
       drawOverTheShoulderPlayer(ctx, screenWidth, screenHeight);
       drawCombatEffects(ctx);
-      drawInteractHint(ctx);
     }
 
-    // Small prompt at the bottom of the viewport when the player faces a door or switch.
-    function drawInteractHint(c) {
-      if (combatState.inBattle || player.isAnimating) return;
-      const vec = DIR_VECS[player.dirIndex];
-      const row = MAP[player.gridY + vec.dy];
-      const t = row ? row[player.gridX + vec.dx] : undefined;
-      if (t !== 3 && t !== 4 && t !== 5) return;
-      const label = t === 3 ? 'LOCKED' : (t === 5 ? 'THROWN' : 'E : USE');
-      c.save();
-      c.font = 'bold 11px "Courier New", monospace';
-      c.textAlign = 'center';
-      c.textBaseline = 'middle';
-      const w = c.measureText(label).width + 14;
-      c.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      c.fillRect(screenWidth / 2 - w / 2, screenHeight - 22, w, 16);
-      c.fillStyle = t === 3 ? '#fca5a5' : '#fde047';
-      c.fillText(label, screenWidth / 2, screenHeight - 13);
-      c.restore();
-    }
+    // render3D used to end with drawInteractHint(ctx): a small "E : USE" / "LOCKED" / "THROWN"
+    // label at the bottom of the screen whenever the player faced a door or switch tile.
+    // Removed - it told the player a wall segment was interactive, and for a switch whether
+    // it was already thrown, before they'd actually spotted the fixture themselves, which
+    // undercut the same puzzle the switch-placement distance and the minimap change further
+    // up exist to protect. Interacting is still fully discoverable from the door and switch
+    // textures alone; it's just not spelled out in text anymore. interact() below dropped its
+    // floating "IT'S LOCKED" / "ALREADY THROWN" / "THE GATE GRINDS OPEN" text for the same
+    // reason, keeping only the sound cues and the fixtures' own visual state change.
 
     // ==========================================
     // MINIMAP & NAVIGATION (FOG OF WAR)
@@ -3693,7 +3673,7 @@
       if (t === 4 || t === 5) {
         const sw = switchList.find(s => s.x === fx && s.y === fy);
         if (!sw) return;
-        if (sw.on) { showFloatingCombatText('ALREADY THROWN', 160, 100, '#94a3b8'); return; }
+        if (sw.on) return;                  // already thrown - the lever's own pose says so
         sw.on = true;
         MAP[fy][fx] = 5;
         playSfx('button', { vary: 0.06 });
@@ -3703,14 +3683,12 @@
           MAP[door.y][door.x] = 6;          // opened gate: walkable, still drawn as a doorway
           passagesList.push({ x: door.x, y: door.y });
           playSfx('end', { vary: 0.04, gain: 0.6 });
-          showFloatingCombatText('THE GATE GRINDS OPEN', 160, 92, '#fde047');
         }
         return;
       }
 
       if (t === 3) {
-        showFloatingCombatText("IT'S LOCKED", 160, 108, '#f87171');
-        playSfx('bump');
+        playSfx('bump');                    // still shut - the door's own texture shows that
       }
     }
 
@@ -4235,12 +4213,6 @@
       if (progHeaderIcon) progHeaderIcon.textContent = '\u2705';
       progStatusText.textContent = 'Done.';
       progSubText.style.display = 'none';
-
-      if (chkAutoEnter && chkAutoEnter.checked) {
-        const b = pendingBundle;
-        pendingBundle = null;
-        enterDungeon(b);
-      }
     }
 
     if (btnEnterDungeon) {
