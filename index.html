@@ -231,7 +231,9 @@
       width: fit-content !important;
       max-width: 96vw !important;
       height: fit-content !important;
-      max-height: 94vh !important;
+      /* The window may use everything body's 12px padding leaves it; a tighter cap here
+         just makes the bottom rows overflow the frame instead of shrinking the viewport. */
+      max-height: calc(100vh - 24px) !important;
       margin: auto !important;
       display: flex !important;
       flex-direction: column !important;
@@ -250,7 +252,10 @@
       gap: 4px !important;
     }
     .viewport-frame {
-      height: clamp(260px, calc(100vh - 160px), calc((100vw - 270px) * 0.75)) !important;
+      /* 190px = body padding + title bar + panel padding + the location bar + the battle
+         action bar. The battle bar has to be in that budget even while it is hidden, or
+         entering battle pushes the last two rows out through the bottom of the window. */
+      height: clamp(260px, calc(100vh - 190px), calc((100vw - 270px) * 0.75)) !important;
       aspect-ratio: 4 / 3 !important;
       position: relative !important;
       overflow: hidden !important;

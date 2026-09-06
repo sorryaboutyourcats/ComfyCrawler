@@ -2689,14 +2689,39 @@
       const openW = DOOR_SPR_W - 2 * post;
       const openH = DOOR_SPR_H - lintel;               // opening runs down to the floor
 
-      // The closed door's visible band, with the opening punched out of it -> jamb ring, no leaf.
+      // Punching a plain rectangle here left the closed door's own arched top (whatever
+      // curve the generated art actually drew) hanging as a solid chunk above a flat-topped
+      // hole - a doorway that reads as "the wall opened," not as a door-shaped cutout. So the
+      // hole itself is an arch: straight jambs up to the springline, then a rounded top - a
+      // reasonable universal doorway silhouette given the closed art's real curve isn't known
+      // (it's a plain opaque generated image, no alpha to trace).
+      const archH = Math.min(openH * 0.38, openW * 0.55);
+      const springY = lintel + archH;
+      const archCx = post + openW / 2;
+      function archPath() {
+        c.beginPath();
+        c.moveTo(post, lintel + openH);
+        c.lineTo(post, springY);
+        c.ellipse(archCx, springY, openW / 2, archH, 0, Math.PI, 2 * Math.PI, false);
+        c.lineTo(post + openW, lintel + openH);
+        c.closePath();
+      }
+
+      // The closed door's visible band, with the arch-shaped opening punched out of it ->
+      // jamb ring, no leaf.
       c.drawImage(src, 0, bandY, TEX_SIZE, bandH, 0, 0, DOOR_SPR_W, DOOR_SPR_H);
+      archPath();
       c.globalCompositeOperation = 'destination-out';
-      c.fillRect(post, lintel, openW, openH);
+      c.fill();
       c.globalCompositeOperation = 'source-over';
 
-      // Dark reveals down the inside of each post + a shadow under the lintel, so the opening
-      // reads as a threshold with depth rather than a hole cut flat into the wall.
+      // Dark reveals down the inside of each post + a shadow under the arch, so the opening
+      // reads as a threshold with depth rather than a hole cut flat into the wall. Clipped to
+      // the same arch path so the shading can't paint into the solid spandrels above the curve.
+      c.save();
+      archPath();
+      c.clip();
+
       const reveal = c.createLinearGradient(post, 0, post + openW, 0);
       reveal.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
       reveal.addColorStop(0.13, 'rgba(0, 0, 0, 0)');
@@ -2705,11 +2730,13 @@
       c.fillStyle = reveal;
       c.fillRect(post, lintel, openW, openH);
 
-      const head = c.createLinearGradient(0, lintel, 0, lintel + openH * 0.22);
+      const head = c.createLinearGradient(0, lintel, 0, springY);
       head.addColorStop(0, 'rgba(0, 0, 0, 0.5)');
       head.addColorStop(1, 'rgba(0, 0, 0, 0)');
       c.fillStyle = head;
-      c.fillRect(post, lintel, openW, openH * 0.22);
+      c.fillRect(post, lintel, openW, archH);
+
+      c.restore();
 
       doorOpenTexture = c.getImageData(0, 0, DOOR_SPR_W, DOOR_SPR_H);
     }
@@ -2818,6 +2845,23 @@
     function _tileKey(x, y) { return x + ',' + y; }
 
     const _ORTHO = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+    const _NEIGHBORS8 = _ORTHO.concat([
+      { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }, { dx: 1, dy: 1 }
+    ]);
+
+    // Used by the lantern pass below: true if (x,y) touches a still-closed door (3) or a
+    // switch (4/5) tile, including diagonally - a torch crowding the archway looks cluttered,
+    // and worse, one beside a switch lights up a fixture placeGatesAndSwitches specifically
+    // put off the beaten path to be hard to spot.
+    function _nearGateOrSwitch(x, y) {
+      for (const d of _NEIGHBORS8) {
+        const nx = x + d.dx, ny = y + d.dy;
+        if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+        const v = MAP[ny][nx];
+        if (v === 3 || v === 4 || v === 5) return true;
+      }
+      return false;
+    }
 
     // Shortest path over MAP===0 tiles. In a perfect (spanning-tree) maze there is exactly
     // one simple path, so this IS the start->exit route. Returns [{x,y}, ...] or null.
@@ -3119,12 +3163,12 @@
       // excluded from the walkable-tile count).
       placeGatesAndSwitches();
 
-      // Add Lanterns to Walls
+      // Add Lanterns to Walls - never beside a door or switch (see _nearGateOrSwitch above).
       for (let y = 1; y < MAP_HEIGHT - 1; y++) {
         for (let x = 1; x < MAP_WIDTH - 1; x++) {
           if (MAP[y][x] === 1) {
             const hasAdjacentFloor = (MAP[y-1][x] === 0 || MAP[y+1][x] === 0 || MAP[y][x-1] === 0 || MAP[y][x+1] === 0);
-            if (hasAdjacentFloor && (x + y) % 3 === 0) {
+            if (hasAdjacentFloor && (x + y) % 3 === 0 && !_nearGateOrSwitch(x, y)) {
               MAP[y][x] = 2;
               lanternList.push({ x, y });
             }
