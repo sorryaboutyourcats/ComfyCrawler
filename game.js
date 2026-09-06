@@ -1044,7 +1044,8 @@
       e.stateTimer = 0;
       e.attackTimer = cfg.cadence;
       e.x = 0;
-      e.vx = cfg.slow ? 0.5 : 1.5;
+      // Boss only - the walker recomputes vx every frame from where the player is standing.
+      e.vx = cfg.slow ? 0.5 : 0;
       e.altitude = cfg.hover;
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
@@ -1472,13 +1473,27 @@
             }
           }
         } else {
-          // Walker & boss: strafe along the ground. The boss barely moves and hits like a truck.
-          const range = cfg.slow ? 24 : 58;
-          const spd = cfg.slow ? 0.5 : 1.5;
+          // Walker & boss: two different ways of holding the ground. The walker stalks - it
+          // creeps towards wherever the player is standing, and turns tail once it is badly
+          // hurt. The boss barely moves and hits like a truck, picking a fresh direction to
+          // lumber in after each haymaker.
+          // The walker's crawl is deliberately far slower than the player's 3.8px/frame strafe,
+          // so the 44px dodge window in landStrike stays winnable - the pressure is that
+          // standing still lets it close the gap.
+          const range = cfg.slow ? 24 : 85;
+          const spd = cfg.slow ? 0.5 : 0.9;
           if (e.state !== 'attack' && e.state !== 'telegraph') {
+            if (!cfg.slow) {
+              const gap = combatState.playerX - e.x;
+              const toward = gap < 0 ? -1 : 1;
+              // Below 30% HP the walker loses its nerve and backs away instead of closing.
+              e.vx = (e.hp <= e.maxHp * 0.3 ? -toward : toward) * spd;
+              // Don't jitter once it is already on top of the player.
+              if (Math.abs(gap) < 6 && e.hp > e.maxHp * 0.3) e.vx = 0;
+            }
             e.x += e.vx;
-            if (e.x > range) { e.x = range; e.vx = -spd; }
-            else if (e.x < -range) { e.x = -range; e.vx = spd; }
+            if (e.x > range) { e.x = range; e.vx = -Math.abs(e.vx); }
+            else if (e.x < -range) { e.x = -range; e.vx = Math.abs(e.vx); }
           }
 
           if (e.state === 'hurt' || e.state === 'attack') {
@@ -1502,6 +1517,9 @@
               e.state = 'attack';
               e.stateTimer = cfg.slow ? 20 : 14;
               e.blockTimer = 0;
+              // Coin-flip which way the boss lumbers off after the swing, so the next
+              // wind-up doesn't always come from the same side.
+              if (cfg.slow) e.vx = (Math.random() < 0.5 ? -spd : spd);
               landStrike(cfg.dmg, "DODGED! (MISS)", "🛡️ PARRY BLOCKED!", cfg.slow ? "CRUSH!" : "HP HIT!");
             }
           }
@@ -3526,13 +3544,10 @@
           if (mv === 3) {
             c.fillStyle = '#b45309';
             c.fillRect(wx + 2, wy + 2, tileSize - 4, tileSize - 4);
-          } else if (mv === 4 || mv === 5) {
-            // Small dot: a switch is a fixture on a wall tile, not the whole tile.
-            c.fillStyle = mv === 5 ? '#22c55e' : '#f97316';
-            c.beginPath();
-            c.arc(wx + tileSize / 2, wy + tileSize / 2, Math.max(1.5, tileSize * 0.13), 0, Math.PI * 2);
-            c.fill();
           }
+          // Switch tiles (4/5) get no marker - they render as a plain wall, same as any other.
+          // The minimap would otherwise hand the player the solution to a puzzle whose whole
+          // point is that the lever is placed away from its gate and has to be found in 3D.
         });
       });
 
