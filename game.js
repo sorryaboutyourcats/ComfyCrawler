@@ -11,7 +11,7 @@
     const defeatModal = document.getElementById('defeatModal');
     const defeatText = document.getElementById('defeatText');
     const deadMovesCount = document.getElementById('deadMovesCount');
-    const btnRiseAgain = document.getElementById('btnRiseAgain');
+    const btnRestartDungeon = document.getElementById('btnRestartDungeon');
     const btnDeadNewDungeon = document.getElementById('btnDeadNewDungeon');
 
     const modeSelect = document.getElementById('modeSelect');
@@ -21,9 +21,19 @@
     const krea2PortraitResInput = document.getElementById('krea2PortraitResInput');
     const soundModeRow = document.getElementById('soundModeRow');
     const soundModeSelect = document.getElementById('soundModeSelect');
-    const gridCountInput = document.getElementById('gridCountInput');
-    const gridCountSlider = document.getElementById('gridCountSlider');
+    const difficultyRow = document.getElementById('difficultyRow');
     const gridDesc = document.getElementById('gridDesc');
+
+    // Maze size is a three-way difficulty pick, not a free slider - one knob with three
+    // meanings instead of a number nobody knows how to read. 111 is the new ceiling
+    // (generateAuthentic3DMaze used to clamp at 100).
+    const DIFFICULTIES = {
+      easy:   { grids: 33,  desc: 'Easy: 33 corridors - a short labyrinth with a nearby Exit.' },
+      medium: { grids: 66,  desc: 'Medium: 66 corridors with branching paths, lanterns and a distant Exit.' },
+      hard:   { grids: 111, desc: 'Hard: 111 corridors - a sprawling maze with a long, well-gated route to the Exit.' }
+    };
+    const MAX_GRIDS = 111;
+    let selectedDifficulty = 'medium';
     const wallPromptInput = document.getElementById('wallPromptInput');
     const playerPromptInput = document.getElementById('playerPromptInput');
     const playerFileInput = document.getElementById('playerFileInput');
@@ -69,6 +79,7 @@
     const btnDown = document.getElementById('btnDown');
     const btnLeft = document.getElementById('btnLeft');
     const btnRight = document.getElementById('btnRight');
+    const btnAction = document.getElementById('btnAction');
     const btnMaximize = document.getElementById('btnMaximize');
     const btnClose = document.getElementById('btnClose');
 
@@ -119,6 +130,17 @@
     // AI-generated wall fixture (torch/lantern/lamp) matted onto wallLanternTexture in
     // buildLanternWallFromBase. Null falls back to the procedural shapes drawn there.
     let aiLanternImg = null;
+
+    // Door / switch textures - built the same way as wallLanternTexture (a full-cell wall
+    // texture, selected in render3D's wall dispatch by MAP tile value: 3=door, 4=switch OFF,
+    // 5=switch ON). The aiDoorImg / aiSwitchImg are the style-matched cutouts the builders
+    // composite in; null falls back to procedural shapes. See buildDoorTexture /
+    // buildSwitchWallTextures.
+    let doorTexture = null;
+    let switchWallOffTexture = null;
+    let switchWallOnTexture = null;
+    let aiDoorImg = null;
+    let aiSwitchImg = null;
 
     let playerSpriteImg = null;
     let playerFaceImg = null;
@@ -420,7 +442,7 @@
     // per playthrough - see generate_menu_music_asset in server.py. Plays from the moment
     // the title screen is usable through the whole loading screen, ducking under the intro
     // narration and stopping for good once assets are ready and the "ready" chime plays.
-    const MENU_MUSIC_VOLUME = 0.75;        // 25% quieter than the dungeon music's full gain
+    const MENU_MUSIC_VOLUME = 0.4125;     // was 0.75, then lowered 45% - much quieter than dungeon music
     const MENU_MUSIC_DUCK_VOLUME = MENU_MUSIC_VOLUME * 0.2;
     let menuMusicBuf = null;
     let menuMusicLoading = false;
@@ -629,6 +651,13 @@
     let visitedTiles = new Set();
     let passagesList = [];
     let lanternList = [];
+    // Locked gates on the single start->exit path, and the wall switches that open them.
+    // doorList:   [{ x, y, index, opened }]  - x,y is a former connector tile now set to MAP 3
+    // switchList: [{ x, y, cellX, cellY, doorIndex, on }] - x,y is a wall tile set to MAP 4/5,
+    //             cellX,cellY the floor tile the player stands on to face it.
+    // Built by placeGatesAndSwitches() during maze generation; guaranteed solvable.
+    let doorList = [];
+    let switchList = [];
     let exitRoom = { x: 5, y: 5 };
     let startRoom = { x: 1, y: 1 };
     let zBuffer = new Float64Array(screenWidth);
@@ -637,6 +666,12 @@
     let currentThemeName = "Windows 95";
     let totalMoves = 0;
     let queuedAction = null;
+
+    // The dungeon exactly as the player entered it - MAP tiles, the door/switch latches, the
+    // walkable-tile list and the spawn pose, plus the asset bundle so its music can restart.
+    // Captured once by enterDungeon(); restartDungeon() rolls the whole run back to it from the
+    // death screen without regenerating anything.
+    let dungeonSnapshot = null;
 
     const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
     const DIR_VECS = [
@@ -702,18 +737,20 @@
 
     btnPlayAgain.addEventListener('click', openSetupScreen);
 
-    function updateGridText(val) {
-      const v = Math.max(10, Math.min(100, parseInt(val) || 25));
-      gridCountInput.value = v;
-      gridCountSlider.value = v;
-      if (v <= 15) gridDesc.textContent = `Quick 3DMaze: ${v} grid corridors with glowing lanterns and Exit.`;
-      else if (v <= 35) gridDesc.textContent = `Standard 3DMaze Labyrinth: ${v} corridors with branching paths and lanterns.`;
-      else if (v <= 70) gridDesc.textContent = `Large 3DMaze Labyrinth: ${v} complex winding passages with distant Exit.`;
-      else gridDesc.textContent = `Epic 3DMaze Challenge: ${v} massive interconnected passages!`;
+    function setDifficulty(id) {
+      if (!DIFFICULTIES[id]) id = 'medium';
+      selectedDifficulty = id;
+      gridDesc.textContent = DIFFICULTIES[id].desc;
+      difficultyRow.querySelectorAll('.difficulty-btn').forEach((btn) => {
+        btn.classList.toggle('is-selected', btn.dataset.difficulty === id);
+      });
     }
 
-    gridCountInput.addEventListener('input', (e) => updateGridText(e.target.value));
-    gridCountSlider.addEventListener('input', (e) => updateGridText(e.target.value));
+    difficultyRow.addEventListener('click', (e) => {
+      const btn = e.target.closest('.difficulty-btn');
+      if (btn) setDifficulty(btn.dataset.difficulty);
+    });
+    setDifficulty(selectedDifficulty);
 
     btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
@@ -1037,27 +1074,51 @@
       setTimeout(() => { if (defeatModal) defeatModal.classList.remove('hidden'); }, 700);
     }
 
-    // Second wind: same dungeon, same foe, full bars. Cheaper than making the player sit
-    // through another two-minute generation just because they lost a fight.
-    function revivePlayer() {
-      combatState.dead = false;
+    // Death-screen "Restart Dungeon": roll the whole run back to the instant the player entered
+    // - same maze, same gates (re-locked), same spawn - with bars refilled, the step counter
+    // zeroed and the dungeon's music restarted from the top. No regeneration, so it's instant.
+    // Falls back to the setup screen if there's somehow no snapshot to restore.
+    function restartDungeon() {
+      if (!dungeonSnapshot) { openSetupScreen(); return; }
+
       if (defeatModal) defeatModal.classList.add('hidden');
-      if (combatState.inBattle) toggleBattleMode(false);
-      releaseHeldKeys();
-      combatState.playerHp = combatState.playerMaxHp;
-      combatState.playerStm = combatState.playerMaxStm;
-      combatState.playerX = 0;
-      combatState.vx = 0;
-      combatState.attackFrame = 0;
-      combatState.hurtFrame = 0;
-      combatState.faceState = 'idle';
-      combatState.faceTimer = 0;
-      combatState.shieldProgress = 0;
-      combatState.combatEffects.length = 0;
-      combatState.enemy.hp = combatState.enemy.maxHp;
+      if (victoryModal) victoryModal.classList.add('hidden');
+
+      // Maze back to its start-of-run shape: closed doors (MAP 3), un-thrown switches (MAP 4),
+      // and the walkable-tile list without any tiles a since-opened door had added.
+      MAP = dungeonSnapshot.map.map(row => row.slice());
+      passagesList = dungeonSnapshot.passages.map(p => ({ x: p.x, y: p.y }));
+      doorList = dungeonSnapshot.doors.map(d => ({ ...d }));
+      switchList = dungeonSnapshot.switches.map(s => ({ ...s }));
+
+      // Spawn pose (same object - other code closes over `player`).
+      Object.assign(player, dungeonSnapshot.player);
+      player.isAnimating = false;
+
+      // Exploration progress.
+      visitedTiles.clear();
+      visitedTiles.add(`${player.gridX},${player.gridY}`);
+      totalMoves = 0;
+      queuedAction = null;
+      if (mapProgressBadge) {
+        mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
+      }
+
+      // Combat: the same full reset a brand new dungeon gets - full HP/stamina, fresh foe roll,
+      // battle chrome cleared, held keys released, `dead` flag lifted.
+      resetCombatForNewDungeon();
+
+      // Music from the top: loadMusicBank tears down the running explore/battle loops and
+      // starts them fresh. playSfx('start') is the same sting enterDungeon plays on entry.
+      loadMusicBank(dungeonSnapshot.bundle && dungeonSnapshot.bundle.music);
+      playSfx('start', { vary: 0 });
+
+      render3D();
+      drawMinimap();
+      updateHUD();
     }
 
-    if (btnRiseAgain) btnRiseAgain.addEventListener('click', revivePlayer);
+    if (btnRestartDungeon) btnRestartDungeon.addEventListener('click', restartDungeon);
     if (btnDeadNewDungeon) btnDeadNewDungeon.addEventListener('click', openSetupScreen);
 
     // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
@@ -1075,6 +1136,8 @@
       combatState.vx = 0;
       combatState.attackFrame = 0;
       combatState.hurtFrame = 0;
+      combatState.faceState = 'idle';   // else a death-frame face lingers ~16s into the next run
+      combatState.faceTimer = 0;
       combatState.shieldProgress = 0;
       combatState.combatEffects.length = 0;
       combatState.dead = false;
@@ -1103,11 +1166,11 @@
     function combatAttack() {
       if (combatState.dead) return;
       if (!combatState.inBattle || combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
-      if (combatState.playerStm < 15) {
+      if (combatState.playerStm < 30) {
         showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
         return;
       }
-      combatState.playerStm = Math.max(0, combatState.playerStm - 15);
+      combatState.playerStm = Math.max(0, combatState.playerStm - 30);
       // The swing, on the windup. The impact sound is separate, on frame 7 where the hit
       // actually resolves.
       playSfx('attack');
@@ -2196,6 +2259,8 @@
 
       buildLanternWallFromBase(wallTexture, "Windows 95");
       buildDynamicExitSignTexture("Windows 95", wallTexture);
+      buildDoorTexture(wallTexture, "Windows 95");
+      buildSwitchWallTextures(wallTexture, "Windows 95");
     }
 
     function buildLanternWallFromBase(baseWallImageData, styleName = "Windows 95") {
@@ -2345,11 +2410,370 @@
       exitSignTexture = c.getImageData(0, 0, 256, 140);
     }
 
+    // Full-cell wall texture for a closed door (MAP tile 3). Uses the style-matched AI slab
+    // (aiDoorImg) when it decoded, otherwise paints a procedural banded slab over the wall.
+    function buildDoorTexture(baseWallImageData, styleName = "Windows 95") {
+      if (aiDoorImg && aiDoorImg.complete && aiDoorImg.naturalWidth > 0) {
+        doorTexture = imageToTexture(aiDoorImg);
+        return;
+      }
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = TEX_SIZE;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      if (baseWallImageData) c.putImageData(baseWallImageData, 0, 0);
+      else { c.fillStyle = '#3f3f46'; c.fillRect(0, 0, TEX_SIZE, TEX_SIZE); }
+
+      const isWin95 = styleName.toLowerCase().includes('windows');
+      const S = TEX_SIZE;
+      const m = 18;                                   // stone jamb margin
+
+      // recessed doorway
+      c.fillStyle = isWin95 ? '#6b7280' : '#1f2937';
+      c.fillRect(m, m, S - 2 * m, S - 2 * m);
+
+      // planks
+      const px = m + 8, pw = S - 2 * m - 16, planks = 4;
+      const plankW = pw / planks;
+      for (let i = 0; i < planks; i++) {
+        c.fillStyle = isWin95
+          ? (i % 2 ? '#9ca3af' : '#7d8590')
+          : (i % 2 ? '#5b4632' : '#4a3826');
+        c.fillRect(px + i * plankW, m + 8, plankW - 2, S - 2 * m - 16);
+      }
+
+      // iron bands
+      c.fillStyle = isWin95 ? '#334155' : '#27272a';
+      c.fillRect(m + 4, m + 30, S - 2 * m - 8, 14);
+      c.fillRect(m + 4, S - m - 44, S - 2 * m - 8, 14);
+
+      // ring handle
+      c.strokeStyle = isWin95 ? '#1e293b' : '#18181b';
+      c.lineWidth = 7;
+      c.beginPath(); c.arc(S / 2 + 34, S / 2, 20, 0, Math.PI * 2); c.stroke();
+      // keyhole plate
+      c.fillStyle = isWin95 ? '#1e293b' : '#18181b';
+      c.fillRect(S / 2 + 24, S / 2 + 24, 16, 22);
+      c.fillStyle = isWin95 ? '#0f172a' : '#000000';
+      c.beginPath(); c.arc(S / 2 + 32, S / 2 + 31, 4, 0, Math.PI * 2); c.fill();
+      c.fillRect(S / 2 + 31, S / 2 + 31, 3, 10);
+
+      // frame outline
+      c.strokeStyle = isWin95 ? '#e2e8f0' : '#111827';
+      c.lineWidth = 4;
+      c.strokeRect(m, m, S - 2 * m, S - 2 * m);
+
+      doorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+    }
+
+    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). Composites the style-matched AI
+    // lever cutout (aiSwitchImg) onto the wall - dim + tilted for OFF, upright + green glow
+    // for ON - or paints a procedural lever when no art came back. Footprint mirrors the
+    // lantern's (see buildLanternWallFromBase).
+    function buildSwitchWallTextures(baseWallImageData, styleName = "Windows 95") {
+      const haveArt = aiSwitchImg && aiSwitchImg.complete && aiSwitchImg.naturalWidth > 0;
+
+      function make(on) {
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = TEX_SIZE;
+        const c = cv.getContext('2d');
+        c.imageSmoothingEnabled = false;
+        if (baseWallImageData) c.putImageData(baseWallImageData, 0, 0);
+
+        const cx = 128;
+        const baseY = 150;
+
+        if (haveArt) {
+          const maxW = 52, maxH = 92;
+          const scale = Math.min(maxW / aiSwitchImg.naturalWidth, maxH / aiSwitchImg.naturalHeight, 1);
+          const dw = aiSwitchImg.naturalWidth * scale;
+          const dh = aiSwitchImg.naturalHeight * scale;
+
+          if (on) {
+            const bloom = c.createRadialGradient(cx, baseY - dh * 0.55, 2, cx, baseY - dh * 0.55, dh * 0.9);
+            bloom.addColorStop(0, 'rgba(74, 222, 128, 0.75)');
+            bloom.addColorStop(0.5, 'rgba(34, 197, 94, 0.28)');
+            bloom.addColorStop(1, 'rgba(22, 163, 74, 0)');
+            c.globalCompositeOperation = 'lighter';
+            c.fillStyle = bloom;
+            c.fillRect(cx - dw * 1.6, baseY - dh * 1.7, dw * 3.2, dh * 2.2);
+            c.globalCompositeOperation = 'source-over';
+          }
+
+          c.save();
+          c.imageSmoothingEnabled = true;
+          if (on) {
+            c.drawImage(aiSwitchImg, cx - dw / 2, baseY - dh, dw, dh);
+          } else {
+            // dim + tilt the lever "down"
+            const tmp = document.createElement('canvas');
+            tmp.width = Math.max(1, Math.ceil(dw));
+            tmp.height = Math.max(1, Math.ceil(dh));
+            const tc = tmp.getContext('2d');
+            tc.imageSmoothingEnabled = true;
+            tc.drawImage(aiSwitchImg, 0, 0, tmp.width, tmp.height);
+            tc.globalCompositeOperation = 'source-atop';
+            tc.fillStyle = 'rgba(20, 24, 30, 0.45)';
+            tc.fillRect(0, 0, tmp.width, tmp.height);
+            c.translate(cx, baseY);
+            c.rotate(-0.35);
+            c.drawImage(tmp, -dw / 2, -dh);
+          }
+          c.restore();
+          c.imageSmoothingEnabled = false;
+        } else {
+          const isWin95 = styleName.toLowerCase().includes('windows');
+          // mounting plate
+          c.fillStyle = isWin95 ? '#94a3b8' : '#18181b';
+          c.fillRect(cx - 16, baseY - 44, 32, 44);
+          c.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
+          c.lineWidth = 3;
+          c.strokeRect(cx - 16, baseY - 44, 32, 44);
+          // pivot
+          c.fillStyle = '#52525b';
+          c.beginPath(); c.arc(cx, baseY - 22, 5, 0, Math.PI * 2); c.fill();
+          // lever
+          c.strokeStyle = on ? '#16a34a' : '#a1a1aa';
+          c.lineWidth = 7;
+          c.beginPath();
+          c.moveTo(cx, baseY - 22);
+          if (on) c.lineTo(cx + 16, baseY - 46);
+          else c.lineTo(cx - 16, baseY - 4);
+          c.stroke();
+          // knob + indicator
+          c.fillStyle = on ? '#22c55e' : '#71717a';
+          c.beginPath();
+          c.arc(on ? cx + 16 : cx - 16, on ? baseY - 46 : baseY - 4, 6, 0, Math.PI * 2);
+          c.fill();
+          if (on) {
+            const g = c.createRadialGradient(cx, baseY - 30, 2, cx, baseY - 30, 40);
+            g.addColorStop(0, 'rgba(74, 222, 128, 0.55)');
+            g.addColorStop(1, 'rgba(34, 197, 94, 0)');
+            c.globalCompositeOperation = 'lighter';
+            c.fillStyle = g;
+            c.fillRect(cx - 45, baseY - 70, 90, 90);
+            c.globalCompositeOperation = 'source-over';
+          }
+        }
+
+        return c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      }
+
+      switchWallOffTexture = make(false);
+      switchWallOnTexture = make(true);
+    }
+
+    // ==========================================
+    // LOCKED GATES + SWITCHES  (placed during maze generation)
+    // ==========================================
+    function _tileKey(x, y) { return x + ',' + y; }
+
+    const _ORTHO = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+
+    // Shortest path over MAP===0 tiles. In a perfect (spanning-tree) maze there is exactly
+    // one simple path, so this IS the start->exit route. Returns [{x,y}, ...] or null.
+    function _bfsPath(a, b) {
+      const prev = new Map();
+      prev.set(_tileKey(a.x, a.y), null);
+      const queue = [{ x: a.x, y: a.y }];
+      let qi = 0;
+      while (qi < queue.length) {
+        const cur = queue[qi++];
+        if (cur.x === b.x && cur.y === b.y) break;
+        for (const d of _ORTHO) {
+          const nx = cur.x + d.dx, ny = cur.y + d.dy;
+          if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+          if (MAP[ny][nx] !== 0) continue;
+          const k = _tileKey(nx, ny);
+          if (prev.has(k)) continue;
+          prev.set(k, cur);
+          queue.push({ x: nx, y: ny });
+        }
+      }
+      if (!prev.has(_tileKey(b.x, b.y))) return null;
+      const out = [];
+      let node = { x: b.x, y: b.y };
+      while (node) { out.push(node); node = prev.get(_tileKey(node.x, node.y)); }
+      out.reverse();
+      return out;
+    }
+
+    // Flood fill from seed over tiles where passableFn(x,y) is true. Returns
+    // Map("x,y" -> {x, y, dist}).
+    function _flood(seed, passableFn) {
+      const out = new Map();
+      const start = { x: seed.x, y: seed.y, dist: 0 };
+      out.set(_tileKey(seed.x, seed.y), start);
+      const queue = [start];
+      let qi = 0;
+      while (qi < queue.length) {
+        const cur = queue[qi++];
+        for (const d of _ORTHO) {
+          const nx = cur.x + d.dx, ny = cur.y + d.dy;
+          if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+          const k = _tileKey(nx, ny);
+          if (out.has(k) || !passableFn(nx, ny)) continue;
+          const e = { x: nx, y: ny, dist: cur.dist + 1 };
+          out.set(k, e);
+          queue.push(e);
+        }
+      }
+      return out;
+    }
+
+    // Place 1-3 locked doors on the start->exit path and, for each, one wall switch that the
+    // player can PROVABLY reach before that door (sequential gating). The maze is a spanning
+    // tree so its start->exit path is unique; odd path indices are the connector tiles a door
+    // can sit on. Guarantee: switch_k lies in the region reachable with doors 0..k-1 open, so
+    // the player opens them in order and always finishes. Fills doorList / switchList and
+    // stamps MAP (3 = closed door, 4 = switch OFF).
+    function placeGatesAndSwitches() {
+      doorList = [];
+      switchList = [];
+
+      const path = _bfsPath(startRoom, exitRoom);
+      if (!path || path.length < 2) return;
+      const pathTiles = new Set(path.map((c) => _tileKey(c.x, c.y)));
+      const L = path.length - 1;
+      if (L < 8) return;                                  // too short to gate comfortably
+
+      const connectorCount = Math.floor(L / 2);
+      let N = Math.min(3, Math.floor(connectorCount / 2));
+      if (N < 1) return;
+
+      // door path-indices: evenly spaced, odd (connector tiles), strictly increasing with a
+      // gap >= 2, and at least one cell of slack before the first / after the last.
+      const doorIdx = [];
+      for (let i = 1; i <= N; i++) {
+        let t = Math.round((i * L) / (N + 1));
+        if (t % 2 === 0) t -= 1;
+        const lo = 1 + 2 * i;
+        const hi = (L - 1) - 2 * (N - i);
+        if (lo > hi) continue;
+        t = Math.max(lo, Math.min(hi, t));
+        if (doorIdx.length && t <= doorIdx[doorIdx.length - 1] + 1) {
+          t = doorIdx[doorIdx.length - 1] + 2;
+        }
+        if (t % 2 === 1 && t >= 1 && t <= L - 1 &&
+            (!doorIdx.length || t > doorIdx[doorIdx.length - 1])) {
+          doorIdx.push(t);
+        }
+      }
+      N = doorIdx.length;
+      if (N < 1) return;
+
+      const usedCells = new Set();
+
+      for (let k = 0; k < N; k++) {
+        const d = path[doorIdx[k]];
+        const seed = (k === 0) ? path[0] : path[doorIdx[k - 1] + 1];
+
+        // doors k..N-1 are still shut in this state; earlier doors are stamped MAP===3 and
+        // therefore also block the flood, which only tightens the region (still safe).
+        const blocked = new Set();
+        for (let j = k; j < N; j++) blocked.add(_tileKey(path[doorIdx[j]].x, path[doorIdx[j]].y));
+        const region = _flood(seed, (x, y) => MAP[y][x] === 0 && !blocked.has(_tileKey(x, y)));
+
+        // Distance of every region tile from the door's approach tile (the path cell the
+        // player stands on when the gate blocks them). Used to push the switch away from
+        // the gate it opens - a lever mounted in the cell facing the door is no puzzle,
+        // the player never has to leave the corridor to find it.
+        const approach = path[doorIdx[k] - 1];
+        const doorDist = _flood(approach, (x, y) => MAP[y][x] === 0 && !blocked.has(_tileKey(x, y)));
+
+        // host cell: an (odd,odd) floor tile in the region, not start/exit, unused, with a
+        // solid wall to mount on. Wants it well clear of the door, off the start->exit path
+        // (so reaching it costs a real detour) and ideally down a dead end.
+        let best = null, bestScore = -1;
+        const pickHost = (minDoorDist) => {
+          best = null; bestScore = -1;
+          region.forEach((e) => {
+            if (e.x % 2 !== 1 || e.y % 2 !== 1) return;
+            if (e.x === startRoom.x && e.y === startRoom.y) return;
+            if (e.x === exitRoom.x && e.y === exitRoom.y) return;
+            if (usedCells.has(_tileKey(e.x, e.y))) return;
+            const dEntry = doorDist.get(_tileKey(e.x, e.y));
+            if (!dEntry || dEntry.dist < minDoorDist) return;
+            let wallNb = 0, floorNb = 0;
+            for (const dl of _ORTHO) {
+              const nx = e.x + dl.dx, ny = e.y + dl.dy;
+              if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+              if (MAP[ny][nx] === 1) wallNb++;
+              else if (MAP[ny][nx] === 0) floorNb++;
+            }
+            if (wallNb === 0) return;
+            const dd = dEntry.dist;
+            const offPath = !pathTiles.has(_tileKey(e.x, e.y));
+            const score = (offPath ? 60 : 0)                  // side passage, not the main route
+                        + (floorNb <= 1 ? 25 : 0)             // dead end
+                        + (dd <= 20 ? 40 : 0)                 // far, but not a slog back to the gate
+                        + Math.min(dd, 20) * 4
+                        + e.dist;                             // tie-break: deeper from the seed
+            if (score > bestScore) { bestScore = score; best = { x: e.x, y: e.y }; }
+          });
+        };
+
+        // 6 tiles = three cells clear of the gate. Relax only when the reachable region is
+        // too cramped to honour it, so tiny mazes still get a solvable switch.
+        pickHost(6);
+        if (!best) pickHost(4);
+        if (!best) pickHost(2);
+        if (!best) pickHost(0);
+
+        // fallback: a path cell strictly between the seed and this door, furthest from the
+        // door first for the same reason.
+        if (!best) {
+          const lowT = (k === 0) ? 2 : doorIdx[k - 1] + 1;
+          for (let t = lowT; t <= doorIdx[k] - 1; t++) {
+            const c = path[t];
+            if (c.x % 2 !== 1 || c.y % 2 !== 1) continue;
+            if (usedCells.has(_tileKey(c.x, c.y))) continue;
+            let wallNb = 0;
+            for (const dl of _ORTHO) {
+              const nx = c.x + dl.dx, ny = c.y + dl.dy;
+              if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 1) wallNb++;
+            }
+            if (wallNb > 0) { best = { x: c.x, y: c.y }; break; }
+          }
+        }
+        if (!best) continue;                               // cannot gate safely -> skip door
+
+        // wall tile for the switch: a solid neighbour of the host cell. Prefer the wall
+        // opposite the single entrance (the "back wall" of a dead end), and prefer non-border.
+        const floorDirs = [];
+        for (const dl of _ORTHO) {
+          const nx = best.x + dl.dx, ny = best.y + dl.dy;
+          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) floorDirs.push(dl);
+        }
+        const wallCandidates = [];
+        for (const dl of _ORTHO) {
+          const nx = best.x + dl.dx, ny = best.y + dl.dy;
+          if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+          if (MAP[ny][nx] !== 1) continue;
+          const border = (nx === 0 || ny === 0 || nx === MAP_WIDTH - 1 || ny === MAP_HEIGHT - 1);
+          const opposite = floorDirs.length === 1 &&
+            dl.dx === -floorDirs[0].dx && dl.dy === -floorDirs[0].dy;
+          wallCandidates.push({ x: nx, y: ny, rank: (opposite ? 0 : 1) + (border ? 2 : 0) });
+        }
+        if (!wallCandidates.length) continue;
+        wallCandidates.sort((p, q) => p.rank - q.rank);
+        const wall = wallCandidates[0];
+
+        MAP[d.y][d.x] = 3;
+        MAP[wall.y][wall.x] = 4;
+        doorList.push({ x: d.x, y: d.y, index: k, opened: false });
+        switchList.push({
+          x: wall.x, y: wall.y, cellX: best.x, cellY: best.y, doorIndex: k, on: false
+        });
+        usedCells.add(_tileKey(best.x, best.y));
+      }
+    }
+
         // ==========================================
     // AUTHENTIC 3DMAZE GENERATOR (GOLDEN STANDARD - EXACT TILES)
     // ==========================================
-    function generateAuthentic3DMaze(numGrids = 25) {
-      numGrids = Math.max(10, Math.min(100, numGrids));
+    function generateAuthentic3DMaze(numGrids = DIFFICULTIES.medium.grids) {
+      numGrids = Math.max(10, Math.min(MAX_GRIDS, numGrids));
 
       // Calculate target cells to reach exactly (or close to) numGrids total walkable tiles.
       // Since total tiles = cells + (cells - 1) = 2 * cells - 1
@@ -2364,6 +2788,8 @@
 
       MAP = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(1));
       lanternList = [];
+      doorList = [];
+      switchList = [];
 
       const visitedCells = Array(cellRows).fill(0).map(() => Array(cellCols).fill(false));
       const stack = [];
@@ -2425,6 +2851,14 @@
         }
       }
 
+      startRoom = { x: startC * 2 + 1, y: startR * 2 + 1 };
+      exitRoom = { x: furthestCell.c * 2 + 1, y: furthestCell.r * 2 + 1 };
+
+      // Locked gates go in BEFORE the lantern pass (which only touches MAP===1, so it skips
+      // our door/switch tiles) and BEFORE passagesList is built (so a closed door is correctly
+      // excluded from the walkable-tile count).
+      placeGatesAndSwitches();
+
       // Add Lanterns to Walls
       for (let y = 1; y < MAP_HEIGHT - 1; y++) {
         for (let x = 1; x < MAP_WIDTH - 1; x++) {
@@ -2446,9 +2880,6 @@
           }
         }
       }
-
-      startRoom = { x: startC * 2 + 1, y: startR * 2 + 1 };
-      exitRoom = { x: furthestCell.c * 2 + 1, y: furthestCell.r * 2 + 1 };
 
       // GUARANTEE player spawns facing the OPEN corridor (never facing a wall!)
       let spawnDir = 1;
@@ -2624,7 +3055,11 @@
         if (side === 0 && rayDirX > 0) texX = TEX_SIZE - texX - 1;
         if (side === 1 && rayDirY < 0) texX = TEX_SIZE - texX - 1;
 
-        const wallTexToUse = (hit === 2 && wallLanternTexture) ? wallLanternTexture : wallTexture;
+        let wallTexToUse = wallTexture;
+        if (hit === 2 && wallLanternTexture) wallTexToUse = wallLanternTexture;
+        else if (hit === 3 && doorTexture) wallTexToUse = doorTexture;
+        else if (hit === 4 && switchWallOffTexture) wallTexToUse = switchWallOffTexture;
+        else if (hit === 5 && switchWallOnTexture) wallTexToUse = switchWallOnTexture;
         const wallData = wallTexToUse.data;
 
         let wallLanternLight = 0;
@@ -2643,7 +3078,8 @@
         const sideShade = side === 1 ? 0.82 : 1.0;
         const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
         const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
-        const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
+        const switchGlow = (hit === 5) ? 0.22 : 0;
+        const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow + switchGlow);
 
         // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
         // unchanged), but are now only WALL_HEIGHT tall - so squeezing the whole texture in
@@ -2723,6 +3159,27 @@
       drawCombatEnemy(ctx, screenWidth, screenHeight);
       drawOverTheShoulderPlayer(ctx, screenWidth, screenHeight);
       drawCombatEffects(ctx);
+      drawInteractHint(ctx);
+    }
+
+    // Small prompt at the bottom of the viewport when the player faces a door or switch.
+    function drawInteractHint(c) {
+      if (combatState.inBattle || player.isAnimating) return;
+      const vec = DIR_VECS[player.dirIndex];
+      const row = MAP[player.gridY + vec.dy];
+      const t = row ? row[player.gridX + vec.dx] : undefined;
+      if (t !== 3 && t !== 4 && t !== 5) return;
+      const label = t === 3 ? 'LOCKED' : (t === 5 ? 'E : RESET' : 'E : USE');
+      c.save();
+      c.font = 'bold 11px "Courier New", monospace';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      const w = c.measureText(label).width + 14;
+      c.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      c.fillRect(screenWidth / 2 - w / 2, screenHeight - 22, w, 16);
+      c.fillStyle = t === 3 ? '#fca5a5' : '#fde047';
+      c.fillText(label, screenWidth / 2, screenHeight - 13);
+      c.restore();
     }
 
     // ==========================================
@@ -2784,6 +3241,17 @@
             c.strokeStyle = '#475569';
             c.lineWidth = 0.5;
             c.strokeRect(wx, wy, tileSize, tileSize);
+
+            const mv = MAP[w.y][w.x];
+            if (mv === 3) {
+              c.fillStyle = '#b45309';
+              c.fillRect(wx + 2, wy + 2, tileSize - 4, tileSize - 4);
+            } else if (mv === 4 || mv === 5) {
+              c.fillStyle = mv === 5 ? '#22c55e' : '#f97316';
+              c.beginPath();
+              c.arc(wx + tileSize / 2, wy + tileSize / 2, Math.max(2, tileSize * 0.22), 0, Math.PI * 2);
+              c.fill();
+            }
           }
         });
       });
@@ -2914,6 +3382,39 @@
       requestAnimationFrame(step);
     }
 
+    // Face a tile and press E: throw a wall switch (MAP 4 -> 5) to permanently open its door
+    // (MAP 3 -> 0), or bump a still-locked door. Latching: a thrown switch stays on.
+    function interact() {
+      if (player.isAnimating || combatState.inBattle) return;
+      const vec = DIR_VECS[player.dirIndex];
+      const fx = player.gridX + vec.dx;
+      const fy = player.gridY + vec.dy;
+      const t = (MAP[fy] && MAP[fy][fx] !== undefined) ? MAP[fy][fx] : 1;
+
+      if (t === 4 || t === 5) {
+        const sw = switchList.find(s => s.x === fx && s.y === fy);
+        if (!sw) return;
+        if (sw.on) { showFloatingCombatText('ALREADY THROWN', 160, 100, '#94a3b8'); return; }
+        sw.on = true;
+        MAP[fy][fx] = 5;
+        playSfx('button', { vary: 0.06 });
+        const door = doorList.find(d => d.index === sw.doorIndex);
+        if (door && !door.opened) {
+          door.opened = true;
+          MAP[door.y][door.x] = 0;
+          passagesList.push({ x: door.x, y: door.y });
+          playSfx('end', { vary: 0.04, gain: 0.6 });
+          showFloatingCombatText('THE GATE GRINDS OPEN', 160, 92, '#fde047');
+        }
+        return;
+      }
+
+      if (t === 3) {
+        showFloatingCombatText("IT'S LOCKED", 160, 108, '#f87171');
+        playSfx('bump');
+      }
+    }
+
     function moveForward() {
       if (player.isAnimating) { queuedAction = 'UP'; return; }
       const vec = DIR_VECS[player.dirIndex];
@@ -2973,6 +3474,7 @@
     btnDown.addEventListener('pointerdown', (e) => { e.preventDefault(); moveBackward(); });
     btnLeft.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateLeft(); });
     btnRight.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateRight(); });
+    if (btnAction) btnAction.addEventListener('pointerdown', (e) => { e.preventDefault(); interact(); });
 
     window.addEventListener('keydown', (e) => {
       if (screenGame.classList.contains('hidden')) return;
@@ -3016,6 +3518,9 @@
       } else if (['ArrowRight', 'KeyD'].includes(e.code)) {
         e.preventDefault();
         rotateRight();
+      } else if (e.code === 'KeyE' || e.code === 'Enter') {
+        e.preventDefault();
+        interact();
       }
     });
 
@@ -3119,18 +3624,22 @@
     // screen back until the real art is in wallTexture/ceilingTexture/floorTexture - otherwise
     // the first render3D() paints whatever was already loaded (the Windows-95 defaults, or the
     // previous dungeon's art) and the swap to the new textures a moment later reads as a flash.
-    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady) {
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady, doorUri, switchUri) {
       // Cleared unconditionally: a dungeon with no lantern art (e.g. the Windows 95 style,
       // which keeps its procedural logo gag - see get_surface_prompts) must not keep showing
-      // the PREVIOUS dungeon's AI fixture.
+      // the PREVIOUS dungeon's AI fixture. Same for the door/switch cutouts.
       aiLanternImg = null;
-      const total = [wallUri, ceilUri, floorUri, lanternUri].filter(Boolean).length;
+      aiDoorImg = null;
+      aiSwitchImg = null;
+      const total = [wallUri, ceilUri, floorUri, lanternUri, doorUri, switchUri].filter(Boolean).length;
       let loaded = 0;
 
       function finish() {
         if (activeMode !== 'v1_video') {
           buildLanternWallFromBase(wallTexture, styleName);
           buildDynamicExitSignTexture(styleName, wallTexture);
+          buildDoorTexture(wallTexture, styleName);
+          buildSwitchWallTextures(wallTexture, styleName);
         }
         if (onReady) {
           onReady();
@@ -3167,6 +3676,16 @@
         imgL.onload = () => { aiLanternImg = imgL; checkDone(); };
         imgL.src = lanternUri;
       }
+      if (doorUri) {
+        const imgD = new Image();
+        imgD.onload = () => { aiDoorImg = imgD; checkDone(); };
+        imgD.src = doorUri;
+      }
+      if (switchUri) {
+        const imgS = new Image();
+        imgS.onload = () => { aiSwitchImg = imgS; checkDone(); };
+        imgS.src = switchUri;
+      }
 
       if (total === 0) finish();
     }
@@ -3176,6 +3695,16 @@
     // generation happens to finish.
     function enterDungeon(b) {
       if (!b) return;
+      // Freeze the dungeon's start-of-run state now, while nothing has moved and every gate is
+      // still shut, so the death screen's "Restart Dungeon" can roll back to exactly here.
+      dungeonSnapshot = {
+        bundle: b,
+        map: MAP.map(row => row.slice()),
+        passages: passagesList.map(p => ({ x: p.x, y: p.y })),
+        doors: doorList.map(d => ({ ...d })),
+        switches: switchList.map(s => ({ ...s })),
+        player: { ...player }
+      };
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
       // Belt-and-braces: armEnterDungeon already stopped the menu loop when loading finished,
@@ -3275,13 +3804,13 @@
 
       if (activeMode === 'v1_video') {
         // Video mode never raycasts these textures, so there's nothing worth blocking on.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, null, b.door_texture, b.switch_texture);
         showGameScreen();
       } else {
         // Hold the game screen (and its first render3D()) until the real wall/ceiling/floor/
         // lantern art has decoded, so the player never sees a frame of stale textures before
         // the swap.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen, b.door_texture, b.switch_texture);
       }
     }
 
@@ -3406,7 +3935,7 @@
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       currentThemeName = wallStyle;
       activeMode = modeSelect.value;
-      const numGrids = Math.max(10, Math.min(100, parseInt(gridCountInput.value) || 25));
+      const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
 
       // Start every dungeon from a clean slate. Quitting straight from an active battle (without
       // pressing Space to leave battle mode first) used to carry that fight's drained stamina,
@@ -3513,7 +4042,7 @@
 
     // Boot engine
     buildDefaultTextures();
-    generateAuthentic3DMaze(25);
+    generateAuthentic3DMaze(DIFFICULTIES.medium.grids);
     render3D();
     drawMinimap();
     updateHUD();

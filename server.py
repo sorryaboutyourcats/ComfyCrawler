@@ -1573,6 +1573,61 @@ def get_surface_prompts(wall_style):
     return wall_p, ceil_p, floor_p, lantern_p
 
 
+# Isolation tail for the switch cutout - same job as _LANTERN_TAIL: one object on a clean
+# white ground so BiRefNet has a real background to cut. The door is a full-cell OPAQUE
+# surface (no cutout) so it does not use this.
+_GATE_TAIL = ("Exactly one object, centered, front view, isolated on a plain flat pure white "
+              "background, no scene, no floor, no walls, no room, no shadow, no text.")
+
+
+def get_gate_prompts(wall_style):
+    """(door_p, switch_p) themed to the dungeon style. Kept separate from get_surface_prompts
+    so that function's 4-tuple signature and call sites stay untouched.
+
+    FLUX schnell at cfg 1.0 - the negative is inert, so these are POSITIVE-ONLY. Name the
+    object literally, force flat orthographic framing, isolate on white (see _LANTERN_TAIL
+    notes above for why naming unwanted things backfires)."""
+    ui = wall_style.lower()
+
+    if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
+        door_p = ("Authentic Windows 95 3D maze screensaver style, a heavy closed stone door "
+                  "sealing a corridor, chunky grey stone slab bound with dark iron bands and a "
+                  "big round iron ring handle, thick white mortar edges, flat straight-on "
+                  "orthographic front view, the door fills the whole frame edge to edge, retro "
+                  "90s low-poly CGI, bright uniform lighting, zero shadows, zero perspective.")
+        switch_p = ("A chunky retro 1990s wall-mounted lever switch on a grey steel plate, a big "
+                    "red handle resting in the down position, Windows 95 low-poly CGI look, "
+                    "bright even lighting. " + _GATE_TAIL)
+
+    elif any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship',
+                               'future', 'cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
+        door_p = ("A sealed dark sci-fi blast door of riveted brushed-metal panels with glowing "
+                  "cyan seams, fully closed, flat straight-on orthographic front view, the door "
+                  "fills the whole frame edge to edge, zero perspective, zero horizon, zero sky.")
+        switch_p = ("A dark angular metal wall panel with one large recessed lever switch that "
+                    "glows cyan, sci-fi hardware, the handle in its resting position. "
+                    + _GATE_TAIL)
+
+    elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
+        door_p = ("A massive closed dungeon door of weathered oak planks bound with rusted iron "
+                  "bands and studs, a heavy iron ring handle, set in a grey mossy stone arch, "
+                  "flat straight-on orthographic front view, the door fills the whole frame edge "
+                  "to edge, zero perspective, zero horizon.")
+        switch_p = ("A wrought iron wall lever on a rusted metal plate bolted to grey stone, the "
+                    "handle resting down. " + _GATE_TAIL)
+
+    else:
+        door_p = (f"A large closed door or gate made of {wall_style}, sealing a corridor, sturdy "
+                  f"and firmly shut, flat straight-on orthographic front view, the door fills the "
+                  f"whole frame edge to edge, zero perspective, zero horizon, zero sky, no room "
+                  f"around it, no text.")
+        switch_p = (f"A single wall-mounted lever switch themed as {wall_style}, a mechanical "
+                    f"handle on a small mounting plate, the handle resting in its neutral "
+                    f"position. " + _GATE_TAIL)
+
+    return door_p, switch_p
+
+
 
 def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=None, mode="v4_flux",
                              progress_cb=None, weapon_style=None, enemy_style=None):
@@ -2491,8 +2546,11 @@ def generate_flux_surfaces_only(wall_style):
     prefixes = {"w": f"trio_w_{int(time.time()*1000)}",
                 "c": f"trio_c_{int(time.time()*1000)}",
                 "f": f"trio_f_{int(time.time()*1000)}",
-                "l": f"trio_l_{int(time.time()*1000)}"}
+                "l": f"trio_l_{int(time.time()*1000)}",
+                "d": f"trio_d_{int(time.time()*1000)}",
+                "s": f"trio_s_{int(time.time()*1000)}"}
     wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style)
+    door_p, switch_p = get_gate_prompts(wall_style)
 
     def _surface(tag, prompt_text):
         return {
@@ -2513,12 +2571,33 @@ def generate_flux_surfaces_only(wall_style):
     payload.update(_surface("w", wall_p))
     payload.update(_surface("c", ceil_p))
     payload.update(_surface("f", floor_p))
+    # Door is a single full-cell surface (one door per map cell), so like the three tiling
+    # textures it gets a plain opaque SaveImage - but it is NOT run through make_seamless_4way
+    # below, because it must not tile.
+    payload.update(_surface("d", door_p))
+
+    # BiRefNet loader - shared by the lantern and the switch cutouts below.
+    payload["bg_model"] = {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"}
+
+    # Switch is an isolated object (a wall lever), matted onto the wall on the client the same
+    # way the lantern is - so it gets its own square canvas + BiRefNet cutout. Always generated
+    # (get_gate_prompts never returns None).
+    payload["s_lat"] = {"inputs": {"width": 384, "height": 384, "batch_size": 1}, "class_type": "EmptyLatentImage"}
+    payload["s_pos"] = {"inputs": {"text": switch_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
+    payload["s_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+                                    "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                    "model": ["1", 0], "positive": ["s_pos", 0], "negative": ["neg", 0],
+                                    "latent_image": ["s_lat", 0]}, "class_type": "KSampler"}
+    payload["s_dec"] = {"inputs": {"samples": ["s_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"}
+    payload["s_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["s_dec", 0]}, "class_type": "RemoveBackground"}
+    payload["s_maskinv"] = {"inputs": {"mask": ["s_mask", 0]}, "class_type": "InvertMask"}
+    payload["s_save"] = {"inputs": {"filename_prefix": prefixes["s"], "images": ["s_dec", 0], "mask": ["s_maskinv", 0]},
+                         "class_type": "SaveImageWithAlpha"}
 
     # Lantern is an isolated object, not a tiling material, so it gets its own square canvas
     # and a BiRefNet cutout (the same node the krea2 weapon/shield/enemy sprites use - see
     # _krea2_add_branch) instead of the plain opaque SaveImage the three surfaces get.
     if lantern_p:
-        payload["bg_model"] = {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"}
         payload["l_lat"] = {"inputs": {"width": 384, "height": 384, "batch_size": 1}, "class_type": "EmptyLatentImage"}
         payload["l_pos"] = {"inputs": {"text": lantern_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
         payload["l_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
@@ -2536,7 +2615,7 @@ def generate_flux_surfaces_only(wall_style):
     with urllib.request.urlopen(req) as resp:
         prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
 
-    expected = ("w_save", "c_save", "f_save") + (("l_save",) if lantern_p else ())
+    expected = ("w_save", "c_save", "f_save", "d_save", "s_save") + (("l_save",) if lantern_p else ())
     start_time = time.time()
     while time.time() - start_time < 120:
         time.sleep(0.1)
@@ -2558,13 +2637,19 @@ def generate_flux_surfaces_only(wall_style):
         make_seamless_4way(c_path, blend_pixels=12)
         make_seamless_4way(f_path, blend_pixels=12)
 
+        # Door: a single full-cell surface - NOT tiled, so no make_seamless_4way.
+        d_path = _p("d_save")
+        # Switch: BiRefNet cutout, trimmed to its alpha box like the lantern.
+        s_path = _p("s_save")
+        _save_tight(s_path)
+
         l_path = None
         if lantern_p:
             l_path = _p("l_save")
             _save_tight(l_path)
 
         PROGRESS.finish_job("surfaces")
-        return w_path, c_path, f_path, l_path
+        return w_path, c_path, f_path, l_path, d_path, s_path
 
     raise TimeoutError("FLUX.1 surface texture generation timed out.")
 
@@ -2661,7 +2746,7 @@ def _plan_v6(steps, sound_mode="music_and_sound"):
         # key,             label,                                                    weight, units
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
-        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
+        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
         # Every player pose + every frame of all three foes, all in the one krea2 job.
         ("frames",         "Animating the swing and the walk with krea2 turbo...",        80, (len(V6_FRAME_NAMES) + _enemy_frame_count()) * st),
         # "enemy_variants" is NOT here on purpose. It only runs when the species naming
@@ -2689,7 +2774,7 @@ def _plan_v5(steps):
     return [
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
-        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 3 * 4),
+        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
         ("frames",         "Forging the character, weapon and shield...",                 55, (3 + _enemy_frame_count()) * st),
         # See _plan_v6 for why "enemy_variants" is registered lazily instead of planned.
         ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
@@ -4435,7 +4520,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path = generate_flux_surfaces_only(wall_style)
+        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style)
 
         gen_progress["current_step"] = 3
         assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
@@ -4459,6 +4544,8 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
             "lantern_texture": _b64(l_path) if l_path else None,
+            "door_texture": _b64(d_path) if d_path else None,
+            "switch_texture": _b64(s_path) if s_path else None,
             "player_sprite": player_b64,
             "player_sprites": [player_b64],
             "player_face": faces_b64[0],
@@ -4519,7 +4606,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path = generate_flux_surfaces_only(wall_style)
+        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style)
 
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, steps, portrait_res)
@@ -4550,6 +4637,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
             "lantern_texture": _b64(l_path) if l_path else None,
+            "door_texture": _b64(d_path) if d_path else None,
+            "switch_texture": _b64(s_path) if s_path else None,
             "player_sprite": frames_b64[0],
             "player_sprites": frames_b64,
             "player_face": faces_b64[0],

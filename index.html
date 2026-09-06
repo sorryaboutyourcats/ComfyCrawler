@@ -65,6 +65,15 @@
       border-bottom: 2px solid #ffffff;
       box-shadow: inset 1px 1px #0a0a0a;
     }
+    /* Selected difficulty button: the same pressed-in bevel :active gives, held down. */
+    .win95-btn.is-selected {
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+      background: #dcdcdc;
+    }
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
       color: white;
@@ -473,26 +482,27 @@
 
         <div class="p-3 flex flex-col gap-4">
           <div class="win95-box p-3 bg-slate-100 flex flex-col gap-2">
-            <div class="flex justify-between items-center">
-              <label class="text-xs font-bold text-slate-800">
-                Amount of Grids / Maze Size:
-              </label>
-              <div class="flex items-center gap-1">
-                <input type="number" id="gridCountInput" min="10" max="100" value="25" class="win95-input w-16 text-center text-xs font-bold" />
-                <span class="text-xs text-slate-600 font-bold">Grids</span>
-              </div>
+            <label class="text-xs font-bold text-slate-800">
+              Difficulty / Maze Size:
+            </label>
+
+            <div id="difficultyRow" class="flex gap-1.5">
+              <button type="button" data-difficulty="easy" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
+                <span class="text-xs">Easy</span>
+                <span class="text-[10px] font-bold text-slate-600">33 Grids</span>
+              </button>
+              <button type="button" data-difficulty="medium" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
+                <span class="text-xs">Medium</span>
+                <span class="text-[10px] font-bold text-slate-600">66 Grids</span>
+              </button>
+              <button type="button" data-difficulty="hard" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
+                <span class="text-xs">Hard</span>
+                <span class="text-[10px] font-bold text-slate-600">111 Grids</span>
+              </button>
             </div>
-            
-            <input type="range" id="gridCountSlider" min="10" max="100" value="25" class="w-full cursor-pointer accent-blue-800" />
-            
-            <div class="flex justify-between text-[10px] text-slate-500 font-bold">
-              <span>10 (Quick)</span>
-              <span>25 (Standard Labyrinth)</span>
-              <span>60 (Large)</span>
-              <span>100 (Epic 3DMaze)</span>
-            </div>
+
             <div id="gridDesc" class="text-[11px] text-blue-900 font-bold mt-0.5">
-              Standard 3DMaze: 25 interconnected corridors with glowing lanterns and distant Exit.
+              Medium 3DMaze Labyrinth: 66 corridors with branching paths, lanterns and a distant Exit.
             </div>
           </div>
 
@@ -619,8 +629,8 @@
                 <div class="text-[11px] font-bold text-blue-900 bg-blue-100 px-3 py-1 rounded w-full">
                   Steps taken: <span id="deadMovesCount">0</span>
                 </div>
-                <button id="btnRiseAgain" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-200 hover:bg-red-300 w-full mt-1">
-                  ⚕️ Rise and Fight On
+                <button id="btnRestartDungeon" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-200 hover:bg-red-300 w-full mt-1">
+                  🔄 Restart Dungeon
                 </button>
                 <button id="btnDeadNewDungeon" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full">
                   ✨ Create New Dungeon
@@ -717,13 +727,13 @@
 
           <!-- D-Pad Navigation Controls -->
           <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
-            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS (Space: Battle):</div>
-            
+            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS (Space: Battle, E: Use):</div>
+
             <div class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>
               <button id="btnUp" class="win95-btn dpad-btn" title="Move Forward (W / Up)">▲</button>
-              <div></div>
-              
+              <button id="btnAction" class="win95-btn dpad-btn" title="Use switch / door (E)">E</button>
+
               <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">◀</button>
               <button id="btnDown" class="win95-btn dpad-btn" title="Move Backward (S / Down)">▼</button>
               <button id="btnRight" class="win95-btn dpad-btn" title="Rotate Right 90° (D / Right)">▶</button>
