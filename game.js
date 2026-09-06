@@ -1305,10 +1305,28 @@
       btnCombatAttack.addEventListener('pointerdown', (e) => { e.preventDefault(); combatAttack(); });
     }
 
-    // 60 FPS Combat Game Loop
-    setInterval(() => {
-      if (!screenGame || screenGame.classList.contains('hidden')) return;
+    // Combat runs on a FIXED timestep, decoupled from how often we actually draw.
+    //
+    // Every counter below (attackTimer, cadence, telegraph, swoopTimer, attackFrame...) is
+    // measured in 1/60s frames and stepped exactly once per combatTick(). That was fine while
+    // a 60fps timer drove it, but render3D() is a synchronous software raycaster running in the
+    // same callback - the moment it blows the 16.7ms budget the browser coalesces the timer,
+    // fewer ticks fire, and every attack window stretches out in real seconds. Which is exactly
+    // the "enemies get slower when the FPS drops" bug.
+    //
+    // So: measure real elapsed milliseconds, bank them, and spend them in whole SIM_STEP chunks.
+    // A frame that took 33ms runs two ticks, a frame that took 16ms runs one. The sim holds 60
+    // steps per real second regardless of frame rate, and none of the tuning numbers had to move.
+    // Whole steps matter - the hit resolution checks `attackFrame === 7` and the wind-up checks
+    // `attackTimer === cfg.telegraph`, so counters must never skip a value the way `* delta`
+    // scaling would make them.
+    const SIM_STEP = 1000 / 60;
+    const MAX_SIM_STEPS = 5;
+    let simLastTime = performance.now();
+    let simAccumulator = 0;
 
+    // One fixed 1/60s step of combat. Pure simulation - no drawing, no DOM.
+    function combatTick() {
       if (combatState.inBattle) {
         if (keysHeld.left) {
           combatState.vx = -3.8;
@@ -1512,16 +1530,55 @@
         }
       }
 
+      updateCombatEffects();
+    }
+
+    // One displayed frame: catch the simulation up to real elapsed time, then draw once.
+    //
+    // Drawing lives out here rather than inside combatTick() so a slow raycast can never starve
+    // the combat clock - a 40ms render just means the next frameTime is 40ms and the accumulator
+    // spends it on three ticks. Also on rAF rather than setInterval so it parks properly when the
+    // tab is hidden instead of raycasting an invisible canvas at whatever rate the browser allows.
+    function combatFrame(now) {
+      requestAnimationFrame(combatFrame);
+
+      // Off-stage (setup / generation / menu screens). Reset the clock as well as bailing, so
+      // coming back doesn't fire a burst of catch-up ticks for time the fight was never on screen.
+      if (!screenGame || screenGame.classList.contains('hidden')) {
+        simLastTime = now;
+        simAccumulator = 0;
+        return;
+      }
+
+      let frameTime = now - simLastTime;
+      simLastTime = now;
+      // A long stall - backgrounded tab, GC pause, texture generation - must not translate into
+      // hundreds of queued ticks fast-forwarding the fight. Cap the debt at a quarter second.
+      if (frameTime > 250) frameTime = 250;
+      simAccumulator += frameTime;
+
+      let steps = 0;
+      while (simAccumulator >= SIM_STEP && steps < MAX_SIM_STEPS) {
+        combatTick();
+        simAccumulator -= SIM_STEP;
+        steps++;
+      }
+      // Still behind after MAX_SIM_STEPS means the machine genuinely can't keep up. Drop the
+      // backlog and let combat run in slow motion rather than spiral trying to catch up.
+      if (steps === MAX_SIM_STEPS) simAccumulator = 0;
+
       if (playerHpBar) playerHpBar.style.width = `${(combatState.playerHp / combatState.playerMaxHp) * 100}%`;
       if (playerHpText) playerHpText.textContent = `${Math.ceil(combatState.playerHp)}/${combatState.playerMaxHp}`;
       if (playerStmBar) playerStmBar.style.width = `${(combatState.playerStm / combatState.playerMaxStm) * 100}%`;
       if (playerStmText) playerStmText.textContent = `${Math.ceil(combatState.playerStm)}/${combatState.playerMaxStm}`;
 
       renderDoomFace();
+      // While a move/turn tween is running it owns the raycast (see animate3D), so skip ours.
       if (activeMode !== 'v1_video' && !player.isAnimating) {
         render3D();
       }
-    }, 1000 / 60);
+    }
+    requestAnimationFrame(combatFrame);
 
     function renderDoomFace() {
       if (!doomFaceCtx) return;
@@ -2282,12 +2339,25 @@
       c.fillText(`${e.name || 'NIGHTSTALKER'} [${e.hp}/${e.maxHp}]`, width / 2, 21);
     }
 
-    function drawCombatEffects(c) {
+    // Floating text ages on the SIMULATION clock, not the render clock - it used to age inside
+    // drawCombatEffects, which meant a slow frame stretched the popups along with everything
+    // else. Advancing it in combatTick keeps `life: 32` worth ~0.53s no matter the frame rate.
+    function updateCombatEffects() {
       for (let i = combatState.combatEffects.length - 1; i >= 0; i--) {
         const eff = combatState.combatEffects[i];
         eff.life--;
         eff.y -= 0.8;
+        if (eff.life <= 0) {
+          combatState.combatEffects.splice(i, 1);
+        }
+      }
+    }
 
+    // Pure draw - mutating sim state from here would double up whenever a frame runs more than
+    // one simulation step. See updateCombatEffects above.
+    function drawCombatEffects(c) {
+      for (let i = 0; i < combatState.combatEffects.length; i++) {
+        const eff = combatState.combatEffects[i];
         c.fillStyle = eff.color;
         c.font = 'bold 12px monospace';
         c.textAlign = 'center';
@@ -2295,10 +2365,6 @@
         c.shadowBlur = 4;
         c.fillText(eff.text, eff.x, eff.y);
         c.shadowBlur = 0;
-
-        if (eff.life <= 0) {
-          combatState.combatEffects.splice(i, 1);
-        }
       }
     }
 
@@ -2592,15 +2658,17 @@
     }
 
     // The opened gate (MAP tile 6). A door that vanished on unlocking used to leave the player
-    // no evidence a gate had ever been there, so an opened one keeps a doorway: the jamb stays,
-    // the leaf stands swung back against one post, and the middle is transparent so the player
-    // both sees and walks through it.
+    // no evidence a gate had ever been there, so an opened one keeps the jamb - but the leaf
+    // itself is just gone, not swung open against a post: a swung leaf is drawn edge-on this
+    // close up (the doorway is only ever seen face-on or from the crossing corridor - see the
+    // per-column ray-segment pass in render3D), which reads as a random sliver of door
+    // material jammed in the opening rather than as a door standing open. Erasing it entirely
+    // reads as "open" at every angle, with no geometry that can look wrong.
     //
     // Every pixel comes from doorTexture - the closed door - so whatever style the generator
-    // returned, the open gate matches it with no second piece of art to generate: the jamb IS
-    // that art's own border, and the leaf is that art squashed edge-on. Sampled from the
-    // vertical band the wall renderer actually shows (the texTop crop in render3D) so the open
-    // jamb lines up with the closed door it replaces.
+    // returned, the open gate's jamb matches it with no second piece of art to generate.
+    // Sampled from the vertical band the wall renderer actually shows (the texTop crop in
+    // render3D) so the open jamb lines up with the closed door it replaces.
     function buildOpenDoorTexture() {
       if (!doorTexture) { doorOpenTexture = null; return; }
 
@@ -2621,14 +2689,14 @@
       const openW = DOOR_SPR_W - 2 * post;
       const openH = DOOR_SPR_H - lintel;               // opening runs down to the floor
 
-      // 1. the closed door's visible band, with the opening punched out of it -> jamb ring
+      // The closed door's visible band, with the opening punched out of it -> jamb ring, no leaf.
       c.drawImage(src, 0, bandY, TEX_SIZE, bandH, 0, 0, DOOR_SPR_W, DOOR_SPR_H);
       c.globalCompositeOperation = 'destination-out';
       c.fillRect(post, lintel, openW, openH);
       c.globalCompositeOperation = 'source-over';
 
-      // 2. dark reveals down the inside of each post + a shadow under the lintel, so the
-      //    opening reads as a threshold with depth rather than a hole cut in the wall
+      // Dark reveals down the inside of each post + a shadow under the lintel, so the opening
+      // reads as a threshold with depth rather than a hole cut flat into the wall.
       const reveal = c.createLinearGradient(post, 0, post + openW, 0);
       reveal.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
       reveal.addColorStop(0.13, 'rgba(0, 0, 0, 0)');
@@ -2642,28 +2710,6 @@
       head.addColorStop(1, 'rgba(0, 0, 0, 0)');
       c.fillStyle = head;
       c.fillRect(post, lintel, openW, openH * 0.22);
-
-      // 3. the leaf - the same door face squashed into a narrow slab hinged against the left
-      //    post, darkened because it is turned away from the corridor
-      const leafW = Math.max(2, Math.round(openW * 0.26));
-      const leaf = document.createElement('canvas');
-      leaf.width = leafW; leaf.height = Math.max(1, openH);
-      const lc = leaf.getContext('2d');
-      lc.imageSmoothingEnabled = true;
-      lc.drawImage(src, 0, bandY, TEX_SIZE, bandH, 0, 0, leaf.width, leaf.height);
-      lc.globalCompositeOperation = 'source-atop';
-      lc.fillStyle = 'rgba(8, 10, 14, 0.42)';
-      lc.fillRect(0, 0, leaf.width, leaf.height);
-
-      c.imageSmoothingEnabled = false;
-      c.drawImage(leaf, post, lintel, leafW, openH);
-
-      // free edge of the swung leaf: a lit lip against a hard shadow, so it separates from
-      // the dark opening behind it instead of smearing into it
-      c.fillStyle = 'rgba(255, 255, 255, 0.16)';
-      c.fillRect(post + leafW - 4, lintel, 2, openH);
-      c.fillStyle = 'rgba(0, 0, 0, 0.75)';
-      c.fillRect(post + leafW - 2, lintel, 3, openH);
 
       doorOpenTexture = c.getImageData(0, 0, DOOR_SPR_W, DOOR_SPR_H);
     }

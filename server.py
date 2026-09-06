@@ -1595,38 +1595,75 @@ def get_gate_prompts(wall_style):
     buildOpenDoorTexture derives the open gate from the closed door's own pixels."""
     ui = wall_style.lower()
 
+    # Every branch below follows the same two rules:
+    #   1. The archway/frame is described with the SAME material words as get_surface_prompts'
+    #      wall_p for that bucket, so the door sits in a frame that visibly belongs to the
+    #      corridor instead of reading as a different building dropped into it.
+    #   2. The door LEAF is a DIFFERENT but thematically related object, not a copy of the wall
+    #      material or a vague "made of {style}" (a real brick wall frames a wooden door, not a
+    #      brick door; "made of candy cane" literally asked FLUX for a door built from a thin
+    #      curved candy stick, which is why one bucket needs a concrete, door-shaped noun -
+    #      "gingerbread door" - rather than the wall's own pattern name).
+    # Every door_p also explicitly forbids empty/black background: this is a full-frame OPAQUE
+    # image (no BiRefNet cutout, unlike the switch/lantern), so whatever the model doesn't draw
+    # as door or archway shows up as literal black margins on the wall in-game - "fills the
+    # frame edge to edge" alone wasn't reliable enough at cfg 1.0 to prevent that.
+    NO_MARGINS = "the door and its archway completely fill the frame edge to edge with zero empty background and zero black margins"
+
     if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
-        door_p = ("Authentic Windows 95 3D maze screensaver style, a heavy closed stone door "
-                  "sealing a corridor, chunky grey stone slab bound with dark iron bands and a "
-                  "big round iron ring handle, thick white mortar edges, flat straight-on "
-                  "orthographic front view, the door fills the whole frame edge to edge, retro "
-                  "90s low-poly CGI, bright uniform lighting, zero shadows, zero perspective.")
-        switch_p = ("A chunky retro 1990s wall-mounted lever switch on a grey steel plate, a big "
-                    "red handle resting in the down position, Windows 95 low-poly CGI look, "
-                    "bright even lighting. " + _GATE_TAIL)
+        door_p = (f"Authentic Windows 95 3D maze screensaver style, a heavy closed door set into "
+                  f"an archway built from the same bold chunky crimson red bricks and thick stark "
+                  f"white mortar lines as the corridor wall, the door itself a dark iron-bound "
+                  f"wood door slab with a big round iron ring handle, flat straight-on "
+                  f"orthographic front view, {NO_MARGINS}, retro 90s low-poly CGI, bright "
+                  f"uniform lighting, zero shadows, zero perspective.")
+        switch_p = ("A chunky retro 1990s wall-mounted lever switch on a grey steel plate bolted "
+                    "to a red brick wall, a big red handle resting in the down position, Windows "
+                    "95 low-poly CGI look, bright even lighting. " + _GATE_TAIL)
 
     elif any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship',
                                'future', 'cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
-        door_p = ("A sealed dark sci-fi blast door of riveted brushed-metal panels with glowing "
-                  "cyan seams, fully closed, flat straight-on orthographic front view, the door "
-                  "fills the whole frame edge to edge, zero perspective, zero horizon, zero sky.")
+        door_p = (f"A sealed dark sci-fi blast door - a heavy round airlock hatch with a glowing "
+                  f"cyan viewport ring and warning stripes - set into a surrounding wall of the "
+                  f"same dark riveted brushed-metal panels with glowing cyan seams as the "
+                  f"corridor, fully closed, flat straight-on orthographic front view, "
+                  f"{NO_MARGINS}, zero perspective, zero horizon, zero sky.")
         switch_p = ("A dark angular metal wall panel with one large recessed lever switch, "
                     "sci-fi hardware, unpowered and unlit, the handle in its resting position. "
                     + _GATE_TAIL)
 
     elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
-        door_p = ("A massive closed dungeon door of weathered oak planks bound with rusted iron "
-                  "bands and studs, a heavy iron ring handle, set in a grey mossy stone arch, "
-                  "flat straight-on orthographic front view, the door fills the whole frame edge "
-                  "to edge, zero perspective, zero horizon.")
+        door_p = (f"A massive closed dungeon door of weathered oak planks bound with rusted iron "
+                  f"bands and studs, a heavy iron ring handle, set into a surrounding archway of "
+                  f"the same grey mossy dungeon stone blocks as the corridor wall, flat "
+                  f"straight-on orthographic front view, {NO_MARGINS}, zero perspective, zero "
+                  f"horizon.")
         switch_p = ("A wrought iron wall lever on a rusted metal plate bolted to grey stone, the "
                     "handle resting down. " + _GATE_TAIL)
 
+    elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']):
+        door_p = (f"A closed door set into a surrounding archway of the same red and white "
+                  f"peppermint candy cane stripes and gingerbread cookie pattern with white "
+                  f"icing as the corridor wall, the door itself a gingerbread cookie house door "
+                  f"with white icing piping trim and a round candy button for a handle, warm "
+                  f"bakery colors, flat straight-on orthographic front view, {NO_MARGINS}, "
+                  f"bright saturated colors, zero shadows, zero perspective.")
+        switch_p = ("A small wall-mounted lever switch styled as a striped candy cane handle on "
+                    "a white iced gingerbread cookie plate, bright bakery colors, the handle "
+                    "resting down. " + _GATE_TAIL)
+
     else:
-        door_p = (f"A large closed door or gate made of {wall_style}, sealing a corridor, sturdy "
-                  f"and firmly shut, flat straight-on orthographic front view, the door fills the "
-                  f"whole frame edge to edge, zero perspective, zero horizon, zero sky, no room "
-                  f"around it, no text.")
+        # No preset bucket for this style, so the archway is DESCRIBED as {wall_style} (matching
+        # how get_surface_prompts' generic wall_p uses it) while the leaf falls back to a plain
+        # iron-bound wood door - a concrete, universally sensible "different but related" object
+        # instead of the literal "made of {wall_style}" this used to say, which asked for the
+        # door to be built from whatever noun the player typed (a candy-cane door, a taco door)
+        # rather than a door that merely belongs in a room styled that way.
+        door_p = (f"A closed door set into a surrounding archway or frame styled as {wall_style}, "
+                  f"matching the corridor wall, the door itself a heavy iron-bound wood door "
+                  f"slab with a round iron ring handle, sturdy and firmly shut, flat "
+                  f"straight-on orthographic front view, {NO_MARGINS}, zero perspective, zero "
+                  f"horizon, zero sky, no room around it, no text.")
         switch_p = (f"A single wall-mounted lever switch themed as {wall_style}, a mechanical "
                     f"handle on a small mounting plate, the handle resting in its neutral "
                     f"position. " + _GATE_TAIL)
