@@ -64,7 +64,6 @@
     const crawlPending = document.getElementById('crawlPending');
     const btnEnterDungeon = document.getElementById('btnEnterDungeon');
     const chkAutoEnter = document.getElementById('chkAutoEnter');
-    const chkNarrate = document.getElementById('chkNarrate');
     const btnNarrateManual = document.getElementById('btnNarrateManual');
     const progHeaderText = document.getElementById('progHeaderText');
     const progHeaderIcon = document.getElementById('progHeaderIcon');
@@ -132,11 +131,15 @@
     let aiLanternImg = null;
 
     // Door / switch textures - built the same way as wallLanternTexture (a full-cell wall
-    // texture, selected in render3D's wall dispatch by MAP tile value: 3=door, 4=switch OFF,
-    // 5=switch ON). The aiDoorImg / aiSwitchImg are the style-matched cutouts the builders
+    // texture, selected in render3D's wall dispatch by MAP tile value: 3=closed door,
+    // 4=switch OFF, 5=switch ON; 6=opened door, which is walkable and drawn as a sprite). The aiDoorImg / aiSwitchImg are the style-matched cutouts the builders
     // composite in; null falls back to procedural shapes. See buildDoorTexture /
     // buildSwitchWallTextures.
     let doorTexture = null;
+    // The open gate (MAP tile 6) is a see-through billboard, not a wall texture - see
+    // buildOpenDoorTexture and the open-gate pass at the end of render3D.
+    let doorOpenTexture = null;
+    const DOOR_SPR_W = 256, DOOR_SPR_H = 160;
     let switchWallOffTexture = null;
     let switchWallOnTexture = null;
     let aiDoorImg = null;
@@ -191,15 +194,9 @@
     // is just one <audio> element working through that list; no voice picking, no
     // getVoices()/voiceschanged race, no Chrome pause-queue bug - all of that lived on the
     // browser-TTS side and none of it applies to a plain audio file.
-    // Defaults ON (it is the point of the feature) but is remembered once touched, hence
-    // !== '0' rather than === '1'.
-    const NARRATE_KEY = 'comfycrawler.narrate';
-    function loadNarrate() {
-      try { return localStorage.getItem(NARRATE_KEY) !== '0'; } catch (e) { return true; }
-    }
-    function saveNarrate(on) {
-      try { localStorage.setItem(NARRATE_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
-    }
+    // Always on. There was a "Narrate the intro" checkbox (and a remembered
+    // comfycrawler.narrate preference) here; the narration is the point of the loading screen
+    // and now also cues the loading music, so it is no longer optional.
 
     // A beat of silence after the title and after each paragraph, so the crawl reads like
     // it's being spoken deliberately rather than one clip barging straight into the next.
@@ -228,10 +225,24 @@
       narrateIndex = 0;
     }
 
+    // True while there are clips queued for this story - narration is either speaking or
+    // between paragraphs. The music hand-off waits on this: see armEnterDungeon.
+    function narrationActive() {
+      return narrateClips.length > 0;
+    }
+
+    // The narrator reaching the end of the crawl, as opposed to stopNarration()'s other
+    // callers (a new dungeon, leaving for the game, unload), which are teardown and must not
+    // start anything. This is the one that scores the rest of the loading screen.
+    function finishNarration() {
+      stopNarration();
+      playScreenMusic('loading');
+    }
+
     function playNarrationClip(i) {
       narrateIndex = i;
       narrateClips.forEach((c, idx) => c.el.classList.toggle('speaking', idx === i));
-      if (i >= narrateClips.length) { stopNarration(); return; }
+      if (i >= narrateClips.length) { finishNarration(); return; }
       narrateAudio.src = narrateClips[i].src;
       const p = narrateAudio.play();
       // A rejected promise (autoplay blocked) is handled by the startCheck timeout below,
@@ -247,7 +258,7 @@
       // rather than a jump-cut straight to the next line.
       narrateClips.forEach(c => c.el.classList.remove('speaking'));
       const next = narrateIndex + 1;
-      if (next >= narrateClips.length) { stopNarration(); return; }
+      if (next >= narrateClips.length) { finishNarration(); return; }
       narratePauseTimer = setTimeout(() => {
         narratePauseTimer = null;
         playNarrationClip(next);
@@ -267,7 +278,6 @@
 
     function startNarration() {
       if (!crawlText) return;
-      if (chkNarrate && !chkNarrate.checked) return;
       if (screenProgress.classList.contains('hidden')) return;
       const story = dungeonStory;
       if (!story || !Array.isArray(story.audio) || !story.audio.length) return;
@@ -296,14 +306,6 @@
       }, 1500);
     }
 
-    if (chkNarrate) {
-      chkNarrate.checked = loadNarrate();
-      chkNarrate.addEventListener('change', () => {
-        saveNarrate(chkNarrate.checked);
-        if (chkNarrate.checked) startNarration();
-        else stopNarration();
-      });
-    }
     if (btnNarrateManual) {
       btnNarrateManual.addEventListener('click', () => {
         if (narrateClips.length) retryNarrationPlay();
@@ -421,6 +423,22 @@
       });
     }
 
+    // The run is over (death, victory) and the loading loop is about to take the screen.
+    // stopMusic() alone is a hard cut in the middle of a bar; this rides the beds down first
+    // and tears them down after. The caller is responsible for the delay - both call sites
+    // already wait before revealing their box.
+    function fadeOutDungeonMusic(sec) {
+      const ctx = sfxContext();
+      if (!ctx) { stopMusic(); return; }
+      const now = ctx.currentTime;
+      Object.values(musicNodes).forEach(node => {
+        node.gain.gain.cancelScheduledValues(now);
+        node.gain.gain.setValueAtTime(node.gain.gain.value, now);
+        node.gain.gain.linearRampToValueAtTime(0, now + sec);
+      });
+      setTimeout(stopMusic, sec * 1000 + 100);
+    }
+
     // Single call site drives both directions of the explore/battle crossfade.
     function setMusicMode(inBattle) {
       const ctx = sfxContext();
@@ -486,8 +504,9 @@
       try { node.src.disconnect(); node.gain.disconnect(); } catch (e) {}
     }
 
-    // Fires once, when the dungeon finishes generating - the menu's job is done, the dungeon's
-    // own explore/battle loops take over once the player actually enters.
+    // Retires the menu loop for the rest of the run. Called from playScreenMusic() - whichever
+    // screen track comes up first (normally the loading loop, the moment the narrator stops)
+    // is what the menu loop hands off to, and it never comes back until returnToMenuMusic().
     function stopMenuMusicForLoadingComplete() {
       menuMusicStopped = true;
       menuMusicDucked = false;
@@ -528,8 +547,11 @@
 
     // Win, lose, or quit back to the title screen: the dungeon's own music must stop, and the
     // menu loop restarts from silence and eases back up rather than snapping to full volume.
+    // The win or death loop has been running underneath its box, so it fades down across the
+    // same beat the menu loop is fading up - a crossfade, not a hard cut.
     function returnToMenuMusic() {
       stopMusic();
+      stopScreenMusic(2.0);
       stopMenuMusicLoop();
       menuMusicStopped = false;
       menuMusicDucked = false;
@@ -538,6 +560,90 @@
       if (!menuMusicNode) return;
       const ctx = sfxContext();
       menuMusicNode.gain.gain.linearRampToValueAtTime(MENU_MUSIC_VOLUME, ctx.currentTime + 3.0);
+    }
+
+    // ---- Screen music (static, generated once, NOT per-dungeon) -------------
+    // Three more fixed loops alongside the menu one, served from sounds/<name>_music.wav -
+    // see STATIC_MUSIC in server.py:
+    //   loading  picks up exactly where the intro narration puts it down and carries the
+    //            loading screen to the ENTER button
+    //   death    under the death box
+    //   victory  under the victory box
+    // Exactly one of these and the menu loop is ever audible: playScreenMusic() retires the
+    // menu loop for the run and cross-fades off whichever screen track was already up, and
+    // returnToMenuMusic() fades the lot out as the menu comes back.
+    const SCREEN_MUSIC_VOLUME = 0.4125;   // same bed level as the menu loop
+    const SCREEN_MUSIC_FADE_IN = 1.5;
+    const SCREEN_MUSIC_FADE_OUT = 0.6;
+    let screenMusicBufs = {};      // name -> AudioBuffer, once fetched and decoded
+    let screenMusicLoading = {};   // name -> true while its fetch is in flight
+    let screenMusicNode = null;    // { name, src, gain } while actually playing
+    // The track playScreenMusic() was asked for. Held separately from screenMusicNode so a
+    // request made before the buffer arrives can still start on decode - and so that a
+    // stopScreenMusic() in between cancels it, which is what keeps a track requested at the
+    // death box from starting after the player has already restarted out of it.
+    let screenMusicWanted = null;
+
+    function loadScreenMusic(name) {
+      if (screenMusicBufs[name] || screenMusicLoading[name]) return;
+      const ctx = sfxContext();
+      if (!ctx) return;
+      screenMusicLoading[name] = true;
+      fetch(`${SERVER_URL}/sounds/${name}_music.wav`)
+        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject()))
+        .then(ab => ctx.decodeAudioData(ab, buf => {
+          screenMusicBufs[name] = buf;
+          screenMusicLoading[name] = false;
+          // Whatever was wanted may have changed (or been cancelled) while this downloaded.
+          if (screenMusicWanted === name && !screenMusicNode) playScreenMusic(name);
+        }, () => { screenMusicLoading[name] = false; }))
+        .catch(() => { screenMusicLoading[name] = false; /* that screen runs silent */ });
+    }
+
+    // Idempotent per track: every trigger (narration ending, the victory box, the death box)
+    // can call this without checking what is already playing.
+    function playScreenMusic(name) {
+      screenMusicWanted = name;
+      stopMenuMusicForLoadingComplete();   // the menu loop's job is over for this run
+      if (screenMusicNode && screenMusicNode.name === name) return;
+      _fadeOutScreenMusicNode(SCREEN_MUSIC_FADE_OUT);   // swapping tracks, not stopping
+      if (!screenMusicBufs[name]) { loadScreenMusic(name); return; }
+      const ctx = sfxContext();
+      if (!ctx) return;
+      const src = ctx.createBufferSource();
+      src.buffer = screenMusicBufs[name];
+      src.loop = true;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      src.connect(g); g.connect(musicMaster);
+      src.start();
+      g.gain.linearRampToValueAtTime(SCREEN_MUSIC_VOLUME, ctx.currentTime + SCREEN_MUSIC_FADE_IN);
+      screenMusicNode = { name, src, gain: g };
+    }
+
+    // Rides the current node down and tears it down after, without touching screenMusicWanted
+    // - playScreenMusic uses it to cross-fade, stopScreenMusic to actually stop.
+    function _fadeOutScreenMusicNode(fadeSec) {
+      if (!screenMusicNode) return;
+      const node = screenMusicNode;
+      screenMusicNode = null;
+      const ctx = sfxContext();
+      if (!ctx || fadeSec <= 0) {
+        try { node.src.stop(); node.src.disconnect(); node.gain.disconnect(); } catch (e) {}
+        return;
+      }
+      const now = ctx.currentTime;
+      node.gain.gain.cancelScheduledValues(now);
+      node.gain.gain.setValueAtTime(node.gain.gain.value, now);
+      node.gain.gain.linearRampToValueAtTime(0, now + fadeSec);
+      setTimeout(() => {
+        try { node.src.stop(); node.src.disconnect(); node.gain.disconnect(); } catch (e) {}
+      }, fadeSec * 1000 + 100);
+    }
+
+    function stopScreenMusic(fadeSec) {
+      screenMusicWanted = null;
+      _fadeOutScreenMusicNode(fadeSec === undefined ? SCREEN_MUSIC_FADE_OUT : fadeSec);
     }
 
     // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
@@ -610,6 +716,10 @@
     // playSfx like everything else. A 404 (or a checkout without the files) just leaves them
     // absent, and the procedural bank covers them.
     const UI_SOUNDS = ['start', 'button', 'end', 'ready'];
+    // The sting that plays the instant the dungeon opens, on a first entry and on a restart
+    // from the death box alike. Lowered 15% from full - it was landing louder than the bed
+    // it hands off to.
+    const START_STING_GAIN = 0.85;
     function loadUiSounds() {
       const ctx = sfxContext();
       if (!ctx) return;
@@ -627,8 +737,9 @@
     // loading" checkbox fires it from the poll timer), so rather than relying on any single
     // button, unlock on the first gesture of any kind. Once is enough for the session.
     ['pointerdown', 'keydown'].forEach(evt => {
-      window.addEventListener(evt, () => { sfxContext(); loadUiSounds(); loadMenuMusic(); },
-                              { once: true, capture: true });
+      window.addEventListener(evt, () => {
+        sfxContext(); loadUiSounds(); loadMenuMusic(); loadScreenMusic('loading');
+      }, { once: true, capture: true });
     });
 
     // One delegated click for every Win95 button, rather than a listener per control.
@@ -1070,8 +1181,15 @@
       if (defeatText) {
         defeatText.textContent = deathEpitaph();
       }
+      // The run's own explore/battle bed has no business under a death box; the death loop
+      // takes the screen instead and holds until the player restarts (stopScreenMusic) or
+      // quits out to the menu (returnToMenuMusic).
+      fadeOutDungeonMusic(0.6);
       // A beat before the box, so the death cry and the hurt frame land first.
-      setTimeout(() => { if (defeatModal) defeatModal.classList.remove('hidden'); }, 700);
+      setTimeout(() => {
+        if (defeatModal) defeatModal.classList.remove('hidden');
+        playScreenMusic('death');
+      }, 700);
     }
 
     // Death-screen "Restart Dungeon": roll the whole run back to the instant the player entered
@@ -1108,10 +1226,12 @@
       // battle chrome cleared, held keys released, `dead` flag lifted.
       resetCombatForNewDungeon();
 
-      // Music from the top: loadMusicBank tears down the running explore/battle loops and
-      // starts them fresh. playSfx('start') is the same sting enterDungeon plays on entry.
+      // Music from the top: the death loop that was scoring the box gives way, and
+      // loadMusicBank tears down the running explore/battle loops and starts them fresh.
+      // playSfx('start') is the same sting enterDungeon plays on entry.
+      stopScreenMusic();
       loadMusicBank(dungeonSnapshot.bundle && dungeonSnapshot.bundle.music);
-      playSfx('start', { vary: 0 });
+      playSfx('start', { vary: 0, gain: START_STING_GAIN });
 
       render3D();
       drawMinimap();
@@ -2260,6 +2380,7 @@
       buildLanternWallFromBase(wallTexture, "Windows 95");
       buildDynamicExitSignTexture("Windows 95", wallTexture);
       buildDoorTexture(wallTexture, "Windows 95");
+      buildOpenDoorTexture();
       buildSwitchWallTextures(wallTexture, "Windows 95");
     }
 
@@ -2466,101 +2587,187 @@
       doorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
 
-    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). Composites the style-matched AI
-    // lever cutout (aiSwitchImg) onto the wall - dim + tilted for OFF, upright + green glow
-    // for ON - or paints a procedural lever when no art came back. Footprint mirrors the
-    // lantern's (see buildLanternWallFromBase).
+    // The opened gate (MAP tile 6). A door that vanished on unlocking used to leave the player
+    // no evidence a gate had ever been there, so an opened one keeps a doorway: the jamb stays,
+    // the leaf stands swung back against one post, and the middle is transparent so the player
+    // both sees and walks through it.
+    //
+    // Every pixel comes from doorTexture - the closed door - so whatever style the generator
+    // returned, the open gate matches it with no second piece of art to generate: the jamb IS
+    // that art's own border, and the leaf is that art squashed edge-on. Sampled from the
+    // vertical band the wall renderer actually shows (the texTop crop in render3D) so the open
+    // jamb lines up with the closed door it replaces.
+    function buildOpenDoorTexture() {
+      if (!doorTexture) { doorOpenTexture = null; return; }
+
+      const bandY = Math.round((TEX_SIZE * (1 - WALL_HEIGHT)) / 2);
+      const bandH = Math.round(TEX_SIZE * WALL_HEIGHT);
+
+      const src = document.createElement('canvas');
+      src.width = src.height = TEX_SIZE;
+      src.getContext('2d').putImageData(doorTexture, 0, 0);
+
+      const cv = document.createElement('canvas');
+      cv.width = DOOR_SPR_W; cv.height = DOOR_SPR_H;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      const post = Math.round(DOOR_SPR_W * 0.13);      // side jamb thickness
+      const lintel = Math.round(DOOR_SPR_H * 0.12);    // head jamb thickness
+      const openW = DOOR_SPR_W - 2 * post;
+      const openH = DOOR_SPR_H - lintel;               // opening runs down to the floor
+
+      // 1. the closed door's visible band, with the opening punched out of it -> jamb ring
+      c.drawImage(src, 0, bandY, TEX_SIZE, bandH, 0, 0, DOOR_SPR_W, DOOR_SPR_H);
+      c.globalCompositeOperation = 'destination-out';
+      c.fillRect(post, lintel, openW, openH);
+      c.globalCompositeOperation = 'source-over';
+
+      // 2. dark reveals down the inside of each post + a shadow under the lintel, so the
+      //    opening reads as a threshold with depth rather than a hole cut in the wall
+      const reveal = c.createLinearGradient(post, 0, post + openW, 0);
+      reveal.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
+      reveal.addColorStop(0.13, 'rgba(0, 0, 0, 0)');
+      reveal.addColorStop(0.87, 'rgba(0, 0, 0, 0)');
+      reveal.addColorStop(1, 'rgba(0, 0, 0, 0.55)');
+      c.fillStyle = reveal;
+      c.fillRect(post, lintel, openW, openH);
+
+      const head = c.createLinearGradient(0, lintel, 0, lintel + openH * 0.22);
+      head.addColorStop(0, 'rgba(0, 0, 0, 0.5)');
+      head.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      c.fillStyle = head;
+      c.fillRect(post, lintel, openW, openH * 0.22);
+
+      // 3. the leaf - the same door face squashed into a narrow slab hinged against the left
+      //    post, darkened because it is turned away from the corridor
+      const leafW = Math.max(2, Math.round(openW * 0.26));
+      const leaf = document.createElement('canvas');
+      leaf.width = leafW; leaf.height = Math.max(1, openH);
+      const lc = leaf.getContext('2d');
+      lc.imageSmoothingEnabled = true;
+      lc.drawImage(src, 0, bandY, TEX_SIZE, bandH, 0, 0, leaf.width, leaf.height);
+      lc.globalCompositeOperation = 'source-atop';
+      lc.fillStyle = 'rgba(8, 10, 14, 0.42)';
+      lc.fillRect(0, 0, leaf.width, leaf.height);
+
+      c.imageSmoothingEnabled = false;
+      c.drawImage(leaf, post, lintel, leafW, openH);
+
+      // free edge of the swung leaf: a lit lip against a hard shadow, so it separates from
+      // the dark opening behind it instead of smearing into it
+      c.fillStyle = 'rgba(255, 255, 255, 0.16)';
+      c.fillRect(post + leafW - 4, lintel, 2, openH);
+      c.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      c.fillRect(post + leafW - 2, lintel, 3, openH);
+
+      doorOpenTexture = c.getImageData(0, 0, DOOR_SPR_W, DOOR_SPR_H);
+    }
+
+    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). OFF is the plain themed fixture -
+    // the style-matched AI lever (aiSwitchImg), or a procedural plate when no art came back -
+    // mounted on the wall in its resting pose. ON is then built by redrawing THAT SAME OFF
+    // CANVAS and lighting it: the indicator lamp comes on and a green bloom spills onto the
+    // wall around the fixture. The lever itself never moves or tilts between the two, so they
+    // read as one fixture switched on rather than two different props.
+    //
+    // The fixture is deliberately small and chunky - the AI cutout is downsampled to SWITCH_SRC
+    // px before being blown back up with smoothing off - so it sits in the wall at roughly
+    // lantern scale and at the wall texture's own resolution, instead of floating over it as a
+    // smooth high-res decal.
     function buildSwitchWallTextures(baseWallImageData, styleName = "Windows 95") {
       const haveArt = aiSwitchImg && aiSwitchImg.complete && aiSwitchImg.naturalWidth > 0;
+      const isWin95 = styleName.toLowerCase().includes('windows');
 
-      function make(on) {
-        const cv = document.createElement('canvas');
-        cv.width = cv.height = TEX_SIZE;
-        const c = cv.getContext('2d');
-        c.imageSmoothingEnabled = false;
-        if (baseWallImageData) c.putImageData(baseWallImageData, 0, 0);
+      const cx = 128;                 // fixture centre on the wall
+      const baseY = 142;              // where the fixture's bottom edge sits
+      const maxW = 34, maxH = 56;     // fixture footprint (was 52x92)
+      const SWITCH_SRC = 24;          // chunky-pixel source size for the AI cutout
+      const lampX = cx, lampY = baseY + 9, lampR = 4;
 
-        const cx = 128;
-        const baseY = 150;
+      // ---- OFF: the themed fixture, unlit ------------------------------------------------
+      const off = document.createElement('canvas');
+      off.width = off.height = TEX_SIZE;
+      const oc = off.getContext('2d');
+      oc.imageSmoothingEnabled = false;
+      if (baseWallImageData) oc.putImageData(baseWallImageData, 0, 0);
 
-        if (haveArt) {
-          const maxW = 52, maxH = 92;
-          const scale = Math.min(maxW / aiSwitchImg.naturalWidth, maxH / aiSwitchImg.naturalHeight, 1);
-          const dw = aiSwitchImg.naturalWidth * scale;
-          const dh = aiSwitchImg.naturalHeight * scale;
+      let fw = maxW, fh = maxH;       // actual fixture size, reused for the ON bloom
+      if (haveArt) {
+        const scale = Math.min(maxW / aiSwitchImg.naturalWidth, maxH / aiSwitchImg.naturalHeight, 1);
+        fw = Math.max(1, Math.round(aiSwitchImg.naturalWidth * scale));
+        fh = Math.max(1, Math.round(aiSwitchImg.naturalHeight * scale));
 
-          if (on) {
-            const bloom = c.createRadialGradient(cx, baseY - dh * 0.55, 2, cx, baseY - dh * 0.55, dh * 0.9);
-            bloom.addColorStop(0, 'rgba(74, 222, 128, 0.75)');
-            bloom.addColorStop(0.5, 'rgba(34, 197, 94, 0.28)');
-            bloom.addColorStop(1, 'rgba(22, 163, 74, 0)');
-            c.globalCompositeOperation = 'lighter';
-            c.fillStyle = bloom;
-            c.fillRect(cx - dw * 1.6, baseY - dh * 1.7, dw * 3.2, dh * 2.2);
-            c.globalCompositeOperation = 'source-over';
-          }
+        const longest = Math.max(fw, fh);
+        const sw = Math.max(1, Math.round(SWITCH_SRC * (fw / longest)));
+        const sh = Math.max(1, Math.round(SWITCH_SRC * (fh / longest)));
+        const small = document.createElement('canvas');
+        small.width = sw; small.height = sh;
+        const sc = small.getContext('2d');
+        sc.imageSmoothingEnabled = true;
+        sc.drawImage(aiSwitchImg, 0, 0, sw, sh);
 
-          c.save();
-          c.imageSmoothingEnabled = true;
-          if (on) {
-            c.drawImage(aiSwitchImg, cx - dw / 2, baseY - dh, dw, dh);
-          } else {
-            // dim + tilt the lever "down"
-            const tmp = document.createElement('canvas');
-            tmp.width = Math.max(1, Math.ceil(dw));
-            tmp.height = Math.max(1, Math.ceil(dh));
-            const tc = tmp.getContext('2d');
-            tc.imageSmoothingEnabled = true;
-            tc.drawImage(aiSwitchImg, 0, 0, tmp.width, tmp.height);
-            tc.globalCompositeOperation = 'source-atop';
-            tc.fillStyle = 'rgba(20, 24, 30, 0.45)';
-            tc.fillRect(0, 0, tmp.width, tmp.height);
-            c.translate(cx, baseY);
-            c.rotate(-0.35);
-            c.drawImage(tmp, -dw / 2, -dh);
-          }
-          c.restore();
-          c.imageSmoothingEnabled = false;
-        } else {
-          const isWin95 = styleName.toLowerCase().includes('windows');
-          // mounting plate
-          c.fillStyle = isWin95 ? '#94a3b8' : '#18181b';
-          c.fillRect(cx - 16, baseY - 44, 32, 44);
-          c.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
-          c.lineWidth = 3;
-          c.strokeRect(cx - 16, baseY - 44, 32, 44);
-          // pivot
-          c.fillStyle = '#52525b';
-          c.beginPath(); c.arc(cx, baseY - 22, 5, 0, Math.PI * 2); c.fill();
-          // lever
-          c.strokeStyle = on ? '#16a34a' : '#a1a1aa';
-          c.lineWidth = 7;
-          c.beginPath();
-          c.moveTo(cx, baseY - 22);
-          if (on) c.lineTo(cx + 16, baseY - 46);
-          else c.lineTo(cx - 16, baseY - 4);
-          c.stroke();
-          // knob + indicator
-          c.fillStyle = on ? '#22c55e' : '#71717a';
-          c.beginPath();
-          c.arc(on ? cx + 16 : cx - 16, on ? baseY - 46 : baseY - 4, 6, 0, Math.PI * 2);
-          c.fill();
-          if (on) {
-            const g = c.createRadialGradient(cx, baseY - 30, 2, cx, baseY - 30, 40);
-            g.addColorStop(0, 'rgba(74, 222, 128, 0.55)');
-            g.addColorStop(1, 'rgba(34, 197, 94, 0)');
-            c.globalCompositeOperation = 'lighter';
-            c.fillStyle = g;
-            c.fillRect(cx - 45, baseY - 70, 90, 90);
-            c.globalCompositeOperation = 'source-over';
-          }
-        }
-
-        return c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+        oc.imageSmoothingEnabled = false;
+        oc.drawImage(small, cx - fw / 2, baseY - fh, fw, fh);
+      } else {
+        // Procedural fallback, drawn once in its resting pose - the ON state below lights it
+        // rather than redrawing the lever somewhere else.
+        oc.fillStyle = isWin95 ? '#94a3b8' : '#27272a';
+        oc.fillRect(cx - 11, baseY - 30, 22, 30);
+        oc.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
+        oc.lineWidth = 2;
+        oc.strokeRect(cx - 11, baseY - 30, 22, 30);
+        oc.fillStyle = '#52525b';
+        oc.beginPath(); oc.arc(cx, baseY - 15, 4, 0, Math.PI * 2); oc.fill();
+        oc.strokeStyle = isWin95 ? '#b91c1c' : '#a1a1aa';
+        oc.lineWidth = 5;
+        oc.beginPath();
+        oc.moveTo(cx, baseY - 15);
+        oc.lineTo(cx - 9, baseY - 2);
+        oc.stroke();
+        oc.fillStyle = isWin95 ? '#dc2626' : '#71717a';
+        oc.beginPath(); oc.arc(cx - 9, baseY - 2, 4, 0, Math.PI * 2); oc.fill();
+        fw = 22; fh = 30;
       }
 
-      switchWallOffTexture = make(false);
-      switchWallOnTexture = make(true);
+      // Indicator lamp on the mounting plate, dark. This is the one part that changes state,
+      // so it is drawn in the same place in both textures.
+      oc.fillStyle = isWin95 ? '#64748b' : '#3f3f46';
+      oc.beginPath(); oc.arc(lampX, lampY, lampR + 2, 0, Math.PI * 2); oc.fill();
+      oc.fillStyle = '#3f3f46';
+      oc.beginPath(); oc.arc(lampX, lampY, lampR, 0, Math.PI * 2); oc.fill();
+
+      switchWallOffTexture = oc.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+
+      // ---- ON: that same fixture, lit ----------------------------------------------------
+      const on = document.createElement('canvas');
+      on.width = on.height = TEX_SIZE;
+      const nc = on.getContext('2d');
+      nc.imageSmoothingEnabled = false;
+      nc.drawImage(off, 0, 0);                                  // the OFF switch, verbatim
+
+      nc.fillStyle = '#bbf7d0';
+      nc.beginPath(); nc.arc(lampX, lampY, lampR, 0, Math.PI * 2); nc.fill();
+      nc.fillStyle = '#22c55e';
+      nc.beginPath(); nc.arc(lampX, lampY, lampR - 1.5, 0, Math.PI * 2); nc.fill();
+
+      nc.globalCompositeOperation = 'lighter';
+      const lit = nc.createRadialGradient(cx, baseY - fh * 0.45, 2,
+                                          cx, baseY - fh * 0.45, Math.max(fw, fh) * 1.6);
+      lit.addColorStop(0, 'rgba(74, 222, 128, 0.5)');
+      lit.addColorStop(0.45, 'rgba(34, 197, 94, 0.2)');
+      lit.addColorStop(1, 'rgba(22, 163, 74, 0)');
+      nc.fillStyle = lit;
+      nc.fillRect(cx - fw * 2, baseY - fh * 2.2, fw * 4, fh * 3.2);
+
+      const lampGlow = nc.createRadialGradient(lampX, lampY, 1, lampX, lampY, 24);
+      lampGlow.addColorStop(0, 'rgba(134, 239, 172, 0.7)');
+      lampGlow.addColorStop(1, 'rgba(34, 197, 94, 0)');
+      nc.fillStyle = lampGlow;
+      nc.fillRect(lampX - 24, lampY - 24, 48, 48);
+      nc.globalCompositeOperation = 'source-over';
+
+      switchWallOnTexture = nc.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
 
     // ==========================================
@@ -3029,7 +3236,10 @@
             hit = 1;
             break;
           }
-          if (MAP[mapY][mapX] > 0) hit = MAP[mapY][mapX];
+          // 6 is an opened gate: walkable and see-through, so the ray passes it and the
+          // doorway is drawn as a sprite in the open-gate pass below.
+          const cell = MAP[mapY][mapX];
+          if (cell > 0 && cell !== 6) hit = cell;
         }
 
         if (side === 0) perpWallDist = (mapX - posX + (1 - stepX) / 2) / rayDirX;
@@ -3153,6 +3363,63 @@
         }
       }
 
+      // Open gates (MAP tile 6). Billboards rather than wall tiles, because the tile has to
+      // stay walkable and see-through. A door only ever sits in a one-tile connector with solid
+      // walls on both flanks, so it is only ever visible from along its own corridor - which
+      // makes a camera-facing quad indistinguishable from a fixed doorway here. Sorted far ->
+      // near and z-tested per stripe like the sign above; alpha fades out as the camera reaches
+      // the threshold so stepping through does not smear the leaf across the whole view.
+      if (doorOpenTexture && doorList.length) {
+        const gates = [];
+        for (const d of doorList) {
+          if (!d.opened) continue;
+          const sx = (d.x + 0.5) - posX, sy = (d.y + 0.5) - posY;
+          gates.push({ sx, sy, d2: sx * sx + sy * sy });
+        }
+        gates.sort((a, b) => b.d2 - a.d2);
+
+        const gData = doorOpenTexture.data;
+        const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+        const halfCell = screenWidth / (4 * Math.tan(halfFov));   // half a cell wide at dist 1
+
+        for (const g of gates) {
+          const transformX = invDet * (dirY * g.sx - dirX * g.sy);
+          const transformY = invDet * (-planeY * g.sx + planeX * g.sy);
+          if (transformY < 0.35) continue;
+          const fade = Math.min(1, (transformY - 0.35) / 0.5);
+          if (fade <= 0.02) continue;
+
+          const spriteScreenX = (screenWidth / 2) * (1 + transformX / transformY);
+          const spriteH = (screenHeight * WALL_HEIGHT) / transformY;   // same as a wall column
+          const spriteW = (halfCell * 2) / transformY;
+          const topY = screenHeight / 2 - spriteH / 2;
+          const leftX = spriteScreenX - spriteW / 2;
+
+          const startX = Math.max(0, Math.floor(leftX));
+          const endX = Math.min(screenWidth - 1, Math.ceil(leftX + spriteW));
+          const startY = Math.max(0, Math.floor(topY));
+          const endY = Math.min(screenHeight - 1, Math.ceil(topY + spriteH));
+          const shade = 1.0 / (1.0 + transformY * 0.38);
+
+          for (let stripe = startX; stripe <= endX; stripe++) {
+            if (transformY >= zBuffer[stripe]) continue;
+            const texX = Math.floor(((stripe - leftX) * DOOR_SPR_W) / spriteW);
+            if (texX < 0 || texX >= DOOR_SPR_W) continue;
+            for (let y = startY; y <= endY; y++) {
+              const texY = Math.floor(((y - topY) * DOOR_SPR_H) / spriteH);
+              if (texY < 0 || texY >= DOOR_SPR_H) continue;
+              const sIdx = (texY * DOOR_SPR_W + texX) * 4;
+              const alpha = (gData[sIdx + 3] / 255) * fade;
+              if (alpha <= 0.05) continue;
+              const pIdx = (y * screenWidth + stripe) * 4;
+              buffer[pIdx]     = Math.min(255, buffer[pIdx]     * (1 - alpha) + gData[sIdx]     * shade * alpha);
+              buffer[pIdx + 1] = Math.min(255, buffer[pIdx + 1] * (1 - alpha) + gData[sIdx + 1] * shade * alpha);
+              buffer[pIdx + 2] = Math.min(255, buffer[pIdx + 2] * (1 - alpha) + gData[sIdx + 2] * shade * alpha);
+            }
+          }
+        }
+      }
+
       ctx.putImageData(imgData, 0, 0);
 
       // Render 3D Combat Entities
@@ -3169,7 +3436,7 @@
       const row = MAP[player.gridY + vec.dy];
       const t = row ? row[player.gridX + vec.dx] : undefined;
       if (t !== 3 && t !== 4 && t !== 5) return;
-      const label = t === 3 ? 'LOCKED' : (t === 5 ? 'E : RESET' : 'E : USE');
+      const label = t === 3 ? 'LOCKED' : (t === 5 ? 'THROWN' : 'E : USE');
       c.save();
       c.font = 'bold 11px "Courier New", monospace';
       c.textAlign = 'center';
@@ -3233,25 +3500,38 @@
         ];
 
         adj.forEach(w => {
-          if (w.x >= 0 && w.x < MAP_WIDTH && w.y >= 0 && w.y < MAP_HEIGHT && MAP[w.y][w.x] >= 1) {
-            const wx = offsetX + w.x * tileSize;
-            const wy = offsetY + w.y * tileSize;
-            c.fillStyle = '#334155';
-            c.fillRect(wx, wy, tileSize, tileSize);
-            c.strokeStyle = '#475569';
-            c.lineWidth = 0.5;
-            c.strokeRect(wx, wy, tileSize, tileSize);
+          if (w.x < 0 || w.x >= MAP_WIDTH || w.y < 0 || w.y >= MAP_HEIGHT) return;
+          const mv = MAP[w.y][w.x];
+          if (mv < 1) return;
+          const wx = offsetX + w.x * tileSize;
+          const wy = offsetY + w.y * tileSize;
 
-            const mv = MAP[w.y][w.x];
-            if (mv === 3) {
-              c.fillStyle = '#b45309';
-              c.fillRect(wx + 2, wy + 2, tileSize - 4, tileSize - 4);
-            } else if (mv === 4 || mv === 5) {
-              c.fillStyle = mv === 5 ? '#22c55e' : '#f97316';
-              c.beginPath();
-              c.arc(wx + tileSize / 2, wy + tileSize / 2, Math.max(2, tileSize * 0.22), 0, Math.PI * 2);
-              c.fill();
-            }
+          // An opened gate is a passage now, not a wall - floor-coloured with the jamb left
+          // as an outline, so the map shows where the gate was and that it is through.
+          if (mv === 6) {
+            c.fillStyle = '#2563eb';
+            c.fillRect(wx, wy, tileSize, tileSize);
+            c.strokeStyle = '#b45309';
+            c.lineWidth = 2;
+            c.strokeRect(wx + 1, wy + 1, tileSize - 2, tileSize - 2);
+            return;
+          }
+
+          c.fillStyle = '#334155';
+          c.fillRect(wx, wy, tileSize, tileSize);
+          c.strokeStyle = '#475569';
+          c.lineWidth = 0.5;
+          c.strokeRect(wx, wy, tileSize, tileSize);
+
+          if (mv === 3) {
+            c.fillStyle = '#b45309';
+            c.fillRect(wx + 2, wy + 2, tileSize - 4, tileSize - 4);
+          } else if (mv === 4 || mv === 5) {
+            // Small dot: a switch is a fixture on a wall tile, not the whole tile.
+            c.fillStyle = mv === 5 ? '#22c55e' : '#f97316';
+            c.beginPath();
+            c.arc(wx + tileSize / 2, wy + tileSize / 2, Math.max(1.5, tileSize * 0.13), 0, Math.PI * 2);
+            c.fill();
           }
         });
       });
@@ -3279,6 +3559,10 @@
         winMovesCount.textContent = totalMoves;
         playSfx('end', { vary: 0 });
         victoryModal.classList.remove('hidden');
+        // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
+        // and the victory loop scores the box until the player heads back to the menu.
+        fadeOutDungeonMusic(0.6);
+        setTimeout(() => playScreenMusic('victory'), 700);
       }
     }
 
@@ -3401,7 +3685,7 @@
         const door = doorList.find(d => d.index === sw.doorIndex);
         if (door && !door.opened) {
           door.opened = true;
-          MAP[door.y][door.x] = 0;
+          MAP[door.y][door.x] = 6;          // opened gate: walkable, still drawn as a doorway
           passagesList.push({ x: door.x, y: door.y });
           playSfx('end', { vary: 0.04, gain: 0.6 });
           showFloatingCombatText('THE GATE GRINDS OPEN', 160, 92, '#fde047');
@@ -3415,14 +3699,22 @@
       }
     }
 
+    // Walkable floor: open corridor (0) or an opened gate (6). Everything else - wall (1),
+    // lantern (2), still-locked door (3), switch plate (4/5) - is solid.
+    function isWalkable(x, y) {
+      const row = MAP[y];
+      if (!row) return false;
+      const t = row[x];
+      return t === 0 || t === 6;
+    }
+
     function moveForward() {
       if (player.isAnimating) { queuedAction = 'UP'; return; }
       const vec = DIR_VECS[player.dirIndex];
       const nextX = player.gridX + vec.dx;
       const nextY = player.gridY + vec.dy;
 
-      // STRICT COLLISION: ONLY MAP === 0 is walkable floor! (MAP === 1 and MAP === 2 are solid walls)
-      if (MAP[nextY] && MAP[nextY][nextX] === 0) {
+      if (isWalkable(nextX, nextY)) {
         player.gridX = nextX;
         player.gridY = nextY;
         totalMoves++;
@@ -3440,8 +3732,7 @@
       const nextX = player.gridX - vec.dx;
       const nextY = player.gridY - vec.dy;
 
-      // STRICT COLLISION: ONLY MAP === 0 is walkable floor!
-      if (MAP[nextY] && MAP[nextY][nextX] === 0) {
+      if (isWalkable(nextX, nextY)) {
         player.gridX = nextX;
         player.gridY = nextY;
         totalMoves++;
@@ -3639,6 +3930,7 @@
           buildLanternWallFromBase(wallTexture, styleName);
           buildDynamicExitSignTexture(styleName, wallTexture);
           buildDoorTexture(wallTexture, styleName);
+          buildOpenDoorTexture();
           buildSwitchWallTextures(wallTexture, styleName);
         }
         if (onReady) {
@@ -3707,14 +3999,20 @@
       };
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
-      // Belt-and-braces: armEnterDungeon already stopped the menu loop when loading finished,
-      // but nothing should still be playing it once the dungeon itself starts.
+      // The loading loop plays right up to this click - fade it out under the start sting.
+      stopScreenMusic();
+      // Fetch the win and death loops now, while the player still has a whole dungeon between
+      // them and either box. Decoding a 90s buffer at the moment of death would be audible.
+      loadScreenMusic('death');
+      loadScreenMusic('victory');
+      // Belt-and-braces: playScreenMusic already retired the menu loop when the narrator
+      // finished, but nothing should still be playing it once the dungeon itself starts.
       menuMusicStopped = true;
       stopMenuMusicLoop();
       // v6 ships bundle.sfx; every other mode leaves it undefined and playSfx falls back to
       // the procedural bank.
       loadSfxBank(b.sfx);
-      playSfx('start', { vary: 0 });      // fixed pitch: this one is a signature, not foley
+      playSfx('start', { vary: 0, gain: START_STING_GAIN });   // fixed pitch: a signature, not foley
       // v6 with sound_mode "music_and_sound" ships bundle.music; everything else leaves it
       // undefined and loadMusicBank just tears down the previous dungeon's loops.
       loadMusicBank(b.music);
@@ -3864,12 +4162,17 @@
       crawlText.classList.add('rolling');
 
       startNarration();
+      // A story with no audio (generation failed, or a mode that never renders any) has no
+      // "when the narrator stops" moment to wait for, so the loading loop starts now.
+      if (!narrationActive()) playScreenMusic('loading');
     }
 
     function resetCrawl() {
       // Before anything else: a second CREATE must not leave the previous dungeon's
-      // narrator talking over the new one.
+      // narrator talking over the new one, or its loading loop running under the menu music
+      // this screen opens on.
       stopNarration();
+      stopScreenMusic();
       crawlStarted = false;
       if (crawlStage) crawlStage.style.display = '';
       if (progHeaderText) progHeaderText.textContent = 'Generating Dungeon Assets & Character...';
@@ -3891,10 +4194,7 @@
 
     // Assets are ready, but the player decides when to stop reading.
     function armEnterDungeon(bundle) {
-      // Loading is done - announce it once, then the menu music's job is over. The dungeon's
-      // own explore/battle loops (if any) take over once the player actually enters.
       playSfx('ready');
-      stopMenuMusicForLoadingComplete();
       pendingBundle = bundle;
       if (bundle && bundle.story) {
         dungeonStory = bundle.story;
@@ -3904,6 +4204,12 @@
         // "The chronicle is being written..." sitting there after everything is done.
         if (crawlStage) crawlStage.style.display = 'none';
       }
+      // Loading is done, so the loading loop scores whatever reading time the player takes
+      // before pressing ENTER. Checked after startCrawl above rather than before it, because
+      // on a bundle that carries its own story the narrator only arms on that line - if the
+      // narrator is now running it gets to finish first and finishNarration() starts the
+      // loop, so the two never overlap.
+      if (!narrationActive()) playScreenMusic('loading');
       const where = (dungeonStory && dungeonStory.location) ? dungeonStory.location : '';
       btnEnterDungeon.textContent = where ? ('ENTER ' + where.toUpperCase()) : 'ENTER THE DUNGEON';
       btnEnterDungeon.disabled = false;

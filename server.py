@@ -1586,7 +1586,13 @@ def get_gate_prompts(wall_style):
 
     FLUX schnell at cfg 1.0 - the negative is inert, so these are POSITIVE-ONLY. Name the
     object literally, force flat orthographic framing, isolate on white (see _LANTERN_TAIL
-    notes above for why naming unwanted things backfires)."""
+    notes above for why naming unwanted things backfires).
+
+    Both are single-state art. The switch is the OFF fixture - resting handle, nothing lit -
+    because buildSwitchWallTextures composites the ON state from these exact pixels by lighting
+    an indicator lamp over them, so a lever that comes back already glowing leaves the two
+    states looking identical. For the same reason the door is only ever generated CLOSED:
+    buildOpenDoorTexture derives the open gate from the closed door's own pixels."""
     ui = wall_style.lower()
 
     if any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
@@ -1604,8 +1610,8 @@ def get_gate_prompts(wall_style):
         door_p = ("A sealed dark sci-fi blast door of riveted brushed-metal panels with glowing "
                   "cyan seams, fully closed, flat straight-on orthographic front view, the door "
                   "fills the whole frame edge to edge, zero perspective, zero horizon, zero sky.")
-        switch_p = ("A dark angular metal wall panel with one large recessed lever switch that "
-                    "glows cyan, sci-fi hardware, the handle in its resting position. "
+        switch_p = ("A dark angular metal wall panel with one large recessed lever switch, "
+                    "sci-fi hardware, unpowered and unlit, the handle in its resting position. "
                     + _GATE_TAIL)
 
     elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
@@ -3825,18 +3831,47 @@ def generate_music_pack(wall_style):
 
 
 # ---------------------------------------------------------------------------
-# Static one-off audio: the main menu music loop and the loading-complete chime
+# Static one-off audio: the four screen music loops and the loading-complete chime
 # ---------------------------------------------------------------------------
-# Unlike sfx/music above, these are NOT per-dungeon - the main menu is the same for every
-# player, so there is nothing to theme them off of. Generated once with the same models and
-# committed to sounds/, same as the start/button/end UI sounds. Not called at server runtime;
-# run `python server.py --gen-static-audio` (see the __main__ block) whenever either needs to
-# be re-rolled, and commit the result.
-MENU_MUSIC_SECONDS = 180.0
-MENU_MUSIC_PROMPT = (
-    "Atmospheric heroic fantasy title screen music for a retro 1990s dungeon crawler video "
-    "game, mysterious and inviting, moderate steady tempo, orchestral and synth textures."
-) + _MUSIC_TAIL
+# Unlike sfx/music above, these are NOT per-dungeon - the menu, the loading screen and the
+# win/death boxes look the same for every player, so there is nothing to theme them off of.
+# Generated once with the same models and committed to sounds/, same as the start/button/end
+# UI sounds. Not called at server runtime; run `python server.py --gen-static-audio` (see the
+# __main__ block) whenever one of them needs to be re-rolled, and commit the result.
+#
+# name -> (seconds, prompt), rendered to sounds/<name>_music.wav. The menu and loading loops
+# are three minutes because a player can sit on either for a long time and a short loop gives
+# itself away; the win and death boxes are left in seconds, so ninety is already generous.
+STATIC_MUSIC = {
+    "menu": (180.0, (
+        "Atmospheric heroic fantasy title screen music for a retro 1990s dungeon crawler "
+        "video game, mysterious and inviting, moderate steady tempo, orchestral and synth "
+        "textures."
+    )),
+    # Takes over from the menu loop the moment the intro narration finishes and carries the
+    # loading screen to the ENTER button. Written to sit UNDER a screen the player is reading
+    # and waiting on rather than to be listened to: forward motion, no melody to follow.
+    "loading": (180.0, (
+        "Slow brooding dark fantasy ambient music for a retro 1990s dungeon crawler video "
+        "game, patient and expectant, low sustained strings and soft synth pads over a quiet "
+        "steady pulse, restrained and understated, no melody."
+    )),
+    # Under the death box. Lands after the player's death cry and a beat of silence, so it
+    # can be genuinely slow - it is not competing with anything.
+    "death": (90.0, (
+        "Slow mournful dark fantasy funeral dirge for a retro 1990s dungeon crawler video "
+        "game, heavy and defeated, low strings and a distant tolling bell over a deep drone, "
+        "sombre and final, very slow tempo."
+    )),
+    # Under the victory box, behind the 'end' sting that fires with it. Triumphant, but a bed
+    # rather than a fanfare - a fanfare would fight the sting and then have nowhere to go on
+    # the loop seam.
+    "victory": (90.0, (
+        "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler video "
+        "game, proud and resolved, bright brass and swelling strings over a steady confident "
+        "march, celebratory and full."
+    )),
+}
 
 READY_CHIME_PROMPT = (
     "A bright cheerful two-note magical chime bell, one clean isolated cue sound announcing "
@@ -3844,31 +3879,32 @@ READY_CHIME_PROMPT = (
 )
 
 
-def generate_menu_music_asset():
-    """Renders sounds/menu_music.wav - the fixed, looping main menu track. 3 minutes long so
-    the loop isn't noticeably repetitive; the first cut at 15s looped too obviously. Prints
-    and returns False on failure rather than raising, matching the rest of the audio pipeline."""
+def generate_static_music_asset(name):
+    """Renders sounds/<name>_music.wav for one entry of STATIC_MUSIC. Prints and returns False
+    on failure rather than raising, matching the rest of the audio pipeline - a missing file
+    just means that screen plays silent, which game.js already handles."""
+    seconds, prompt = STATIC_MUSIC[name]
     seed = random.randint(1, 2**31 - 1)
     payload = {
         "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
         "music_clip": {"inputs": {"clip_name": MUSIC_CLIP, "type": "stable_audio", "device": "default"},
                        "class_type": "CLIPLoader"},
     }
-    _music_add_branch(payload, "menu", MENU_MUSIC_PROMPT, seed, seconds=MENU_MUSIC_SECONDS)
+    _music_add_branch(payload, name, prompt + _MUSIC_TAIL, seed, seconds=seconds)
     try:
-        paths = _krea2_submit_and_collect(payload, ["menu"], timeout=1800, out_key="audio")
-        url, problem = _finish_music(paths["menu"], "menu")
+        paths = _krea2_submit_and_collect(payload, [name], timeout=1800, out_key="audio")
+        url, problem = _finish_music(paths[name], name)
     except Exception as e:
-        print(f"[menu music] generation failed ({e})")
+        print(f"[{name} music] generation failed ({e})")
         return False
     if problem:
-        print(f"[menu music] {problem} - try again (a fresh seed each run)")
+        print(f"[{name} music] {problem} - try again (a fresh seed each run)")
         return False
     data = base64.b64decode(url.split(",", 1)[1])
-    out_path = os.path.join(PROJECT_DIR, "sounds", "menu_music.wav")
+    out_path = os.path.join(PROJECT_DIR, "sounds", f"{name}_music.wav")
     with open(out_path, "wb") as f:
         f.write(data)
-    print(f"[menu music] saved {out_path} ({len(data) / 1024:.0f} KB)")
+    print(f"[{name} music] saved {out_path} ({len(data) / 1024:.0f} KB)")
     return True
 
 
@@ -4706,16 +4742,17 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
-        # The static UI sounds (start / button / end), the main menu music loop, and the
+        # The static UI sounds (start / button / end), the four screen music loops, and the
         # loading-complete chime. Unlike the gameplay foley these do not change with the
-        # theme, so they were generated once (see generate_menu_music_asset /
+        # theme, so they were generated once (see generate_static_music_asset /
         # generate_ready_chime_asset) and committed to sounds/ rather than costing time in
         # every run.
         elif self.path.startswith("/sounds/"):
             name = os.path.basename(self.path)
             # Basename alone already defeats "../", but the whitelist keeps this route from
             # ever becoming a general file server.
-            if name in ("start.wav", "button.wav", "end.wav", "menu_music.wav", "ready.wav"):
+            if name in (("start.wav", "button.wav", "end.wav", "ready.wav")
+                        + tuple(f"{k}_music.wav" for k in STATIC_MUSIC)):
                 wav_file = os.path.join(PROJECT_DIR, "sounds", name)
                 if os.path.exists(wav_file):
                     with open(wav_file, "rb") as f:
@@ -4822,13 +4859,18 @@ def run_server():
         httpd.serve_forever()
 
 if __name__ == "__main__":
-    # One-off static audio asset generation - see generate_menu_music_asset /
+    # One-off static audio asset generation - see generate_static_music_asset /
     # generate_ready_chime_asset. Does not touch PORT or start the HTTP server.
+    # --gen-static-audio does the lot; --gen-<name>-music re-rolls one loop on a fresh seed,
+    # which is the flag you actually want when a single track comes back wrong.
+    single = [k for k in STATIC_MUSIC if f"--gen-{k}-music" in sys.argv]
     if "--gen-static-audio" in sys.argv:
-        generate_menu_music_asset()
+        for key in STATIC_MUSIC:
+            generate_static_music_asset(key)
         generate_ready_chime_asset()
-    elif "--gen-menu-music" in sys.argv:
-        generate_menu_music_asset()
+    elif single:
+        for key in single:
+            generate_static_music_asset(key)
     elif "--gen-ready-chime" in sys.argv:
         generate_ready_chime_asset()
     else:
