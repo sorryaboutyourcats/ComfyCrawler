@@ -520,41 +520,18 @@
 
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800">
-              Select Engine Mode:
+              Graphics Quality:
             </label>
-            <select id="modeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-              <option value="v6_krea" selected>⚡ v6 krea2 turbo (7-Frame Swing Animation)</option>
-              <option value="v5_krea">v5 krea2 turbo (One-Shot Character Engine)</option>
-              <option value="v4_flux">v4 Multi-Frame Sprite Engine (FLUX Animated Sprite Sheet)</option>
-              <option value="v3_flux">v3 FLUX.1 [schnell] (Single Warrior + Valbrace Modular Rig)</option>
-              <option value="v2_texture">v2 texture (MiniMax H3 Material Texture + 3D Engine)</option>
-              <option value="v1_video">v1 video (FMV Video Clips)</option>
+            <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+              <option value="normal" selected>Normal (full resolution)</option>
+              <option value="reduced">Reduced (half resolution &ndash; faster)</option>
             </select>
-            <div id="modeDesc" class="text-[11px] text-blue-900 mt-1">
-              <strong>v6 krea2 turbo:</strong> like v5, but the player is a 7-frame krea2 swing animation (shared seed) swapped through on block / attack / hurt, the way v4 did it.
-            </div>
-          </div>
-
-          <div id="krea2Settings" class="win95-box p-3 bg-slate-100 flex flex-col gap-2">
-            <label class="text-xs font-bold text-slate-800">krea2 turbo (v5) generation settings:</label>
-            <div class="flex justify-between items-center gap-2">
-              <label class="text-[11px] font-bold text-slate-700" for="krea2ResInput">Resolution (square px)</label>
-              <input type="number" id="krea2ResInput" min="384" max="1280" step="64" value="512" class="win95-input w-20 text-center text-xs font-bold" />
-            </div>
-            <div class="flex justify-between items-center gap-2">
-              <label class="text-[11px] font-bold text-slate-700" for="krea2StepsInput">Sampler steps</label>
-              <input type="number" id="krea2StepsInput" min="4" max="20" step="1" value="8" class="win95-input w-20 text-center text-xs font-bold" />
-            </div>
-            <div class="flex justify-between items-center gap-2">
-              <label class="text-[11px] font-bold text-slate-700" for="krea2PortraitResInput">HUD portrait res (square px)</label>
-              <input type="number" id="krea2PortraitResInput" min="128" max="768" step="64" value="128" class="win95-input w-20 text-center text-xs font-bold" />
-            </div>
-            <div class="text-[10px] text-slate-500 font-bold">Lower all three for faster generation. 512&nbsp;px / 8&nbsp;steps is the current baseline; bump to 768&ndash;896 for more detail. Four portrait frames (idle / attack / block / hurt) are generated at the portrait res &ndash; 128 holds up fine in the ~112&nbsp;px HUD slot.</div>
+            <div class="text-[10px] text-slate-500 font-bold">Reduced halves the pixel resolution of every generated texture, sprite, enemy and HUD portrait (a 512&times;512 texture becomes 256&times;256) for a faster, lighter dungeon. Normal is the full-quality default.</div>
           </div>
 
           <div id="soundModeRow" class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800">
-              Sound Generation (v6 only):
+              Sound Generation:
             </label>
             <select id="soundModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
               <option value="music_and_sound" selected>Generated music and sound</option>

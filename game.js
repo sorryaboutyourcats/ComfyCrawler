@@ -14,12 +14,11 @@
     const btnRestartDungeon = document.getElementById('btnRestartDungeon');
     const btnDeadNewDungeon = document.getElementById('btnDeadNewDungeon');
 
-    const modeSelect = document.getElementById('modeSelect');
-    const modeDesc = document.getElementById('modeDesc');
-    const krea2ResInput = document.getElementById('krea2ResInput');
-    const krea2StepsInput = document.getElementById('krea2StepsInput');
-    const krea2PortraitResInput = document.getElementById('krea2PortraitResInput');
-    const soundModeRow = document.getElementById('soundModeRow');
+    // Engine mode is fixed at v6 (see activeMode below) - the picker was removed. The krea2
+    // resolution / steps / portrait-res number inputs were removed too (never adjusted); the
+    // server uses its own defaults. The only setup dropdowns left are graphics quality and
+    // sound generation.
+    const gfxQualitySelect = document.getElementById('gfxQualitySelect');
     const soundModeSelect = document.getElementById('soundModeSelect');
     const difficultyRow = document.getElementById('difficultyRow');
     const gridDesc = document.getElementById('gridDesc');
@@ -888,25 +887,6 @@
     btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
-
-    const MODE_DESCRIPTIONS = {
-      v6_krea: '<strong>v6 krea2 turbo:</strong> like v5, but the player is a 7-frame krea2 swing animation (shared seed) swapped through on block / attack / hurt, the way v4 did it.',
-      v5_krea: '<strong>v5 krea2 turbo:</strong> FLUX schnell tiles the dungeon; krea2 turbo makes the player, weapon, shield, enemy & portrait in one clean pass each.',
-      v4_flux: '<strong>v4 Multi-Frame Sprite Engine:</strong> SDXL-Lightning + IPAdapter + OpenPose rig, 5 posed player frames with composited gear.',
-      v3_flux: '<strong>v3 FLUX.1 [schnell]:</strong> Synthesizes full 3D environment & custom warrior character in ~10s.',
-      v2_texture: '<strong>v2 texture:</strong> MiniMax H3 material textures in a 3D raycaster.',
-      v1_video: '<strong>v1 video:</strong> Pre-rendered frame-chained FMV clips.',
-    };
-    const krea2Settings = document.getElementById('krea2Settings');
-    const KREA2_MODES = ['v5_krea', 'v6_krea'];
-    const syncModeDesc = () => {
-      if (modeDesc && MODE_DESCRIPTIONS[modeSelect.value]) modeDesc.innerHTML = MODE_DESCRIPTIONS[modeSelect.value];
-      if (krea2Settings) krea2Settings.classList.toggle('hidden', !KREA2_MODES.includes(modeSelect.value));
-      // sfx/music generation is v6-only, unlike krea2Settings above which v5 uses too.
-      if (soundModeRow) soundModeRow.classList.toggle('hidden', modeSelect.value !== 'v6_krea');
-    };
-    modeSelect.addEventListener('change', syncModeDesc);
-    syncModeDesc();
 
     // Each quick idea fills in the whole setup - dungeon look plus the player, weapon and
     // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
@@ -4624,7 +4604,7 @@
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       currentThemeName = wallStyle;
-      activeMode = modeSelect.value;
+      activeMode = 'v6_krea';   // engine mode picker removed - v6 is the only engine now
       const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
 
       // Start every dungeon from a clean slate. Quitting straight from an active battle (without
@@ -4662,10 +4642,8 @@
             enemy_style: enemyPromptInput ? enemyPromptInput.value.trim() : "",
             enemy_image: attachedImages.enemy || null,
             mode: activeMode,
-            krea_res: krea2ResInput ? parseInt(krea2ResInput.value) || 512 : 512,
-            krea_steps: krea2StepsInput ? parseInt(krea2StepsInput.value) || 8 : 8,
-            krea_portrait_res: krea2PortraitResInput ? parseInt(krea2PortraitResInput.value) || 128 : 128,
-            sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound'
+            sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound',
+            graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal'
           })
         });
 
