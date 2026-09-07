@@ -58,6 +58,76 @@ KREA2_PORTRAIT_RES_DEFAULT = 256
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
+# ---------------------------------------------------------------------------
+# File logging. Until this, server.py only ever wrote to its console - so when the
+# process died (terminal closed, machine slept, an unhandled exception) there was
+# nothing left to say why. Everything on stdout/stderr - our own print()s,
+# BaseHTTPRequestHandler's access log, and any traceback - is now also appended to
+# server.log next to this file, with the prior run rolled to server.log.1 on start.
+LOG_PATH = os.path.join(PROJECT_DIR, "server.log")
+
+
+class _Tee:
+    """Write-through to the real stream plus the log file; never let the log break output."""
+    def __init__(self, stream, fh):
+        self._stream = stream
+        self._fh = fh
+
+    def write(self, text):
+        try:
+            self._stream.write(text)
+        except Exception:
+            pass
+        try:
+            self._fh.write(text)
+            self._fh.flush()
+        except Exception:
+            pass
+
+    def flush(self):
+        for t in (self._stream, self._fh):
+            try:
+                t.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        return getattr(self._stream, "isatty", lambda: False)()
+
+
+def _init_file_logging():
+    try:
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 0:
+            bak = LOG_PATH + ".1"
+            try:
+                if os.path.exists(bak):
+                    os.remove(bak)
+            except Exception:
+                pass
+            try:
+                os.replace(LOG_PATH, bak)
+            except Exception:
+                pass
+        fh = open(LOG_PATH, "a", encoding="utf-8", buffering=1)
+    except Exception as e:  # a locked/unwritable log must not stop the server
+        print(f"[log] could not open {LOG_PATH}: {e}")
+        return
+    fh.write("\n===== ComfyCrawler server start %s (pid %d) =====\n"
+             % (time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
+    fh.flush()
+    sys.stdout = _Tee(sys.stdout, fh)
+    sys.stderr = _Tee(sys.stderr, fh)
+
+    def _log_uncaught(exc_type, exc, tb):
+        import traceback
+        sys.stderr.write("[FATAL] uncaught exception - server exiting:\n")
+        traceback.print_exception(exc_type, exc, tb)
+
+    sys.excepthook = _log_uncaught
+
+
+_init_file_logging()
+
 gen_progress = {
     "is_generating": False,
     "current_step": 0,
@@ -5030,8 +5100,18 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 def run_server():
     print(f"Starting ComfyCrawler Trio Server on http://127.0.0.1:{PORT}...")
     PROGRESS.start()
-    with socketserver.TCPServer(("", PORT), DungeonHTTPRequestHandler) as httpd:
-        httpd.serve_forever()
+    try:
+        with socketserver.TCPServer(("", PORT), DungeonHTTPRequestHandler) as httpd:
+            httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("Server stopped (Ctrl+C).")
+    except Exception:
+        import traceback
+        print("[FATAL] server loop crashed:")
+        traceback.print_exc()
+        raise
+    finally:
+        print("===== server exit %s =====" % time.strftime("%Y-%m-%d %H:%M:%S"))
 
 if __name__ == "__main__":
     # One-off static audio asset generation - see generate_static_music_asset /

@@ -1131,7 +1131,7 @@
         showFloatingCombatText(`${combatState.enemy.name} APPROACHES!`, 160, 80, "#facc15");
       } else {
         if (battleModeBadge) {
-          battleModeBadge.textContent = "MAZE EXPLORATION";
+          battleModeBadge.textContent = "EXPLORATION TIME";
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800";
         }
         if (battleActionBar) battleActionBar.classList.add('hidden');
@@ -1206,6 +1206,13 @@
       combatState.faceState = 'hurt';
       combatState.faceTimer = 999;
       releaseHeldKeys();                 // a held block must not survive into the modal
+      // Swap the pulsing "BATTLE TIME" badge for the verdict. resetCombatForNewDungeon()
+      // still runs toggleBattleMode(false) on restart/new-dungeon (inBattle is never cleared
+      // here), so this clears itself back to "EXPLORATION TIME" then.
+      if (battleModeBadge) {
+        battleModeBadge.textContent = "YOU DIED";
+        battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-900 text-white";
+      }
       if (deadMovesCount) deadMovesCount.textContent = totalMoves;
       if (defeatText) {
         defeatText.textContent = deathEpitaph();

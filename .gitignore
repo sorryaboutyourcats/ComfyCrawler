@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 dungeon_sessions/
+server.log
+server.log.1
 .DS_Store
 Thumbs.db
 piper_voices/
