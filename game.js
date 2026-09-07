@@ -90,7 +90,7 @@
     const progStatusText = document.getElementById('progStatusText');
     const progPercentText = document.getElementById('progPercentText');
     const progTimer = document.getElementById('progTimer');
-    const progSubText = document.getElementById('progSubText');
+    const progPhaseText = document.getElementById('progPhaseText');
     const crawlStage = document.getElementById('crawlStage');
     const crawlText = document.getElementById('crawlText');
     const crawlPending = document.getElementById('crawlPending');
@@ -5765,7 +5765,7 @@
       if (crawlStage) crawlStage.style.display = '';
       if (progHeaderText) progHeaderText.textContent = 'Generating Dungeon Assets & Character...';
       if (progHeaderIcon) progHeaderIcon.textContent = '\u23f3';
-      progSubText.style.display = '';
+      if (progPhaseText) progPhaseText.textContent = '';
       pendingBundle = null;
       dungeonStory = null;
       applyHeroStatusLabel();
@@ -5807,7 +5807,7 @@
       if (progHeaderText) progHeaderText.textContent = 'Generated!';
       if (progHeaderIcon) progHeaderIcon.textContent = '\u2705';
       progStatusText.textContent = 'Done.';
-      progSubText.style.display = 'none';
+      if (progPhaseText) progPhaseText.textContent = '';
     }
 
     function tryEnterDungeon() {
@@ -5849,8 +5849,6 @@
       if (titleButtons) titleButtons.classList.add('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
-      progSubText.textContent = `Building the ${numGrids}-grid maze while ComfyUI works...`;
-
       generateAuthentic3DMaze(numGrids);
       buildExitStairsTexture(wallStyle, wallTexture);
 
@@ -5885,9 +5883,9 @@
 
             progStatusText.textContent = p.status_message;
             progPercentText.textContent = p.percent + "%";
-            // Live sub-job detail ("slash2 - step 5/8"). This element used to be written
-            // once at submit time and then never again.
-            if (p.phase) progSubText.textContent = p.phase;
+            // Live sub-job detail ("slash2 - step 5/8"), shown inline between the status
+            // message and the percent rather than on its own centered line below.
+            if (p.phase) progPhaseText.textContent = p.phase;
 
             // The story lands minutes ahead of the art - start reading immediately.
             if (p.story && !crawlStarted) startCrawl(p.story);
