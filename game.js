@@ -155,7 +155,9 @@
     let ceilingTexture = null;
     let floorTexture = null;
     let wallLanternTexture = null;
-    let exitSignTexture = null;
+    // The descending stairwell that marks the exit cell - see buildExitStairsTexture. Rebuilt
+    // per dungeon so it is cut from that theme's own stone.
+    let exitStairsTexture = null;
     // AI-generated wall fixture (torch/lantern/lamp) matted onto wallLanternTexture in
     // buildLanternWallFromBase. Null falls back to the procedural shapes drawn there.
     let aiLanternImg = null;
@@ -358,6 +360,12 @@
     const musicOn = true;
     let musicBank = {};            // 'explore'/'battle' -> AudioBuffer
     let musicNodes = {};           // 'explore'/'battle' -> { src, gain }
+    // A sub-bus carrying ONLY the dungeon's own explore/battle beds, so they can be ducked
+    // under a screen loop and brought straight back. The menu and screen loops bypass it and
+    // hang off musicMaster directly - ducking must not touch the thing being ducked FOR.
+    // Without it the only way to quiet the dungeon was fadeOutDungeonMusic, which tears the
+    // looping nodes down; getting them back would mean re-decoding the whole bank.
+    let dungeonMusicBus = null;
 
     function sfxContext() {
       if (!audioCtx) {
@@ -370,6 +378,9 @@
         musicMaster = audioCtx.createGain();
         musicMaster.gain.value = 0.6;
         musicMaster.connect(audioCtx.destination);
+        dungeonMusicBus = audioCtx.createGain();
+        dungeonMusicBus.gain.value = 1;
+        dungeonMusicBus.connect(musicMaster);
       }
       // Created suspended under the autoplay policy until a real gesture resumes it. The
       // first-gesture listener below does that; resuming again here is harmless and covers
@@ -435,7 +446,7 @@
             // Read combat state at the moment playback actually starts, not a hardcoded
             // default - a battle toggle could in principle land between request and decode.
             g.gain.value = ((name === 'battle') === combatState.inBattle) ? 1 : 0;
-            src.connect(g); g.connect(musicMaster);
+            src.connect(g); g.connect(dungeonMusicBus || musicMaster);
             src.start();
             musicNodes[name] = { src, gain: g };
           }, () => {});
@@ -457,6 +468,20 @@
         node.gain.gain.linearRampToValueAtTime(0, now + sec);
       });
       setTimeout(stopMusic, sec * 1000 + 100);
+    }
+
+    // Pull the dungeon's bed down (or back up) without stopping it, so a screen loop can take
+    // the foreground for a moment and hand it straight back. `level` is a multiplier on the
+    // whole dungeon bus: 0 silences the beds, 1 restores them, and the explore/battle balance
+    // underneath is untouched throughout.
+    function duckDungeonMusic(level, sec) {
+      const ctx = sfxContext();
+      if (!ctx || !dungeonMusicBus) return;
+      const now = ctx.currentTime;
+      const g = dungeonMusicBus.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(level, now + Math.max(0.01, sec));
     }
 
     // Single call site drives both directions of the explore/battle crossfade.
@@ -584,12 +609,15 @@
     }
 
     // ---- Screen music (static, generated once, NOT per-dungeon) -------------
-    // Three more fixed loops alongside the menu one, served from sounds/<name>_music.wav -
+    // Four more fixed loops alongside the menu one, served from sounds/<name>_music.wav -
     // see STATIC_MUSIC in server.py:
     //   loading  picks up exactly where the intro narration puts it down and carries the
     //            loading screen to the ENTER button
     //   death    under the death box
     //   victory  under the victory box
+    //   levelup  under the level-up choice box. The odd one out: it plays DURING a run rather
+    //            than over a box that ends one, so instead of the dungeon's bed being faded
+    //            out under it, the bed is ducked on dungeonMusicBus and handed straight back.
     // Exactly one of these and the menu loop is ever audible: playScreenMusic() retires the
     // menu loop for the run and cross-fades off whichever screen track was already up, and
     // returnToMenuMusic() fades the lot out as the menu comes back.
@@ -974,7 +1002,13 @@
     // has 2.4x the walker's HP and hits hardest, the flyer spends most of the fight out of
     // reach. A maze holds ~4-14 markers (see placeEnemyMarkers), so clearing a whole dungeon
     // is worth ~150-350 XP - three to four levels.
-    const ENEMY_XP = { walker: 22, flyer: 28, boss: 60 };
+    // The two pack foes are worth less each because you fight three / two of them: a swarm
+    // pays 3x10 = 30 and a wing 2x12 = 24. The swarm sits above the walker it is built from
+    // because it hits about 1.6x as hard and has more HP between the three of them; the wing
+    // sits BELOW the flyer it is built from, despite being two creatures, because its circle
+    // hands the player an opening roughly every 1.6s against the flyer's 2.9s and it goes
+    // down in a fifth of the time.
+    const ENEMY_XP = { walker: 22, flyer: 28, boss: 60, swarmer: 10, circler: 12 };
 
     // 40 to reach level 2, then 30 more each time: 40 / 70 / 100 / 130... Two walkers make the
     // first level, and the curve outruns a single dungeon's supply by about level 5.
@@ -998,6 +1032,13 @@
 
     const LEVEL_CHOICE_KEYS = ['strength', 'stamina', 'survival'];
     let levelUpOpen = false;
+    // How far the dungeon's bed drops under the level-up loop. Ducked rather than silenced, so
+    // the run is still audibly going on underneath the choice.
+    const LEVELUP_DUCK = 0.18;
+    // Tracks whether the music swap has happened, separately from levelUpOpen: two banked
+    // levels re-open the box without ever closing it, and the loop must not restart between
+    // them (playScreenMusic is idempotent, but the duck ramp would retrigger).
+    let levelUpMusicWasOpen = false;
 
     // ---- Progression -------------------------------------------------------
 
@@ -1072,11 +1113,25 @@
       levelUpModal.classList.remove('hidden');
       syncLevelUpSelection();
       playSfx('end', { vary: 0, gain: 0.55 });
+      // The dungeon's bed steps aside for the level-up loop rather than stopping: this is a
+      // pause inside the run, not the end of one, so the explore/battle beds are ducked (and
+      // kept running) and brought straight back when the choice is taken. Both calls are
+      // no-ops when the loop or the bank never loaded, so a silent run stays silent.
+      if (!levelUpMusicWasOpen) {
+        levelUpMusicWasOpen = true;
+        duckDungeonMusic(LEVELUP_DUCK, 0.35);
+        playScreenMusic('levelup');
+      }
     }
 
     function closeLevelUpModal() {
       levelUpOpen = false;
       if (levelUpModal) levelUpModal.classList.add('hidden');
+      if (levelUpMusicWasOpen) {
+        levelUpMusicWasOpen = false;
+        stopScreenMusic(0.5);
+        duckDungeonMusic(1, 1.1);
+      }
     }
 
     function syncLevelUpSelection() {
@@ -1165,6 +1220,11 @@
       maxHurtFrames: 24,
       shieldProgress: 0.0,
       combatEffects: [],
+      // Every foe on the field. A normal fight holds exactly one entry, and enemies[0] is
+      // always the same object as `enemy` below - the lead. The pack variants (swarmer /
+      // circler) fill it with 3 / 2 of them. Anything that reads ONE foe (the death epitaph,
+      // killPlayer, the name plate) still reads the lead; anything that fights reads the array.
+      enemies: [],
       enemy: {
         name: 'NIGHTSTALKER',
         variant: 'walker',
@@ -1181,6 +1241,10 @@
         blockTimer: 0,   // walker: >0 = guarding, the next player strike is largely absorbed
         atkCount: 0,     // boss: swings taken in the current patrol phase (3 -> hunt)
         hunting: false,  // boss: walking the player down instead of drifting left/right
+        orbit: 0,        // circler: angle around its holding pattern, radians
+        laps: 0,         // circler: full circles flown since its last swoop
+        homeX: 0,        // circler: the centre that circle is drawn around
+        formOffset: 0,   // swarmer: the spot in the pack it holds, px either side of the player
         deathFade: 0     // >0 once killed: ticks up while the corpse dithers away
       },
       faceState: 'idle',
@@ -1188,6 +1252,8 @@
       glanceDir: 0,
       glanceTimer: 60
     };
+    // The lead is enemies[0], always - see the comment on the array above.
+    combatState.enemies = [combatState.enemy];
 
     // walker / flyer / boss - one typed enemy idea, three battlefield roles. Stats and AI
     // differ here; the distinct sprites come from the server (bundle.enemy_variants).
@@ -1220,11 +1286,94 @@
     // That break is also why even the boss's near-permanent guard costs the player a weakened
     // swing rather than stalling the fight - but it does roughly halve effective DPS on it.
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.018, blockHold: 90,  slow: false, hover: 0,  sfxRate: 1.00 },
+      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.018, blockHold: 90,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
       flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,     blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030, blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030, blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
+
+      // --- PACK FOES. Neither one costs a generation: `recolorOf` names the variant whose
+      // sprites they borrow and hue/sat is the filter laid over every frame of them (see
+      // recolorFrame), so a swarm reads as its own creature drawn in another colour. Their
+      // heightFrac/widthFrac are the base variant's x0.7 - the "30% smaller" - and `group` is
+      // how many of them spawn at once. `spd` overrides the grounded walk speed.
+      //
+      //   swarmer  three little walkers, 0.44 -> 0.308 tall. No guard at all (the big one's
+      //            block is what makes it a wall; these are meant to be swatted), 38 HP each
+      //            against its 100, and they attack constantly - a 70-frame cadence against
+      //            the walker's 115, with the three clocks fanned out across one cycle by
+      //            initEnemy so the pressure is steady rather than one huge simultaneous hit.
+      //            Simulated against a passive player who never moves or guards, all three
+      //            in range, that is ~10 HP/s of incoming damage against the lone walker's
+      //            ~6 - and each kill takes a third of it away, while the walker's guard (a
+      //            swarmer has none) roughly halves what the player deals back to IT. The two
+      //            fights end up costing about the same, which is what 38 HP a head and a
+      //            6-damage bite are tuned for. They also never break off: `timid` is what
+      //            makes the lone walker retreat below 30% HP, and these do not have it.
+      //   circler  two small flyers, 0.40 -> 0.28 tall, that hold a circular pattern instead
+      //            of the flyer's hover. altitude = hover - sin(orbit) * orbitLift runs
+      //            52 +/- 26, so the bottom of every lap sits at 26 - under the 34px reach
+      //            cut-off in the player's strike, for roughly a quarter of each circle.
+      //            Unlike the flyer, which can only be hit during its own swoop, this one
+      //            hands the player a window every lap. After CIRCLER_LAPS circles it breaks
+      //            off and dives like a flyer.
+      swarmer: { tag: 'RUNT ',      maxHp: 38, dmg: 6,  cadence: 70, telegraph: 16, heightFrac: 0.308, widthFrac: 0.364, fly: false, canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 0,  sfxRate: 1.30, timid: false, spd: 1.15, recolorOf: 'walker', hue: 205, sat: 1.25, group: 3 },
+      circler: { tag: 'FLEDGLING ', maxHp: 48, dmg: 12, cadence: 95, telegraph: 20, heightFrac: 0.280, widthFrac: 0.462, fly: true,  canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 52, sfxRate: 1.55, timid: false, recolorOf: 'flyer', hue: 125, sat: 1.30, group: 2, orbitRX: 52, orbitLift: 26, orbitSpeed: 0.055 },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
+    // Full circles a circler flies before it commits to a swoop.
+    const CIRCLER_LAPS = 3;
+
+    // Hue-rotate a generated sprite into a second creature. A canvas filter applies to the
+    // whole draw, so one pass into an offscreen canvas the size of the source gives a frame
+    // that is a drop-in for the Image everywhere downstream - provided it also answers to
+    // naturalWidth / naturalHeight / complete, which solidContentBox and drawEnemyContent both
+    // read off it. Cached per (source frame, filter), and deliberately NOT cached while the
+    // source is still decoding: a call made before the data URL finished loading hands back
+    // the untinted original and retries on the next frame rather than freezing a blank canvas
+    // into the cache for the rest of the run.
+    const _recolorCache = new WeakMap();
+    function recolorFrame(img, hue, sat) {
+      if (!img || !img.complete || !(img.naturalWidth > 0)) return img;
+      let perImg = _recolorCache.get(img);
+      if (!perImg) { perImg = new Map(); _recolorCache.set(img, perImg); }
+      const ck = hue + '|' + sat;
+      const hit = perImg.get(ck);
+      if (hit) return hit;
+      const w = img.naturalWidth, h = img.naturalHeight;
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const cx = cv.getContext('2d');
+      // A browser with no canvas-filter support just draws the copy through untinted - the
+      // pack still fights at its own size and stats, it simply isn't recoloured.
+      cx.filter = `hue-rotate(${hue}deg) saturate(${sat})`;
+      cx.drawImage(img, 0, 0, w, h);
+      Object.defineProperty(cv, 'naturalWidth', { value: w });
+      Object.defineProperty(cv, 'naturalHeight', { value: h });
+      Object.defineProperty(cv, 'complete', { value: true });
+      perImg.set(ck, cv);
+      return cv;
+    }
+
+    // The {idle, attack, block} set a variant draws with. Base variants own theirs; a pack foe
+    // borrows its base's and recolours every frame of it. Null means the sprite it needs never
+    // arrived, which is the caller's cue to fall back to whatever the mode did ship.
+    function enemyFramesFor(key) {
+      const cfg = ENEMY_VARIANTS[key];
+      if (!cfg) return null;
+      if (!cfg.recolorOf) {
+        const own = enemyVariantImgs[key];
+        return (own && own.idle) ? own : null;
+      }
+      const base = enemyVariantImgs[cfg.recolorOf];
+      if (!base || !base.idle) return null;
+      const out = {};
+      for (const f of Object.keys(base)) out[f] = recolorFrame(base[f], cfg.hue, cfg.sat);
+      return out;
+    }
+
+    // What a battle with no marker behind it (Space, in testing) rolls, and the pool
+    // placeEnemyMarkers scatters. Kept apart from ENEMY_VARIANT_KEYS, which is the
+    // "did the bundle ship distinct sprites" check and has to stay the three generated foes.
+    const ENEMY_ROLL_KEYS = ['walker', 'flyer', 'boss', 'swarmer', 'circler'];
 
     // Roll one of the three foes and apply its stats. Called on every battle entry, so during
     // testing you cycle the variants just by leaving and re-entering combat (Space).
@@ -1236,18 +1385,78 @@
       // A marker asks for the foe it was drawn as, but a mode that shipped one enemy sprite
       // can only field the walker - fighting a "boss" wearing the walker's art (and its 240 HP)
       // would be a bug, not a surprise.
-      const key = haveVariants
-        ? (forceKey || ENEMY_VARIANT_KEYS[Math.floor(Math.random() * ENEMY_VARIANT_KEYS.length)])
+      let key = haveVariants
+        ? (forceKey || ENEMY_ROLL_KEYS[Math.floor(Math.random() * ENEMY_ROLL_KEYS.length)])
         : 'walker';
+      // A pack foe exists only as a recolour, so it needs the sprite it borrows. Dropping back
+      // to that base variant keeps a marker drawn as a swarm from arriving as three foes with
+      // no art, at the cost of it arriving as the one big foe it was recoloured from.
+      if (ENEMY_VARIANTS[key] && ENEMY_VARIANTS[key].recolorOf && !enemyFramesFor(key)) {
+        key = ENEMY_VARIANTS[key].recolorOf;
+      }
       const cfg = ENEMY_VARIANTS[key] || ENEMY_VARIANTS.walker;
-      const e = combatState.enemy;
+      const count = Math.max(1, cfg.group || 1);
+      const name = enemyDisplayName(key, cfg);
+
+      // The lead is REUSED, never replaced: killPlayer, deathEpitaph and
+      // resetCombatForNewDungeon all hold combatState.enemy directly, so enemies[0] has to
+      // stay that same object. The rest of a pack are shallow clones of it.
+      const pack = [];
+      for (let i = 0; i < count; i++) {
+        const e = (i === 0) ? combatState.enemy : Object.assign({}, combatState.enemy);
+        initEnemy(e, key, cfg, i, count);
+        e.name = name;
+        pack.push(e);
+      }
+      combatState.enemies = pack;
+
+      // Only swap the active sprite when we have a real per-variant set; otherwise leave
+      // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy). A pack parks
+      // its BASE frames here - the recolour is done per draw by enemyFramesFor, so a sprite
+      // that was still decoding at this point still comes out tinted once it lands.
+      const set = enemyVariantImgs[cfg.recolorOf || key];
+      if (set && set.idle && haveVariants) {
+        enemyFrames = set;
+        enemySpriteFrames = [set.idle];
+      }
+      return key;
+    }
+
+    // Each foe is its own species with its own invented name ("Gravewing Shrike"), so use that
+    // when the server sent one - no "FLYING " tag, because a flyer that was designed to fly is
+    // not a tagged version of the walker.
+    // Without them (older bundle, or the naming call failed and the three were derived from one
+    // sprite) fall back to the tag + the story's common foe name, with the boss taking the
+    // story's champion title so the crawl text and the health bar agree:
+    // "THE HORDE", "FLYING THE HORDE", "DREAD THE OVERCLOCKED".
+    // A pack foe never has a generated name of its own - it wears its base variant's name under
+    // its own tag, which is exactly what it looks like: "RUNT GRAVEWING SHRIKE".
+    function enemyDisplayName(key, cfg) {
+      if (cfg.recolorOf) {
+        const baseName = (enemyVariantNames && enemyVariantNames[cfg.recolorOf] || '').trim()
+          || (enemyStyleName || 'nightstalker');
+        return (cfg.tag + baseName).toUpperCase();
+      }
+      const ownName = (enemyVariantNames && enemyVariantNames[key] || '').trim();
+      const name = ownName || (key === 'boss'
+        ? (enemyBossName || (cfg.tag + (enemyStyleName || 'nightstalker')))
+        : (cfg.tag + (enemyStyleName || 'nightstalker')));
+      return name.toUpperCase();
+    }
+
+    // Put one foe on the field. `i` / `count` are its place in the pack, and everything they
+    // touch is there to stop a pack behaving as one creature: the attack clocks are fanned out
+    // across a full cadence so three swarmers never swing on the same frame, the spawn x is
+    // spread across the arena, and each circler starts a lap-fraction round its own circle so
+    // two of them are never over the same spot.
+    function initEnemy(e, key, cfg, i, count) {
       e.variant = key;
       e.maxHp = cfg.maxHp;
       e.hp = cfg.maxHp;
       e.state = 'idle';
       e.stateTimer = 0;
-      e.attackTimer = cfg.cadence;
-      e.x = 0;
+      e.attackTimer = cfg.cadence + Math.round((cfg.cadence * i) / count);
+      e.x = count > 1 ? (i - (count - 1) / 2) * 56 : 0;
       // Boss only - the walker recomputes vx every frame from where the player is standing.
       e.vx = cfg.slow ? 0.5 : 0;
       // Boss attack rhythm - see the grounded-AI block: three patrol swings, then a hunt.
@@ -1258,26 +1467,15 @@
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
       e.deathFade = 0;
-      // Each foe is its own species with its own invented name ("Gravewing Shrike"), so use
-      // that when the server sent one - no "FLYING " tag, because a flyer that was designed
-      // to fly is not a tagged version of the walker.
-      // Without them (older bundle, or the naming call failed and the three were derived from
-      // one sprite) fall back to the tag + the story's common foe name, with the boss taking
-      // the story's champion title so the crawl text and the health bar agree:
-      // "THE HORDE", "FLYING THE HORDE", "DREAD THE OVERCLOCKED".
-      const ownName = (enemyVariantNames && enemyVariantNames[key] || '').trim();
-      const name = ownName || (key === 'boss'
-        ? (enemyBossName || (cfg.tag + (enemyStyleName || 'nightstalker')))
-        : (cfg.tag + (enemyStyleName || 'nightstalker')));
-      e.name = name.toUpperCase();
-      // Only swap the active sprite when we have a real per-variant set; otherwise leave
-      // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy).
-      const set = enemyVariantImgs[key];
-      if (set && set.idle && haveVariants) {
-        enemyFrames = set;
-        enemySpriteFrames = [set.idle];
-      }
-      return key;
+      // Circler: half a circle apart, around a centre at its own spawn x, so two of them are
+      // on opposite sides of their patterns and the player never faces both low points at once.
+      e.orbit = (Math.PI * 2 * i) / count;
+      e.laps = 0;
+      e.homeX = e.x;
+      // Where in the pack a swarmer tries to stand, relative to the player. Kept inside the
+      // 44px dodge window in landEnemyStrike, so standing still really does let all three
+      // connect - stepping aside is what shakes the flankers off.
+      e.formOffset = count > 1 ? (i - (count - 1) / 2) * 30 : 0;
     }
 
     // How the entrance plays, in sim ticks. The hero slides up into frame first; the foe
@@ -1325,7 +1523,10 @@
         // The foe the marker was drawn as; a battle started any other way still rolls at random.
         pickEnemyVariant(forceVariant);
 
-        showFloatingCombatText(`${combatState.enemy.name} APPROACHES!`, 160, 80, "#facc15");
+        const packN = combatState.enemies.length;
+        showFloatingCombatText(packN > 1 ? `${combatState.enemy.name} x${packN} APPROACH!`
+                                        : `${combatState.enemy.name} APPROACHES!`,
+          160, 80, "#facc15");
       } else {
         if (battleModeBadge) {
           battleModeBadge.textContent = "EXPLORATION";
@@ -1345,8 +1546,8 @@
 
     // Fraction of the foe's pixels currently drawn: dithers up over the entrance, holds at 1
     // through the fight, dithers back down as the corpse dissolves. 0 means it is gone.
-    function enemyVisibility() {
-      const e = combatState.enemy;
+    function enemyVisibility(which) {
+      const e = which || combatState.enemy;
       if (e.deathFade > 0) {
         return Math.max(0, 1 - (e.deathFade - 1) / DEATH_FADE_FRAMES);
       }
@@ -1429,17 +1630,17 @@
       return line.replace(/\{hero\}/g, hero).replace(/\{area\}/g, area).replace(/\{enemy\}/g, enemy);
     }
 
-    // Player defeat. Until this existed playerHp simply floored at 0 in landStrike and the
+    // Player defeat. Until this existed playerHp simply floored at 0 in landEnemyStrike and the
     // fight carried on, so there was no moment for a death sound to belong to.
     function killPlayer() {
       if (combatState.dead) return;      // several strikes can resolve on the same frame
       combatState.dead = true;
       playSfx('death_player');
-      // Drop the foe back to a neutral pose so its celebration hop isn't frozen mid-swing.
-      if (combatState.enemy) {
-        combatState.enemy.state = 'idle';
-        combatState.enemy.stateTimer = 0;
-        combatState.enemy.blockTimer = 0;
+      // Drop the foes back to a neutral pose so the celebration hop isn't frozen mid-swing.
+      for (const e of combatState.enemies) {
+        e.state = 'idle';
+        e.stateTimer = 0;
+        e.blockTimer = 0;
       }
       combatState.hurtFrame = 1;
       combatState.faceState = 'hurt';
@@ -1535,7 +1736,7 @@
       activeMarker = null;
       combatState.introFrame = 0;
       combatState.pendingXp = 0;
-      combatState.enemy.deathFade = 0;
+      combatState.enemies.forEach(e => { e.deathFade = 0; });
       combatState.playerStm = combatState.playerMaxStm;
       combatState.playerHp = combatState.playerMaxHp;
       combatState.playerX = 0;
@@ -1568,7 +1769,7 @@
     function combatAttack() {
       if (combatState.dead || inputLocked()) return;
       // No free swing at a foe that hasn't finished arriving, and none at a corpse.
-      if (!battleReady() || combatState.enemy.deathFade > 0) return;
+      if (!battleReady() || !combatState.enemies.some(e => e.hp > 0)) return;
       if (combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
       if (combatState.playerStm < 30) {
         showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
@@ -1622,6 +1823,237 @@
     let simLastTime = performance.now();
     let simAccumulator = 0;
 
+    // Resolve one of an enemy's telegraphed strikes against the player's position and guard.
+    // Lifted out of the AI so every foe on the field shares one definition of what a landed
+    // blow costs. The popups are nudged towards the striker's own x, so three swarmers landing
+    // inside the same second don't stack their text on one spot.
+    function landEnemyStrike(e, dmg, dodgeMsg, blockMsg, hitLabel) {
+      const tx = 160 + (e.x || 0) * 0.4;
+      const isDodged = Math.abs(combatState.playerX - e.x) > 44;
+      const isGuarded = combatState.shieldProgress > 0.6;
+      if (isDodged) {
+        playSfx('miss_player');
+        showFloatingCombatText(dodgeMsg, tx, 130, "#38bdf8");
+      } else if (isGuarded) {
+        playSfx('block');
+        showFloatingCombatText(blockMsg, tx, 140, "#a855f7");
+        combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
+        // Absorbing a blow on the shield barely dents HP but takes a huge bite of stamina -
+        // block too many hits without spacing out and the guard breaks.
+        combatState.playerStm = Math.max(0, combatState.playerStm - (dmg * 1.5 + 10));
+      } else {
+        combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
+        combatState.hurtFrame = 1;
+        combatState.faceState = 'hurt';
+        combatState.faceTimer = 26;
+        showFloatingCombatText(`-${dmg} ${hitLabel}`, tx, 160, "#dc2626");
+        // The guarded branch above floors HP at 1, so this is the only path to 0.
+        if (combatState.playerHp <= 0) killPlayer();
+        else playSfx('hit_player');
+      }
+    }
+
+    // Keep pack members off one another. Three swarmers all steering at the same player would
+    // otherwise stack into one silhouette with one hitbox. Half the overlap comes out of each
+    // side, so a pushed-apart pair stays centred where it was rather than one shoving the other
+    // across the arena, and the result is clamped a little wider than the ±85 patrol range so
+    // the outside of a squeezed pack can still be reached.
+    const MIN_PACK_GAP = 30;
+    function separatePack(e) {
+      for (const o of combatState.enemies) {
+        if (o === e || o.hp <= 0) continue;
+        const d = e.x - o.x;
+        const overlap = MIN_PACK_GAP - Math.abs(d);
+        if (overlap <= 0) continue;
+        const dir = d === 0 ? (Math.random() < 0.5 ? -1 : 1) : (d < 0 ? -1 : 1);
+        e.x = Math.max(-92, Math.min(92, e.x + dir * overlap * 0.5));
+        o.x = Math.max(-92, Math.min(92, o.x - dir * overlap * 0.5));
+      }
+    }
+
+    // One foe's turn: three ways of fighting, chosen off its variant config.
+    //   circling (circler)     - laps a circle that dips into reach, then breaks off to swoop
+    //   airborne (flyer)       - hovers out of reach, then swoops
+    //   grounded (walker/boss/ - holds the floor, guards, and closes on the player
+    //             swarmer)
+    function tickEnemyAI(e) {
+      const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+      if (e.blockTimer > 0) e.blockTimer--;
+
+      if (cfg.orbitLift) {
+        // Circler: instead of the flyer's hover it flies a circle - cos drives the drift across
+        // the arena, sin drives the altitude - so it is out of reach over the top of the arc
+        // and inside the player's 34px reach at the bottom of it. That is its whole weakness:
+        // the flyer can only be hit during its own swoop, this one hands the player a window
+        // on every lap. After CIRCLER_LAPS circles it breaks off and dives exactly like a
+        // flyer, then slides back into the pattern wherever it ended up.
+        if (e.state === 'hurt') {
+          e.stateTimer--;
+          if (e.stateTimer <= 0 && e.swoop === 'none') e.state = 'idle';
+        }
+        e.swoopTimer--;
+        if (e.swoop === 'none') {
+          e.orbit = (e.orbit + cfg.orbitSpeed) % (Math.PI * 2);
+          // laps counts CIRCLES FLOWN, fractionally, rather than wraps of e.orbit - the two
+          // came apart the moment a circler could rejoin its pattern part-way round (see the
+          // 'rising' branch), which made the first lap after a swoop as short as a quarter turn.
+          e.laps += cfg.orbitSpeed / (Math.PI * 2);
+          e.x = e.homeX + Math.cos(e.orbit) * cfg.orbitRX;
+          // Minus sin: the low point of the lap is at orbit = pi/2 and the high point at
+          // 3pi/2, running 26..78 against the 34px reach cut-off in the player's strike - so
+          // roughly a quarter of every circle has it inside the blade's reach.
+          e.altitude = cfg.hover - Math.sin(e.orbit) * cfg.orbitLift;
+          if (e.laps >= CIRCLER_LAPS && e.state !== 'hurt') {
+            e.laps = 0;
+            e.swoop = 'diving'; e.swoopTimer = 24; e.state = 'telegraph';
+            showFloatingCombatText("⚠️ IT BREAKS OFF!", 160 + e.x * 0.5, 58, "#fbbf24");
+          }
+        } else if (e.swoop === 'diving') {
+          e.altitude += (0 - e.altitude) * 0.22;
+          e.x += (combatState.playerX - e.x) * 0.16;
+          if (e.swoopTimer <= 0) {
+            e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
+            landEnemyStrike(e, cfg.dmg, "DODGED THE DIVE!", "🛡️ DIVE BLOCKED!", "DIVE!");
+          }
+        } else if (e.swoop === 'striking') {
+          if (e.swoopTimer <= 0) { e.swoop = 'rising'; e.swoopTimer = 26; }
+        } else if (e.swoop === 'rising') {
+          e.altitude += (cfg.hover - e.altitude) * 0.16;
+          if (e.swoopTimer <= 0) {
+            e.swoop = 'none'; e.state = 'idle';
+            // Rejoin the pattern around where it actually is. Both halves matter: the centre
+            // is re-pinned near where it climbed out (clamped so the circle stays on screen),
+            // and the ANGLE is solved from its current x - acos gives the two candidates and
+            // the 2pi- form picks the upper half of the circle, where sin is negative and the
+            // altitude is at or above hover. Snapping orbit to 0 instead would have flung it
+            // a full radius sideways on the frame it re-entered the pattern.
+            e.homeX = Math.max(-30, Math.min(30, e.x));
+            const t = Math.max(-1, Math.min(1, (e.x - e.homeX) / cfg.orbitRX));
+            e.orbit = (Math.PI * 2) - Math.acos(t);
+            e.laps = 0;
+          }
+        }
+      } else if (cfg.fly) {
+        // Flyer: hovers high and out of reach, drifting side to side, until it commits to a
+        // swoop - dive to the player, strike, climb back up.
+        if (e.state === 'hurt') {
+          e.stateTimer--;
+          if (e.stateTimer <= 0 && e.swoop === 'none') e.state = 'idle';
+        }
+        e.swoopTimer--;
+        if (e.swoop === 'none') {
+          e.x += Math.sin(Date.now() / 620) * 1.3;
+          e.altitude = cfg.hover + Math.sin(Date.now() / 300) * 5;
+          if (e.swoopTimer <= 0 && e.state !== 'hurt') {
+            e.swoop = 'diving'; e.swoopTimer = 26; e.state = 'telegraph';
+            showFloatingCombatText("⚠️ SWOOP INCOMING!", 160, 58, "#fbbf24");
+          }
+        } else if (e.swoop === 'diving') {
+          e.altitude += (0 - e.altitude) * 0.22;
+          e.x += (combatState.playerX - e.x) * 0.14;
+          if (e.swoopTimer <= 0) {
+            e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
+            landEnemyStrike(e, cfg.dmg, "DODGED THE SWOOP!", "🛡️ SWOOP BLOCKED!", "SWOOP!");
+          }
+        } else if (e.swoop === 'striking') {
+          if (e.swoopTimer <= 0) { e.swoop = 'rising'; e.swoopTimer = 26; }
+        } else if (e.swoop === 'rising') {
+          e.altitude += (cfg.hover - e.altitude) * 0.16;
+          if (e.swoopTimer <= 0) {
+            e.swoop = 'none'; e.swoopTimer = 80 + Math.floor(Math.random() * 60); e.state = 'idle';
+          }
+        }
+      } else {
+        // Walker, swarmer & boss: three ways of holding the ground. The walker stalks - it
+        // creeps towards wherever the player is standing, and turns tail once it is badly
+        // hurt. Its crawl is deliberately far slower than the player's 3.8px/frame strafe, so
+        // the 44px dodge window in landEnemyStrike stays winnable - the pressure is that
+        // standing still lets it close the gap.
+        // The swarmer is that same stalk, quicker and without the nerve to break off, aimed at
+        // its own slot in the pack (formOffset) rather than at the player's exact x so three of
+        // them arrive spread out instead of single file.
+        // The boss alternates instead: it drifts left/right for three haymakers (picking a
+        // fresh direction after each), then hunts - steering straight at the player until it
+        // lands the next one, then back to the drift. See the attack-resolution block below.
+        // Its patrol is also much wider than it used to be. Penned into ±24 it could never
+        // reach a player parked at the ±85 strafe limit - the gap stayed over that 44px dodge
+        // threshold, so every haymaker scored as a miss and the edge of the arena was a free
+        // camp. ±62 closes that, and a hunt gets the walker's full ±85 so following the player
+        // means all the way to the wall.
+        const range = cfg.slow ? (e.hunting ? 85 : 62) : 85;
+        const spd = cfg.spd || (cfg.slow ? 0.5 : 0.9);
+        if (e.state !== 'attack' && e.state !== 'telegraph') {
+          if (!cfg.slow || e.hunting) {
+            const gap = (combatState.playerX + (e.formOffset || 0)) - e.x;
+            const toward = gap < 0 ? -1 : 1;
+            // Below 30% HP a TIMID foe loses its nerve and backs away instead of closing. Only
+            // the lone walker is: the boss never breaks off once it is hunting, and a swarmer
+            // is meant to keep coming - three of them peeling away at 11 HP would turn the back
+            // half of every swarm fight into a chase.
+            const flees = cfg.timid && e.hp <= e.maxHp * 0.3;
+            // A hunt closes faster than the patrol drift, but 0.8px/frame is still a fifth of
+            // the player's 3.8px strafe - it is outrunnable, just not ignorable.
+            e.vx = (flees ? -toward : toward) * (e.hunting ? spd * 1.6 : spd);
+            // Don't jitter once it is already standing on its mark.
+            if (Math.abs(gap) < 6 && !flees) e.vx = 0;
+          }
+          e.x += e.vx;
+          if (e.x > range) { e.x = range; e.vx = -Math.abs(e.vx); }
+          else if (e.x < -range) { e.x = -range; e.vx = Math.abs(e.vx); }
+          if (combatState.enemies.length > 1) separatePack(e);
+        }
+
+        if (e.state === 'hurt' || e.state === 'attack') {
+          e.stateTimer--;
+          if (e.stateTimer <= 0) e.state = 'idle';
+        } else {
+          e.attackTimer--;
+          // A grounded foe occasionally raises its guard between attacks (see the player-strike
+          // resolution, where e.blockTimer soaks most of a hit). While blockTimer runs, the
+          // renderer swaps in that foe's generated block frame. The swarmer has no guard at
+          // all - blockOdds 0 - which is most of what makes a pack of them killable.
+          if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0
+              && Math.random() < (cfg.blockOdds || 0)) {
+            e.blockTimer = cfg.blockHold || 75;
+            showFloatingCombatText("ENEMY GUARDS", 160 + e.x, 78, "#94a3b8");
+          }
+          if (e.attackTimer === cfg.telegraph) {
+            e.state = 'telegraph';
+            // A pack telegraphs with a bare glyph over its own head: three swarmers winding up
+            // every second would otherwise bury the screen in "ENEMY WIND-UP!".
+            if ((cfg.group || 1) > 1) {
+              showFloatingCombatText("⚠️", 160 + e.x, 88, "#fbbf24");
+            } else {
+              showFloatingCombatText(cfg.slow ? "⚠️ HEAVY WIND-UP!" : "⚠️ ENEMY WIND-UP!", 160, 75, "#fbbf24");
+            }
+          } else if (e.attackTimer <= 0) {
+            e.attackTimer = cfg.cadence + Math.floor(Math.random() * 50);
+            e.state = 'attack';
+            e.stateTimer = cfg.slow ? 20 : 14;
+            e.blockTimer = 0;
+            // Boss rhythm: three swings thrown from the drifting left/right patrol, then it
+            // stops wandering and walks the player down for one hunted swing - after which
+            // the count resets and the patrol resumes. Riding out the patrol phase at the
+            // wall is survivable; riding out the hunt there is not.
+            if (cfg.slow) {
+              if (e.hunting) {
+                e.hunting = false;      // that was the hunt's payoff - back to patrolling
+                e.atkCount = 0;
+              } else if (++e.atkCount >= 3) {
+                e.hunting = true;
+                showFloatingCombatText("⚠️ IT HUNTS YOU!", 160, 66, "#f87171");
+              }
+              // Coin-flip which way the boss lumbers off after the swing, so the next
+              // wind-up doesn't always come from the same side. While hunting this is
+              // immediately overwritten next frame by the steer-toward-player above.
+              e.vx = (Math.random() < 0.5 ? -spd : spd);
+            }
+            landEnemyStrike(e, cfg.dmg, "DODGED! (MISS)", "🛡️ PARRY BLOCKED!", cfg.slow ? "CRUSH!" : "HP HIT!");
+          }
+        }
+      }
+    }
+
     // One fixed 1/60s step of combat. Pure simulation - no drawing, no DOM.
     function combatTick() {
       // The level-up box stops the world, not just the input: no stamina regen, no floating
@@ -1633,11 +2065,21 @@
         combatState.introFrame++;
       }
 
-      // Corpse dissolve. Runs to completion even though the fight is over, then hands the
-      // dungeon back - see finishEncounterVictory.
-      if (combatState.inBattle && combatState.enemy.deathFade > 0 && !combatState.dead) {
-        combatState.enemy.deathFade++;
-        if (combatState.enemy.deathFade > DEATH_FADE_FRAMES + DEATH_FADE_HOLD) {
+      // Corpse dissolve, per foe. A pack member starts dithering out the moment it drops while
+      // the rest of its pack fights on, so this can no longer be "the enemy is fading" - the
+      // dungeon only comes back once every one of them is down AND the last corpse has
+      // finished dissolving.
+      if (combatState.inBattle && combatState.enemies.length && !combatState.dead) {
+        let stillFading = false, allDown = true;
+        for (const e of combatState.enemies) {
+          if (e.deathFade > 0) {
+            e.deathFade++;
+            if (e.deathFade <= DEATH_FADE_FRAMES + DEATH_FADE_HOLD) stillFading = true;
+          } else if (e.hp > 0) {
+            allDown = false;
+          }
+        }
+        if (allDown && !stillFading) {
           updateCombatEffects();
           finishEncounterVictory();
           return;
@@ -1675,17 +2117,26 @@
 
       if (combatState.attackFrame > 0) {
         combatState.attackFrame++;
-        if (combatState.attackFrame === 7 && combatState.enemy.hp > 0) {
-          const e = combatState.enemy;
-          const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
-          const outOfReach = cfg.fly && e.altitude > 34;
-          const guarded = e.blockTimer > 0;
-          if (outOfReach) {
-            // The weapon whooshing through air, not a sound the enemy makes - no cfg.sfxRate
-            // pitch, unlike hit_enemy/block/death_enemy below.
+        if (combatState.attackFrame === 7) {
+          // Who the swing lands on. Against a lone foe that is the only answer; against a pack
+          // it is the NEAREST one the blade can actually reach, so a swarmer that has closed on
+          // the player is cut before one still crossing the floor, and a circler is only a
+          // target while the bottom of its lap has it under the 34px reach line.
+          const living = combatState.enemies.filter(k => k.hp > 0);
+          let e = null;
+          for (const k of living) {
+            const kcfg = ENEMY_VARIANTS[k.variant] || ENEMY_VARIANTS.walker;
+            if (kcfg.fly && k.altitude > 34) continue;
+            if (!e || Math.abs(combatState.playerX - k.x) < Math.abs(combatState.playerX - e.x)) e = k;
+          }
+          if (living.length && !e) {
+            // Everything left is in the air. The weapon whooshing through air, not a sound the
+            // enemy makes - no cfg.sfxRate pitch, unlike hit_enemy/block/death_enemy below.
             playSfx('miss_enemy');
             showFloatingCombatText("OUT OF REACH!", 160, 90, "#93c5fd");
-          } else {
+          } else if (e) {
+            const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+            const guarded = e.blockTimer > 0;
             // STRENGTH picks ride on the base roll, so +4 is +4 through a guard and armour too
             // (both of which scale the total) rather than a flat bonus that dwarfs them.
             let dmg = 24 + progression.bonusAtk + Math.floor(Math.random() * 12);
@@ -1694,8 +2145,10 @@
             e.hp = Math.max(0, e.hp - dmg);
             e.state = 'hurt';
             e.stateTimer = 12;
+            // Anchored on the foe that was actually hit rather than on the centre line, so in a
+            // pack the number appears over the one that took it.
             showFloatingCombatText(guarded ? `BLOCKED! -${dmg}` : `-${dmg} SLASH!`,
-              160 + (Math.random() * 30 - 15), 100, guarded ? "#94a3b8" : "#f87171");
+              160 + e.x * 0.6 + (Math.random() * 20 - 10), 100, guarded ? "#94a3b8" : "#f87171");
             // The enemy's own guard soaking the blow reads as a block, not as a wound.
             // Pitched by cfg.sfxRate - see ENEMY_VARIANTS - so the same clip reads as the
             // flyer's yelp or the boss's boom depending on who is actually getting hit.
@@ -1705,13 +2158,19 @@
               e.state = 'defeated';
               e.blockTimer = 0;
               // Starts the dither-out. combatTick counts it up and calls
-              // finishEncounterVictory() once the corpse has fully dissolved.
+              // finishEncounterVictory() once every corpse has fully dissolved.
               e.deathFade = 1;
-              // Same species, three sizes: one death cry serves all three variants, pitched
-              // by cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
+              // Same species, several sizes: one death cry serves every variant, pitched by
+              // cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
               playSfx('death_enemy', { rate: cfg.sfxRate });
-              combatState.pendingXp = ENEMY_XP[e.variant] || ENEMY_XP.walker;
-              showFloatingCombatText(`VICTORY! +${combatState.pendingXp} XP`, 160, 70, "#fde047");
+              // Banked, not assigned: a pack pays out once, for all of them, when the last
+              // corpse finishes dissolving.
+              const xp = ENEMY_XP[e.variant] || ENEMY_XP.walker;
+              combatState.pendingXp += xp;
+              const left = combatState.enemies.filter(k => k.hp > 0).length;
+              showFloatingCombatText(
+                left ? `DOWN! +${xp} XP (${left} LEFT)` : `VICTORY! +${combatState.pendingXp} XP`,
+                160, 70, "#fde047");
             }
           }
         }
@@ -1739,143 +2198,14 @@
         combatState.glanceTimer = 60 + Math.floor(Math.random() * 80);
       }
 
-      // battleReady(), not inBattle: a foe still dithering into existence does not get to swing.
-      if (battleReady() && combatState.enemy.hp > 0 && !combatState.dead) {
-        const e = combatState.enemy;
-        const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
-        if (e.blockTimer > 0) e.blockTimer--;
-
-        // Resolve one of the enemy's telegraphed strikes against the player's position/guard.
-        const landStrike = (dmg, dodgeMsg, blockMsg, hitLabel) => {
-          const isDodged = Math.abs(combatState.playerX - e.x) > 44;
-          const isGuarded = combatState.shieldProgress > 0.6;
-          if (isDodged) {
-            playSfx('miss_player');
-            showFloatingCombatText(dodgeMsg, 160, 130, "#38bdf8");
-          } else if (isGuarded) {
-            playSfx('block');
-            showFloatingCombatText(blockMsg, 160, 140, "#a855f7");
-            combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
-            // Absorbing a blow on the shield barely dents HP but takes a huge bite of stamina -
-            // block too many hits without spacing out and the guard breaks.
-            combatState.playerStm = Math.max(0, combatState.playerStm - (dmg * 1.5 + 10));
-          } else {
-            combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
-            combatState.hurtFrame = 1;
-            combatState.faceState = 'hurt';
-            combatState.faceTimer = 26;
-            showFloatingCombatText(`-${dmg} ${hitLabel}`, 160, 160, "#dc2626");
-            // The guarded branch above floors HP at 1, so this is the only path to 0.
-            if (combatState.playerHp <= 0) killPlayer();
-            else playSfx('hit_player');
-          }
-        };
-
-        if (cfg.fly) {
-          // Flyer: hovers high and out of reach, drifting side to side, until it commits to a
-          // swoop - dive to the player, strike, climb back up.
-          if (e.state === 'hurt') {
-            e.stateTimer--;
-            if (e.stateTimer <= 0 && e.swoop === 'none') e.state = 'idle';
-          }
-          e.swoopTimer--;
-          if (e.swoop === 'none') {
-            e.x += Math.sin(Date.now() / 620) * 1.3;
-            e.altitude = cfg.hover + Math.sin(Date.now() / 300) * 5;
-            if (e.swoopTimer <= 0 && e.state !== 'hurt') {
-              e.swoop = 'diving'; e.swoopTimer = 26; e.state = 'telegraph';
-              showFloatingCombatText("⚠️ SWOOP INCOMING!", 160, 58, "#fbbf24");
-            }
-          } else if (e.swoop === 'diving') {
-            e.altitude += (0 - e.altitude) * 0.22;
-            e.x += (combatState.playerX - e.x) * 0.14;
-            if (e.swoopTimer <= 0) {
-              e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
-              landStrike(cfg.dmg, "DODGED THE SWOOP!", "🛡️ SWOOP BLOCKED!", "SWOOP!");
-            }
-          } else if (e.swoop === 'striking') {
-            if (e.swoopTimer <= 0) { e.swoop = 'rising'; e.swoopTimer = 26; }
-          } else if (e.swoop === 'rising') {
-            e.altitude += (cfg.hover - e.altitude) * 0.16;
-            if (e.swoopTimer <= 0) {
-              e.swoop = 'none'; e.swoopTimer = 80 + Math.floor(Math.random() * 60); e.state = 'idle';
-            }
-          }
-        } else {
-          // Walker & boss: two different ways of holding the ground. The walker stalks - it
-          // creeps towards wherever the player is standing, and turns tail once it is badly
-          // hurt. Its crawl is deliberately far slower than the player's 3.8px/frame strafe, so
-          // the 44px dodge window in landStrike stays winnable - the pressure is that standing
-          // still lets it close the gap.
-          // The boss alternates instead: it drifts left/right for three haymakers (picking a
-          // fresh direction after each), then hunts - steering straight at the player until it
-          // lands the next one, then back to the drift. See the attack-resolution block below.
-          // Its patrol is also much wider than it used to be. Penned into ±24 it could never
-          // reach a player parked at the ±85 strafe limit - the gap stayed over that 44px dodge
-          // threshold, so every haymaker scored as a miss and the edge of the arena was a free
-          // camp. ±62 closes that, and a hunt gets the walker's full ±85 so following the player
-          // means all the way to the wall.
-          const range = cfg.slow ? (e.hunting ? 85 : 62) : 85;
-          const spd = cfg.slow ? 0.5 : 0.9;
-          if (e.state !== 'attack' && e.state !== 'telegraph') {
-            if (!cfg.slow || e.hunting) {
-              const gap = combatState.playerX - e.x;
-              const toward = gap < 0 ? -1 : 1;
-              // Below 30% HP the walker loses its nerve and backs away instead of closing. The
-              // boss never breaks off - once it is hunting it comes on at any HP.
-              const flees = !cfg.slow && e.hp <= e.maxHp * 0.3;
-              // A hunt closes faster than the patrol drift, but 0.8px/frame is still a fifth of
-              // the player's 3.8px strafe - it is outrunnable, just not ignorable.
-              e.vx = (flees ? -toward : toward) * (e.hunting ? spd * 1.6 : spd);
-              // Don't jitter once it is already on top of the player.
-              if (Math.abs(gap) < 6 && !flees) e.vx = 0;
-            }
-            e.x += e.vx;
-            if (e.x > range) { e.x = range; e.vx = -Math.abs(e.vx); }
-            else if (e.x < -range) { e.x = -range; e.vx = Math.abs(e.vx); }
-          }
-
-          if (e.state === 'hurt' || e.state === 'attack') {
-            e.stateTimer--;
-            if (e.stateTimer <= 0) e.state = 'idle';
-          } else {
-            e.attackTimer--;
-            // A grounded foe occasionally raises its guard between attacks (see the player-strike
-            // resolution, where e.blockTimer soaks most of a hit). While blockTimer runs, the
-            // renderer swaps in that foe's generated block frame.
-            if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0
-                && Math.random() < (cfg.blockOdds || 0)) {
-              e.blockTimer = cfg.blockHold || 75;
-              showFloatingCombatText("ENEMY GUARDS", 160 + e.x, 78, "#94a3b8");
-            }
-            if (e.attackTimer === cfg.telegraph) {
-              e.state = 'telegraph';
-              showFloatingCombatText(cfg.slow ? "⚠️ HEAVY WIND-UP!" : "⚠️ ENEMY WIND-UP!", 160, 75, "#fbbf24");
-            } else if (e.attackTimer <= 0) {
-              e.attackTimer = cfg.cadence + Math.floor(Math.random() * 50);
-              e.state = 'attack';
-              e.stateTimer = cfg.slow ? 20 : 14;
-              e.blockTimer = 0;
-              // Boss rhythm: three swings thrown from the drifting left/right patrol, then it
-              // stops wandering and walks the player down for one hunted swing - after which
-              // the count resets and the patrol resumes. Riding out the patrol phase at the
-              // wall is survivable; riding out the hunt there is not.
-              if (cfg.slow) {
-                if (e.hunting) {
-                  e.hunting = false;      // that was the hunt's payoff - back to patrolling
-                  e.atkCount = 0;
-                } else if (++e.atkCount >= 3) {
-                  e.hunting = true;
-                  showFloatingCombatText("⚠️ IT HUNTS YOU!", 160, 66, "#f87171");
-                }
-                // Coin-flip which way the boss lumbers off after the swing, so the next
-                // wind-up doesn't always come from the same side. While hunting this is
-                // immediately overwritten next frame by the steer-toward-player above.
-                e.vx = (Math.random() < 0.5 ? -spd : spd);
-              }
-              landStrike(cfg.dmg, "DODGED! (MISS)", "🛡️ PARRY BLOCKED!", cfg.slow ? "CRUSH!" : "HP HIT!");
-            }
-          }
+      // battleReady(), not inBattle: a foe still dithering into existence does not get to
+      // swing. Every living foe on the field takes its turn - a lone walker is a pack of one.
+      if (battleReady() && !combatState.dead) {
+        for (const e of combatState.enemies) {
+          // The pack shares a tick, so the blow that kills the player can be followed by two
+          // more from foes further down the array. Stop the moment the hero is down.
+          if (combatState.dead) break;
+          if (e.hp > 0) tickEnemyAI(e);
         }
       }
 
@@ -2698,9 +3028,24 @@
           drawY = bottomY - drawH;
         }
 
+        // A pack marker shows the pack: the same sprite drawn `group` times, spread along the
+        // corridor and each bobbing on its own phase so it reads as several small foes rather
+        // than one blurred silhouette. Offsets are fractions of the drawn width, so the spread
+        // holds at any distance.
+        const groupN = Math.max(1, (ENEMY_VARIANTS[v.m.variant] || {}).group || 1);
+        const members = [];
+        for (let i = 0; i < groupN; i++) {
+          members.push({
+            dx: groupN === 1 ? 0 : (i - (groupN - 1) / 2) * drawW * 0.60,
+            dy: groupN === 1 ? 0 : Math.sin(Date.now() / bobRate + v.m.phase + i * 1.9) * wallH * 0.02,
+          });
+        }
+        const spread = members.reduce((m, k) => Math.max(m, Math.abs(k.dx)), 0);
+        const wobble = members.reduce((m, k) => Math.max(m, Math.abs(k.dy)), 0);
+
         // Cheap reject before the per-column occlusion scan.
-        const spanL = Math.floor(Math.min(drawX, screenX - drawW / 2));
-        const spanR = Math.ceil(Math.max(drawX + drawW, screenX + drawW / 2));
+        const spanL = Math.floor(Math.min(drawX, screenX - drawW / 2) - spread);
+        const spanR = Math.ceil(Math.max(drawX + drawW, screenX + drawW / 2) + spread);
         if (spanR < 0 || spanL >= screenWidth) continue;
 
         // Walk the sprite's columns and collect the unoccluded runs. Clipping to those rects
@@ -2711,8 +3056,8 @@
         let runStart = -1, runs = 0;
         // The band has to reach the floor line as well as the sprite: the marker hovers, so its
         // ground shadow sits well below its own bottom edge and would be clipped off otherwise.
-        const clipTop = Math.max(0, Math.floor(Math.min(drawY, floorY)) - 2);
-        const clipBottom = Math.min(screenHeight, Math.ceil(Math.max(drawY + drawH, floorY + wallH * 0.06)) + 2);
+        const clipTop = Math.max(0, Math.floor(Math.min(drawY - wobble, floorY)) - 2);
+        const clipBottom = Math.min(screenHeight, Math.ceil(Math.max(drawY + drawH + wobble, floorY + wallH * 0.06)) + 2);
         const clipH = Math.max(1, clipBottom - clipTop);
         for (let x = Math.max(0, spanL); x <= Math.min(screenWidth - 1, spanR); x++) {
           const open = v.tY < zBuffer[x];
@@ -2729,14 +3074,16 @@
         const shade = Math.max(0.45, 1.0 / (1.0 + v.tY * 0.30));
 
         const f = fxLayer();
-        // Ground shadow first, so it is shaded and clipped with the body.
+        // Ground shadows first, so they are shaded and clipped with the bodies.
         f.fillStyle = 'rgba(0,0,0,0.34)';
-        f.beginPath();
-        f.ellipse(screenX, floorY - wallH * 0.02, drawW * 0.22, wallH * 0.035, 0, 0, Math.PI * 2);
-        f.fill();
+        for (const k of members) {
+          f.beginPath();
+          f.ellipse(screenX + k.dx, floorY - wallH * 0.02, drawW * 0.22, wallH * 0.035, 0, 0, Math.PI * 2);
+          f.fill();
+        }
 
         if (img) {
-          f.drawImage(img, drawX, drawY, drawW, drawH);
+          for (const k of members) f.drawImage(img, drawX + k.dx, drawY + k.dy, drawW, drawH);
         } else {
           // No generated sprite (v1 video mode, or a bundle whose enemy failed): a plain
           // hovering sigil still tells the player a fight is parked on this tile.
@@ -2764,27 +3111,38 @@
     // never dithered: it belongs to the HUD, and it stays up through the dissolve so the kill
     // reads as a kill.
     function drawCombatEnemy(c, width, height) {
-      const e = combatState.enemy;
       if (!combatState.inBattle) return;
-      if (e.hp <= 0 && e.deathFade <= 0) return;      // dead and already dissolved
 
-      const fade = enemyVisibility();
-      if (fade > 0) {
+      // Back to front, by altitude: whatever is highest is furthest up the arena, so it is
+      // laid down first and anything on the floor overlaps it. Sorted on a copy - the array
+      // order is the pack order everywhere else (formOffset, orbit phase) and must not move.
+      const order = combatState.enemies
+        .filter(e => e.hp > 0 || e.deathFade > 0)
+        .slice()
+        .sort((a, b) => (b.altitude || 0) - (a.altitude || 0));
+
+      for (const e of order) {
+        // Each foe carries its own dissolve, so in a pack one corpse dithers away while the
+        // rest are still solid - which means the fade layer is per foe, not per frame.
+        const fade = enemyVisibility(e);
+        if (fade <= 0) continue;
         if (fade < 1) {
-          drawEnemyBody(fxLayer(), width, height);
+          drawEnemyBody(fxLayer(), width, height, e);
           blitFxLayer(c, fade, 1);
         } else {
-          drawEnemyBody(c, width, height);
+          drawEnemyBody(c, width, height, e);
         }
       }
       // The plate waits for the foe to start materialising rather than announcing a creature
       // that isn't on screen yet - but it stays up through the dissolve, so the emptied health
-      // bar is the last thing seen of it.
-      if (fade > 0 || e.deathFade > 0) drawEnemyHpBar(c, width, e);
+      // bar is the last thing seen of it. That is exactly the window enemyVisibility opens at,
+      // and it has to be read off the clock rather than off the lead: in a pack the lead can
+      // be the first one down, and the plate belongs to the whole pack.
+      if (combatState.introFrame > INTRO_FADE_DELAY) drawEnemyHpBar(c, width, combatState.enemy);
     }
 
-    function drawEnemyBody(c, width, height) {
-      const e = combatState.enemy;
+    function drawEnemyBody(c, width, height, which) {
+      const e = which || combatState.enemy;
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
       const GROUND_Y = 165;                       // where a grounded enemy's feet sit
       const ex = width / 2 + (e.x || 0);
@@ -2803,18 +3161,23 @@
       if (enemySpriteFrames && enemySpriteFrames.length > 0) {
         // Per-variant frame set (idle / attack / block) when the bundle has one; otherwise the
         // legacy flat [idle, attack, hurt] array from v3/v4.
+        // Looked up per draw rather than read off the global: a pack foe's set is a recolour
+        // built on demand, and the first frames of a fight can land before the sprite it
+        // borrows has finished decoding - in which case enemyFramesFor hands back the untinted
+        // original and quietly upgrades itself once the source is ready.
+        const frames = enemyFramesFor(e.variant) || enemyFrames;
         let frame, sizeRef = null;
-        if (enemyFrames && enemyFrames.idle) {
-          frame = enemyFrames.idle;
+        if (frames && frames.idle) {
+          frame = frames.idle;
           // Attack wins over block: the AI clears blockTimer when it commits to a strike, so
           // these do not overlap in practice, but the strike is the one that must read.
-          if (e.state === 'attack' || e.state === 'telegraph') frame = enemyFrames.attack || frame;
-          else if (e.blockTimer > 0) frame = enemyFrames.block || frame;
+          if (e.state === 'attack' || e.state === 'telegraph') frame = frames.attack || frame;
+          else if (e.blockTimer > 0) frame = frames.block || frame;
           // Scale EVERY frame by the idle's content box. Sizing each frame on its own box
           // would shrink the whole foe whenever it lunged, since a thrust-out limb measures
           // bigger; anchoring on the idle keeps it a constant size and lets the attack frame
           // genuinely reach further than the idle silhouette.
-          sizeRef = enemyFrames.idle;
+          sizeRef = frames.idle;
         } else {
           frame = enemySpriteFrames[0];
           if (e.state === 'hurt') frame = enemySpriteFrames[2] || frame;
@@ -2842,6 +3205,15 @@
 
           drawEnemyContent(c, frame, ex, bottomY, targetH, maxW, sizeRef);
           c.globalAlpha = 1;
+
+          // In a pack the plate at the top of the screen is the pack's total, so each member
+          // carries its own thin bar to show which one is actually being worn down. A lone foe
+          // has the plate and doesn't need one.
+          if (combatState.enemies.length > 1 && e.hp > 0) {
+            // Floored below the name plate (which owns y 8..26): a circler at the top of its
+            // arc sits high enough that its bar would otherwise land on top of it.
+            drawEnemyPipBar(c, ex, Math.max(32, bottomY - targetH - 10), e);
+          }
 
           // The guard arc and the boss aura that used to be stroked over the sprite here are
           // gone, along with the telegraph circle above. They were standing in for poses the
@@ -2915,19 +3287,44 @@
     // Pulled out of drawCombatEnemy so the AI-sprite path can draw it too - that path returns
     // early to skip the procedural body, which silently took the name plate with it.
     function drawEnemyHpBar(c, width, e) {
-      c.fillStyle = 'rgba(15, 23, 42, 0.9)';
-      c.fillRect(width / 2 - 75, 8, 150, 18);
-      c.strokeStyle = '#94a3b8'; c.lineWidth = 1.5;
-      c.strokeRect(width / 2 - 75, 8, 150, 18);
+      // A pack shares one plate: the bar is the whole pack's remaining HP and the count is how
+      // many of them are still standing, so it empties over the fight the way a single foe's
+      // does. Which one you are currently cutting into is read off the little bar over its own
+      // head - see drawEnemyPipBar. The plate is widened to fit the extra "x3".
+      const pack = combatState.enemies;
+      const isPack = pack.length > 1;
+      const hp = isPack ? pack.reduce((s, k) => s + Math.max(0, k.hp), 0) : e.hp;
+      const maxHp = isPack ? pack.reduce((s, k) => s + k.maxHp, 0) : e.maxHp;
+      const label = isPack
+        ? `${e.name || 'NIGHTSTALKER'} x${pack.filter(k => k.hp > 0).length} [${hp}/${maxHp}]`
+        : `${e.name || 'NIGHTSTALKER'} [${e.hp}/${e.maxHp}]`;
+      const w = isPack ? 196 : 150;
 
-      const hpW = Math.max(0, (e.hp / e.maxHp) * 146);
+      c.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      c.fillRect(width / 2 - w / 2, 8, w, 18);
+      c.strokeStyle = '#94a3b8'; c.lineWidth = 1.5;
+      c.strokeRect(width / 2 - w / 2, 8, w, 18);
+
+      const hpW = Math.max(0, (hp / maxHp) * (w - 4));
       c.fillStyle = '#dc2626';
-      c.fillRect(width / 2 - 73, 10, hpW, 14);
+      c.fillRect(width / 2 - w / 2 + 2, 10, hpW, 14);
 
       c.fillStyle = '#f8fafc';
       c.font = 'bold 10px sans-serif';
       c.textAlign = 'center';
-      c.fillText(`${e.name || 'NIGHTSTALKER'} [${e.hp}/${e.maxHp}]`, width / 2, 21);
+      c.fillText(label, width / 2, 21);
+    }
+
+    // The thin HP bar a pack member wears over its own head. Deliberately tiny and unlabelled -
+    // it is there to say "this is the one you have been hitting", not to be read as a number.
+    function drawEnemyPipBar(c, cx, y, e) {
+      const w = 30, h = 4;
+      c.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      c.fillRect(cx - w / 2 - 1, y - 1, w + 2, h + 2);
+      c.fillStyle = '#dc2626';
+      c.fillRect(cx - w / 2, y, Math.max(0, (e.hp / e.maxHp) * w), h);
+      c.strokeStyle = 'rgba(148, 163, 184, 0.75)'; c.lineWidth = 1;
+      c.strokeRect(cx - w / 2 - 1.5, y - 1.5, w + 3, h + 3);
     }
 
     // Floating text ages on the SIMULATION clock, not the render clock - it used to age inside
@@ -3039,7 +3436,7 @@
       floorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
 
       buildLanternWallFromBase(wallTexture, "Windows 95");
-      buildDynamicExitSignTexture("Windows 95", wallTexture);
+      buildExitStairsTexture("Windows 95", wallTexture);
       buildDoorTexture(wallTexture, "Windows 95");
       buildOpenDoorTexture();
       buildSwitchWallTextures(wallTexture, "Windows 95");
@@ -3166,30 +3563,179 @@
       wallLanternTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
 
-    function buildDynamicExitSignTexture(styleName = "Windows 95", sourceWallImageData = null) {
+    // Average colour of a wall/floor texture, so the stairwell below can be cut from the same
+    // stone as the dungeon it sits in rather than being one fixed grey in every theme.
+    function averageTextureColor(imgData, fallback = { r: 122, g: 118, b: 112 }) {
+      if (!imgData || !imgData.data) return fallback;
+      const d = imgData.data;
+      let r = 0, g = 0, b = 0, n = 0;
+      // Every 64th pixel is plenty for a mean and keeps this off the frame budget.
+      for (let i = 0; i < d.length; i += 4 * 64) {
+        r += d[i]; g += d[i + 1]; b += d[i + 2]; n++;
+      }
+      if (!n) return fallback;
+      return { r: r / n, g: g / n, b: b / n };
+    }
+
+    // The exit used to be a floating "End" placard. It is a STAIRWELL now: a stone opening cut
+    // into the far wall of the exit cell with steps descending away into the dark.
+    //
+    // Drawn in one-point perspective and anchored to the FLOOR at render time (see the exit
+    // pass in render3D), not centred on the horizon the way the placard was. That is what makes
+    // it read as a hole in the world instead of a sign hanging in one: the nearest step edge
+    // meets the floor line of the exit cell, and each step further down is drawn thinner,
+    // narrower and darker, converging on a vanishing point just under eye level - which is
+    // exactly where descending steps go.
+    //
+    // The 256x128 canvas is authored at the aspect the renderer will draw it at (one cell wide
+    // by ~0.92 of a wall tall, which works out near 2:1 at every distance because both scale as
+    // 1/d), so the steps are not squashed on screen.
+    const EXIT_SPR_W = 256, EXIT_SPR_H = 128;
+    // How much of a wall's height the stairwell opening takes, measured up from the floor.
+    // 0.92 leaves a course of stone above the lintel rather than running into the ceiling.
+    const EXIT_STAIRS_WALL_FRAC = 0.92;
+    function buildExitStairsTexture(styleName = "Windows 95", sourceWallImageData = null) {
       const cv = document.createElement('canvas');
-      cv.width = 256;
-      cv.height = 140;
+      cv.width = EXIT_SPR_W;
+      cv.height = EXIT_SPR_H;
       const c = cv.getContext('2d');
       c.imageSmoothingEnabled = false;
+      c.clearRect(0, 0, EXIT_SPR_W, EXIT_SPR_H);
 
-      c.fillStyle = 'rgba(241, 245, 249, 0.95)';
-      c.fillRect(6, 6, 244, 128);
+      // Normalise the sampled wall to a fixed, fairly dark luminance. Sampling alone gives a
+      // pastel stairwell in a bright theme and a black one in a dark theme; renormalising keeps
+      // the dungeon's HUE while pinning the tone, so the stairs read as shadowed stone whatever
+      // the walls are made of.
+      const raw = averageTextureColor(sourceWallImageData);
+      const luma = 0.2126 * raw.r + 0.7152 * raw.g + 0.0722 * raw.b;
+      const norm = luma > 8 ? 118 / luma : 1;
+      const base = { r: raw.r * norm, g: raw.g * norm, b: raw.b * norm };
+      // m scales the stone; tint blends it towards the warm light spilling down the stairwell.
+      const stone = (m, tint = 0, a = 1) => {
+        const t = Math.max(0, Math.min(1, tint)) * 0.5;
+        const r = Math.min(255, base.r * m * (1 - t) + 255 * t);
+        const g = Math.min(255, base.g * m * (1 - t) + 238 * t);
+        const b = Math.min(255, base.b * m * (1 - t) + 200 * t);
+        return `rgba(${r | 0},${g | 0},${b | 0},${a})`;
+      };
 
-      c.strokeStyle = '#475569'; c.lineWidth = 4;
-      c.strokeRect(6, 6, 244, 128);
+      // --- The opening. Its top edge is the lintel of the arch, its bottom edge is the floor.
+      // Filled with deep shadow rather than pure black so the corners the flight does not reach
+      // read as the stairwell's own unlit walls instead of holes punched in the world.
+      const JAMB = 18;                    // stone left and right of the opening
+      const LINTEL = 14;                  // stone above it
+      const openL = JAMB, openR = EXIT_SPR_W - JAMB, openT = LINTEL, openB = EXIT_SPR_H;
+      const cx = EXIT_SPR_W / 2;
+      const voidGrad = c.createLinearGradient(0, openB, 0, openT);
+      voidGrad.addColorStop(0, stone(0.10));
+      voidGrad.addColorStop(1, stone(0.30));
+      c.fillStyle = voidGrad;
+      c.fillRect(openL, openT, openR - openL, openB - openT);
 
-      c.fillStyle = '#0f172a';
-      c.font = '900 46px "Courier New", monospace';
-      c.textAlign = 'left';
-      c.textBaseline = 'middle';
-      c.fillText("End", 120, 70);
+      // --- The flight. Step 0 is nearest, at the bottom, spanning the full opening; each one
+      // after is shorter (foreshortening compresses the treads), narrower (the walls converge)
+      // and BRIGHTER - the stairs climb out of the dungeon towards daylight, which is also what
+      // makes them legible from the far end of a dark corridor.
+      const STEPS = 14;
+      const geom = [];                     // remembered for the side walls below
+      let y = EXIT_SPR_H;                  // front edge of the nearest step
+      let stepH = 23;                      // its on-screen height
+      let halfW = (openR - openL) / 2;
+      for (let i = 0; i < STEPS && stepH > 0.6; i++) {
+        const nextHalfW = halfW * 0.908;
+        const top = y - stepH;
+        // How far up the flight this step is. Squared-ish so the brightening reads as light
+        // falling from one place rather than a flat ramp.
+        const up = Math.pow(i / (STEPS - 1), 1.4);
 
-      c.fillStyle = '#eab308';
-      c.beginPath(); c.arc(68, 70, 24, 0, Math.PI * 2); c.fill();
-      c.strokeStyle = '#ca8a04'; c.lineWidth = 3; c.stroke();
+        geom.push({ y, halfW });
 
-      exitSignTexture = c.getImageData(0, 0, 256, 140);
+        // Tread - the flat you would step on, narrowing as it recedes.
+        c.fillStyle = stone(0.52 + up * 0.58, up * 0.85);
+        c.beginPath();
+        c.moveTo(cx - halfW, y);
+        c.lineTo(cx + halfW, y);
+        c.lineTo(cx + nextHalfW, top);
+        c.lineTo(cx - nextHalfW, top);
+        c.closePath();
+        c.fill();
+
+        // Riser - the vertical face under the step's front edge, always in its own shadow.
+        // It is what reads as "step" rather than "stripe".
+        const riserH = Math.max(1, stepH * 0.34);
+        c.fillStyle = stone(0.18 + up * 0.30, up * 0.25);
+        c.beginPath();
+        c.moveTo(cx - halfW, y);
+        c.lineTo(cx + halfW, y);
+        c.lineTo(cx + halfW * 0.997, y - riserH);
+        c.lineTo(cx - halfW * 0.997, y - riserH);
+        c.closePath();
+        c.fill();
+
+        // Lit nosing along the front edge, catching the light from above.
+        c.fillStyle = stone(0.85 + up * 0.5, up, 0.9);
+        c.fillRect(cx - halfW, y - riserH - 1, halfW * 2, 1.4);
+
+        y = top;
+        stepH *= 0.812;
+        halfW = nextHalfW;
+      }
+
+      // --- Side walls, following the flight up. Drawn as one polygon per side from the
+      // opening's edge to each step's outer corner, so the treads are bounded by stone all the
+      // way up instead of ending in a black wedge.
+      const flightTop = y, flightHalfW = halfW;
+      for (const side of [-1, 1]) {
+        const wallGrad = c.createLinearGradient(0, EXIT_SPR_H, 0, flightTop);
+        wallGrad.addColorStop(0, stone(0.20));
+        wallGrad.addColorStop(1, stone(0.46, 0.30));
+        c.fillStyle = wallGrad;
+        c.beginPath();
+        c.moveTo(cx + side * (openR - openL) / 2, EXIT_SPR_H);
+        c.lineTo(cx + side * (openR - openL) / 2, openT);
+        c.lineTo(cx + side * flightHalfW, flightTop);
+        for (let i = geom.length - 1; i >= 0; i--) {
+          c.lineTo(cx + side * geom[i].halfW, geom[i].y);
+        }
+        c.closePath();
+        c.fill();
+      }
+
+      // --- The light the stairs climb towards. Sits at the top of the flight and spills a
+      // little way back down it, which is what tells the player these go OUT rather than
+      // deeper in - and makes the exit findable from the dark end of a long corridor.
+      const glowR = (openR - openL) * 0.5;
+      const glow = c.createRadialGradient(cx, flightTop + 2, 1, cx, flightTop + 2, glowR);
+      glow.addColorStop(0, 'rgba(255,242,214,0.92)');
+      glow.addColorStop(0.35, 'rgba(255,232,186,0.42)');
+      glow.addColorStop(1, 'rgba(255,226,170,0)');
+      c.fillStyle = glow;
+      c.fillRect(openL, openT, openR - openL, EXIT_SPR_H - openT);
+
+      // --- Stone surround. Painted LAST and only outside the opening, so the arch frames the
+      // hole rather than being drawn over by it.
+      c.fillStyle = stone(0.78);
+      c.fillRect(0, 0, openL, EXIT_SPR_H);                       // left jamb
+      c.fillRect(openR, 0, EXIT_SPR_W - openR, EXIT_SPR_H);      // right jamb
+      c.fillRect(0, 0, EXIT_SPR_W, openT);                       // lintel
+      // Bevel: lit on top and left, shadowed on the inner reveal, which is what gives the
+      // opening depth instead of reading as a black rectangle painted on the wall.
+      c.fillStyle = stone(1.18, 0.9);
+      c.fillRect(0, 0, EXIT_SPR_W, 3);
+      c.fillRect(0, 0, 3, EXIT_SPR_H);
+      c.fillStyle = stone(0.42, 0.95);
+      c.fillRect(openL - 3, openT - 3, (openR - openL) + 6, 3);  // under the lintel
+      c.fillRect(openL - 3, openT, 3, EXIT_SPR_H - openT);       // inner reveal, left
+      c.fillRect(openR, openT, 3, EXIT_SPR_H - openT);           // inner reveal, right
+
+      // Block courses across the surround, so the frame reads as masonry at a glance.
+      c.fillStyle = stone(0.55, 0.75);
+      for (let by = 10; by < EXIT_SPR_H; by += 22) {
+        c.fillRect(0, by, openL - 3, 1.5);
+        c.fillRect(openR + 3, by, EXIT_SPR_W - openR - 3, 1.5);
+      }
+
+      exitStairsTexture = c.getImageData(0, 0, EXIT_SPR_W, EXIT_SPR_H);
     }
 
     // Full-cell wall texture for a closed door (MAP tile 3). Uses the style-matched AI slab
@@ -4023,11 +4569,14 @@
     //     spawn - the player gets a corridor's worth of dungeon before the first ambush.
     //   - markers keep 2 tiles between them, so a cleared stretch stays cleared and a corridor
     //     never turns into a gauntlet of three back-to-back fights.
-    //   - one in six is a boss and one in three a flyer; the rest walk. Rolled per marker, so a
-    //     small maze may draw no boss at all.
+    //   - the BOSS does not roam. It is placed first, on the walkable tiles immediately
+    //     adjacent to the exit - one, or two where the exit has two ways in - so the last
+    //     thing between the player and the stairs is always the dread foe. Everything that
+    //     roams is a walker or a flyer.
     // Density is ~1 foe per 6 tiles, floored at 4 so even the smallest maze is worth fighting
-    // through, capped at 14 so a huge one doesn't become a slog.
+    // through, capped at 14 so a huge one doesn't become a slog. The guards count towards it.
     const MARKER_MIN_SPACING = 2;
+    const MAX_EXIT_GUARDS = 2;
     function placeEnemyMarkers() {
       enemyMarkers = [];
       activeMarker = null;
@@ -4035,7 +4584,25 @@
 
       const target = Math.max(4, Math.min(14, Math.round(passagesList.length * 0.16)));
       const far = (a, bx, by) => Math.abs(a.x - bx) + Math.abs(a.y - by);
+      const walkable = new Set(passagesList.map(p => `${p.x},${p.y}`));
+      const push = (x, y, variant) =>
+        enemyMarkers.push({ x, y, variant, alive: true, phase: Math.random() * Math.PI * 2 });
 
+      // --- The exit guard(s). The exit is normally the far dead end of the maze, so this is
+      // usually a single boss standing in the only corridor that reaches it - unavoidable, and
+      // visible from down that corridor because markerScaleFor draws it half again as large as
+      // anything else. Braiding can leave the exit with a second approach; both get a guard, so
+      // the stairs cannot be reached around the back.
+      // The spawn tile is excluded on the off chance a small maze puts the two next to each
+      // other - being ambushed by the boss before taking a step is not a fight, it is a wall.
+      const approaches = [{ x: exitRoom.x + 1, y: exitRoom.y }, { x: exitRoom.x - 1, y: exitRoom.y },
+                          { x: exitRoom.x, y: exitRoom.y + 1 }, { x: exitRoom.x, y: exitRoom.y - 1 }]
+        .filter(p => walkable.has(`${p.x},${p.y}`) &&
+                     !(p.x === startRoom.x && p.y === startRoom.y));
+      _shuffle(approaches);
+      approaches.slice(0, MAX_EXIT_GUARDS).forEach(p => push(p.x, p.y, 'boss'));
+
+      // --- The roaming foes fill the rest of the maze around them.
       const candidates = passagesList.filter(p =>
         !(p.x === startRoom.x && p.y === startRoom.y) &&
         !(p.x === exitRoom.x && p.y === exitRoom.y) &&
@@ -4043,12 +4610,23 @@
       );
       _shuffle(candidates);
 
+      // The roaming mix. The lone walker stays the most common thing in a corridor; the lone
+      // flyer and the two packs split the rest, so a dungeon of a dozen markers holds roughly
+      // four walkers, three flyers, three swarms and two wings. A pack with no sprite to
+      // recolour (a mode that only ever shipped one enemy) drops out of the bag rather than
+      // standing in the corridor drawn small and then arriving as one full-size walker.
+      const ROAM_WEIGHTS = { walker: 4, flyer: 3, swarmer: 3, circler: 2 };
+      const roamBag = [];
+      for (const [k, w] of Object.entries(ROAM_WEIGHTS)) {
+        if (ENEMY_VARIANTS[k].recolorOf && !enemyFramesFor(k)) continue;
+        for (let i = 0; i < w; i++) roamBag.push(k);
+      }
+      if (!roamBag.length) roamBag.push('walker');
+
       for (const p of candidates) {
         if (enemyMarkers.length >= target) break;
         if (enemyMarkers.some(m => far(p, m.x, m.y) < MARKER_MIN_SPACING)) continue;
-        const roll = Math.random();
-        const variant = roll < 0.17 ? 'boss' : (roll < 0.5 ? 'flyer' : 'walker');
-        enemyMarkers.push({ x: p.x, y: p.y, variant, alive: true, phase: Math.random() * Math.PI * 2 });
+        push(p.x, p.y, roamBag[Math.floor(Math.random() * roamBag.length)]);
       }
       updateProgressionHUD();
     }
@@ -4057,7 +4635,7 @@
     // generated one, else whatever single enemy sprite the mode shipped. Null falls through to
     // the procedural sigil in drawWorldEnemies.
     function markerFrameFor(variant) {
-      const set = enemyVariantImgs[variant];
+      const set = enemyFramesFor(variant);
       if (set && set.idle && set.idle.complete && set.idle.naturalWidth > 0) return set.idle;
       const fallback = enemySpriteFrames[0];
       if (fallback && fallback.complete && fallback.naturalWidth > 0) return fallback;
@@ -4266,8 +4844,19 @@
         }
       }
 
-      // 3D Billboard "END" Sign
-      if (exitSignTexture) {
+      // The exit stairwell, standing in the middle of the exit cell.
+      //
+      // FLOOR-anchored, not horizon-centred like the "End" placard this replaced. A hole in the
+      // ground has to meet the ground: its bottom edge sits on the exit cell's floor line and it
+      // rises from there, so the flight recedes UP the screen towards the vanishing point the
+      // same way the corridor floor does. Centring it on the horizon (the placard's anchoring)
+      // left it hanging in the air with corridor visible underneath.
+      //
+      // Width is one full map cell rather than a ratio of the height. A lateral world unit at
+      // depth d covers screenWidth / (2*tan(halfFov)*d) pixels - the horizontal twin of the
+      // screenHeight/d the wall pass uses vertically - so this makes the stone surround meet
+      // the cell's own side walls at every distance instead of drifting with it.
+      if (exitStairsTexture) {
         const spriteX = (exitRoom.x + 0.5) - posX;
         const spriteY = (exitRoom.y + 0.5) - posY;
 
@@ -4276,40 +4865,48 @@
         const transformY = invDet * (-planeY * spriteX + planeX * spriteY);
 
         if (transformY > 0.1) {
-          const spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
-          // 0.55 of a wall's height - scaled by WALL_HEIGHT so the sign keeps that ratio.
-          const spriteHeight = Math.abs(Math.floor((screenHeight * WALL_HEIGHT / transformY) * 1.1));
-          const spriteWidth = Math.floor(spriteHeight * 1.5);
+          const spriteScreenX = (screenWidth / 2) * (1 + transformX / transformY);
+          const wallH = (screenHeight * WALL_HEIGHT) / transformY;
+          const spriteWidth = (screenWidth / (2 * Math.tan(halfFov))) / transformY;
+          const spriteHeight = wallH * EXIT_STAIRS_WALL_FRAC;
+          // Bottom edge on the floor line of the cell the stairwell stands in.
+          const floorY = screenHeight / 2 + wallH / 2;
+          const topY = floorY - spriteHeight;
+          const leftX = spriteScreenX - spriteWidth / 2;
 
-          const drawStartY = Math.max(0, Math.floor(-spriteHeight / 2 + screenHeight / 2));
-          const drawEndY = Math.min(screenHeight - 1, Math.floor(spriteHeight / 2 + screenHeight / 2));
-          const drawStartX = Math.max(0, Math.floor(-spriteWidth / 2 + spriteScreenX));
-          const drawEndX = Math.min(screenWidth - 1, Math.floor(spriteWidth / 2 + spriteScreenX));
+          const drawStartY = Math.max(0, Math.floor(topY));
+          const drawEndY = Math.min(screenHeight - 1, Math.ceil(floorY));
+          const drawStartX = Math.max(0, Math.floor(leftX));
+          const drawEndX = Math.min(screenWidth - 1, Math.ceil(leftX + spriteWidth));
 
-          const signData = exitSignTexture.data;
-          const signW = 256;
-          const signH = 140;
+          const signData = exitStairsTexture.data;
+          // A touch of the wall pass's distance falloff, so the stairwell belongs to the
+          // corridor rather than glowing at full brightness the way the old placard did. Only
+          // a touch: this thing is lit from BEYOND the opening, not by the dungeon, and it is
+          // the one landmark the player is looking for down a long dark hall. Shading it like
+          // masonry (the walls' 0.38 falloff, no floor) turned it into a black rectangle at
+          // three tiles and lost the exit entirely.
+          const exitShade = Math.max(0.78, 1.0 / (1.0 + transformY * 0.16));
 
-          for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
-            const texX = Math.floor(((stripe - (-spriteWidth / 2 + spriteScreenX)) * signW) / spriteWidth);
+          for (let stripe = drawStartX; stripe <= drawEndX; stripe++) {
+            const texX = Math.floor(((stripe - leftX) * EXIT_SPR_W) / spriteWidth);
+            if (texX < 0 || texX >= EXIT_SPR_W) continue;
+            // Same per-column depth test the walls wrote, so a stairwell glimpsed past a corner
+            // is cut off by the corner rather than drawn over it.
+            if (transformY >= zBuffer[stripe]) continue;
 
-            if (transformY > 0 && stripe >= 0 && stripe < screenWidth && transformY < zBuffer[stripe]) {
-              for (let y = drawStartY; y < drawEndY; y++) {
-                const d = (y - (-spriteHeight / 2 + screenHeight / 2)) * signH;
-                const texY = Math.floor(d / spriteHeight);
+            for (let y = drawStartY; y <= drawEndY; y++) {
+              const texY = Math.floor(((y - topY) * EXIT_SPR_H) / spriteHeight);
+              if (texY < 0 || texY >= EXIT_SPR_H) continue;
 
-                if (texX >= 0 && texX < signW && texY >= 0 && texY < signH) {
-                  const sIdx = (texY * signW + texX) * 4;
-                  const alpha = signData[sIdx + 3] / 255;
+              const sIdx = (texY * EXIT_SPR_W + texX) * 4;
+              const alpha = signData[sIdx + 3] / 255;
+              if (alpha <= 0.05) continue;
 
-                  if (alpha > 0.05) {
-                    const pIdx = (y * screenWidth + stripe) * 4;
-                    buffer[pIdx] = Math.floor(buffer[pIdx] * (1 - alpha) + signData[sIdx] * alpha);
-                    buffer[pIdx + 1] = Math.floor(buffer[pIdx + 1] * (1 - alpha) + signData[sIdx + 1] * alpha);
-                    buffer[pIdx + 2] = Math.floor(buffer[pIdx + 2] * (1 - alpha) + signData[sIdx + 2] * alpha);
-                  }
-                }
-              }
+              const pIdx = (y * screenWidth + stripe) * 4;
+              buffer[pIdx] = Math.floor(buffer[pIdx] * (1 - alpha) + signData[sIdx] * exitShade * alpha);
+              buffer[pIdx + 1] = Math.floor(buffer[pIdx + 1] * (1 - alpha) + signData[sIdx + 1] * exitShade * alpha);
+              buffer[pIdx + 2] = Math.floor(buffer[pIdx + 2] * (1 - alpha) + signData[sIdx + 2] * exitShade * alpha);
             }
           }
         }
@@ -4895,7 +5492,7 @@
       function finish() {
         if (activeMode !== 'v1_video') {
           buildLanternWallFromBase(wallTexture, styleName);
-          buildDynamicExitSignTexture(styleName, wallTexture);
+          buildExitStairsTexture(styleName, wallTexture);
           buildDoorTexture(wallTexture, styleName);
           buildOpenDoorTexture();
           buildSwitchWallTextures(wallTexture, styleName);
@@ -4981,6 +5578,10 @@
       // them and either box. Decoding a 90s buffer at the moment of death would be audible.
       loadScreenMusic('death');
       loadScreenMusic('victory');
+      // The level-up loop is wanted mid-run and with no warning - the box opens the instant a
+      // kill crosses a threshold - so it has to be in memory before the first fight, not
+      // fetched when it is already needed.
+      loadScreenMusic('levelup');
       // Belt-and-braces: playScreenMusic already retired the menu loop when the narrator
       // finished, but nothing should still be playing it once the dungeon itself starts.
       menuMusicStopped = true;
@@ -5240,7 +5841,7 @@
       progSubText.textContent = `Building the ${numGrids}-grid maze while ComfyUI works...`;
 
       generateAuthentic3DMaze(numGrids);
-      buildDynamicExitSignTexture(wallStyle, wallTexture);
+      buildExitStairsTexture(wallStyle, wallTexture);
 
       const startTime = Date.now();
       progTimer.textContent = "0.0s";

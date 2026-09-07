@@ -4247,6 +4247,16 @@ STATIC_MUSIC = {
         "game, proud and resolved, bright brass and swelling strings over a steady confident "
         "march, celebratory and full."
     )),
+    # Under the level-up choice box, which ducks the dungeon bed rather than replacing it and
+    # is usually on screen for only a few seconds. Thirty is the shortest loop here on purpose:
+    # nobody sits on this screen, so a long take would only ever play its first bars. Kept
+    # brighter and lighter than "victory" - that one closes a whole run, this one is a pause
+    # inside one, and the two must not read as the same event.
+    "levelup": (30.0, (
+        "Bright uplifting fantasy level-up music for a retro 1990s dungeon crawler video game, "
+        "a triumphant moment of reward and choice, shimmering bells and warm strings over a "
+        "gentle rising arpeggio, hopeful and radiant, moderate tempo."
+    )),
 }
 
 READY_CHIME_PROMPT = (
