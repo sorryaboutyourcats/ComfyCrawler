@@ -790,6 +790,13 @@
     // Built by placeGatesAndSwitches() during maze generation; guaranteed solvable.
     let doorList = [];
     let switchList = [];
+    // Roaming foes, scattered over the walkable tiles at generation time and drawn in the 3D
+    // view as floating billboards (see drawWorldEnemies). Stepping onto one starts its battle;
+    // winning clears `alive` and the marker stops being drawn.
+    //   [{ x, y, variant, alive, phase }]   phase de-syncs each marker's hover bob.
+    let enemyMarkers = [];
+    // The marker whose battle is currently running, so the win can retire the right one.
+    let activeMarker = null;
     let exitRoom = { x: 5, y: 5 };
     let startRoom = { x: 1, y: 1 };
     let zBuffer = new Float64Array(screenWidth);
@@ -924,7 +931,6 @@
     // ==========================================
     const doomFaceCanvas = document.getElementById('doomFaceCanvas');
     const doomFaceCtx = doomFaceCanvas ? doomFaceCanvas.getContext('2d') : null;
-    const btnToggleBattle = document.getElementById('btnToggleBattle');
     const battleActionBar = document.getElementById('battleActionBar');
     // The battle bar and the D-pad share one slot in the controls panel - exactly one of them
     // is on screen at a time, which keeps the sidebar (and so the window) a fixed height.
@@ -940,11 +946,192 @@
       const hero = (dungeonStory && dungeonStory.hero || '').trim();
       heroStatusLabel.textContent = hero ? (hero.toUpperCase() + ':') : HERO_STATUS_DEFAULT;
     }
+
     const playerHpBar = document.getElementById('playerHpBar');
     const playerHpText = document.getElementById('playerHpText');
     const playerStmBar = document.getElementById('playerStmBar');
     const playerStmText = document.getElementById('playerStmText');
+    const playerXpBar = document.getElementById('playerXpBar');
+    const playerXpText = document.getElementById('playerXpText');
+    const playerLevelBadge = document.getElementById('playerLevelBadge');
+    const encounterBadge = document.getElementById('encounterBadge');
     const controlsHeader = document.getElementById('controlsHeader');
+
+    const levelUpModal = document.getElementById('levelUpModal');
+    const levelUpLevelText = document.getElementById('levelUpLevelText');
+    const levelUpChoices = document.getElementById('levelUpChoices');
+
+    // ==========================================
+    // LEVELLING
+    // ==========================================
+    // The base bars every run starts from. playerMaxHp / playerMaxStm are BASE + the bonuses
+    // banked by SURVIVAL / STAMINA picks, recomputed by applyProgressionStats() - so resetting
+    // progression really does put the bars back where a fresh hero starts.
+    const BASE_MAX_HP = 100;
+    const BASE_MAX_STM = 100;
+
+    // What each foe is worth. Roughly proportional to how long it takes to put down: the boss
+    // has 2.4x the walker's HP and hits hardest, the flyer spends most of the fight out of
+    // reach. A maze holds ~4-14 markers (see placeEnemyMarkers), so clearing a whole dungeon
+    // is worth ~150-350 XP - three to four levels.
+    const ENEMY_XP = { walker: 22, flyer: 28, boss: 60 };
+
+    // 40 to reach level 2, then 30 more each time: 40 / 70 / 100 / 130... Two walkers make the
+    // first level, and the curve outruns a single dungeon's supply by about level 5.
+    function xpForLevel(level) { return 40 + (level - 1) * 30; }
+
+    const LEVEL_GAINS = { strength: 4, stamina: 15, survival: 20 };
+    // Every level also patches the hero up, whichever path they take. Without it the run is
+    // decided by the first two fights - there is no other healing in the dungeon.
+    const LEVEL_HEAL_FRAC = 0.4;
+
+    const progression = {
+      level: 1,
+      xp: 0,
+      xpToNext: xpForLevel(1),
+      bonusAtk: 0,
+      bonusHp: 0,
+      bonusStm: 0,
+      pendingLevels: 0,   // levels banked but not yet spent; the modal reopens per level
+      choiceIndex: 0      // which option the keyboard cursor is on
+    };
+
+    const LEVEL_CHOICE_KEYS = ['strength', 'stamina', 'survival'];
+    let levelUpOpen = false;
+
+    // ---- Progression -------------------------------------------------------
+
+    // The bars are derived, never edited in place: max = base + banked bonuses. Anything that
+    // changes a bonus (a level-up pick) or clears them (a new dungeon) calls this.
+    function applyProgressionStats() {
+      combatState.playerMaxHp = BASE_MAX_HP + progression.bonusHp;
+      combatState.playerMaxStm = BASE_MAX_STM + progression.bonusStm;
+      combatState.playerHp = Math.min(combatState.playerHp, combatState.playerMaxHp);
+      combatState.playerStm = Math.min(combatState.playerStm, combatState.playerMaxStm);
+    }
+
+    function updateProgressionHUD() {
+      if (playerLevelBadge) playerLevelBadge.textContent = `LV ${progression.level}`;
+      if (playerXpBar) {
+        playerXpBar.style.width = `${Math.min(100, (progression.xp / progression.xpToNext) * 100)}%`;
+      }
+      if (playerXpText) playerXpText.textContent = `${progression.xp}/${progression.xpToNext}`;
+      if (encounterBadge) {
+        const left = enemyMarkers.filter(m => m.alive).length;
+        encounterBadge.textContent = left ? `Foes: ${left}` : 'Foes: cleared';
+      }
+    }
+
+    function resetProgression() {
+      progression.level = 1;
+      progression.xp = 0;
+      progression.xpToNext = xpForLevel(1);
+      progression.bonusAtk = 0;
+      progression.bonusHp = 0;
+      progression.bonusStm = 0;
+      progression.pendingLevels = 0;
+      progression.choiceIndex = 0;
+      closeLevelUpModal();
+      applyProgressionStats();
+      updateProgressionHUD();
+    }
+
+    // Award a kill's XP and bank any levels it crossed. A single boss can span two thresholds,
+    // so this loops - and pendingLevels means the modal is shown once PER level rather than
+    // silently swallowing the second one.
+    function grantXp(amount) {
+      if (!amount) return;
+      progression.xp += amount;
+      while (progression.xp >= progression.xpToNext) {
+        progression.xp -= progression.xpToNext;
+        progression.level++;
+        progression.xpToNext = xpForLevel(progression.level);
+        progression.pendingLevels++;
+      }
+      updateProgressionHUD();
+      if (progression.pendingLevels > 0) openLevelUpModal();
+    }
+
+    function openLevelUpModal() {
+      if (!levelUpModal || progression.pendingLevels <= 0) return;
+      levelUpOpen = true;
+      releaseHeldKeys();          // a held guard must not drain stamina behind the modal
+      progression.choiceIndex = 0;
+      if (levelUpLevelText) {
+        // The level being SPENT, not necessarily the one just reached - two banked levels are
+        // taken one at a time, oldest first.
+        const spending = progression.level - progression.pendingLevels + 1;
+        levelUpLevelText.textContent = `Level ${spending}`;
+      }
+      const sTxt = document.getElementById('levelUpStrengthText');
+      const tTxt = document.getElementById('levelUpStaminaText');
+      const vTxt = document.getElementById('levelUpSurvivalText');
+      if (sTxt) sTxt.textContent = `+${LEVEL_GAINS.strength} attack damage`;
+      if (tTxt) tTxt.textContent = `+${LEVEL_GAINS.stamina} max stamina`;
+      if (vTxt) vTxt.textContent = `+${LEVEL_GAINS.survival} max health`;
+      levelUpModal.classList.remove('hidden');
+      syncLevelUpSelection();
+      playSfx('end', { vary: 0, gain: 0.55 });
+    }
+
+    function closeLevelUpModal() {
+      levelUpOpen = false;
+      if (levelUpModal) levelUpModal.classList.add('hidden');
+    }
+
+    function syncLevelUpSelection() {
+      if (!levelUpChoices) return;
+      const btns = levelUpChoices.querySelectorAll('.levelup-choice');
+      btns.forEach((b, i) => b.classList.toggle('selected', i === progression.choiceIndex));
+    }
+
+    function moveLevelUpSelection(delta) {
+      const n = LEVEL_CHOICE_KEYS.length;
+      progression.choiceIndex = (progression.choiceIndex + delta + n) % n;
+      syncLevelUpSelection();
+      playSfx('turn', { gain: 0.4 });
+    }
+
+    function applyLevelChoice(kind) {
+      if (!levelUpOpen || progression.pendingLevels <= 0) return;
+      if (kind === 'strength') progression.bonusAtk += LEVEL_GAINS.strength;
+      else if (kind === 'stamina') progression.bonusStm += LEVEL_GAINS.stamina;
+      else if (kind === 'survival') progression.bonusHp += LEVEL_GAINS.survival;
+      else return;
+
+      progression.pendingLevels--;
+      applyProgressionStats();
+      // SURVIVAL's new headroom is handed over filled, and every level tops the hero up - see
+      // LEVEL_HEAL_FRAC. Stamina refills the same way so the next fight opens with a full bar.
+      const heal = Math.round(combatState.playerMaxHp * LEVEL_HEAL_FRAC)
+                 + (kind === 'survival' ? LEVEL_GAINS.survival : 0);
+      combatState.playerHp = Math.min(combatState.playerMaxHp, combatState.playerHp + heal);
+      combatState.playerStm = combatState.playerMaxStm;
+      updateProgressionHUD();
+      playSfx('button', { vary: 0.05 });
+
+      // A second banked level (a boss can carry the hero across two thresholds) is taken as its
+      // own pick, straight away. Re-opening in place rather than closing and re-opening on a
+      // timer matters: any gap would unfreeze the dungeon between the two choices.
+      if (progression.pendingLevels > 0) {
+        openLevelUpModal();
+      } else {
+        closeLevelUpModal();
+        render3D();
+      }
+    }
+
+    if (levelUpChoices) {
+      levelUpChoices.querySelectorAll('.levelup-choice').forEach(btn => {
+        btn.addEventListener('click', () => applyLevelChoice(btn.dataset.choice));
+      });
+    }
+
+    // One gate for every input path - the keyboard handler, the D-pad and the combat buttons
+    // all check this, so the level-up box really does stop the game rather than just covering it.
+    function inputLocked() {
+      return levelUpOpen;
+    }
 
     const btnCombatDodgeL = document.getElementById('btnCombatDodgeL');
     const btnCombatAttack = document.getElementById('btnCombatAttack');
@@ -957,9 +1144,15 @@
       block: false
     };
 
+
     const combatState = {
       inBattle: false,
       dead: false,              // set by killPlayer(); freezes combat until Rise / new dungeon
+      // How many sim ticks the current battle has been running. Drives the entrance: the hero
+      // slides up from below the frame while the foe dither-fades in. Both are done, and both
+      // fighters unfrozen, at INTRO_TOTAL.
+      introFrame: 0,
+      pendingXp: 0,             // banked at the kill, paid out when the death fade finishes
       playerHp: 100,
       playerMaxHp: 100,
       playerStm: 100,
@@ -987,7 +1180,8 @@
         swoopTimer: 0,
         blockTimer: 0,   // walker: >0 = guarding, the next player strike is largely absorbed
         atkCount: 0,     // boss: swings taken in the current patrol phase (3 -> hunt)
-        hunting: false   // boss: walking the player down instead of drifting left/right
+        hunting: false,  // boss: walking the player down instead of drifting left/right
+        deathFade: 0     // >0 once killed: ticks up while the corpse dithers away
       },
       faceState: 'idle',
       faceTimer: 0,
@@ -1039,9 +1233,12 @@
       // other modes ship one enemy, so they stay on the walker.
       const haveVariants = ENEMY_VARIANT_KEYS.filter(k => enemyVariantImgs[k] &&
                                                           enemyVariantImgs[k].idle).length >= 2;
-      const key = forceKey || (haveVariants
-        ? ENEMY_VARIANT_KEYS[Math.floor(Math.random() * ENEMY_VARIANT_KEYS.length)]
-        : 'walker');
+      // A marker asks for the foe it was drawn as, but a mode that shipped one enemy sprite
+      // can only field the walker - fighting a "boss" wearing the walker's art (and its 240 HP)
+      // would be a bug, not a surprise.
+      const key = haveVariants
+        ? (forceKey || ENEMY_VARIANT_KEYS[Math.floor(Math.random() * ENEMY_VARIANT_KEYS.length)])
+        : 'walker';
       const cfg = ENEMY_VARIANTS[key] || ENEMY_VARIANTS.walker;
       const e = combatState.enemy;
       e.variant = key;
@@ -1060,6 +1257,7 @@
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
+      e.deathFade = 0;
       // Each foe is its own species with its own invented name ("Gravewing Shrike"), so use
       // that when the server sent one - no "FLYING " tag, because a flyer that was designed
       // to fly is not a tagged version of the walker.
@@ -1082,7 +1280,20 @@
       return key;
     }
 
-    function toggleBattleMode(forceState) {
+    // How the entrance plays, in sim ticks. The hero slides up into frame first; the foe
+    // starts materialising a few ticks later and takes longer, so it is still resolving out of
+    // the dark when the player has landed. Neither side may act until INTRO_TOTAL.
+    const INTRO_SLIDE_FRAMES = 26;    // hero's rise from below the frame
+    const INTRO_SLIDE_DIST = 170;     // px below the canvas the hero starts at
+    const INTRO_FADE_DELAY = 7;       // ticks before the foe begins to appear
+    const INTRO_FADE_FRAMES = 34;     // ticks the foe's dither-in takes
+    const INTRO_TOTAL = INTRO_FADE_DELAY + INTRO_FADE_FRAMES;
+    // How long a corpse takes to dissolve, plus the beat held after it is gone before the
+    // dungeon comes back.
+    const DEATH_FADE_FRAMES = 40;
+    const DEATH_FADE_HOLD = 20;
+
+    function toggleBattleMode(forceState, forceVariant) {
       if (typeof forceState === 'boolean') {
         combatState.inBattle = forceState;
       } else {
@@ -1092,7 +1303,7 @@
 
       if (combatState.inBattle) {
         if (battleModeBadge) {
-          battleModeBadge.textContent = "BATTLE TIME";
+          battleModeBadge.textContent = "BATTLE";
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white animate-pulse";
         }
         if (battleActionBar) battleActionBar.classList.remove('hidden');
@@ -1100,38 +1311,81 @@
         // around behind the combat view. Swapping it out for the combat buttons settles that
         // and costs no height, since the two grids are the same size.
         if (dpadGrid) dpadGrid.classList.add('hidden');
-        if (controlsHeader) controlsHeader.textContent = "COMBAT: A/D Strafe, Z Strike, X Block, Space Flee";
-        // No on-screen FLEE button: Space is the way out, and the status bar stays clean.
-        if (btnToggleBattle) btnToggleBattle.classList.add('hidden');
+        if (controlsHeader) controlsHeader.textContent = "COMBAT: A/D Strafe, Z Strike, X Block";
 
         combatState.playerX = 0;
         combatState.vx = 0;
         combatState.attackFrame = 0;
         combatState.hurtFrame = 0;
         combatState.shieldProgress = 0;
+        // Runs the entrance and, until it finishes, freezes both fighters - see combatTick.
+        combatState.introFrame = 0;
+        combatState.pendingXp = 0;
 
-        // Roll a fresh foe (walker / flyer / boss) every time a battle begins.
-        pickEnemyVariant();
+        // The foe the marker was drawn as; a battle started any other way still rolls at random.
+        pickEnemyVariant(forceVariant);
 
         showFloatingCombatText(`${combatState.enemy.name} APPROACHES!`, 160, 80, "#facc15");
       } else {
         if (battleModeBadge) {
-          battleModeBadge.textContent = "EXPLORATION TIME";
+          battleModeBadge.textContent = "EXPLORATION";
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800";
         }
         if (battleActionBar) battleActionBar.classList.add('hidden');
         if (dpadGrid) dpadGrid.classList.remove('hidden');
-        if (controlsHeader) controlsHeader.textContent = "CONTROLS (Space: Battle):";
-        if (btnToggleBattle) {
-          btnToggleBattle.innerHTML = "⚔️ <span>BATTLE (Space)</span>";
-          btnToggleBattle.className = "win95-btn px-2 py-0.5 text-[10px] font-bold text-red-900 bg-red-100 hover:bg-red-200";
-        }
+        if (controlsHeader) controlsHeader.textContent = "CONTROLS (Space: Use):";
+        combatState.introFrame = 0;
         // Hiding the action bar mid-press means the Block button never receives its pointerup or
         // pointerleave, so keysHeld.block would stay stuck on - and a stuck block drains stamina to
         // 2 and then blocks its own regen forever (see the regen guard in the combat loop).
         releaseHeldKeys();
       }
       render3D();
+    }
+
+    // Fraction of the foe's pixels currently drawn: dithers up over the entrance, holds at 1
+    // through the fight, dithers back down as the corpse dissolves. 0 means it is gone.
+    function enemyVisibility() {
+      const e = combatState.enemy;
+      if (e.deathFade > 0) {
+        return Math.max(0, 1 - (e.deathFade - 1) / DEATH_FADE_FRAMES);
+      }
+      if (combatState.introFrame >= INTRO_TOTAL) return 1;
+      return Math.max(0, Math.min(1, (combatState.introFrame - INTRO_FADE_DELAY) / INTRO_FADE_FRAMES));
+    }
+
+    // Both fighters are held still until the entrance has played out.
+    function battleReady() {
+      return combatState.inBattle && combatState.introFrame >= INTRO_TOTAL;
+    }
+
+    // Walk onto a marker -> its fight begins. The marker is remembered so the win retires the
+    // right one; a loss leaves it standing, so a restarted run has to face it again.
+    function startEncounter(marker) {
+      if (!marker || !marker.alive) return;
+      if (combatState.inBattle || combatState.dead || inputLocked()) return;
+      activeMarker = marker;
+      queuedAction = null;              // a buffered step must not fire behind the duel
+      toggleBattleMode(true, marker.variant);
+    }
+
+    function checkEncounterAtPlayer() {
+      if (combatState.inBattle || combatState.dead || inputLocked()) return;
+      const m = enemyMarkers.find(k => k.alive && k.x === player.gridX && k.y === player.gridY);
+      if (m) startEncounter(m);
+    }
+
+    // The corpse has finished dissolving: retire the marker, hand the dungeon back, and pay out
+    // the XP - which is what may raise the level-up box over the corridor.
+    function finishEncounterVictory() {
+      const xp = combatState.pendingXp;
+      combatState.pendingXp = 0;
+      if (activeMarker) activeMarker.alive = false;
+      activeMarker = null;
+      toggleBattleMode(false);
+      updateProgressionHUD();
+      drawMinimap();
+      grantXp(xp);
     }
 
     // Any held input has to be dropped whenever the player stops actively driving the game, or a
@@ -1229,6 +1483,9 @@
       passagesList = dungeonSnapshot.passages.map(p => ({ x: p.x, y: p.y }));
       doorList = dungeonSnapshot.doors.map(d => ({ ...d }));
       switchList = dungeonSnapshot.switches.map(s => ({ ...s }));
+      // Every foe back on its tile, alive again - the same maze means the same fights, and a
+      // restart that kept the cleared markers would hand the player a walk to the exit.
+      enemyMarkers = (dungeonSnapshot.enemies || []).map(m => ({ ...m }));
 
       // Spawn pose (same object - other code closes over `player`).
       Object.assign(player, dungeonSnapshot.player);
@@ -1271,6 +1528,14 @@
       // new dungeon starts out of battle but still wearing the "BATTLE TIME" chrome.
       if (combatState.inBattle) toggleBattleMode(false);
       releaseHeldKeys();
+      // Levels are a per-run thing: a new dungeon (and a restart, which rolls the run back to
+      // its first step) starts the hero at level 1 with the base bars. This has to land BEFORE
+      // the refill below, since it is what puts playerMaxHp back to BASE_MAX_HP.
+      resetProgression();
+      activeMarker = null;
+      combatState.introFrame = 0;
+      combatState.pendingXp = 0;
+      combatState.enemy.deathFade = 0;
       combatState.playerStm = combatState.playerMaxStm;
       combatState.playerHp = combatState.playerMaxHp;
       combatState.playerX = 0;
@@ -1289,10 +1554,6 @@
     // Alt-tabbing or clicking into a text field while holding X swallows the keyup the same way.
     window.addEventListener('blur', releaseHeldKeys);
 
-    if (btnToggleBattle) {
-      btnToggleBattle.addEventListener('click', () => toggleBattleMode());
-    }
-
     function showFloatingCombatText(text, x, y, color = '#ffffff') {
       combatState.combatEffects.push({
         text: text,
@@ -1305,8 +1566,10 @@
     }
 
     function combatAttack() {
-      if (combatState.dead) return;
-      if (!combatState.inBattle || combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
+      if (combatState.dead || inputLocked()) return;
+      // No free swing at a foe that hasn't finished arriving, and none at a corpse.
+      if (!battleReady() || combatState.enemy.deathFade > 0) return;
+      if (combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
       if (combatState.playerStm < 30) {
         showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
         return;
@@ -1361,7 +1624,27 @@
 
     // One fixed 1/60s step of combat. Pure simulation - no drawing, no DOM.
     function combatTick() {
-      if (combatState.inBattle) {
+      // The level-up box stops the world, not just the input: no stamina regen, no floating
+      // text ageing, no enemy clock. It only ever opens between fights, but a frozen sim means
+      // the dungeon is exactly as it was left when the choice is taken.
+      if (levelUpOpen) return;
+
+      if (combatState.inBattle && combatState.introFrame < INTRO_TOTAL) {
+        combatState.introFrame++;
+      }
+
+      // Corpse dissolve. Runs to completion even though the fight is over, then hands the
+      // dungeon back - see finishEncounterVictory.
+      if (combatState.inBattle && combatState.enemy.deathFade > 0 && !combatState.dead) {
+        combatState.enemy.deathFade++;
+        if (combatState.enemy.deathFade > DEATH_FADE_FRAMES + DEATH_FADE_HOLD) {
+          updateCombatEffects();
+          finishEncounterVictory();
+          return;
+        }
+      }
+
+      if (battleReady() && !combatState.dead) {
         if (keysHeld.left) {
           combatState.vx = -3.8;
           combatState.glanceDir = -1;
@@ -1403,7 +1686,9 @@
             playSfx('miss_enemy');
             showFloatingCombatText("OUT OF REACH!", 160, 90, "#93c5fd");
           } else {
-            let dmg = 24 + Math.floor(Math.random() * 12);
+            // STRENGTH picks ride on the base roll, so +4 is +4 through a guard and armour too
+            // (both of which scale the total) rather than a flat bonus that dwarfs them.
+            let dmg = 24 + progression.bonusAtk + Math.floor(Math.random() * 12);
             if (guarded) { dmg = Math.max(1, Math.floor(dmg * 0.25)); e.blockTimer = 0; }
             if (cfg.slow) dmg = Math.floor(dmg * 0.7);   // boss is armoured
             e.hp = Math.max(0, e.hp - dmg);
@@ -1418,10 +1703,15 @@
 
             if (e.hp <= 0) {
               e.state = 'defeated';
+              e.blockTimer = 0;
+              // Starts the dither-out. combatTick counts it up and calls
+              // finishEncounterVictory() once the corpse has fully dissolved.
+              e.deathFade = 1;
               // Same species, three sizes: one death cry serves all three variants, pitched
               // by cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
               playSfx('death_enemy', { rate: cfg.sfxRate });
-              showFloatingCombatText("VICTORY! +50 ESSENCE", 160, 70, "#fde047");
+              combatState.pendingXp = ENEMY_XP[e.variant] || ENEMY_XP.walker;
+              showFloatingCombatText(`VICTORY! +${combatState.pendingXp} XP`, 160, 70, "#fde047");
             }
           }
         }
@@ -1449,7 +1739,8 @@
         combatState.glanceTimer = 60 + Math.floor(Math.random() * 80);
       }
 
-      if (combatState.inBattle && combatState.enemy.hp > 0 && !combatState.dead) {
+      // battleReady(), not inBattle: a foe still dithering into existence does not get to swing.
+      if (battleReady() && combatState.enemy.hp > 0 && !combatState.dead) {
         const e = combatState.enemy;
         const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
         if (e.blockTimer > 0) e.blockTimer--;
@@ -2091,7 +2382,11 @@
       // Bob only while actually strafing. The old idle bob ran constantly and, on a sprite with no
       // feet planted animation, read as the character hovering rather than breathing.
       const walkBob = isMoving ? Math.sin(Date.now() / 90) * 3 : 0;
-      const py = height + walkBob;
+      // Battle entrance: the hero rises into frame from below the canvas. Eased out, so they
+      // arrive decelerating into their stance instead of snapping to a stop.
+      const slideT = Math.min(1, combatState.introFrame / INTRO_SLIDE_FRAMES);
+      const slideIn = Math.pow(1 - slideT, 3) * INTRO_SLIDE_DIST;   // ease-out on the remaining gap
+      const py = height + walkBob + slideIn;
 
       const attFrame = combatState.attackFrame;
       const hurtFrame = combatState.hurtFrame;
@@ -2244,10 +2539,251 @@
       c.restore();
     }
 
-    // High-Detail Shaded Dark Fantasy Demon Knight Enemy
-    function drawCombatEnemy(c, width, height) {
-      if (!combatState.inBattle || combatState.enemy.hp <= 0) return;
+    // ==========================================
+    // DITHERED FADES (ordered 4x4 Bayer)
+    // ==========================================
+    // A straight globalAlpha fade turns a sprite into a ghost - it goes translucent and you see
+    // the corridor through it. What the enemies want instead is the 8-bit dissolve: every pixel
+    // stays fully opaque, and the SET of pixels drawn grows (materialising) or shrinks (dying)
+    // through an ordered dither. That can't be done with alpha, so it is done by punching holes:
+    // draw the sprite into an offscreen canvas at 1:1 with the 320x240 view, erase a Bayer
+    // pattern of pixels out of it with destination-out, then blit the result over the scene.
+    //
+    // 17 patterns are pre-built (0..16 of the 4x4 matrix's cells kept) and cached, so a fade
+    // costs one fillRect per frame rather than any per-pixel work.
+    const BAYER4 = [
+      [0, 8, 2, 10],
+      [12, 4, 14, 6],
+      [3, 11, 1, 9],
+      [15, 7, 13, 5],
+    ];
+    let _fxCanvas = null, _fxC = null;
+    const _ditherPatterns = new Array(17).fill(null);
 
+    // Clear and hand back the offscreen scratch view, sized exactly like the viewport so
+    // anything drawn into it lands on the same pixel when blitted back.
+    function fxLayer() {
+      if (!_fxCanvas) {
+        _fxCanvas = document.createElement('canvas');
+        _fxCanvas.width = screenWidth;
+        _fxCanvas.height = screenHeight;
+        _fxC = _fxCanvas.getContext('2d');
+      }
+      _fxC.setTransform(1, 0, 0, 1, 0, 0);
+      _fxC.globalAlpha = 1;
+      _fxC.globalCompositeOperation = 'source-over';
+      _fxC.clearRect(0, 0, screenWidth, screenHeight);
+      return _fxC;
+    }
+
+    // Pattern of the pixels to ERASE for a fade that keeps `keep` (0..1) of them.
+    function ditherErasePattern(keep) {
+      const level = Math.max(0, Math.min(16, Math.round(keep * 16)));
+      if (!_ditherPatterns[level]) {
+        const tile = document.createElement('canvas');
+        tile.width = 4; tile.height = 4;
+        const tc = tile.getContext('2d');
+        tc.fillStyle = '#000';
+        for (let y = 0; y < 4; y++) {
+          for (let x = 0; x < 4; x++) {
+            // Cells whose threshold is at or above the kept count get erased.
+            if (BAYER4[y][x] >= level) tc.fillRect(x, y, 1, 1);
+          }
+        }
+        _ditherPatterns[level] = _fxC.createPattern(tile, 'repeat');
+      }
+      return _ditherPatterns[level];
+    }
+
+    // Finish an fxLayer(): darken it to `shade`, dissolve it to `keep`, blit it to `c`.
+    // Both effects are clipped to what was actually drawn (source-atop / destination-out), so
+    // the empty rest of the scratch canvas stays empty and the scene shows through it.
+    function blitFxLayer(c, keep = 1, shade = 1) {
+      if (keep <= 0) return;
+      // Both fills below cover the whole layer, and a pattern fill is laid down in the CURRENT
+      // transform - so reset it, whatever the caller was drawing with.
+      _fxC.setTransform(1, 0, 0, 1, 0, 0);
+      _fxC.globalAlpha = 1;
+      if (shade < 1) {
+        _fxC.globalCompositeOperation = 'source-atop';
+        _fxC.fillStyle = `rgba(0,0,0,${(1 - shade).toFixed(3)})`;
+        _fxC.fillRect(0, 0, screenWidth, screenHeight);
+      }
+      if (keep < 1) {
+        _fxC.globalCompositeOperation = 'destination-out';
+        _fxC.fillStyle = ditherErasePattern(keep);
+        _fxC.fillRect(0, 0, screenWidth, screenHeight);
+      }
+      _fxC.globalCompositeOperation = 'source-over';
+      c.drawImage(_fxCanvas, 0, 0);
+    }
+
+    // ==========================================
+    // WORLD ENEMY MARKERS (exploration view)
+    // ==========================================
+    // The floating foe you walk into to start a fight. Camera-facing billboards, drawn after
+    // the raycast has been flushed to the canvas so they can be real drawImage() calls (the
+    // sprites are Images, not ImageData) - which means occlusion has to be re-done by hand:
+    // each marker is clipped to the runs of screen columns where it is nearer than the wall
+    // the raycaster already recorded in zBuffer.
+    const MARKER_HEIGHT_FRAC = 0.46;   // of the wall height at the marker's distance
+    const MARKER_WIDTH_FRAC = 0.62;
+    const MARKER_HOVER_FRAC = 0.24;    // lifted off the floor line by this much of a wall
+    // A marker is drawn at its own variant's proportions relative to the walker, so the corridor
+    // tells the player what is waiting before they step into it: a dread boss looms half again
+    // as large, and a flyer hangs higher up the passage.
+    function markerScaleFor(variant) {
+      const cfg = ENEMY_VARIANTS[variant] || ENEMY_VARIANTS.walker;
+      return {
+        size: cfg.heightFrac / ENEMY_VARIANTS.walker.heightFrac,
+        // cfg.hover is in combat-canvas pixels (0..240); as a fraction of a wall it reads the
+        // same at any distance.
+        lift: (cfg.hover || 0) / screenHeight,
+      };
+    }
+    function drawWorldEnemies(c, posX, posY, dirX, dirY, planeX, planeY) {
+      if (!enemyMarkers.length) return;
+      const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+
+      const visible = [];
+      for (const m of enemyMarkers) {
+        if (!m.alive) continue;
+        const relX = (m.x + 0.5) - posX;
+        const relY = (m.y + 0.5) - posY;
+        const tX = invDet * (dirY * relX - dirX * relY);
+        const tY = invDet * (-planeY * relX + planeX * relY);
+        if (tY < 0.28) continue;                    // behind the camera or inside it
+        visible.push({ m, tX, tY });
+      }
+      if (!visible.length) return;
+      visible.sort((a, b) => b.tY - a.tY);          // far to near, so nearer foes overlap
+
+      for (const v of visible) {
+        const wallH = (screenHeight * WALL_HEIGHT) / v.tY;
+        const screenX = (screenWidth / 2) * (1 + v.tX / v.tY);
+        const floorY = screenHeight / 2 + wallH / 2;
+        const scale = markerScaleFor(v.m.variant);
+        // A flyer bobs faster and further than something standing on the floor.
+        const bobRate = scale.lift > 0 ? 260 : 430;
+        const bob = Math.sin(Date.now() / bobRate + v.m.phase) * (wallH * (scale.lift > 0 ? 0.055 : 0.035));
+        const bottomY = floorY - wallH * (MARKER_HOVER_FRAC + scale.lift) + bob;
+
+        const img = markerFrameFor(v.m.variant);
+        const targetH = wallH * MARKER_HEIGHT_FRAC * scale.size;
+        const maxW = wallH * MARKER_WIDTH_FRAC * scale.size;
+        let drawW, drawH, drawX, drawY;
+        if (img) {
+          const box = solidContentBox(img);
+          const aspect = img.naturalWidth / img.naturalHeight;
+          drawH = targetH;
+          drawW = drawH * aspect;
+          if (box) {
+            // Same content-box sizing the battle view uses, so a sprite with a big transparent
+            // margin isn't drawn as a thumbnail floating in an invisible box.
+            let fullH = drawH / box.h;
+            let fullW = fullH * aspect;
+            if (box.w * fullW > maxW) { const k = maxW / (box.w * fullW); fullH *= k; fullW *= k; }
+            drawW = fullW; drawH = fullH;
+            drawX = screenX - (box.x + box.w / 2) * fullW;
+            drawY = bottomY - (box.y + box.h) * fullH;
+          } else {
+            if (drawW > maxW) { drawH *= maxW / drawW; drawW = maxW; }
+            drawX = screenX - drawW / 2;
+            drawY = bottomY - drawH;
+          }
+        } else {
+          drawH = targetH;
+          drawW = drawH;
+          drawX = screenX - drawW / 2;
+          drawY = bottomY - drawH;
+        }
+
+        // Cheap reject before the per-column occlusion scan.
+        const spanL = Math.floor(Math.min(drawX, screenX - drawW / 2));
+        const spanR = Math.ceil(Math.max(drawX + drawW, screenX + drawW / 2));
+        if (spanR < 0 || spanL >= screenWidth) continue;
+
+        // Walk the sprite's columns and collect the unoccluded runs. Clipping to those rects
+        // is what lets a marker be half-hidden behind a corner instead of popping into view
+        // whole the moment its centre clears the wall.
+        c.save();
+        c.beginPath();
+        let runStart = -1, runs = 0;
+        // The band has to reach the floor line as well as the sprite: the marker hovers, so its
+        // ground shadow sits well below its own bottom edge and would be clipped off otherwise.
+        const clipTop = Math.max(0, Math.floor(Math.min(drawY, floorY)) - 2);
+        const clipBottom = Math.min(screenHeight, Math.ceil(Math.max(drawY + drawH, floorY + wallH * 0.06)) + 2);
+        const clipH = Math.max(1, clipBottom - clipTop);
+        for (let x = Math.max(0, spanL); x <= Math.min(screenWidth - 1, spanR); x++) {
+          const open = v.tY < zBuffer[x];
+          if (open && runStart < 0) runStart = x;
+          else if (!open && runStart >= 0) { c.rect(runStart, clipTop, x - runStart, clipH); runs++; runStart = -1; }
+        }
+        if (runStart >= 0) { c.rect(runStart, clipTop, Math.min(screenWidth, spanR + 1) - runStart, clipH); runs++; }
+        if (!runs) { c.restore(); continue; }
+        c.clip();
+
+        // Distance shading matched to the wall pass, so a marker down a long corridor sinks
+        // into the same gloom the stonework does. Floored higher than a wall's, because these
+        // read as lit from within.
+        const shade = Math.max(0.45, 1.0 / (1.0 + v.tY * 0.30));
+
+        const f = fxLayer();
+        // Ground shadow first, so it is shaded and clipped with the body.
+        f.fillStyle = 'rgba(0,0,0,0.34)';
+        f.beginPath();
+        f.ellipse(screenX, floorY - wallH * 0.02, drawW * 0.22, wallH * 0.035, 0, 0, Math.PI * 2);
+        f.fill();
+
+        if (img) {
+          f.drawImage(img, drawX, drawY, drawW, drawH);
+        } else {
+          // No generated sprite (v1 video mode, or a bundle whose enemy failed): a plain
+          // hovering sigil still tells the player a fight is parked on this tile.
+          const r = drawW / 2;
+          const cx = screenX, cy = bottomY - r;
+          const g = f.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
+          g.addColorStop(0, '#f87171');
+          g.addColorStop(0.6, '#7f1d1d');
+          g.addColorStop(1, 'rgba(24,0,0,0)');
+          f.fillStyle = g;
+          f.beginPath(); f.arc(cx, cy, r, 0, Math.PI * 2); f.fill();
+          f.fillStyle = '#fde047';
+          f.fillRect(cx - r * 0.45, cy - r * 0.15, r * 0.3, r * 0.14);
+          f.fillRect(cx + r * 0.15, cy - r * 0.15, r * 0.3, r * 0.14);
+        }
+        blitFxLayer(c, 1, shade);
+        c.restore();
+      }
+    }
+
+    // High-Detail Shaded Dark Fantasy Demon Knight Enemy
+    // The foe, its entrance and its dissolve. The body is drawn through an offscreen layer
+    // whenever it is part-way through a fade, so the dither can punch holes in the finished
+    // figure rather than in each shape it is built from - see blitFxLayer. The name plate is
+    // never dithered: it belongs to the HUD, and it stays up through the dissolve so the kill
+    // reads as a kill.
+    function drawCombatEnemy(c, width, height) {
+      const e = combatState.enemy;
+      if (!combatState.inBattle) return;
+      if (e.hp <= 0 && e.deathFade <= 0) return;      // dead and already dissolved
+
+      const fade = enemyVisibility();
+      if (fade > 0) {
+        if (fade < 1) {
+          drawEnemyBody(fxLayer(), width, height);
+          blitFxLayer(c, fade, 1);
+        } else {
+          drawEnemyBody(c, width, height);
+        }
+      }
+      // The plate waits for the foe to start materialising rather than announcing a creature
+      // that isn't on screen yet - but it stays up through the dissolve, so the emptied health
+      // bar is the last thing seen of it.
+      if (fade > 0 || e.deathFade > 0) drawEnemyHpBar(c, width, e);
+    }
+
+    function drawEnemyBody(c, width, height) {
       const e = combatState.enemy;
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
       const GROUND_Y = 165;                       // where a grounded enemy's feet sit
@@ -2312,7 +2848,6 @@
           // sprites could not show; each foe now has its own generated block and attack frame,
           // so the pose carries it and the shapes on top just obscured the art.
           c.restore();
-          drawEnemyHpBar(c, width, e);
           return;
         }
       }
@@ -2375,8 +2910,6 @@
       c.fillRect(ex + 2, ey - 24, 10, 4);
 
       c.restore();
-
-      drawEnemyHpBar(c, width, e);
     }
 
     // Pulled out of drawCombatEnemy so the AI-sprite path can draw it too - that path returns
@@ -3453,6 +3986,10 @@
         }
       }
 
+      // Needs the finished passagesList - and the finished gates, since a marker parked on a
+      // door tile would be unreachable until its switch was thrown.
+      placeEnemyMarkers();
+
       // GUARANTEE player spawns facing the OPEN corridor (never facing a wall!)
       let spawnDir = 1;
       if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x + 1] === 0) spawnDir = 1;
@@ -3476,6 +4013,55 @@
       if (mapProgressBadge) {
         mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
       }
+    }
+
+    // Scatter the dungeon's foes over its corridors.
+    //
+    // Rules, in the order they matter:
+    //   - never the spawn tile, never the exit tile (the exit ends the run the moment it is
+    //     stepped on, so a fight there could never resolve), and nothing within 2 tiles of the
+    //     spawn - the player gets a corridor's worth of dungeon before the first ambush.
+    //   - markers keep 2 tiles between them, so a cleared stretch stays cleared and a corridor
+    //     never turns into a gauntlet of three back-to-back fights.
+    //   - one in six is a boss and one in three a flyer; the rest walk. Rolled per marker, so a
+    //     small maze may draw no boss at all.
+    // Density is ~1 foe per 6 tiles, floored at 4 so even the smallest maze is worth fighting
+    // through, capped at 14 so a huge one doesn't become a slog.
+    const MARKER_MIN_SPACING = 2;
+    function placeEnemyMarkers() {
+      enemyMarkers = [];
+      activeMarker = null;
+      if (!passagesList.length) return;
+
+      const target = Math.max(4, Math.min(14, Math.round(passagesList.length * 0.16)));
+      const far = (a, bx, by) => Math.abs(a.x - bx) + Math.abs(a.y - by);
+
+      const candidates = passagesList.filter(p =>
+        !(p.x === startRoom.x && p.y === startRoom.y) &&
+        !(p.x === exitRoom.x && p.y === exitRoom.y) &&
+        far(p, startRoom.x, startRoom.y) > 2
+      );
+      _shuffle(candidates);
+
+      for (const p of candidates) {
+        if (enemyMarkers.length >= target) break;
+        if (enemyMarkers.some(m => far(p, m.x, m.y) < MARKER_MIN_SPACING)) continue;
+        const roll = Math.random();
+        const variant = roll < 0.17 ? 'boss' : (roll < 0.5 ? 'flyer' : 'walker');
+        enemyMarkers.push({ x: p.x, y: p.y, variant, alive: true, phase: Math.random() * Math.PI * 2 });
+      }
+      updateProgressionHUD();
+    }
+
+    // The sprite a marker shows in the corridor: that variant's idle frame when the bundle
+    // generated one, else whatever single enemy sprite the mode shipped. Null falls through to
+    // the procedural sigil in drawWorldEnemies.
+    function markerFrameFor(variant) {
+      const set = enemyVariantImgs[variant];
+      if (set && set.idle && set.idle.complete && set.idle.naturalWidth > 0) return set.idle;
+      const fallback = enemySpriteFrames[0];
+      if (fallback && fallback.complete && fallback.naturalWidth > 0) return fallback;
+      return null;
     }
 
     // ==========================================
@@ -3789,6 +4375,12 @@
 
       ctx.putImageData(imgData, 0, 0);
 
+      // Roaming foes, drawn only out of battle - once a fight starts the duel owns the frame
+      // and the marker the player is standing on would just be underfoot.
+      if (!combatState.inBattle) {
+        drawWorldEnemies(ctx, posX, posY, dirX, dirY, planeX, planeY);
+      }
+
       // Render 3D Combat Entities
       drawCombatEnemy(ctx, screenWidth, screenHeight);
       drawOverTheShoulderPlayer(ctx, screenWidth, screenHeight);
@@ -3958,6 +4550,12 @@
           player.isAnimating = false;
           updateHUD();
 
+          // Ambush check on arrival, not on the key press, so the step is seen through before
+          // the room drops away and the duel slides in. startEncounter clears queuedAction, so
+          // a key held down through the transition can't walk the player during the fight.
+          checkEncounterAtPlayer();
+          if (combatState.inBattle) return;
+
           if (queuedAction) {
             const next = queuedAction;
             queuedAction = null;
@@ -4019,10 +4617,10 @@
       requestAnimationFrame(step);
     }
 
-    // Face a tile and press E: throw a wall switch (MAP 4 -> 5) to permanently open its door
+    // Face a tile and press Space: throw a wall switch (MAP 4 -> 5) to permanently open its door
     // (MAP 3 -> 0), or bump a still-locked door. Latching: a thrown switch stays on.
     function interact() {
-      if (player.isAnimating || combatState.inBattle) return;
+      if (player.isAnimating || combatState.inBattle || inputLocked()) return;
       const vec = DIR_VECS[player.dirIndex];
       const fx = player.gridX + vec.dx;
       const fy = player.gridY + vec.dy;
@@ -4060,6 +4658,7 @@
     }
 
     function moveForward() {
+      if (inputLocked() || combatState.inBattle) return;
       if (player.isAnimating) { queuedAction = 'UP'; return; }
       const vec = DIR_VECS[player.dirIndex];
       const nextX = player.gridX + vec.dx;
@@ -4078,6 +4677,7 @@
     }
 
     function moveBackward() {
+      if (inputLocked() || combatState.inBattle) return;
       if (player.isAnimating) { queuedAction = 'DOWN'; return; }
       const vec = DIR_VECS[player.dirIndex];
       const nextX = player.gridX - vec.dx;
@@ -4096,6 +4696,7 @@
     }
 
     function rotateLeft() {
+      if (inputLocked() || combatState.inBattle) return;
       if (player.isAnimating) { queuedAction = 'LEFT'; return; }
       player.dirIndex = (player.dirIndex + 3) % 4;
       playSfx('turn');
@@ -4103,6 +4704,7 @@
     }
 
     function rotateRight() {
+      if (inputLocked() || combatState.inBattle) return;
       if (player.isAnimating) { queuedAction = 'RIGHT'; return; }
       player.dirIndex = (player.dirIndex + 1) % 4;
       playSfx('turn');
@@ -4121,16 +4723,27 @@
     window.addEventListener('keydown', (e) => {
       if (screenGame.classList.contains('hidden')) return;
 
-      if (e.code === 'Space') {
+      // The level-up box owns the keyboard while it is up: 1/2/3 take a path outright, the
+      // arrows move the cursor and Space/Enter confirms it. Nothing falls through to the
+      // dungeon, and there is no key that dismisses the box without choosing.
+      if (levelUpOpen) {
         e.preventDefault();
-        // Dead means dead: Space must not flip battle mode (or anything else) until the player
-        // Rises Again or leaves for a new dungeon.
-        if (combatState.dead) return;
-        toggleBattleMode();
+        if (e.code === 'Digit1' || e.code === 'Numpad1') applyLevelChoice('strength');
+        else if (e.code === 'Digit2' || e.code === 'Numpad2') applyLevelChoice('stamina');
+        else if (e.code === 'Digit3' || e.code === 'Numpad3') applyLevelChoice('survival');
+        else if (['ArrowUp', 'KeyW', 'ArrowLeft', 'KeyA'].includes(e.code)) moveLevelUpSelection(-1);
+        else if (['ArrowDown', 'KeyS', 'ArrowRight', 'KeyD'].includes(e.code)) moveLevelUpSelection(1);
+        else if (e.code === 'Space' || e.code === 'Enter') {
+          applyLevelChoice(LEVEL_CHOICE_KEYS[progression.choiceIndex]);
+        }
         return;
       }
 
       if (combatState.inBattle) {
+        // Space had been the flee key. There is no fleeing now - the fight ends when one of the
+        // two goes down - but it still has to be swallowed, or it re-triggers whichever combat
+        // button the pointer last left focused.
+        if (e.code === 'Space') { e.preventDefault(); return; }
         if (combatState.dead) return;   // no dodging, guarding or swinging from beyond the grave
         if (['KeyA', 'ArrowLeft'].includes(e.code)) {
           e.preventDefault();
@@ -4160,7 +4773,9 @@
       } else if (['ArrowRight', 'KeyD'].includes(e.code)) {
         e.preventDefault();
         rotateRight();
-      } else if (e.code === 'KeyE' || e.code === 'Enter') {
+      } else if (e.code === 'Space' || e.code === 'Enter') {
+        // Space is the Use key now. It used to toggle battle mode, which only ever existed so
+        // fights could be tested; battles start by walking onto a foe in the corridor instead.
         e.preventDefault();
         interact();
       }
@@ -4352,8 +4967,12 @@
         passages: passagesList.map(p => ({ x: p.x, y: p.y })),
         doors: doorList.map(d => ({ ...d })),
         switches: switchList.map(s => ({ ...s })),
+        enemies: enemyMarkers.map(m => ({ ...m })),
         player: { ...player }
       };
+      // A brand new dungeon is a brand new hero: level 1, base bars, no banked picks.
+      resetProgression();
+      updateProgressionHUD();
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
       // The loading loop plays right up to this click - fade it out under the start sting.

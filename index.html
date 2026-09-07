@@ -216,6 +216,16 @@
       text-align: center;
       padding: 2px 3px;
     }
+    /* The highlighted level-up option (arrow keys move it, SPACE takes it). Pressed-in
+       Win95 bevel plus a yellow ground, so the selection reads without any extra chrome. */
+    .levelup-choice.selected {
+      background: #fef08a;
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+    }
     canvas, img, svg {
       image-rendering: pixelated !important;
     }
@@ -618,6 +628,33 @@
               </div>
             </div>
 
+            <!-- Level-up choice. Sits ABOVE the death/victory boxes (z-40) and, while it is
+                 open, every input path in game.js short-circuits on inputLocked() - so the
+                 dungeon is genuinely frozen until one of the three is taken. -->
+            <div id="levelUpModal" class="absolute inset-0 bg-black/75 z-40 flex items-center justify-center p-3 hidden">
+              <div class="win95-box p-3 flex flex-col items-center gap-2 w-full max-w-[300px] shadow-2xl text-center border-4 border-yellow-400">
+                <h3 class="font-black text-sm text-yellow-900">⬆️ LEVEL UP!</h3>
+                <p class="text-[11px] text-slate-800 leading-tight">
+                  You reach <strong id="levelUpLevelText">Level 2</strong>. Choose what the fighting taught you.
+                </p>
+                <div id="levelUpChoices" class="flex flex-col gap-1.5 w-full">
+                  <button data-choice="strength" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-red-900 bg-red-100 hover:bg-red-200">
+                    <span class="text-[11px] font-black">1 · STRENGTH</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpStrengthText">+4 attack damage</span>
+                  </button>
+                  <button data-choice="stamina" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-green-900 bg-green-100 hover:bg-green-200">
+                    <span class="text-[11px] font-black">2 · STAMINA</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpStaminaText">+15 max stamina</span>
+                  </button>
+                  <button data-choice="survival" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-blue-900 bg-blue-100 hover:bg-blue-200">
+                    <span class="text-[11px] font-black">3 · SURVIVAL</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpSurvivalText">+20 max health</span>
+                  </button>
+                </div>
+                <div class="text-[9px] font-bold text-slate-700">1 / 2 / 3 &nbsp;·&nbsp; ↑↓ then SPACE</div>
+              </div>
+            </div>
+
             <div id="victoryModal" class="absolute inset-0 bg-black/60 z-30 flex items-center justify-center p-4 hidden">
               <div class="win95-box p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-yellow-400">
                 <div class="text-3xl">🏆</div>
@@ -636,11 +673,10 @@
 
           <div class="win95-box px-2 py-1 text-xs flex justify-between items-center text-slate-800 flex-shrink-0 overflow-hidden box-border h-7">
             <span class="truncate pr-1">Location: <strong id="statusPos">Spot (1, 1) [Facing EAST]</strong></span>
-            <div class="flex items-center gap-1">
-              <button id="btnToggleBattle" class="win95-btn px-2 py-0.5 text-[10px] font-bold text-red-900 bg-red-100 hover:bg-red-200 flex items-center gap-1" title="Toggle Valbrace Battle Mode (Space)">
-                ⚔️ <span>BATTLE (Space)</span>
-              </button>
-            </div>
+            <!-- The manual BATTLE (Space) toggle used to live here. Battles now begin by
+                 walking onto one of the enemy markers roaming the maze, so there is nothing
+                 to toggle - and Space is the Use key. -->
+            <span id="encounterBadge" class="text-[10px] font-bold text-slate-600 flex-shrink-0">Foes: 0</span>
           </div>
         </div>
 
@@ -662,7 +698,10 @@
           <div id="battleStatsBox" class="win95-box p-1.5 flex flex-col gap-1 flex-shrink-0 bg-slate-100">
             <div class="flex items-center justify-between">
               <span id="heroStatusLabel" class="text-[10px] font-bold text-slate-700 truncate">WARRIOR STATUS:</span>
-              <span id="battleModeBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800">EXPLORATION TIME</span>
+              <div class="flex items-center gap-1 flex-shrink-0">
+                <span id="playerLevelBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-yellow-300 text-yellow-900 border border-yellow-600">LV 1</span>
+                <span id="battleModeBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800">EXPLORATION</span>
+              </div>
             </div>
             <div class="flex items-center gap-2">
               <!-- Doom-Style Face Portrait -->
@@ -685,18 +724,27 @@
                 <div class="win95-inset h-2 bg-slate-900 overflow-hidden p-0.2">
                   <div id="playerStmBar" class="h-full bg-green-500 transition-all duration-100" style="width: 100%;"></div>
                 </div>
+                <!-- Progress to the next level. Fits in the slack beside the 112px portrait,
+                     so the stats box is exactly as tall as it was before. -->
+                <div class="flex justify-between items-center text-yellow-900">
+                  <span>XP</span>
+                  <span id="playerXpText">0/40</span>
+                </div>
+                <div class="win95-inset h-2 bg-slate-900 overflow-hidden p-0.2">
+                  <div id="playerXpBar" class="h-full bg-yellow-400 transition-all duration-200" style="width: 0%;"></div>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- D-Pad Navigation Controls -->
           <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
-            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS (Space: Battle, E: Use):</div>
+            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS (Space: Use):</div>
 
             <div id="dpadGrid" class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>
               <button id="btnUp" class="win95-btn dpad-btn" title="Move Forward (W / Up)">▲</button>
-              <button id="btnAction" class="win95-btn dpad-btn" title="Use switch / door (E)">E</button>
+              <button id="btnAction" class="win95-btn dpad-btn !text-[10px]" title="Use switch / door (Space)">USE</button>
 
               <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">◀</button>
               <button id="btnDown" class="win95-btn dpad-btn" title="Move Backward (S / Down)">▼</button>
