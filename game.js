@@ -1005,7 +1005,9 @@
         altitude: 0,     // 0 = grounded; >0 = hovering height (flyer)
         swoop: 'none',   // flyer: none | diving | striking | rising
         swoopTimer: 0,
-        blockTimer: 0    // walker: >0 = guarding, the next player strike is largely absorbed
+        blockTimer: 0,   // walker: >0 = guarding, the next player strike is largely absorbed
+        atkCount: 0,     // boss: swings taken in the current patrol phase (3 -> hunt)
+        hunting: false   // boss: walking the player down instead of drifting left/right
       },
       faceState: 'idle',
       faceTimer: 0,
@@ -1071,6 +1073,9 @@
       e.x = 0;
       // Boss only - the walker recomputes vx every frame from where the player is standing.
       e.vx = cfg.slow ? 0.5 : 0;
+      // Boss attack rhythm - see the grounded-AI block: three patrol swings, then a hunt.
+      e.atkCount = 0;
+      e.hunting = false;
       e.altitude = cfg.hover;
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
@@ -1528,21 +1533,31 @@
         } else {
           // Walker & boss: two different ways of holding the ground. The walker stalks - it
           // creeps towards wherever the player is standing, and turns tail once it is badly
-          // hurt. The boss barely moves and hits like a truck, picking a fresh direction to
-          // lumber in after each haymaker.
-          // The walker's crawl is deliberately far slower than the player's 3.8px/frame strafe,
-          // so the 44px dodge window in landStrike stays winnable - the pressure is that
-          // standing still lets it close the gap.
-          const range = cfg.slow ? 24 : 85;
+          // hurt. Its crawl is deliberately far slower than the player's 3.8px/frame strafe, so
+          // the 44px dodge window in landStrike stays winnable - the pressure is that standing
+          // still lets it close the gap.
+          // The boss alternates instead: it drifts left/right for three haymakers (picking a
+          // fresh direction after each), then hunts - steering straight at the player until it
+          // lands the next one, then back to the drift. See the attack-resolution block below.
+          // Its patrol is also much wider than it used to be. Penned into ±24 it could never
+          // reach a player parked at the ±85 strafe limit - the gap stayed over that 44px dodge
+          // threshold, so every haymaker scored as a miss and the edge of the arena was a free
+          // camp. ±62 closes that, and a hunt gets the walker's full ±85 so following the player
+          // means all the way to the wall.
+          const range = cfg.slow ? (e.hunting ? 85 : 62) : 85;
           const spd = cfg.slow ? 0.5 : 0.9;
           if (e.state !== 'attack' && e.state !== 'telegraph') {
-            if (!cfg.slow) {
+            if (!cfg.slow || e.hunting) {
               const gap = combatState.playerX - e.x;
               const toward = gap < 0 ? -1 : 1;
-              // Below 30% HP the walker loses its nerve and backs away instead of closing.
-              e.vx = (e.hp <= e.maxHp * 0.3 ? -toward : toward) * spd;
+              // Below 30% HP the walker loses its nerve and backs away instead of closing. The
+              // boss never breaks off - once it is hunting it comes on at any HP.
+              const flees = !cfg.slow && e.hp <= e.maxHp * 0.3;
+              // A hunt closes faster than the patrol drift, but 0.8px/frame is still a fifth of
+              // the player's 3.8px strafe - it is outrunnable, just not ignorable.
+              e.vx = (flees ? -toward : toward) * (e.hunting ? spd * 1.6 : spd);
               // Don't jitter once it is already on top of the player.
-              if (Math.abs(gap) < 6 && e.hp > e.maxHp * 0.3) e.vx = 0;
+              if (Math.abs(gap) < 6 && !flees) e.vx = 0;
             }
             e.x += e.vx;
             if (e.x > range) { e.x = range; e.vx = -Math.abs(e.vx); }
@@ -1570,9 +1585,23 @@
               e.state = 'attack';
               e.stateTimer = cfg.slow ? 20 : 14;
               e.blockTimer = 0;
-              // Coin-flip which way the boss lumbers off after the swing, so the next
-              // wind-up doesn't always come from the same side.
-              if (cfg.slow) e.vx = (Math.random() < 0.5 ? -spd : spd);
+              // Boss rhythm: three swings thrown from the drifting left/right patrol, then it
+              // stops wandering and walks the player down for one hunted swing - after which
+              // the count resets and the patrol resumes. Riding out the patrol phase at the
+              // wall is survivable; riding out the hunt there is not.
+              if (cfg.slow) {
+                if (e.hunting) {
+                  e.hunting = false;      // that was the hunt's payoff - back to patrolling
+                  e.atkCount = 0;
+                } else if (++e.atkCount >= 3) {
+                  e.hunting = true;
+                  showFloatingCombatText("⚠️ IT HUNTS YOU!", 160, 66, "#f87171");
+                }
+                // Coin-flip which way the boss lumbers off after the swing, so the next
+                // wind-up doesn't always come from the same side. While hunting this is
+                // immediately overwritten next frame by the steer-toward-player above.
+                e.vx = (Math.random() < 0.5 ? -spd : spd);
+              }
               landStrike(cfg.dmg, "DODGED! (MISS)", "🛡️ PARRY BLOCKED!", cfg.slow ? "CRUSH!" : "HP HIT!");
             }
           }
@@ -4570,14 +4599,27 @@
       progSubText.style.display = 'none';
     }
 
-    if (btnEnterDungeon) {
-      btnEnterDungeon.addEventListener('click', () => {
-        if (!pendingBundle) return;
-        const b = pendingBundle;
-        pendingBundle = null;
-        enterDungeon(b);
-      });
+    function tryEnterDungeon() {
+      if (!pendingBundle) return;
+      const b = pendingBundle;
+      pendingBundle = null;
+      enterDungeon(b);
     }
+
+    if (btnEnterDungeon) {
+      btnEnterDungeon.addEventListener('click', tryEnterDungeon);
+    }
+
+    // On the loading screen, once assets are ready (ENTER button armed), Space or Enter
+    // starts the game just like clicking the button. Gated on the progress screen being
+    // up and the button being enabled, so it can't fire mid-generation or from the game.
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'Space' && e.code !== 'Enter') return;
+      if (screenProgress.classList.contains('hidden')) return;
+      if (!btnEnterDungeon || btnEnterDungeon.disabled || !pendingBundle) return;
+      e.preventDefault();
+      tryEnterDungeon();
+    });
 
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";

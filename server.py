@@ -2190,10 +2190,11 @@ ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
 # with krea2_enemy_prompt's per-variant role clauses that feed it.
 KREA2_FALLBACK_DIRECT_VARIANTS = ["walker"]
 
-# Seven short labelled lines. Comfortably over a full reply - the LLM lesson from
+# Eight short labelled lines. Comfortably over a full reply - the LLM lesson from
 # _vlm_wants_rotors applies here too: a truncated answer loses the LAST labels, and a species
-# set missing its BOSS_LOOK is thrown away entirely by parse_enemy_species.
-ENEMY_SPECIES_MAX_TOKENS = 300
+# set missing its BOSS_LOOK is thrown away entirely by parse_enemy_species. GUARD costs about
+# five more tokens of reply; the +20 keeps the old margin on the three LOOK lines.
+ENEMY_SPECIES_MAX_TOKENS = 320
 ENEMY_SPECIES_TEMPERATURE = 0.9
 
 # Per-variant animation frames. Every foe gets an attack frame; only the two that fight on
@@ -2212,16 +2213,62 @@ def _enemy_frame_count():
     """Total enemy sprites in the shared krea2 job - the progress denominator."""
     return sum(len(f) for f in ENEMY_VARIANT_FRAMES.values())
 
-# Pose clauses for krea2_species_prompt. Written to work on a subject with no anatomy at all:
-# a RAM stick has no arms to raise, so the block pose talks about the whole body drawing back
-# rather than about a guard. Same positive-only rule as everything else in this file - these
-# describe a posture, never what the foe is not doing.
+# Pose clauses for krea2_species_prompt. Same positive-only rule as everything else in this
+# file - these describe a posture, never what the foe is not doing.
 ENEMY_FRAME_POSES = {
     "idle":   "It faces the viewer, ready to fight",
     "attack": ("It surges forward at the viewer in mid-attack, lunging into the camera with "
                "its whole body committed and its leading edge thrust out toward you"),
-    "block":  ("It braces hard against an incoming blow, hunched down and drawn back with "
-               "everything pulled in tight and angled to take the hit"),
+}
+
+# The block frame gets one clause per GUARD mode instead of a single shared one.
+#
+# There WAS a single block clause here, written to work on a subject with no anatomy at all -
+# "hunched down and drawn back with everything pulled in tight". It was safe on a RAM stick
+# and it was also nearly invisible: hunching is a small change to a silhouette, the block
+# frame shares its seed with the idle, and a guarding foe came out looking like an idle foe.
+# In the corridor the player could not see that a strike was about to be soaked.
+#
+# So the guard is chosen per foe (the GUARD label, see parse_enemy_species) and each mode
+# changes the SILHOUETTE rather than the posture - that is the entire point of the frame.
+# ARMS puts a real guard up. FIELD gives a thing with no limbs something to raise. SHELL is
+# the animal in between: no arms, but plenty of body to get in the way.
+#
+# Three rules these clauses have to keep, all learned the hard way:
+#
+#  * EVERY clause has to reach the GROUND. This is the one that bit in play. The first ARMS
+#    clause described the upper body and nothing else - crossed forearms, tucked elbows,
+#    hunched shoulders, a lowered head - and krea2 obliged by FRAMING the upper body: it cut
+#    the foe off at the waist and filled the canvas with a chest-up bust. Nothing downstream
+#    saves that. The frontend scales every frame by the IDLE frame's content box (see
+#    drawEnemyContent), which is correct while the frames share a composition and catastrophic
+#    when one of them is a close-up: the guard frame drew as a giant legless torso lunging at
+#    the camera, which is what a player reported as "the enemy gets closer and part of it is
+#    cut off". So each clause names feet, legs, the ground, or the full height of the subject,
+#    and the block frame is also given a wider margin (see krea2_species_prompt).
+#  * No LIST of body parts. krea2 draws every word it is given, so "a wing, a shell or a
+#    plated back" draws one foe with all three bolted on. SHELL therefore names no part at
+#    all and lets the subject supply its own.
+#  * The barrier must TOUCH the subject and be strongly coloured. keep_largest_figure keeps
+#    only the largest connected blob, so a bubble floating clear of the foe is either erased
+#    or - being the bigger shape - erases the foe. And it is cut out of a pure white
+#    background, so a white or pale glow is cut away along with it. Overlapping the body and
+#    saturated cyan survive both passes.
+ENEMY_BLOCK_POSES = {
+    "arms":  ("It stands at its full height with its feet planted wide apart on the ground "
+              "and throws up a hard defensive guard: both arms are raised in front of its "
+              "chest, forearms crossed and turned outward, elbows tucked in tight and "
+              "shoulders hunched up behind them, its weight rocked back over its legs to "
+              "soak up an incoming blow"),
+    "shell": ("It plants itself on the ground and turns side-on, swinging the broadest, "
+              "thickest part of its own body across its front as a barrier and setting its "
+              "whole weight behind it, braced from top to bottom to soak up an incoming "
+              "blow"),
+    "field": ("A force field flares up in front of it: a bright curved wall of glowing cyan "
+              "energy, dense and solid and patterned with a honeycomb of hexagons, standing "
+              "right up against it and spanning it from top to bottom, overlapping the body "
+              "it covers, with the whole of the subject planted on the ground close behind "
+              "the barrier"),
 }
 
 ENEMY_SPECIES_SYSTEM = (
@@ -2270,7 +2317,7 @@ Rules for the LOOK lines. They are fed straight to an image generator, so:
    giving it a humanoid torso and shoulders, replaces it with a generic armoured warrior and
    the subject vanishes - this is the single most common way this job goes wrong.
 
-Reply using EXACTLY these seven labels, each on its own line, in this order. No preamble, no
+Reply using EXACTLY these eight labels, each on its own line, in this order. No preamble, no
 markdown, no commentary, no asterisks:
 
 KIND: <copy exactly ONE of these two words and nothing else. Write CREATURE if {enemy} is
@@ -2278,6 +2325,12 @@ KIND: <copy exactly ONE of these two words and nothing else. Write CREATURE if {
   thing, a food, a device, a machine, a piece of technology. A food is always OBJECT, however
   much it walks and fights in this game. Do not answer with the name of the thing; the only
   two permitted answers are the word CREATURE and the word OBJECT>
+GUARD: <copy exactly ONE of these three words and nothing else. It says how these foes cover
+  up when someone swings at them. Write ARMS if they have arms, hands, claws or forelimbs
+  they could raise in front of their own body. Write SHELL if they have no arms at all, but
+  do have some big broad tough part of themselves they could turn into the blow. Write FIELD
+  if they are an object, a machine or a device that would answer a swing by throwing up a
+  glowing energy barrier in front of itself>
 GRUNT_NAME: <1-3 word proper name for this ONE foe, not a plural>
 GRUNT_LOOK: <one sentence>
 FLYER_NAME: <1-3 word proper name, not a plural>
@@ -2344,17 +2397,51 @@ def _strip_negations(look):
     return _strip_clauses(look, _SPECIES_NEGATION, "negated")
 
 
+def _read_guard(guard, is_creature):
+    """Turn the GUARD line into one of ENEMY_BLOCK_POSES' keys.
+
+    Read the same way as KIND - match the word ANYWHERE in the line, because the model likes
+    to answer in a sentence rather than in the single word it was asked for - with one extra
+    pass in front, because these three option words are ordinary English in a way CREATURE and
+    OBJECT are not. "It has no arms to raise, so SHELL" contains both options, and taking the
+    first match of any case reads it as ARMS: the exact inverted-by-its-own-preamble failure
+    _vlm_wants_rotors documents, where the verdict arrives after the model has talked its way
+    past the options it rejected.
+
+    So CAPITALS are read first. The brief prints the three options in caps and asks for one to
+    be copied, so a verdict is capitalised and the prose around it is not - which sorts that
+    sentence out correctly. Only when nothing is capitalised does the case-insensitive pass
+    run, and there the earliest match wins.
+
+    An unreadable answer falls back on KIND, the only other thing known about the foe: a
+    creature has something of its own to raise, an object gets the barrier. That way round
+    because FIELD is the mode that cannot be badly wrong on anything - it adds a barrier
+    rather than assuming a body part - and a missing KIND already means OBJECT here."""
+    text = (guard or "").strip()
+    for hay, needle in ((text, str.upper), (text.lower(), str.lower)):
+        hits = [(hay.find(needle(m)), m) for m in ENEMY_BLOCK_POSES if needle(m) in hay]
+        if hits:
+            return min(hits)[1]
+    return "arms" if is_creature else "field"
+
+
 def parse_enemy_species(text):
-    """Pull the labels out of the reply. Returns {variant: {"name", "look"}} for the three
-    variants, or None if any of them is missing - a partial set would silently mix a designed
-    foe with a derived one, so it is all three or the fallback path.
+    """Pull the labels out of the reply. Returns {variant: {"name", "look", "guard"}} for the
+    three variants, or None if any of them is missing - a partial set would silently mix a
+    designed foe with a derived one, so it is all three or the fallback path.
 
     KIND decides whether the costume nouns are stripped (see _SPECIES_HIJACK). A MISSING or
     unreadable KIND is treated as OBJECT, i.e. strip: the two failures are not symmetric.
     Stripping a creature's crown costs a slightly plainer gargoyle; not stripping an object's
-    armour costs the subject entirely, which is how a RAM stick became a red mecha."""
+    armour costs the subject entirely, which is how a RAM stick became a red mecha.
+
+    GUARD picks the block pose (ENEMY_BLOCK_POSES). It is one decision for the whole family
+    rather than one per foe: the two that actually block, the grunt and the boss, are the same
+    creature built at two sizes, and every extra required label is another line the reply can
+    come back missing."""
     got = {}
     kind = ""
+    guard = ""
     for raw_line in (text or "").splitlines():
         line = raw_line.strip().strip(_STORY_STRIP)
         if ":" not in line:
@@ -2366,6 +2453,9 @@ def parse_enemy_species(text):
             continue
         if key == "kind":
             kind = value.strip().lower()
+            continue
+        if key == "guard":
+            guard = value.strip()          # case is kept - _read_guard reads CAPITALS first
             continue
         for src, variant in _SPECIES_LABELS.items():
             if key == f"{src}_name":
@@ -2380,6 +2470,9 @@ def parse_enemy_species(text):
     print(f"[species] kind={kind or '(missing)'!r} -> "
           f"{'creature, costume nouns kept' if is_creature else 'object, costume nouns stripped'}")
 
+    mode = _read_guard(guard, is_creature)
+    print(f"[species] guard={guard or '(missing)'!r} -> {mode} block pose")
+
     out = {}
     for v in ENEMY_VARIANT_NAMES:
         entry = got.get(v) or {}
@@ -2388,7 +2481,7 @@ def parse_enemy_species(text):
         look = _strip_negations(entry["look"])
         if not is_creature:
             look = _strip_clauses(look, _SPECIES_HIJACK, "costume-noun")
-        out[v] = {"name": entry["name"], "look": look}
+        out[v] = {"name": entry["name"], "look": look, "guard": mode}
     return out
 
 
@@ -2527,7 +2620,7 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
     )
 
 
-def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle"):
+def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=None):
     """The prompt for an LLM-designed foe (generate_enemy_species). This is the normal path;
     krea2_enemy_prompt above is the fallback.
 
@@ -2549,6 +2642,13 @@ def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle"):
     description does mention it; krea2 wants the subject repeated anyway."""
     subject = (look or "").strip().rstrip(".").strip() or "a shadowy nightstalker demon"
     e = (enemy_style or "").strip()
+    # The block frame always gets one step more margin than the rest. A guard is a WIDER,
+    # taller shape than an idle - arms out to the sides, or a barrier standing across the
+    # whole front - and at the thin margin krea2 satisfied "fill the frame" by cropping in to
+    # a bust instead of drawing the foe smaller. One step of margin gives it the room to
+    # choose the other way. See the framing rule on ENEMY_BLOCK_POSES.
+    if pose == "block":
+        tighten = max(int(tighten or 0), 1)
     margin = [
         "only a thin margin around it",
         "a modest even margin around it",
@@ -2562,9 +2662,14 @@ def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle"):
               f"that, drawn precisely as described and instantly recognisable at a glance.")
     # "It STANDS facing the viewer" was tried and softened: it is a ground cue, and the flyer
     # is meant to be off the ground. Whether it stands or hovers is the LOOK's job. The rest
-    # of the pose (attack / block) comes from ENEMY_FRAME_POSES; all frames of one foe share a
-    # seed, so the pose clause is the only thing that differs between them.
-    stance = ENEMY_FRAME_POSES.get(pose) or ENEMY_FRAME_POSES["idle"]
+    # of the pose comes from ENEMY_FRAME_POSES, or from ENEMY_BLOCK_POSES for the block frame,
+    # where `guard` says which of the three guards suits this foe. All frames of one foe share
+    # a seed, so the pose clause is the only thing that differs between them - which is also
+    # why the block clause has to change the silhouette to be seen at all.
+    if pose == "block":
+        stance = ENEMY_BLOCK_POSES.get(guard) or ENEMY_BLOCK_POSES["field"]
+    else:
+        stance = ENEMY_FRAME_POSES.get(pose) or ENEMY_FRAME_POSES["idle"]
     return (
         f"{anchor} {stance}. Drawn LARGE and filling the "
         f"frame edge to edge, with {margin}, the whole thing completely inside the picture "
@@ -4249,6 +4354,28 @@ def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="wa
     return last
 
 
+def _krea2_regen_pose_frame(look, enemy_style, guard, pose, seed, size, steps, prefix,
+                            variant="walker"):
+    """Re-draw ONE pose frame that came back unusable, at the widest margin the prompt offers.
+
+    Different job from _krea2_regen_enemy above, which re-rolls a broken idle on a FRESH seed
+    because a bad idle is a bad roll of the foe itself. Here the foe is already fine - its
+    idle passed - and only the framing failed, so the seed is the one the rest of that foe's
+    frames were drawn on and the single thing that changes is the margin. Re-rolling the seed
+    instead would hand back a different-looking creature for one frame of the fight.
+
+    Returns the path when it comes back clean, or None to leave the frontend on the idle."""
+    payload = _krea2_loaders()
+    prompt_text = krea2_species_prompt(look, enemy_style, tighten=2, pose=pose, guard=guard)
+    _krea2_add_branch(payload, "pose", prompt_text, size, size, steps, seed, prefix)
+    fp = _krea2_submit_and_collect(payload, ["pose"])["pose"]
+    keep_largest_figure(fp, thresh=50)
+    problem = _enemy_frame_problem(fp)
+    print(f"[krea2] {variant} {pose} reframe at a wider margin is "
+          f"{problem or 'clean'}")
+    return None if problem else fp
+
+
 def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=None):
     """Add the enemy branches to a shared krea2 payload, keyed `enemy_<variant>`, and return
     the list of variants added.
@@ -4262,17 +4389,20 @@ def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=N
     towards one pose and composition; within a foe it is what holds the design still while
     only the pose clause changes. Branches are keyed `enemy_<variant>_<frame>`.
 
-    Returns {variant: [frames]} so the caller knows what to collect."""
-    added = {}
+    Returns ({variant: [frames]}, {variant: seed}) - the frames so the caller knows what to
+    collect, and the seeds so a single mis-framed pose frame can be re-drawn on the same one
+    (see _krea2_regen_pose_frame)."""
+    added, seeds = {}, {}
     for v in (ENEMY_VARIANT_NAMES if species else KREA2_FALLBACK_DIRECT_VARIANTS):
-        seed = random.randint(1, 1000000000)
+        seed = seeds[v] = random.randint(1, 1000000000)
         frames = ENEMY_VARIANT_FRAMES.get(v, ENEMY_FRAME_FALLBACK) if species else ENEMY_FRAME_FALLBACK
         for f in frames:
-            prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style, pose=f) if species
+            prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style, pose=f,
+                                                guard=species[v].get("guard")) if species
                            else krea2_enemy_prompt(enemy_style, variant=v))
             _krea2_add_branch(payload, f"enemy_{v}_{f}", prompt_text, sq, sq, steps, seed, prefix)
         added[v] = list(frames)
-    return added
+    return added, seeds
 
 
 # Kontext edits that turn the finished walker into the other two variants.
@@ -4530,7 +4660,7 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
 
 
 def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=None,
-                                 generated=None):
+                                 generated=None, seeds=None):
     """Post-process the generated enemy branches in `paths` (keys `enemy_<variant>`): drop any
     stray blob / BiRefNet halo, regen a variant that came back too small or clipped, then
     tight-crop.
@@ -4541,12 +4671,22 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
     and the other two are Kontext edits of it (flyer mechanism chosen per subject - see
     _vlm_wants_rotors), which yields an idle frame only.
 
+    `seeds` is {variant: seed} from the same call, so a mis-framed pose frame can be re-drawn
+    as the same foe rather than as a new one.
+
     Returns {variant: {frame: path}}.
 
-    Only the IDLE frame is quality-gated and regenerated, because it is the one the others are
-    measured against and the one shown most of the time. An attack or block frame that comes
-    back broken is simply dropped: the frontend falls back to idle for that pose, which is the
-    behaviour before this feature existed."""
+    Both kinds of frame are quality-gated, but they fail differently. A broken IDLE is a bad
+    roll of the foe itself, so it is re-rolled on a FRESH seed. A broken POSE frame is drawn
+    from an idle that already passed, so the foe is fine and only the framing went wrong: it
+    is re-drawn once on the SAME seed at the widest margin, and dropped only if that fails
+    too, leaving the frontend on the idle for that pose.
+
+    CLIPPING counts as broken on a pose frame, and that is not the obvious call - a lunging
+    limb running off the edge is the pose doing its job. It is the right call because of how
+    the frontend sizes these: every frame is scaled by the IDLE frame's content box, so a
+    frame that got clipped because krea2 re-framed it as a close-up is drawn at the idle's
+    scale and comes out enormous and cut in half. That is worse than no pose frame at all."""
     generated = generated or {v: ENEMY_FRAME_FALLBACK
                               for v in (ENEMY_VARIANT_NAMES if species
                                         else KREA2_FALLBACK_DIRECT_VARIANTS)}
@@ -4565,9 +4705,20 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
                 fp = _krea2_regen_enemy(enemy_style, sq, steps, prefix, variant=v,
                                         clipped=problem.startswith("clipped"), look=look)
             elif problem:
-                print(f"[krea2] {prefix} {v} {f} frame is {problem} - dropping it, "
-                      f"the frontend will use idle for that pose")
-                continue
+                # One retry at the widest margin, on this foe's own seed, before the pose is
+                # given up on. Nearly every failure here is the model choosing to crop in
+                # rather than to draw the subject smaller, and that is exactly what the extra
+                # margin argues it out of - so a retry is worth one image, where dropping the
+                # frame costs the pose for the whole dungeon.
+                print(f"[krea2] {prefix} {v} {f} frame is {problem} - re-framing it once")
+                fp = (_krea2_regen_pose_frame(species[v]["look"], enemy_style,
+                                              species[v].get("guard"), f, (seeds or {}).get(v),
+                                              sq, steps, prefix, variant=v)
+                      if species and (seeds or {}).get(v) else None)
+                if not fp:
+                    print(f"[krea2] {prefix} {v} {f} frame is unusable - dropping it, "
+                          f"the frontend will use idle for that pose")
+                    continue
             if fp:
                 got[f] = fp
         # Register every frame of this foe against ONE box so it holds still when the sprite
@@ -4626,7 +4777,7 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     _krea2_add_branch(payload, "player", krea2_player_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "weapon", krea2_weapon_prompt(weapon_style, player_style), ww, sq, steps, random.randint(1, 1000000000), "v5")
     _krea2_add_branch(payload, "shield", krea2_shield_prompt(player_style), sq, sq, steps, random.randint(1, 1000000000), "v5")
-    added = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5", species=species)
+    added, seeds = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v5", species=species)
 
     names = ("player", "weapon", "shield") + tuple(f"enemy_{v}_{f}"
                                                    for v, fs in added.items() for f in fs)
@@ -4638,7 +4789,7 @@ def generate_krea2_character_bundle(player_style, weapon_style, enemy_style, res
     _save_tight(paths["player"])
 
     enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v5",
-                                           species=species, generated=added)
+                                           species=species, generated=added, seeds=seeds)
     paths["enemies"] = enemies
     # Legacy single-sprite field for older frontend paths. Guarded because losing the whole
     # bundle to a KeyError over one missing enemy would be a poor trade.
@@ -4742,7 +4893,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     frame_prompts = krea2_frame_prompts(player_style, weapon_style)
     for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
-    added = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6", species=species)
+    added, seeds = _krea2_add_enemy_variants(payload, enemy_style, sq, steps, "v6", species=species)
 
     keys = V6_FRAME_NAMES + [f"enemy_{v}_{f}" for v, fs in added.items() for f in fs]
     t0 = time.time()
@@ -4762,7 +4913,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, res, st
     crop_frames_to_common_bbox(frame_paths, bbox_indices=_planted)
 
     enemies = _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, "v6",
-                                           species=species, generated=added)
+                                           species=species, generated=added, seeds=seeds)
     portraits = generate_kontext_portrait_set(player_style)
 
     print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
