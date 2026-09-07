@@ -8,6 +8,7 @@
     const victoryModal = document.getElementById('victoryModal');
     const btnPlayAgain = document.getElementById('btnPlayAgain');
     const winMovesCount = document.getElementById('winMovesCount');
+    const victoryText = document.getElementById('victoryText');
     const defeatModal = document.getElementById('defeatModal');
     const defeatText = document.getElementById('defeatText');
     const deadMovesCount = document.getElementById('deadMovesCount');
@@ -4612,16 +4613,26 @@
 
       // The roaming mix. The lone walker stays the most common thing in a corridor; the lone
       // flyer and the two packs split the rest, so a dungeon of a dozen markers holds roughly
-      // four walkers, three flyers, three swarms and two wings. A pack with no sprite to
-      // recolour (a mode that only ever shipped one enemy) drops out of the bag rather than
-      // standing in the corridor drawn small and then arriving as one full-size walker.
+      // four walkers, three flyers, three swarms and two wings.
+      //
+      // This runs the INSTANT "Create" is clicked - generateAuthentic3DMaze() is synchronous
+      // and happens well before the ComfyUI bundle (and its walker/flyer art) comes back, so
+      // enemyVariantImgs here is either empty (a session's first dungeon) or still holding the
+      // PREVIOUS dungeon's sprites. It used to gate swarmer/circler on enemyFramesFor(k) right
+      // here, "only let a pack roam if its base sprite exists" - which on a first dungeon is
+      // always false, silently dropping both out of the bag before a single marker was placed.
+      // Walker/flyer never had that problem because nothing gated them on sprite-readiness at
+      // all - the sprite swap-in just catches up by the time the player can reach a marker, and
+      // v6_krea (the only engine mode left) always ships all three base variants. Packs get the
+      // same free ride: pickEnemyVariant() re-checks enemyFramesFor() at the moment a fight
+      // actually starts - long after the bundle has landed - and downgrades a pack to its full
+      // size base variant there if it ever genuinely has no sprite to recolour, so no readiness
+      // check belongs here.
       const ROAM_WEIGHTS = { walker: 4, flyer: 3, swarmer: 3, circler: 2 };
       const roamBag = [];
       for (const [k, w] of Object.entries(ROAM_WEIGHTS)) {
-        if (ENEMY_VARIANTS[k].recolorOf && !enemyFramesFor(k)) continue;
         for (let i = 0; i < w; i++) roamBag.push(k);
       }
-      if (!roamBag.length) roamBag.push('walker');
 
       for (const p of candidates) {
         if (enemyMarkers.length >= target) break;
