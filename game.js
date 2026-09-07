@@ -1015,7 +1015,7 @@
     // first level, and the curve outruns a single dungeon's supply by about level 5.
     function xpForLevel(level) { return 40 + (level - 1) * 30; }
 
-    const LEVEL_GAINS = { strength: 4, stamina: 15, survival: 20 };
+    const LEVEL_GAINS = { strength: 4, stamina: 20, survival: 20 };
     // Every level also patches the hero up, whichever path they take. Without it the run is
     // decided by the first two fights - there is no other healing in the dungeon.
     const LEVEL_HEAL_FRAC = 0.4;
@@ -5830,6 +5830,18 @@
       if (!btnEnterDungeon || btnEnterDungeon.disabled || !pendingBundle) return;
       e.preventDefault();
       tryEnterDungeon();
+    });
+
+    // On the setup screen, Enter kicks off generation just like clicking CREATE. Ignored
+    // while the Options modal is up, and while focus is in a textarea (so a multi-line
+    // prompt field keeps its newline).
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'Enter') return;
+      if (screenSetup.classList.contains('hidden')) return;
+      if (modalSettings && !modalSettings.classList.contains('hidden')) return;
+      if (e.target && e.target.tagName === 'TEXTAREA') return;
+      e.preventDefault();
+      btnCreate.click();
     });
 
     btnCreate.addEventListener('click', async () => {

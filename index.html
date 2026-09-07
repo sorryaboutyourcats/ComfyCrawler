@@ -533,11 +533,11 @@
               Graphics Quality:
             </label>
             <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-              <option value="normal" selected>Normal (full resolution)</option>
+              <option value="normal" selected>High Quality (full resolution)</option>
               <option value="optimized">Optimized (middle tier &ndash; faster)</option>
               <option value="reduced">Reduced (half resolution &ndash; fastest)</option>
             </select>
-            <div class="text-[10px] text-slate-500 font-bold"><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than Normal without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>Normal</strong> is the full-quality default.</div>
+            <div class="text-[10px] text-slate-500 font-bold"><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
           </div>
 
           <div id="soundModeRow" class="flex flex-col gap-1.5">
@@ -641,7 +641,7 @@
                   </button>
                   <button data-choice="stamina" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-green-900 bg-green-100 hover:bg-green-200">
                     <span class="text-[11px] font-black">2 · STAMINA</span>
-                    <span class="text-[9px] font-bold text-slate-700" id="levelUpStaminaText">+15 max stamina</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpStaminaText">+20 max stamina</span>
                   </button>
                   <button data-choice="survival" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-blue-900 bg-blue-100 hover:bg-blue-200">
                     <span class="text-[11px] font-black">3 · SURVIVAL</span>
@@ -741,11 +741,15 @@
             <div id="dpadGrid" class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>
               <button id="btnUp" class="win95-btn dpad-btn" title="Move Forward (W / Up)">▲</button>
-              <button id="btnAction" class="win95-btn dpad-btn !text-[10px]" title="Use switch / door (Space)">USE</button>
+              <div></div>
 
               <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">◀</button>
               <button id="btnDown" class="win95-btn dpad-btn" title="Move Backward (S / Down)">▼</button>
               <button id="btnRight" class="win95-btn dpad-btn" title="Rotate Right 90° (D / Right)">▶</button>
+
+              <div></div>
+              <button id="btnAction" class="win95-btn dpad-btn !text-[10px]" title="Use switch / door (Space)">USE</button>
+              <div></div>
             </div>
 
             <!-- Battle Action Bar: takes the D-pad's slot during a fight rather than adding a
