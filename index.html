@@ -524,9 +524,10 @@
             </label>
             <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
               <option value="normal" selected>Normal (full resolution)</option>
-              <option value="reduced">Reduced (half resolution &ndash; faster)</option>
+              <option value="optimized">Optimized (middle tier &ndash; faster)</option>
+              <option value="reduced">Reduced (half resolution &ndash; fastest)</option>
             </select>
-            <div class="text-[10px] text-slate-500 font-bold">Reduced halves the pixel resolution of every generated texture, sprite, enemy and HUD portrait (a 512&times;512 texture becomes 256&times;256) for a faster, lighter dungeon. Normal is the full-quality default.</div>
+            <div class="text-[10px] text-slate-500 font-bold"><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than Normal without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>Normal</strong> is the full-quality default.</div>
           </div>
 
           <div id="soundModeRow" class="flex flex-col gap-1.5">
