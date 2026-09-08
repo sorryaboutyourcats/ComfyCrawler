@@ -166,11 +166,10 @@
     // Door / switch textures - built the same way as wallLanternTexture (a full-cell wall
     // texture, selected in render3D's wall dispatch by MAP tile value: 3=closed door,
     // 4=switch OFF, 5=switch ON; 6=opened door, which is walkable and drawn as a sprite). The
-    // aiDoorImg / aiSwitchImg / aiSwitchOnImg are the style-matched cutouts the builders
-    // composite in; null falls back to procedural shapes. Off and on are two SEPARATELY
-    // generated images (see get_gate_prompts on the server), not one derived from the other -
-    // the fixture just has a different pose in each, no colour or lighting difference. See
-    // buildDoorTexture / buildSwitchWallTextures.
+    // aiDoorImg / aiSwitchImg are the style-matched cutouts the builders composite in; null
+    // falls back to procedural shapes. There is only ONE switch cutout: the on texture is the
+    // off texture's own fixture with its colours inverted. See buildDoorTexture /
+    // buildSwitchWallTextures.
     let doorTexture = null;
     // The open gate (MAP tile 6) is a see-through billboard, not a wall texture - see
     // buildOpenDoorTexture and the open-gate pass at the end of render3D.
@@ -180,7 +179,6 @@
     let switchWallOnTexture = null;
     let aiDoorImg = null;
     let aiSwitchImg = null;
-    let aiSwitchOnImg = null;
 
     let playerSpriteImg = null;
     let playerFaceImg = null;
@@ -1027,6 +1025,15 @@
     // to look it (see combatState.exhaustion).
     const ATTACK_STM_COST = 30;
     const BLOCK_STM_FLOOR = 2;
+    // OVEREXERTION. A swing taken with something in the bar but less than ATTACK_STM_COST is
+    // allowed - it is the desperation option, not a refusal - and it is paid for with the whole
+    // remainder plus this long with the bar HELD at zero: no regen, no guard, and a strafe cut
+    // to EXHAUSTED_STRAFE_SPEED. 120 sim steps is 2 seconds at the fixed 60fps tick.
+    const EXHAUST_LOCK_FRAMES = 120;
+    // What is left of the 3.8px/frame strafe once the bar is empty. Moving is the only thing an
+    // exhausted hero can still do at all, so it is slowed rather than taken away - at 40% they
+    // can still crawl out of a boss's reach, just not out-pace its 0.8px/frame hunt by much.
+    const EXHAUSTED_STRAFE_SPEED = 1.5;
 
     // What each foe is worth. Roughly proportional to how long it takes to put down: the boss
     // has 2.4x the walker's HP and hits hardest, the flyer spends most of the fight out of
@@ -1192,6 +1199,8 @@
                  + (kind === 'survival' ? LEVEL_GAINS.survival : 0);
       combatState.playerHp = Math.min(combatState.playerMaxHp, combatState.playerHp + heal);
       combatState.playerStm = combatState.playerMaxStm;
+      // A refill that a still-running lock would immediately stamp back to zero is not a refill.
+      combatState.exhaustLock = 0;
       updateProgressionHUD();
       playSfx('button', { vary: 0.05 });
 
@@ -1290,6 +1299,10 @@
       // actually DO is still gated on playerStm itself - but it is what makes an out-of-gas
       // hero read as out of gas instead of standing there fresh.
       exhaustion: 0,
+      // Sim ticks left on an overexertion lock (see combatAttack). While it runs the bar is
+      // pinned at 0 rather than merely draining slowly, which is what makes the 2 seconds a
+      // real punishment instead of a rounding error against 0.45/tick regen.
+      exhaustLock: 0,
       glanceDir: 0,
       glanceTimer: 60
     };
@@ -1897,6 +1910,7 @@
       combatState.faceTimer = 0;
       combatState.shieldProgress = 0;
       combatState.exhaustion = 0;
+      combatState.exhaustLock = 0;
       combatState.combatEffects.length = 0;
       combatState.dead = false;
       if (defeatModal) defeatModal.classList.add('hidden');
@@ -1922,11 +1936,25 @@
       // No free swing at a foe that hasn't finished arriving, and none at a corpse.
       if (!battleReady() || !combatState.enemies.some(e => e.hp > 0)) return;
       if (combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
-      if (combatState.playerStm < ATTACK_STM_COST) {
-        showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
+      // An empty bar is an empty bar - nothing comes out of it. This has to sit ABOVE the
+      // overexertion branch below, or a player mashing attack through the lock would keep
+      // re-arming it and the 2 seconds would never actually run out.
+      if (combatState.playerStm <= 0) {
+        showFloatingCombatText("EXHAUSTED!", 160, 180, "#ef4444");
         return;
       }
-      combatState.playerStm = Math.max(0, combatState.playerStm - ATTACK_STM_COST);
+      if (combatState.playerStm < ATTACK_STM_COST) {
+        // Overexertion: the swing lands, at full strength, but it takes everything left AND
+        // holds the bar at zero for EXHAUST_LOCK_FRAMES - two seconds with no guard, no second
+        // swing and a staggering strafe. Trading the next two seconds for one hit now is a
+        // real choice against a foe on its last sliver of HP, and a bad one against a fresh
+        // boss, which is the whole point of allowing it rather than refusing it.
+        combatState.playerStm = 0;
+        combatState.exhaustLock = EXHAUST_LOCK_FRAMES;
+        showFloatingCombatText("OVEREXERTED!", 160, 180, "#f97316");
+      } else {
+        combatState.playerStm = Math.max(0, combatState.playerStm - ATTACK_STM_COST);
+      }
       // The swing, on the windup. The impact sound is separate, on frame 7 where the hit
       // actually resolves.
       playSfx('attack');
@@ -2262,17 +2290,23 @@
       }
 
       if (battleReady() && !combatState.dead) {
+        // An empty bar staggers. Movement is the last thing left to a spent hero - the swing
+        // and the guard are both gone by this point - so it is slowed, not removed.
+        const strafe = combatState.playerStm > 0 ? 3.8 : EXHAUSTED_STRAFE_SPEED;
         if (keysHeld.left) {
-          combatState.vx = -3.8;
+          combatState.vx = -strafe;
           combatState.glanceDir = -1;
         } else if (keysHeld.right) {
-          combatState.vx = 3.8;
+          combatState.vx = strafe;
           combatState.glanceDir = 1;
         } else {
           combatState.vx *= 0.65;
         }
         combatState.playerX = Math.max(-85, Math.min(85, combatState.playerX + combatState.vx));
 
+        // BLOCK_STM_FLOOR is what makes "the guard does not come up on an empty bar" true, and
+        // it is why an overexertion lock leaves the hero defenceless for its full two seconds:
+        // the bar is pinned at 0 below, so this test cannot pass until the lock expires.
         if (keysHeld.block && combatState.playerStm > BLOCK_STM_FLOOR) {
           combatState.shieldProgress = Math.min(1.0, combatState.shieldProgress + 0.2);
           // Holding guard costs stamina; shuffling around while guarding costs much more.
@@ -2284,9 +2318,18 @@
         }
       }
 
-      // Only an ACTIVE block suppresses regen. Gating on keysHeld.block alone meant a block flag
-      // that never got cleared left stamina pinned just above zero forever, even out of combat.
-      if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
+      // An overexertion lock outranks everything: while it runs the bar is HELD at zero rather
+      // than left to climb, so the two seconds it costs are two seconds of no swing, no guard
+      // and a staggering strafe no matter what the player does with the keys. It also ticks
+      // down out of battle, so fleeing a fight does not skip the debt - it just spends it
+      // walking the corridor instead.
+      //
+      // Otherwise: only an ACTIVE block suppresses regen. Gating on keysHeld.block alone meant a
+      // block flag that never got cleared left stamina pinned just above zero forever.
+      if (combatState.exhaustLock > 0) {
+        combatState.exhaustLock--;
+        combatState.playerStm = 0;
+      } else if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
         combatState.playerStm = Math.min(combatState.playerMaxStm, combatState.playerStm + 0.45);
       }
 
@@ -4166,24 +4209,26 @@
     }
 
     // OFF/ON wall textures for a switch (MAP tiles 4 and 5), painted onto one face of the tile
-    // only - see _switchFaceHit. No colour and no light tell the two states apart - not a tint
-    // on the fixture, not a lamp/indicator dot, nothing additive. The only difference is the
-    // fixture's own pose: aiSwitchOnImg is an img2img pass over aiSwitchImg's own pixels on the
-    // server (see get_gate_prompts / generate_flux_surfaces_only), so it is the same plate with
-    // the handle moved rather than a second switch that merely got described the same way. If
-    // either failed to decode, BOTH poses fall back to one procedural rendering path together
-    // (never mixing a real photo for one state with a drawn shape for the other) - a fixed
-    // plate and pivot with a lever that swings between two fully contained positions, drawn in
-    // the exact same colour regardless of state.
+    // only - see _switchFaceHit.
+    //
+    // ONE piece of art, two states. The fixture is drawn once onto a transparent overlay, and
+    // the ON texture is that same overlay with its RGB inverted (alpha untouched, so the
+    // cutout's silhouette is identical in both). Nothing else changes: same plate, same
+    // position, same pose, same wall behind it.
+    //
+    // The server used to generate the thrown pose as a second image. Two independent renders
+    // produced two visibly different fixtures, and an img2img pass over the off render kept
+    // the fixture but barely moved the handle - see get_gate_prompts. Inverting is the one
+    // approach that cannot drift: it is the same pixels, and "photo-negative" is not a state
+    // any wall texture reaches by accident, so it reads as thrown at corridor distance where a
+    // few degrees of handle rotation did not.
     //
     // The fixture is deliberately small and chunky - the AI cutout is downsampled to SWITCH_SRC
     // px before being blown back up with smoothing off - so it sits in the wall at roughly
     // lantern scale and at the wall texture's own resolution, instead of floating over it as a
     // smooth high-res decal.
     function buildSwitchWallTextures(baseWallImageData, styleName = "Windows 95") {
-      const haveOff = aiSwitchImg && aiSwitchImg.complete && aiSwitchImg.naturalWidth > 0;
-      const haveOn = aiSwitchOnImg && aiSwitchOnImg.complete && aiSwitchOnImg.naturalWidth > 0;
-      const haveArt = haveOff && haveOn;
+      const haveArt = aiSwitchImg && aiSwitchImg.complete && aiSwitchImg.naturalWidth > 0;
       const isWin95 = styleName.toLowerCase().includes('windows');
 
       const cx = 128;                 // fixture centre on the wall
@@ -4191,14 +4236,20 @@
       const maxW = 34, maxH = 56;     // fixture footprint
       const SWITCH_SRC = 24;          // chunky-pixel source size for the AI cutout
 
-      // Downsamples one pose's AI cutout to its own small canvas, fit to the SAME maxW/maxH
-      // box the other pose uses. The server already trims the pair to one shared alpha box
-      // (_save_tight_pair), so both arrive at identical dimensions and this scales them
-      // identically - the plate stays pinned and only the handle moves when the state flips.
-      function prepArt(img) {
-        const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
-        const fw = Math.max(1, Math.round(img.naturalWidth * scale));
-        const fh = Math.max(1, Math.round(img.naturalHeight * scale));
+      // The fixture alone, on a transparent TEX_SIZE canvas - kept separate from the wall so
+      // the inversion below hits the hardware and nothing else. Inverting the composited cell
+      // would photo-negative the bricks around it too, which reads as a lighting bug rather
+      // than as a thrown lever.
+      const fixture = document.createElement('canvas');
+      fixture.width = fixture.height = TEX_SIZE;
+      const fx = fixture.getContext('2d');
+      fx.imageSmoothingEnabled = false;
+
+      if (haveArt) {
+        // Downsample the cutout to its own small canvas first, fit inside maxW/maxH.
+        const scale = Math.min(maxW / aiSwitchImg.naturalWidth, maxH / aiSwitchImg.naturalHeight, 1);
+        const fw = Math.max(1, Math.round(aiSwitchImg.naturalWidth * scale));
+        const fh = Math.max(1, Math.round(aiSwitchImg.naturalHeight * scale));
         const longest = Math.max(fw, fh);
         const sw = Math.max(1, Math.round(SWITCH_SRC * (fw / longest)));
         const sh = Math.max(1, Math.round(SWITCH_SRC * (fh / longest)));
@@ -4206,12 +4257,43 @@
         small.width = sw; small.height = sh;
         const sc = small.getContext('2d');
         sc.imageSmoothingEnabled = true;
-        sc.drawImage(img, 0, 0, sw, sh);
-        return { small, fw, fh };
+        sc.drawImage(aiSwitchImg, 0, 0, sw, sh);
+        fx.drawImage(small, cx - fw / 2, baseY - fh, fw, fh);
+      } else {
+        // Procedural fallback: a plate, a pivot and a lever at rest. No pose variant - the
+        // inversion is the state tell here exactly as it is for the AI art.
+        fx.fillStyle = isWin95 ? '#94a3b8' : '#27272a';
+        fx.fillRect(cx - 11, baseY - 34, 22, 34);
+        fx.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
+        fx.lineWidth = 2;
+        fx.strokeRect(cx - 11, baseY - 34, 22, 34);
+
+        const pivotY = baseY - 17;
+        const leverColor = isWin95 ? '#b91c1c' : '#a1a1aa';
+        const tipX = cx - 9, tipY = pivotY + 13;
+        fx.strokeStyle = leverColor;
+        fx.lineWidth = 5;
+        fx.beginPath(); fx.moveTo(cx, pivotY); fx.lineTo(tipX, tipY); fx.stroke();
+        fx.fillStyle = leverColor;
+        fx.beginPath(); fx.arc(tipX, tipY, 4, 0, Math.PI * 2); fx.fill();
+
+        fx.fillStyle = '#52525b';
+        fx.beginPath(); fx.arc(cx, pivotY, 4, 0, Math.PI * 2); fx.fill();
       }
 
-      const offArt = haveArt ? prepArt(aiSwitchImg) : null;
-      const onArt = haveArt ? prepArt(aiSwitchOnImg) : null;
+      // The thrown fixture: same canvas, RGB flipped. Alpha is copied through untouched, so
+      // transparent margin stays transparent and the soft edge of the cutout still feathers.
+      const inverted = document.createElement('canvas');
+      inverted.width = inverted.height = TEX_SIZE;
+      const ictx = inverted.getContext('2d');
+      const fixData = fx.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+      const px = fixData.data;
+      for (let i = 0; i < px.length; i += 4) {
+        px[i] = 255 - px[i];
+        px[i + 1] = 255 - px[i + 1];
+        px[i + 2] = 255 - px[i + 2];
+      }
+      ictx.putImageData(fixData, 0, 0);
 
       function renderPose(on) {
         const c = document.createElement('canvas');
@@ -4219,34 +4301,7 @@
         const ctx2 = c.getContext('2d');
         ctx2.imageSmoothingEnabled = false;
         if (baseWallImageData) ctx2.putImageData(baseWallImageData, 0, 0);
-
-        if (haveArt) {
-          const art = on ? onArt : offArt;
-          ctx2.drawImage(art.small, cx - art.fw / 2, baseY - art.fh, art.fw, art.fh);
-        } else {
-          // Fixed plate + pivot, identical for both states.
-          ctx2.fillStyle = isWin95 ? '#94a3b8' : '#27272a';
-          ctx2.fillRect(cx - 11, baseY - 34, 22, 34);
-          ctx2.strokeStyle = isWin95 ? '#475569' : '#3f3f46';
-          ctx2.lineWidth = 2;
-          ctx2.strokeRect(cx - 11, baseY - 34, 22, 34);
-
-          // Lever: one colour in both states, resting down-left for OFF and thrown up-right
-          // for ON around the same pivot - position is the only thing that changes.
-          const pivotY = baseY - 17;
-          const leverColor = isWin95 ? '#b91c1c' : '#a1a1aa';
-          const tipX = on ? cx + 9 : cx - 9;
-          const tipY = on ? pivotY - 13 : pivotY + 13;
-          ctx2.strokeStyle = leverColor;
-          ctx2.lineWidth = 5;
-          ctx2.beginPath(); ctx2.moveTo(cx, pivotY); ctx2.lineTo(tipX, tipY); ctx2.stroke();
-          ctx2.fillStyle = leverColor;
-          ctx2.beginPath(); ctx2.arc(tipX, tipY, 4, 0, Math.PI * 2); ctx2.fill();
-
-          ctx2.fillStyle = '#52525b';
-          ctx2.beginPath(); ctx2.arc(cx, pivotY, 4, 0, Math.PI * 2); ctx2.fill();
-        }
-
+        ctx2.drawImage(on ? inverted : fixture, 0, 0);
         return ctx2.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
       }
 
@@ -5144,8 +5199,10 @@
         const sideShade = side === 1 ? 0.82 : 1.0;
         const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
         const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
-        // No switchGlow term here - an ON switch is shaded like any other wall tile; the
-        // fixture's pose is the only difference from OFF, per buildSwitchWallTextures.
+        // No switchGlow term here - an ON switch is shaded like any other wall tile. Its
+        // inverted fixture colours are the only difference from OFF, and they are baked into
+        // the texture (buildSwitchWallTextures), so the lighting maths never has to know
+        // which state a switch is in.
         const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
 
         // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
@@ -5568,7 +5625,7 @@
         // it can only be thrown from there. Facing the same tile from another corridor shows
         // blank wall, and throwing an invisible switch through it would read as a bug.
         if (player.gridX !== sw.cellX || player.gridY !== sw.cellY) return;
-        if (sw.on) return;                  // already thrown - the lever's own pose says so
+        if (sw.on) return;                  // already thrown - the inverted fixture says so
         sw.on = true;
         MAP[fy][fx] = 5;
         playSfx('button', { vary: 0.06 });
@@ -5821,15 +5878,14 @@
     // screen back until the real art is in wallTexture/ceilingTexture/floorTexture - otherwise
     // the first render3D() paints whatever was already loaded (the Windows-95 defaults, or the
     // previous dungeon's art) and the swap to the new textures a moment later reads as a flash.
-    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady, doorUri, switchUri, switchOnUri) {
+    function loadAiTextures(wallUri, ceilUri, floorUri, styleName = "Windows 95", lanternUri, onReady, doorUri, switchUri) {
       // Cleared unconditionally: a dungeon with no lantern art (e.g. the Windows 95 style,
       // which keeps its procedural logo gag - see get_surface_prompts) must not keep showing
       // the PREVIOUS dungeon's AI fixture. Same for the door/switch cutouts.
       aiLanternImg = null;
       aiDoorImg = null;
       aiSwitchImg = null;
-      aiSwitchOnImg = null;
-      const total = [wallUri, ceilUri, floorUri, lanternUri, doorUri, switchUri, switchOnUri].filter(Boolean).length;
+      const total = [wallUri, ceilUri, floorUri, lanternUri, doorUri, switchUri].filter(Boolean).length;
       let loaded = 0;
 
       function finish() {
@@ -5884,11 +5940,6 @@
         const imgS = new Image();
         imgS.onload = () => { aiSwitchImg = imgS; checkDone(); };
         imgS.src = switchUri;
-      }
-      if (switchOnUri) {
-        const imgSO = new Image();
-        imgSO.onload = () => { aiSwitchOnImg = imgSO; checkDone(); };
-        imgSO.src = switchOnUri;
       }
 
       if (total === 0) finish();
@@ -6027,13 +6078,13 @@
 
       if (activeMode === 'v1_video') {
         // Video mode never raycasts these textures, so there's nothing worth blocking on.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, null, b.door_texture, b.switch_texture, b.switch_on_texture);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, null, b.door_texture, b.switch_texture);
         showGameScreen();
       } else {
         // Hold the game screen (and its first render3D()) until the real wall/ceiling/floor/
         // lantern art has decoded, so the player never sees a frame of stale textures before
         // the swap.
-        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen, b.door_texture, b.switch_texture, b.switch_on_texture);
+        loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen, b.door_texture, b.switch_texture);
       }
     }
 
