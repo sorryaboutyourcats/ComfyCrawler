@@ -209,6 +209,10 @@
     // Set once generation finishes; the player enters on their own schedule, not ours.
     let pendingBundle = null;
     let crawlStarted = false;
+    // True only while the server is actually rendering a dungeon for us. Drives the
+    // "you will lose this" refresh warning and the cancel beacon further down - see the
+    // beforeunload/pagehide pair next to the CREATE handler.
+    let generationInFlight = false;
 
     // ---- Intro narration (Piper, pre-rendered server-side) -----------------
     // The server picks one narrator (alan or kristin) per story and ships back one WAV
@@ -999,6 +1003,13 @@
     const BASE_MAX_HP = 100;
     const BASE_MAX_STM = 100;
 
+    // What one action costs, named because the EXHAUSTION visuals key off them: below
+    // ATTACK_STM_COST the hero can no longer swing, and at BLOCK_STM_FLOOR the guard drops too -
+    // at which point there is nothing left they can do but shuffle sideways, and they are drawn
+    // to look it (see combatState.exhaustion).
+    const ATTACK_STM_COST = 30;
+    const BLOCK_STM_FLOOR = 2;
+
     // What each foe is worth. Roughly proportional to how long it takes to put down: the boss
     // has 2.4x the walker's HP and hits hardest, the flyer spends most of the fight out of
     // reach. A maze holds ~4-14 markers (see placeEnemyMarkers), so clearing a whole dungeon
@@ -1250,6 +1261,11 @@
       },
       faceState: 'idle',
       faceTimer: 0,
+      // 0..1, smoothed. How spent the hero looks: 0 while a swing is still affordable, and
+      // ramping to 1 as the bar empties past that. Purely cosmetic - what the player can
+      // actually DO is still gated on playerStm itself - but it is what makes an out-of-gas
+      // hero read as out of gas instead of standing there fresh.
+      exhaustion: 0,
       glanceDir: 0,
       glanceTimer: 60
     };
@@ -1272,6 +1288,10 @@
     // same three sprites and stats read as one species at three sizes, so the ear does the
     // rest: the flyer sounds small and quick, the boss sounds huge and slow. 1.0 = walker's
     // own recorded pitch, unchanged.
+    // blockStm is what CATCHING one of this variant's blows on the shield costs the player.
+    // It is the guard's real price - the per-frame hold drain is small change next to it - so it
+    // is authored per foe rather than derived from damage: a runt's bite is an annoyance you can
+    // eat all day, a dread swing takes half the bar and two of them break the guard outright.
     // canBlock/blockOdds/blockHold: the two foes that fight on the ground guard, and they have
     // a generated block frame to show for it (server ENEMY_VARIANT_FRAMES). The flyer does not
     // - it stays out of reach instead, which is its whole defence, and it has no block frame.
@@ -1287,9 +1307,9 @@
     // That break is also why even the boss's near-permanent guard costs the player a weakened
     // swing rather than stalling the fight - but it does roughly halve effective DPS on it.
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.018, blockHold: 90,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
-      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,     blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030, blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
+      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.018, blockHold: 90,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, blockStm: 20, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,     blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, blockStm: 50, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030, blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
 
       // --- PACK FOES. Neither one costs a generation: `recolorOf` names the variant whose
       // sprites they borrow and hue/sat is the filter laid over every frame of them (see
@@ -1316,12 +1336,26 @@
       //            Unlike the flyer, which can only be hit during its own swoop, this one
       //            hands the player a window every lap. After CIRCLER_LAPS circles it breaks
       //            off and dives like a flyer.
-      swarmer: { tag: 'RUNT ',      maxHp: 38, dmg: 6,  cadence: 70, telegraph: 16, heightFrac: 0.308, widthFrac: 0.364, fly: false, canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 0,  sfxRate: 1.30, timid: false, spd: 1.15, recolorOf: 'walker', hue: 205, sat: 1.25, group: 3 },
-      circler: { tag: 'FLEDGLING ', maxHp: 48, dmg: 12, cadence: 95, telegraph: 20, heightFrac: 0.280, widthFrac: 0.462, fly: true,  canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 52, sfxRate: 1.55, timid: false, recolorOf: 'flyer', hue: 125, sat: 1.30, group: 2, orbitRX: 52, orbitLift: 26, orbitSpeed: 0.055 },
+      swarmer: { tag: 'RUNT ',      maxHp: 38, dmg: 6, blockStm: 15,  cadence: 70, telegraph: 16, heightFrac: 0.308, widthFrac: 0.364, fly: false, canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 0,  sfxRate: 1.30, timid: false, spd: 1.15, recolorOf: 'walker', hue: 205, sat: 1.25, group: 3 },
+      circler: { tag: 'FLEDGLING ', maxHp: 48, dmg: 12, blockStm: 10, cadence: 95, telegraph: 20, heightFrac: 0.280, widthFrac: 0.462, fly: true,  canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 52, sfxRate: 1.55, timid: false, recolorOf: 'flyer', hue: 125, sat: 1.30, group: 2, orbitRX: 52, orbitLift: 26, orbitSpeed: 0.055 },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
     // Full circles a circler flies before it commits to a swoop.
     const CIRCLER_LAPS = 3;
+
+    // The hue on swarmer/circler above is only a starting value: every run rolls both of them
+    // fresh, and independently - this run's runts can be blue while its fledglings are purple,
+    // and the next run's are neither. Rolled inside 60-300 degrees because a rotation near
+    // 0/360 is a rotation of nothing, which would draw a pack foe as an undersized copy of the
+    // creature it borrows its sprites from. Saturation is left alone; it is tuned per variant
+    // to keep the recolour from washing out. recolorFrame caches per (frame, hue|sat), so a
+    // new roll simply lands in a new cache slot rather than fighting the old one.
+    const PACK_HUE_MIN = 60, PACK_HUE_MAX = 300;
+    function rollPackHues() {
+      for (const key of ['swarmer', 'circler']) {
+        ENEMY_VARIANTS[key].hue = Math.round(PACK_HUE_MIN + Math.random() * (PACK_HUE_MAX - PACK_HUE_MIN));
+      }
+    }
 
     // Hue-rotate a generated sprite into a second creature. A canvas filter applies to the
     // whole draw, so one pass into an offscreen canvas the size of the source gives a frame
@@ -1631,6 +1665,40 @@
       return line.replace(/\{hero\}/g, hero).replace(/\{area\}/g, area).replace(/\{enemy\}/g, enemy);
     }
 
+    // The other side of DEATH_MESSAGES: the run ended at the stairs instead. Same fill-ins
+    // plus {boss} and {saved} - the champion's title and the people the crawl said it was
+    // going to take, both invented by the story so the outro closes the thread paragraph two
+    // opened. The boss stands on the exit's approach (see placeEnemyMarkers), so every line
+    // can take it as read that the way out went through it.
+    const VICTORY_MESSAGES = [
+      "Congrats {hero}! Good job getting out of {area} - {boss} had it coming. The {saved} have no fear anymore.",
+      "{hero} walks out of {area} alive. {boss} does not. The {saved} sleep tonight because of you.",
+      "That's {area} behind you, {hero}. {boss} is a story now, and the {saved} get to tell it.",
+      "Well done, {hero}! {boss} held {area} for the last time. The {saved} owe you every quiet night from here on.",
+      "You did it, {hero}. {area} is stone again, {boss} is bones, and the {saved} are free of both.",
+      "The stairs at last! {hero} leaves {area} the way {boss} never will. Word reaches the {saved} by morning.",
+      "Daylight, {hero}. You took {area} apart and left {boss} in it. The {saved} can stop counting the days.",
+      "Congratulations, {hero}! {boss} ruled {area} right up until you disagreed. The {saved} have nothing left to fear.",
+      "{hero} climbs out of {area} with {boss}'s reign ended below it. The {saved} will remember the name.",
+      "Out of {area} and into the light, {hero}. {boss} had it coming, and the {saved} have their lives back.",
+      "It's over, {hero}. {area} keeps {boss} now, and you keep your promise to the {saved}.",
+      "Take the air, {hero} - you earned it. {boss} is finished, {area} is emptied, and the {saved} are safe.",
+    ];
+
+    // Fills a VICTORY_MESSAGES line for the run that just ended. {saved} arrives from the
+    // server already stripped of its article (see _story_stake in server.py), because every
+    // line above supplies its own.
+    function victoryOutro() {
+      const story = dungeonStory || {};
+      const hero = (story.hero || '').trim() || 'Warrior';
+      const area = (story.location || '').trim() || 'the dungeon';
+      const boss = (story.boss || '').trim() || enemyBossName || 'whatever ruled it';
+      const saved = (story.saved || '').trim() || 'ones who never came back up';
+      const line = VICTORY_MESSAGES[Math.floor(Math.random() * VICTORY_MESSAGES.length)];
+      return line.replace(/\{hero\}/g, hero).replace(/\{area\}/g, area)
+                 .replace(/\{boss\}/g, boss).replace(/\{saved\}/g, saved);
+    }
+
     // Player defeat. Until this existed playerHp simply floored at 0 in landEnemyStrike and the
     // fight carried on, so there was no moment for a death sound to belong to.
     function killPlayer() {
@@ -1747,6 +1815,7 @@
       combatState.faceState = 'idle';   // else a death-frame face lingers ~16s into the next run
       combatState.faceTimer = 0;
       combatState.shieldProgress = 0;
+      combatState.exhaustion = 0;
       combatState.combatEffects.length = 0;
       combatState.dead = false;
       if (defeatModal) defeatModal.classList.add('hidden');
@@ -1772,11 +1841,11 @@
       // No free swing at a foe that hasn't finished arriving, and none at a corpse.
       if (!battleReady() || !combatState.enemies.some(e => e.hp > 0)) return;
       if (combatState.attackFrame > 0 || combatState.hurtFrame > 0) return;
-      if (combatState.playerStm < 30) {
+      if (combatState.playerStm < ATTACK_STM_COST) {
         showFloatingCombatText("NO STAMINA!", 160, 180, "#ef4444");
         return;
       }
-      combatState.playerStm = Math.max(0, combatState.playerStm - 30);
+      combatState.playerStm = Math.max(0, combatState.playerStm - ATTACK_STM_COST);
       // The swing, on the windup. The impact sound is separate, on frame 7 where the hit
       // actually resolves.
       playSfx('attack');
@@ -1839,9 +1908,13 @@
         playSfx('block');
         showFloatingCombatText(blockMsg, tx, 140, "#a855f7");
         combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
-        // Absorbing a blow on the shield barely dents HP but takes a huge bite of stamina -
-        // block too many hits without spacing out and the guard breaks.
-        combatState.playerStm = Math.max(0, combatState.playerStm - (dmg * 1.5 + 10));
+        // Absorbing a blow on the shield barely dents HP but takes a bite of stamina - block
+        // too many hits without spacing out and the guard breaks. The size of that bite is the
+        // variant's own blockStm (runt 15, fledgling 10, flyer 20, walker 25, dread 50), so
+        // how tiring a foe is to turtle against is authored per creature rather than falling
+        // out of its damage number.
+        const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+        combatState.playerStm = Math.max(0, combatState.playerStm - (cfg.blockStm || 25));
       } else {
         combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
         combatState.hurtFrame = 1;
@@ -2099,7 +2172,7 @@
         }
         combatState.playerX = Math.max(-85, Math.min(85, combatState.playerX + combatState.vx));
 
-        if (keysHeld.block && combatState.playerStm > 2) {
+        if (keysHeld.block && combatState.playerStm > BLOCK_STM_FLOOR) {
           combatState.shieldProgress = Math.min(1.0, combatState.shieldProgress + 0.2);
           // Holding guard costs stamina; shuffling around while guarding costs much more.
           const guardMoving = keysHeld.left || keysHeld.right;
@@ -2115,6 +2188,21 @@
       if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
         combatState.playerStm = Math.min(combatState.playerMaxStm, combatState.playerStm + 0.45);
       }
+
+      // How wrecked the hero LOOKS. Nothing reads this to decide what they may do - the action
+      // gates are still playerStm against ATTACK_STM_COST / BLOCK_STM_FLOOR above - it only
+      // drives the drawing (drawOverTheShoulderPlayer, renderDoomFace, the STM bar).
+      //
+      // It snaps to 0.45 the instant a swing becomes unaffordable rather than easing up from
+      // nothing, because that is the moment the player loses the fight's main verb and the
+      // sprite has to say so; from there it deepens to a fully spent 1.0 as the bar bottoms
+      // out and even the guard drops. Lerped rather than assigned so the pose eases in and out
+      // over ~1/4s instead of popping on the frame stamina crosses the line - regen refills
+      // the last 30 in about a second, and a hard switch flickered.
+      const spentTarget = (combatState.playerStm >= ATTACK_STM_COST || combatState.dead) ? 0
+        : 0.45 + 0.55 * (1 - combatState.playerStm / ATTACK_STM_COST);
+      combatState.exhaustion += (spentTarget - combatState.exhaustion) * 0.12;
+      if (Math.abs(spentTarget - combatState.exhaustion) < 0.004) combatState.exhaustion = spentTarget;
 
       if (combatState.attackFrame > 0) {
         combatState.attackFrame++;
@@ -2249,7 +2337,15 @@
 
       if (playerHpBar) playerHpBar.style.width = `${(combatState.playerHp / combatState.playerMaxHp) * 100}%`;
       if (playerHpText) playerHpText.textContent = `${Math.ceil(combatState.playerHp)}/${combatState.playerMaxHp}`;
-      if (playerStmBar) playerStmBar.style.width = `${(combatState.playerStm / combatState.playerMaxStm) * 100}%`;
+      if (playerStmBar) {
+        playerStmBar.style.width = `${(combatState.playerStm / combatState.playerMaxStm) * 100}%`;
+        // Past the point where a swing is affordable the bar stops reporting how much is left
+        // and starts warning: it flips from green to a flashing red. Cleared back to '' rather
+        // than to a colour, so the bar returns to its bg-green-500 class.
+        playerStmBar.style.backgroundColor = combatState.exhaustion > 0.15
+          ? (Math.floor(Date.now() / 200) % 2 ? '#ef4444' : '#7f1d1d')
+          : '';
+      }
       if (playerStmText) playerStmText.textContent = `${Math.ceil(combatState.playerStm)}/${combatState.playerMaxStm}`;
 
       renderDoomFace();
@@ -2274,17 +2370,26 @@
       const isHurt = combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
       const isAttack = combatState.faceState === 'attack' || combatState.attackFrame > 0;
       const isBlock = combatState.shieldProgress > 0.5;
+      // Spent sits BELOW the three action states: whatever the hero is doing this instant wins
+      // the expression, and the drained face is what is left over when they are doing nothing
+      // because there is nothing left to do it with.
+      const spent = combatState.dead ? 0 : combatState.exhaustion;
+      const isSpent = spent > 0.35;
 
       // Pick the expression that matches what the player is doing. Hurt wins over attack, which
-      // wins over block, matching the priority the body sprite uses.
+      // wins over block, matching the priority the body sprite uses. An exhausted hero borrows
+      // the hurt face for the same reason the body borrows the hurt pose - it is the only
+      // worse-for-wear expression the sheet has.
       let face = playerFaceImg;
       if (playerFaceFrames.length > 1) {
-        const idx = isHurt ? 3 : isAttack ? 1 : isBlock ? 2 : 0;
+        const idx = (isHurt || isSpent) ? 3 : isAttack ? 1 : isBlock ? 2 : 0;
         face = playerFaceFrames[idx] || playerFaceFrames[0];
       }
 
       if (face && face.complete && face.naturalWidth > 0) {
+        applyExhaustionWash(c, spent);
         c.drawImage(face, 2, 2, 40, 40);
+        c.filter = 'none';
 
         // Combat state is shown ONLY through the border colour. Full-portrait tints used to be
         // laid over the face too, but the per-frame krea2 expressions now carry the state
@@ -2292,7 +2397,12 @@
         // muddied a portrait that is already doing the job. Pupils / eyebrows / mouth painted at
         // fixed coordinates were dropped earlier for the same reason - the portrait can be hooded,
         // feline, helmeted or masked, so nothing can be drawn on top at a fixed spot.
-        c.strokeStyle = isHurt ? '#ef4444' : isAttack ? '#f59e0b' : isBlock ? '#38bdf8' : '#64748b';
+        // Amber, and pulsing, when spent: distinct from the attack frame's steady bright amber
+        // and from the hurt frame's red, and moving enough to be noticed from the corner of the
+        // eye - which is the point, since it is the state that says "you cannot swing".
+        c.strokeStyle = isHurt ? '#ef4444' : isAttack ? '#f59e0b' : isBlock ? '#38bdf8'
+                      : isSpent ? (Math.floor(Date.now() / 240) % 2 ? '#a16207' : '#57534e')
+                      : '#64748b';
         c.lineWidth = 2;
         c.strokeRect(1, 1, 42, 42);
         return;
@@ -2301,12 +2411,12 @@
       // Procedural fallback
       c.fillStyle = '#0f172a';
       c.fillRect(0, 0, 44, 44);
-      c.fillStyle = isHurt ? '#fca5a5' : '#fed7aa';
+      c.fillStyle = (isHurt || isSpent) ? '#fca5a5' : '#fed7aa';
       c.fillRect(10, 10, 24, 26);
       c.fillStyle = '#1e3a8a';
       c.fillRect(14, 20, 4, 3);
       c.fillRect(26, 20, 4, 3);
-      c.strokeStyle = isHurt ? '#ef4444' : '#64748b';
+      c.strokeStyle = isHurt ? '#ef4444' : isSpent ? '#a16207' : '#64748b';
       c.lineWidth = 2;
       c.strokeRect(1, 1, 42, 42);
     }
@@ -2704,15 +2814,61 @@
       c.drawImage(img, cx - contentCX, bottomY - contentBottom, fullW, fullH);
     }
 
+    // ---- EXHAUSTION LOOK -------------------------------------------------------------
+    // Two cosmetic passes shared by every player render path. Both take `spent` (0..1, the
+    // smoothed combatState.exhaustion) and both no-op at zero, so the fresh hero pays nothing
+    // for them beyond a comparison.
+
+    // Drain the colour out of the sprite. A hero with an empty bar goes grey and dim rather
+    // than being tinted some new colour, because the frames are generated art in an unknown
+    // palette - washing out what is there survives any of them, where a wash of red or green
+    // would fight half the characters the generator produces. Set as a canvas filter so it
+    // costs one state change rather than a per-pixel pass; the callers clear it afterwards.
+    function applyExhaustionWash(c, spent) {
+      if (spent <= 0.05) return;
+      c.filter = 'saturate(' + (1 - spent * 0.6).toFixed(2) + ') ' +
+                 'brightness(' + (1 - spent * 0.3).toFixed(2) + ')';
+    }
+
+    // Sweat. Three beads on their own staggered falls near the head, each fading as it drops,
+    // so it reads as running sweat rather than three dots blinking in unison. `headY` is where
+    // the top of the drawn character sits in the caller's already-translated space.
+    function drawExhaustionFx(c, spent, headY) {
+      if (spent < 0.25) return;
+      const t = Date.now();
+      const base = Math.min(1, (spent - 0.25) / 0.3) * 0.8;
+      c.save();
+      c.fillStyle = '#bae6fd';
+      for (let i = 0; i < 3; i++) {
+        const prog = ((t + i * 310) % 880) / 880;
+        c.globalAlpha = base * (1 - prog);
+        c.beginPath();
+        c.ellipse((i - 1) * 12 + (i === 1 ? 6 : 0), headY + 14 + prog * 30, 1.5, 2.6, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+      c.restore();
+    }
+
         // 3. COMPOSITE OVER-THE-SHOULDER PLAYER RENDERER (VALBRACE PROPORTIONS)
     function drawOverTheShoulderPlayer(c, width, height) {
       if (!combatState.inBattle) return;
 
       const px = width / 2 + combatState.playerX;
       const isMoving = Math.abs(combatState.vx) > 0.5;
+      // How spent the hero is drawn as, 0..1. Zeroed while dead - the corpse has its own pose
+      // and should not also be panting.
+      const spent = combatState.dead ? 0 : combatState.exhaustion;
       // Bob only while actually strafing. The old idle bob ran constantly and, on a sprite with no
       // feet planted animation, read as the character hovering rather than breathing.
-      const walkBob = isMoving ? Math.sin(Date.now() / 90) * 3 : 0;
+      //
+      // Running out of stamina CROSSFADES that quick strafe bob into a slow, deep heave that
+      // runs whether or not the feet are moving. Crossfaded rather than added, because the
+      // point is that a gassed hero stops looking springy: the +1.4 bias sits them lower in
+      // frame than their fresh stance, and at 260ms a cycle the breathing is less than a third
+      // the rate of the stride. This is what keeps a spent hero looking spent while strafing.
+      const walkBase = isMoving ? Math.sin(Date.now() / 90) * 3 : 0;
+      const pant = Math.sin(Date.now() / 260) * 2.6 + 1.4;
+      const walkBob = walkBase * (1 - spent * 0.7) + pant * spent;
       // Battle entrance: the hero rises into frame from below the canvas. Eased out, so they
       // arrive decelerating into their stance instead of snapping to a stop.
       const slideT = Math.min(1, combatState.introFrame / INTRO_SLIDE_FRAMES);
@@ -2737,8 +2893,12 @@
       }
 
       c.save();
-      const tilt = combatState.vx * 0.012;
-      c.translate(px, py);
+      // Spent: hunch forward and sway. The lean is a constant ~4 degrees at full exhaustion and
+      // the sway a slow drift on top of it, so the hero looks like they are struggling to hold
+      // the stance rather than standing at attention with an empty bar.
+      const tilt = combatState.vx * 0.012
+                 + spent * (0.075 + Math.sin(Date.now() / 430) * 0.035);
+      c.translate(px, py + spent * 4);
       c.rotate(tilt);
 
       // Death pose: keel the whole rig over 90 degrees so the character reads as face-down on
@@ -2774,6 +2934,13 @@
           }
         } else if (shieldProgress > 0.3) {
           currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
+        } else if (spent > 0.2) {
+          // Out of stamina: hold the beaten-up pose. This sits ABOVE the walk frames on
+          // purpose - a hero with nothing left in the tank who strafes should not switch back
+          // to a brisk stride, which was the whole tell that the empty bar meant nothing.
+          // The hurt frame is the only "taking a beating" art the sheet has, and with the
+          // hunch, the heave and the wash below it reads as wrecked rather than as a recoil.
+          currentFrame = playerSpriteFrames[v6Frames ? 6 : 4] || playerSpriteFrames[0];
         } else if (haveWalk && isMoving) {
           // Frames 7 and 8 are opposite phases of one stride, alternated in phase with the
           // existing walk bob so the foot-plant and the bob agree. They are NOT a left-step
@@ -2788,11 +2955,16 @@
           // A side-step is ONE frame per direction, not a cycle, so it would otherwise sit
           // perfectly still while the player strafes. The existing walk bob supplies the
           // missing up-down; the pose frame supplies the stride.
-          if (haveWalk && isMoving && attFrame <= 0 && hurtFrame <= 0) c.translate(0, walkBob * 0.6);
+          if ((spent > 0.2 || (haveWalk && isMoving)) && attFrame <= 0 && hurtFrame <= 0) {
+            c.translate(0, walkBob * 0.6);
+          }
           // Size the character by its measured opaque height and plant its feet just past the
           // bottom edge, so a loose frame crop or a faint ground-shadow blob can't leave the
           // sprite floating in mid-scene. py is already the canvas bottom, so footY is +18.
+          applyExhaustionWash(c, spent);
           drawTrimmedSprite(c, currentFrame, 12, Math.round(height * 0.6));
+          c.filter = 'none';
+          drawExhaustionFx(c, spent, 12 - Math.round(height * 0.6));
         }
         c.restore();
         return;
@@ -2837,7 +3009,13 @@
         const spriteW = spriteH * (playerSpriteImg.naturalWidth / playerSpriteImg.naturalHeight);
         rig.shieldX = (-spriteW / 2) + 5;
         rig.swordX = (spriteW / 2) - 5;
+        // One-sprite modes have no beaten-up pose to swap to, so the wash and the sweat are
+        // the whole of their exhaustion tell - alongside the hunch and heave above, which
+        // every render path shares.
+        applyExhaustionWash(c, spent);
         c.drawImage(playerSpriteImg, -spriteW / 2, -spriteH + 12, spriteW, spriteH);
+        c.filter = 'none';
+        drawExhaustionFx(c, spent, 12 - spriteH);
       } else {
         rig.shieldX = -28;
         rig.swordX = 24;
@@ -3879,15 +4057,16 @@
       doorOpenTexture = c.getImageData(0, 0, DOOR_SPR_W, DOOR_SPR_H);
     }
 
-    // OFF/ON wall textures for a switch (MAP tiles 4 and 5). No colour and no light tell
-    // them apart - not a tint on the fixture, not a lamp/indicator dot, nothing additive.
-    // The only difference is the fixture's own pose, from two SEPARATELY generated pieces of
-    // art (aiSwitchImg / aiSwitchOnImg - see get_gate_prompts on the server, which asks for
-    // the same plate and materials with the handle down vs. thrown, explicitly unlit in
-    // both). If either failed to decode, BOTH poses fall back to one procedural rendering
-    // path together (never mixing a real photo for one state with a drawn shape for the
-    // other) - a fixed plate and pivot with a lever that swings between two fully contained
-    // positions, drawn in the exact same colour regardless of state.
+    // OFF/ON wall textures for a switch (MAP tiles 4 and 5), painted onto one face of the tile
+    // only - see _switchFaceHit. No colour and no light tell the two states apart - not a tint
+    // on the fixture, not a lamp/indicator dot, nothing additive. The only difference is the
+    // fixture's own pose: aiSwitchOnImg is an img2img pass over aiSwitchImg's own pixels on the
+    // server (see get_gate_prompts / generate_flux_surfaces_only), so it is the same plate with
+    // the handle moved rather than a second switch that merely got described the same way. If
+    // either failed to decode, BOTH poses fall back to one procedural rendering path together
+    // (never mixing a real photo for one state with a drawn shape for the other) - a fixed
+    // plate and pivot with a lever that swings between two fully contained positions, drawn in
+    // the exact same colour regardless of state.
     //
     // The fixture is deliberately small and chunky - the AI cutout is downsampled to SWITCH_SRC
     // px before being blown back up with smoothing off - so it sits in the wall at roughly
@@ -3905,8 +4084,9 @@
       const SWITCH_SRC = 24;          // chunky-pixel source size for the AI cutout
 
       // Downsamples one pose's AI cutout to its own small canvas, fit to the SAME maxW/maxH
-      // box the other pose uses - so two independently generated images with slightly
-      // different framing still land at a matched scale.
+      // box the other pose uses. The server already trims the pair to one shared alpha box
+      // (_save_tight_pair), so both arrive at identical dimensions and this scales them
+      // identically - the plate stays pinned and only the handle moves when the state flips.
       function prepArt(img) {
         const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
         const fw = Math.max(1, Math.round(img.naturalWidth * scale));
@@ -3964,6 +4144,30 @@
 
       switchWallOffTexture = renderPose(false);
       switchWallOnTexture = renderPose(true);
+    }
+
+    // Is this ray looking at the ONE face of a switch tile that actually carries the fixture?
+    //
+    // A switch owns a whole map cell, so painting switchWall*Texture on tile 4/5 unconditionally
+    // hung the same lever on all four of its faces - three of them facing corridors the switch
+    // has nothing to do with, each showing a lever the player can walk up to and not throw. The
+    // fixture belongs on exactly one face: the one looking into its host cell (cellX/cellY, the
+    // tile the player must stand on, picked by placeGatesAndSwitches). The other three are plain
+    // wall, which is also what the minimap and the interact() guard below assume.
+    //
+    // The hit face's outward normal points back along the ray's last DDA step: a side-0
+    // (vertical) hit was entered moving stepX, so the face being looked at is the one at
+    // mapX - stepX; side-1 is the same in y. switchList is a handful of entries at most and only
+    // rays that actually hit a 4/5 tile get here, so a linear scan is cheaper than keeping a
+    // lookup in sync with maze regeneration and snapshot restores.
+    function _switchFaceHit(mapX, mapY, side, stepX, stepY) {
+      const faceX = side === 0 ? mapX - stepX : mapX;
+      const faceY = side === 1 ? mapY - stepY : mapY;
+      for (let i = 0; i < switchList.length; i++) {
+        const s = switchList[i];
+        if (s.x === mapX && s.y === mapY) return s.cellX === faceX && s.cellY === faceY;
+      }
+      return false;
     }
 
     // ==========================================
@@ -4808,8 +5012,12 @@
         let wallTexToUse = wallTexture;
         if (hit === 2 && wallLanternTexture) wallTexToUse = wallLanternTexture;
         else if (hit === 3 && doorTexture) wallTexToUse = doorTexture;
-        else if (hit === 4 && switchWallOffTexture) wallTexToUse = switchWallOffTexture;
-        else if (hit === 5 && switchWallOnTexture) wallTexToUse = switchWallOnTexture;
+        else if (hit === 4 || hit === 5) {
+          // Only the face looking into the switch's host cell wears the fixture - see
+          // _switchFaceHit. The other three faces fall through to the plain wall texture.
+          const swTex = hit === 4 ? switchWallOffTexture : switchWallOnTexture;
+          if (swTex && _switchFaceHit(mapX, mapY, side, stepX, stepY)) wallTexToUse = swTex;
+        }
         const wallData = wallTexToUse.data;
 
         let wallLanternLight = 0;
@@ -5110,6 +5318,7 @@
       const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
       if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
         winMovesCount.textContent = totalMoves;
+        if (victoryText) victoryText.textContent = victoryOutro();
         playSfx('end', { vary: 0 });
         victoryModal.classList.remove('hidden');
         // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
@@ -5237,6 +5446,10 @@
       if (t === 4 || t === 5) {
         const sw = switchList.find(s => s.x === fx && s.y === fy);
         if (!sw) return;
+        // The lever is only drawn on the face looking into its host cell (_switchFaceHit), so
+        // it can only be thrown from there. Facing the same tile from another corridor shows
+        // blank wall, and throwing an invisible switch through it would read as a bug.
+        if (player.gridX !== sw.cellX || player.gridY !== sw.cellY) return;
         if (sw.on) return;                  // already thrown - the lever's own pose says so
         sw.on = true;
         MAP[fy][fx] = 5;
@@ -5567,6 +5780,11 @@
     // generation happens to finish.
     function enterDungeon(b) {
       if (!b) return;
+      // New run, new pack colours. Rolled here rather than in restartDungeon, which rolls THIS
+      // run back to its first step and so keeps the foes the player has already met looking the
+      // way they looked. Has to land before the first render either way: the world markers tint
+      // through the same enemyFramesFor path the battle sprites do.
+      rollPackHues();
       // Freeze the dungeon's start-of-run state now, while nothing has moved and every gate is
       // still shut, so the death screen's "Restart Dungeon" can roll back to exactly here.
       dungeonSnapshot = {
@@ -5844,6 +6062,37 @@
       btnCreate.click();
     });
 
+    // A refresh mid-generation used to be silently destructive in both directions: the page
+    // lost the run it was waiting on, and the server carried on feeding ComfyUI a dozen more
+    // prompts for a bundle nobody would ever collect. So warn first...
+    window.addEventListener('beforeunload', (e) => {
+      if (!generationInFlight) return;
+      // Browsers show their own fixed wording here and ignore any string we supply; both
+      // the preventDefault and the legacy returnValue are needed for full coverage.
+      e.preventDefault();
+      e.returnValue = 'Creation is still running. Leaving now will cancel it.';
+      return e.returnValue;
+    });
+
+    // ...and if they leave anyway, tell the server on the way out so it can interrupt the
+    // running ComfyUI job and drop the ones still queued. pagehide (not unload, which is
+    // deprecated and skipped on some teardown paths) fires only once the user has actually
+    // confirmed - cancelling the dialog above never gets here. sendBeacon survives the page
+    // dying; fetch+keepalive is the fallback where it doesn't exist.
+    window.addEventListener('pagehide', (e) => {
+      // persisted means the page went into the back/forward cache and can still come back,
+      // so it hasn't really left. (The preventDefault above already makes the page
+      // bfcache-ineligible while a run is live, but don't lean on that.)
+      if (e.persisted || !generationInFlight) return;
+      generationInFlight = false;
+      const url = `${SERVER_URL}/api/cancel_generation`;
+      // No body, so this stays a CORS-simple POST and needs no preflight the dying page
+      // could never complete.
+      if (!(navigator.sendBeacon && navigator.sendBeacon(url))) {
+        try { fetch(url, { method: 'POST', keepalive: true }); } catch (err) { /* page is going */ }
+      }
+    });
+
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       currentThemeName = wallStyle;
@@ -5856,6 +6105,7 @@
       resetCombatForNewDungeon();
 
       resetCrawl();
+      generationInFlight = true;
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
       if (titleButtons) titleButtons.classList.add('hidden');
@@ -5922,10 +6172,12 @@
             if (!p.is_generating && p.completed_bundle) {
               clearInterval(pollInterval);
               clearInterval(timerInterval);
+              generationInFlight = false;
               armEnterDungeon(p.completed_bundle);
             } else if (p.error) {
               clearInterval(pollInterval);
               clearInterval(timerInterval);
+              generationInFlight = false;
               alert("Error: " + p.error);
               resetCrawl();
               screenProgress.classList.add('hidden');
@@ -5940,6 +6192,7 @@
 
       } catch (err) {
         clearInterval(timerInterval);
+        generationInFlight = false;
         alert('Server communication error. Make sure server.py is running!');
         resetCrawl();
         screenProgress.classList.add('hidden');

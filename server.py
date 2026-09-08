@@ -170,6 +170,83 @@ gen_progress = {
 # is what makes ComfyUI address that job's progress messages back to us.
 COMFY_CLIENT_ID = str(uuid.uuid4())
 
+# ---------------------------------------------------------------------------
+# Abandoned runs: the browser went away mid-generation
+# ---------------------------------------------------------------------------
+# A run is a chain of a dozen-odd ComfyUI prompts submitted one after another from a worker
+# thread. Nothing about that chain was tied to the page that asked for it, so refreshing the
+# browser mid-run used to leave the whole chain going: ComfyUI kept sampling for minutes for
+# a bundle nobody would ever collect, and the reloaded page then queued a second chain behind
+# the first. The page now warns before a mid-run refresh and, if the user goes ahead anyway,
+# beacons /api/cancel_generation on the way out - which drops what we queued and tells the
+# worker to stop at its next checkpoint.
+
+
+class GenerationCancelled(Exception):
+    """Raised on a generation worker thread whose page has gone away."""
+
+
+# The worker Thread objects whose runs were abandoned. Thread objects (not idents, which
+# CPython recycles) so a later run can never inherit an earlier one's cancellation.
+_CANCELLED_RUNS = set()
+
+# The worker for the most recently started run, so /api/cancel_generation knows which
+# thread to mark. None before the first run and after the process restarts.
+GEN_THREAD = None
+
+# Every prompt_id this run handed to ComfyUI. Only used to drain the queue on cancel, so it
+# is never pruned mid-run - deleting an id that already finished is a no-op on ComfyUI's
+# side, and keeping the list append-only means the submit sites stay one line each.
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT_PROMPTS = []
+
+
+def _bail_if_cancelled():
+    """Checkpoint for the generation worker. Called wherever the run would otherwise wait on
+    or submit to ComfyUI, so an abandoned run unwinds within a poll tick instead of grinding
+    through every remaining asset."""
+    if threading.current_thread() in _CANCELLED_RUNS:
+        raise GenerationCancelled("the page was closed - run abandoned")
+
+
+def _track_prompt(prompt_id):
+    """Record a submitted prompt_id (and pass it through, so submit sites read as
+    `prompt_id = _track_prompt(...)`)."""
+    with _INFLIGHT_LOCK:
+        _INFLIGHT_PROMPTS.append(prompt_id)
+    return prompt_id
+
+
+def _comfy_post(path, body):
+    req = urllib.request.Request(f"{COMFY_URL}{path}", data=json.dumps(body).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def cancel_comfy_jobs():
+    """Drop everything this run gave ComfyUI and return how many prompts that was.
+
+    Order matters: delete the still-pending prompts FIRST so that interrupting the running
+    one doesn't just promote the next one off the queue. Deletes by id rather than
+    {"clear": true} so a queue the user filled from ComfyUI's own UI is left alone."""
+    with _INFLIGHT_LOCK:
+        ids = list(_INFLIGHT_PROMPTS)
+        del _INFLIGHT_PROMPTS[:]
+    if not ids:
+        return 0
+    try:
+        _comfy_post("/queue", {"delete": ids})
+    except Exception as e:
+        print(f"[cancel] queue delete failed: {e}")
+    try:
+        _comfy_post("/interrupt", {})
+    except Exception as e:
+        print(f"[cancel] interrupt failed: {e}")
+    print(f"[cancel] dropped {len(ids)} ComfyUI prompt(s) from the abandoned run")
+    return len(ids)
+
+
 
 class ProgressTracker:
     """Drives gen_progress["percent"] from ComfyUI's real per-node progress.
@@ -877,12 +954,13 @@ def generate_enemy_sprites(enemy_style):
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
-        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+        prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
     expected = [f"{n}_save" for n in ENEMY_FRAME_NAMES]
     start_time = time.time()
     while time.time() - start_time < 300:
         time.sleep(0.2)
+        _bail_if_cancelled()
         with urllib.request.urlopen(urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")) as h:
             hist = json.loads(h.read().decode("utf-8"))
         if prompt_id in hist:
@@ -1065,7 +1143,7 @@ def generate_player_sprite_ipadapter(player_style, weapon_style=None):
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
-        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+        prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
     expected_saves = ([f"{name}_save" for name in PLAYER_FRAME_NAMES]
                       + ["sword_save", "sword2_save", "shield_save"]
@@ -1073,6 +1151,7 @@ def generate_player_sprite_ipadapter(player_style, weapon_style=None):
     start_time = time.time()
     while time.time() - start_time < 300:
         time.sleep(0.2)
+        _bail_if_cancelled()
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
             hist_data = json.loads(h_resp.read().decode("utf-8"))
@@ -1681,13 +1760,20 @@ def get_gate_prompts(wall_style):
     notes above for why naming unwanted things backfires).
 
     The door is single-state art (only ever generated CLOSED - buildOpenDoorTexture derives the
-    open gate from the closed door's own pixels), but the switch is genuinely TWO separate
-    images: switch_off_p and switch_on_p describe the exact same plate and materials with the
-    handle down vs. thrown, and nothing else - no colour, no light, no glow in either. An
-    earlier version generated ONE switch image and had the client fake the other state with a
-    tint or a lit indicator lamp, which is exactly the "light/colour tells them apart" look
-    this now avoids; the two prompts exist so the pose itself is the only difference, in art
-    that was actually drawn that way rather than edited to look that way.
+    open gate from the closed door's own pixels). The switch is two images, but only the OFF
+    one is drawn from scratch: switch_on_p is an IMG2IMG prompt run over the finished OFF
+    render (see generate_flux_surfaces_only), so it inherits that exact plate, palette,
+    framing and lighting and only has to move the handle. That is why the two strings below
+    are near word-for-word copies of each other in every bucket - the shared wording tells the
+    model to keep what the reference already shows, and the one clause that differs is the
+    only thing it is being asked to change. Word them apart and img2img will happily redraw
+    the plate to match the new description, which is the "flipping it swaps in a completely
+    different switch" bug this pairing exists to prevent.
+
+    Neither state gets colour, light or glow - the handle's pose is the entire difference. An
+    even earlier version generated ONE image and had the client fake the second state with a
+    tint or a lit indicator lamp, which is exactly the "light tells them apart" look this
+    avoids.
 
     Buckets mirror get_surface_prompts' (same keywords, same relative order, so an ambiguous
     style resolves to the same theme on both sides) - every style get_surface_prompts special-
@@ -1715,9 +1801,9 @@ def get_gate_prompts(wall_style):
     # as door or archway shows up as literal black margins on the wall in-game - "fills the
     # frame edge to edge" alone wasn't reliable enough at cfg 1.0 to prevent that.
     NO_MARGINS = "the door and its archway completely fill the frame edge to edge with zero empty background and zero black margins"
-    # Appended to every switch_on_p: the ONE thing separate generation can't guarantee on its
-    # own is that the model won't decide "on" means "lit up" - candy and sci-fi in particular
-    # have an associative pull toward glow. Spelling out "no colour change" as well as "no
+    # Appended to every switch_on_p. Even starting from the unlit OFF render, "on" has a
+    # strong associative pull toward "lit up" - candy and sci-fi especially - and img2img has
+    # enough denoise headroom to act on it. Spelling out "no colour change" as well as "no
     # light" heads off both failure modes at once.
     UNLIT = "exactly the same colours as its resting state, no glow, no light, nothing lit up, no colour change"
 
@@ -2001,11 +2087,12 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
         res_json = json.loads(resp.read().decode("utf-8"))
-        prompt_id = res_json["prompt_id"]
+        prompt_id = _track_prompt(res_json["prompt_id"])
 
     start_time = time.time()
     while time.time() - start_time < 90:
         time.sleep(0.1)
+        _bail_if_cancelled()
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
             hist_data = json.loads(h_resp.read().decode("utf-8"))
@@ -2134,6 +2221,12 @@ def run_batch_v3_flux(wall_style, player_style=None, player_image=None, mode="v4
         }
         print("[FLUX.1] Dungeon textures, character sprite, and AI portrait complete and packaged!")
 
+    except GenerationCancelled as c:
+        # The page went away mid-run; /api/cancel_generation already drained the queue.
+        print(f"[FLUX.1] {c}")
+        gen_progress["status_message"] = "Generation cancelled - the page was closed."
+        gen_progress["percent"] = 0
+        gen_progress["phase"] = ""
     except Exception as e:
         print(f"[FLUX.1 Error] {e}")
         gen_progress["error"] = str(e)
@@ -2897,6 +2990,39 @@ def _save_tight(img_path, thresh=20):
         print(f"[Tight Crop Error] {os.path.basename(img_path)}: {e}")
 
 
+def _save_tight_pair(path_a, path_b, thresh=20):
+    """Trim TWO RGBA PNGs to the SAME alpha box - the union of both - in place.
+
+    The switch's off/on art is one fixture in two poses, so cropping each to its own box
+    (what _save_tight does) is wrong here: the thrown handle reaches further than the
+    resting one, so the two crops come out at different sizes and aspect ratios, and the
+    client then scales each to fit the same fixture footprint. The plate visibly changes
+    size the instant the lever is thrown. Sharing one box keeps the plate pinned in place
+    and lets only the handle move, which is the whole point of the pair.
+
+    Falls back to independent trims if either image cannot be read."""
+    import numpy as np
+    from PIL import Image
+    try:
+        ims = [Image.open(p).convert("RGBA") for p in (path_a, path_b)]
+        box = None
+        for im in ims:
+            ys, xs = np.nonzero(np.array(im)[:, :, 3] > thresh)
+            if not len(ys):
+                continue
+            b = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+            box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]),
+                                         max(box[2], b[2]), max(box[3], b[3]))
+        if box is None:
+            return
+        for im, p in zip(ims, (path_a, path_b)):
+            im.crop(box).save(p, format="PNG")
+    except Exception as e:
+        print(f"[Tight Crop Error] switch pair: {e}")
+        _save_tight(path_a, thresh)
+        _save_tight(path_b, thresh)
+
+
 def generate_flux_surfaces_only(wall_style, gfx=None):
     """Just the wall / ceiling / floor thirds of generate_flux_all_assets. v5 keeps FLUX
     schnell for the tiling environment textures and generates everything else with krea2.
@@ -2945,13 +3071,28 @@ def generate_flux_surfaces_only(wall_style, gfx=None):
     payload["bg_model"] = {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"}
 
     # Switch is an isolated object (a wall lever), matted onto the wall on the client the same
-    # way the lantern is - so it gets its own square canvas + BiRefNet cutout. Generated TWICE
-    # (s_* = off/resting, so_* = on/thrown) from the two prompts get_gate_prompts returns, each
-    # with its own random seed - two independent renders of the same fixture, not one image
-    # edited into a second state. Always generated (get_gate_prompts never returns None).
+    # way the lantern is - so it gets its own square canvas + BiRefNet cutout.
+    #
+    # The ON pose is NOT a second independent render. It is an img2img pass over the OFF
+    # render: s_dec (the finished off/resting image, still on its white ground) is VAE-encoded
+    # back into a latent and re-sampled at partial denoise with switch_on_p. Two independent
+    # txt2img renders of "the same plate with the handle thrown" are not the same plate - FLUX
+    # redraws the plate, the screws, the bevel and the palette every time, so throwing the
+    # lever in-game swapped in what read as an entirely different fixture. Starting from the
+    # off image's own pixels is what makes it the SAME switch being flipped.
+    #
+    # SWITCH_ON_DENOISE is the whole tuning knob: too low and the handle never actually moves,
+    # too high and the reference washes out and we are back to a new switch. The step count is
+    # scaled up to compensate, because ComfyUI runs steps*denoise sampling steps in img2img -
+    # 7 * 0.62 keeps roughly the 4 real steps schnell is distilled for. The shared seed is a
+    # second, cheaper consistency lever (same trick as the animation frames in
+    # _krea2_add_branch): the two passes then share a noise field as well as a starting image.
+    SWITCH_ON_DENOISE = 0.62
+    switch_seed = random.randint(1, 1000000000)
+
     payload["s_lat"] = {"inputs": {"width": obj_px, "height": obj_px, "batch_size": 1}, "class_type": "EmptyLatentImage"}
     payload["s_pos"] = {"inputs": {"text": switch_off_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
-    payload["s_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+    payload["s_samp"] = {"inputs": {"seed": switch_seed, "steps": 4, "cfg": 1.0,
                                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
                                     "model": ["1", 0], "positive": ["s_pos", 0], "negative": ["neg", 0],
                                     "latent_image": ["s_lat", 0]}, "class_type": "KSampler"}
@@ -2961,12 +3102,14 @@ def generate_flux_surfaces_only(wall_style, gfx=None):
     payload["s_save"] = {"inputs": {"filename_prefix": prefixes["s"], "images": ["s_dec", 0], "mask": ["s_maskinv", 0]},
                          "class_type": "SaveImageWithAlpha"}
 
-    payload["so_lat"] = {"inputs": {"width": obj_px, "height": obj_px, "batch_size": 1}, "class_type": "EmptyLatentImage"}
+    # Encode the OFF render (pre-cutout, so the model still sees the clean white ground it is
+    # supposed to keep) as the ON pass's starting latent instead of an EmptyLatentImage.
+    payload["so_enc"] = {"inputs": {"pixels": ["s_dec", 0], "vae": ["1", 2]}, "class_type": "VAEEncode"}
     payload["so_pos"] = {"inputs": {"text": switch_on_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
-    payload["so_samp"] = {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
-                                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+    payload["so_samp"] = {"inputs": {"seed": switch_seed, "steps": 7, "cfg": 1.0,
+                                     "sampler_name": "euler", "scheduler": "simple", "denoise": SWITCH_ON_DENOISE,
                                      "model": ["1", 0], "positive": ["so_pos", 0], "negative": ["neg", 0],
-                                     "latent_image": ["so_lat", 0]}, "class_type": "KSampler"}
+                                     "latent_image": ["so_enc", 0]}, "class_type": "KSampler"}
     payload["so_dec"] = {"inputs": {"samples": ["so_samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"}
     payload["so_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["so_dec", 0]}, "class_type": "RemoveBackground"}
     payload["so_maskinv"] = {"inputs": {"mask": ["so_mask", 0]}, "class_type": "InvertMask"}
@@ -2992,12 +3135,13 @@ def generate_flux_surfaces_only(wall_style, gfx=None):
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
-        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+        prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
     expected = ("w_save", "c_save", "f_save", "d_save", "s_save", "so_save") + (("l_save",) if lantern_p else ())
     start_time = time.time()
     while time.time() - start_time < 120:
         time.sleep(0.1)
+        _bail_if_cancelled()
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
             hist_data = json.loads(h_resp.read().decode("utf-8"))
@@ -3018,12 +3162,11 @@ def generate_flux_surfaces_only(wall_style, gfx=None):
 
         # Door: a single full-cell surface - NOT tiled, so no make_seamless_4way.
         d_path = _p("d_save")
-        # Switch: two independent BiRefNet cutouts (off/on), each trimmed to its own alpha
-        # box like the lantern.
+        # Switch: the off/on pair, cut out by BiRefNet and then trimmed TOGETHER to one
+        # shared alpha box - see _save_tight_pair for why they must not be trimmed apart.
         s_path = _p("s_save")
-        _save_tight(s_path)
         so_path = _p("so_save")
-        _save_tight(so_path)
+        _save_tight_pair(s_path, so_path)
 
         l_path = None
         if lantern_p:
@@ -3078,16 +3221,18 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None, out
 
     `out_key` is the field a save node reports its files under. Image saves use "images";
     audio saves (the SFX pack) use "audio" - see SavedAudios.as_dict in comfy_api."""
+    _bail_if_cancelled()   # never hand ComfyUI another job for a run nobody is waiting on
     PROGRESS.begin_job(job_key)
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
-        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+        prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
     expected = [f"{n}_save" for n in save_keys]
     start_time = time.time()
     while time.time() - start_time < timeout:
         time.sleep(0.2)
+        _bail_if_cancelled()
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
             hist_data = json.loads(h_resp.read().decode("utf-8"))
@@ -3208,8 +3353,8 @@ spirit of these (write an ORIGINAL one that fits THIS dungeon - do not reuse the
   "You strike the match, step past the threshold, and let the labyrinth swallow you whole."
   "The stone doors grind shut behind you, and the darkness exhales."
 
-Reply using EXACTLY these six labels, each on its own line, in this order. No preamble, no
-markdown, no commentary, no asterisks:
+Reply using EXACTLY these seven labels, each on its own line, in this order. No preamble,
+no markdown, no commentary, no asterisks:
 
 LOCATION: <a 2-4 word proper name for the dungeon>
 HERO: <a 1-3 word proper name for the player>
@@ -3218,6 +3363,10 @@ FOE: <a 1-3 word proper name for ONE single common enemy - not a group or plural
   for one creature)>
 BOSS: <a 1-3 word proper name for their champion - also one individual, same rule: no
   trailing "s" unless the word needs it>
+SAVED: <2-6 words naming who or what is safe once the BOSS falls - the same stake paragraph
+  two makes concrete. PLURAL, and written to follow the word "The" and take a plural verb:
+  "miners of Ashfen", "children of the upper halls", "villages along the ridge". Never one
+  person, never an abstraction like "hope" or "the future">
 CRAWL:
 <paragraph one - the scene and danger>
 
@@ -3265,15 +3414,17 @@ def _submit_and_collect_text(payload, out_key, timeout=180, job_key=None):
     """Sibling of _krea2_submit_and_collect for a text output. PreviewAny is an OUTPUT_NODE
     returning {"ui": {"text": (value,)}}, so the string lands in history under
     outputs[out_key]["text"][0] rather than the ["images"][0] shape the image path expects."""
+    _bail_if_cancelled()
     PROGRESS.begin_job(job_key)
     data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
     req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as resp:
-        prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+        prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
     start_time = time.time()
     while time.time() - start_time < timeout:
         time.sleep(0.2)
+        _bail_if_cancelled()
         hist_req = urllib.request.Request(f"{COMFY_URL}/history/{prompt_id}")
         with urllib.request.urlopen(hist_req) as h_resp:
             hist_data = json.loads(h_resp.read().decode("utf-8"))
@@ -3295,7 +3446,7 @@ _STORY_SMART = {
     "\u2022": "-", "\u2032": "'", "\u2033": '"',
 }
 _STORY_STRIP = "*_#\"'` \t"
-_STORY_LABELS = ("location", "hero", "foe", "boss")
+_STORY_LABELS = ("location", "hero", "foe", "boss", "saved")
 
 # Markdown marks the model sometimes drops mid-sentence ("the *cursed* blade", "a #1 threat")
 # - _STORY_STRIP only trims these off the ends of a string, so one wrapped around a word in
@@ -3357,6 +3508,31 @@ def _singular_creature_name(name):
         words[-1] = last[:-1]
         return " ".join(words)
     return name
+
+
+# Generic stakes for when there is no SAVED line to read - a parse failure, a refusal, or
+# a bundle built before the label existed. Plural and article-less, same shape the model is
+# asked for, so the victory outro reads the same either way.
+_STAKE_FALLBACKS = [
+    "ones who never came back up",
+    "villages that stopped sending word",
+    "people who live over this place",
+    "names carved beside the door",
+]
+
+# "All the miners" / "every last homestead" - the leading determiner is stripped because the
+# outro supplies its own ("The <stake> have no fear anymore"). Repeated so "all of the" goes
+# in one pass rather than leaving "the" behind.
+_STAKE_DETERMINER_RE = re.compile(r"^(?:(?:all\s+of|the|a|an|all|every|each)\s+)+", re.IGNORECASE)
+
+
+def _story_stake(raw, fallback):
+    """SAVED names who or what the boss was going to take. It is only ever read inside a
+    sentence that brings its own article, so the determiner and any trailing punctuation
+    come off here rather than in every line that uses it."""
+    text = _story_name(raw, "", max_words=6)
+    text = _STAKE_DETERMINER_RE.sub("", text).strip().strip(".,;:!")
+    return text or fallback
 
 
 def _lead(name, upper=True):
@@ -3422,10 +3598,11 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
         "hero": _story_title(player_style, "The Nameless"),
         "foe": _story_title(enemy_style, "The Horde"),
         "boss": "The Warden",
+        "saved": random.choice(_STAKE_FALLBACKS),
     }
     out = dict(fallbacks)
 
-    max_words = {"location": 4, "hero": 3, "foe": 3, "boss": 3}
+    max_words = {"location": 4, "hero": 3, "foe": 3, "boss": 3, "saved": 6}
     last_label_end = 0
     found = 0
     for key in _STORY_LABELS:
@@ -3436,6 +3613,10 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
                 out[key] = _singular_creature_name(out[key])
             last_label_end = max(last_label_end, m.end())
             found += 1
+
+    # SAVED is a noun phrase, not a proper name - it goes through the label loop for the
+    # CRAWL-marker bookkeeping above, then loses its determiner here.
+    out["saved"] = _story_stake(out["saved"], fallbacks["saved"])
 
     # The BOSS line names the champion, e.g. "The Overclocked" - but that's not the name it
     # fights under. Combat prepends a title (ENEMY_VARIANTS.boss in game.js), so bake the same
@@ -3474,7 +3655,8 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
         for chunk in re.split(r"\n\s*\n", body):
             lines = [ln.strip().rstrip("\\") for ln in chunk.strip().splitlines()]
             lines = [ln for ln in lines if ln and
-                     not re.match(r"^(LOCATION|HERO|FOE|BOSS|CRAWL|HOOK)\s*:", ln, re.IGNORECASE)]
+                     not re.match(r"^(LOCATION|HERO|FOE|BOSS|SAVED|CRAWL|HOOK)\s*:", ln,
+                                  re.IGNORECASE)]
             para = " ".join(lines).strip().strip("*_#")
             if len(para) > 20:
                 para = _use_real_boss_name(para)
@@ -4584,12 +4766,13 @@ def _vlm_wants_rotors(image_path, timeout=180):
         req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data,
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req) as resp:
-            pid = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+            pid = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
         start = time.time()
         text = ""
         while time.time() - start < timeout:
             time.sleep(0.5)
+            _bail_if_cancelled()
             with urllib.request.urlopen(f"{COMFY_URL}/history/{pid}") as h:
                 hist = json.loads(h.read().decode("utf-8"))
             if pid in hist and (hist[pid].get("outputs") or
@@ -5042,6 +5225,14 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         }
         print("[krea2] v5 bundle complete and packaged!")
 
+    except GenerationCancelled as c:
+        # Not a failure: the page that asked for this run is gone, and /api/cancel_generation
+        # has already drained the ComfyUI queue. Leave progress idle rather than parking an
+        # error the next visitor would see on their first poll.
+        print(f"[krea2 v5] {c}")
+        gen_progress["status_message"] = "Generation cancelled - the page was closed."
+        gen_progress["percent"] = 0
+        gen_progress["phase"] = ""
     except Exception as e:
         print(f"[krea2 v5 Error] {e}")
         gen_progress["error"] = str(e)
@@ -5144,6 +5335,14 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         }
         print("[krea2] v6 bundle complete and packaged!")
 
+    except GenerationCancelled as c:
+        # Not a failure: the page that asked for this run is gone, and /api/cancel_generation
+        # has already drained the ComfyUI queue. Leave progress idle rather than parking an
+        # error the next visitor would see on their first poll.
+        print(f"[krea2 v6] {c}")
+        gen_progress["status_message"] = "Generation cancelled - the page was closed."
+        gen_progress["percent"] = 0
+        gen_progress["phase"] = ""
     except Exception as e:
         print(f"[krea2 v6 Error] {e}")
         gen_progress["error"] = str(e)
@@ -5213,6 +5412,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        global GEN_THREAD
+
         if self.path == "/api/generate_dungeon":
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
@@ -5232,6 +5433,15 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 gfx = _gfx_profile(graphics_quality)
                 # krea2 steps was a UI input once, never touched - run_batch_* just uses
                 # KREA2_STEPS_DEFAULT now.
+
+                # A fresh run owes nothing to any earlier one: forget the prompt ids of
+                # the last run (already drained, or already collected) and drop finished
+                # threads from the cancelled set so it can't grow for the life of the
+                # process.
+                with _INFLIGHT_LOCK:
+                    del _INFLIGHT_PROMPTS[:]
+                _CANCELLED_RUNS.difference_update(
+                    [th for th in list(_CANCELLED_RUNS) if not th.is_alive()])
 
                 # Reset progress synchronously
                 gen_progress["is_generating"] = True
@@ -5269,6 +5479,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                          daemon=True)
                 print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx}")
                 t.start()
+                GEN_THREAD = t
                 return
             except Exception as e:
                 print(f"[Request Error] {e}")
@@ -5284,6 +5495,48 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass  # client already gone, or headers were sent before the throw
                 return
+
+        elif self.path == "/api/cancel_generation":
+            # Beaconed from the page's pagehide handler once the user has confirmed they
+            # want to leave mid-generation. The browser is already tearing the page down, so
+            # nothing here may block for long and nobody will read the reply - it exists so
+            # a manual POST (or a fetch with keepalive) can still see what happened.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length:
+                    self.rfile.read(length)
+            except Exception:
+                pass
+
+            dropped = 0
+            if gen_progress.get("is_generating"):
+                if GEN_THREAD is not None and GEN_THREAD.is_alive():
+                    _CANCELLED_RUNS.add(GEN_THREAD)
+                dropped = cancel_comfy_jobs()
+                # The worker unwinds on its own at the next checkpoint (and clears
+                # is_generating in its finally), but flip it here too so a page reloading
+                # right now doesn't briefly see a run it can no longer follow.
+                gen_progress["is_generating"] = False
+                gen_progress["completed_bundle"] = None
+                gen_progress["error"] = None
+                gen_progress["story"] = None
+                gen_progress["percent"] = 0
+                gen_progress["phase"] = ""
+                gen_progress["status_message"] = "Generation cancelled - the page was closed."
+                PROGRESS.end_plan()
+                print(f"[cancel] run abandoned by the browser; {dropped} prompt(s) dropped")
+
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "dropped": dropped},
+                                            ensure_ascii=True).encode("utf-8"))
+            except Exception:
+                pass  # the page is gone - expected on the beacon path
+            return
+
 
     def do_OPTIONS(self):
         self.send_response(200)
