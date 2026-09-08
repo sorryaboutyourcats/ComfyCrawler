@@ -223,6 +223,12 @@
     // Set once generation finishes; the player enters on their own schedule, not ours.
     let pendingBundle = null;
     let crawlStarted = false;
+    // Date.now() timestamp until which the intro crawl counts as "being read", so the screen
+    // saver's idle timer holds off even if the story shipped with no narration audio (or
+    // autoplay blocked the clip) and there is nothing else - no audio, no video, no battle -
+    // to already block it. Set from the crawl's own scroll duration in startCrawl(); belt and
+    // braces alongside the narrationActive() check in screensaverBlocked().
+    let crawlReadingUntil = 0;
     // True only while the server is actually rendering a dungeon for us. Drives the
     // "you will lose this" refresh warning and the cancel beacon further down - see the
     // beforeunload/pagehide pair next to the CREATE handler.
@@ -1470,6 +1476,29 @@
     // that distance takes. Purely how depth is SOLD - see drawEnemyBody.
     const DEPTH_LIFT = 34;
     const DEPTH_SHRINK = 0.42;
+    // Where a grounded foe's feet sit on the 240px combat view. Module scope rather than a
+    // local of drawEnemyBody because nearWallStaging measures against it too.
+    const GROUND_Y = 165;
+
+    // NEAR-WALL PULL-IN. The duel is staged at a fixed spot on the canvas - see GROUND_Y in
+    // drawEnemyBody - which quietly assumes there is open floor about a cell and a half ahead.
+    // Back the hero into a wall and face it and there isn't: that wall's own floor line drops
+    // below the staged feet, so the foe reads as standing partway UP the masonry. These pull it
+    // forward instead, down the canvas to just in front of whatever is really there.
+    //   CLEARANCE - px the feet clear that floor line by, so the foe is plainly in front of it.
+    //   GROUND_MAX - hard floor on the 240px view; below this the foe is more offscreen than on.
+    //   SCALE_MAX  - cap on the growth the move implies, so a face-full foe stays a foe.
+    //   HEAD_ROOM  - px of canvas kept above the foe, so growing it never decapitates it.
+    //   BACK_ROOM  - px above that floor line a fully withdrawn foe stops at, so the boss charge
+    //                still has a visible wind-up in a space with no room to wind up in.
+    //   EASE       - per-frame approach, so a wall sliding into view grows the foe rather than
+    //                snapping it (the raycast distance behind this jumps at corners).
+    const NEAR_WALL_CLEARANCE = 6;
+    const NEAR_WALL_GROUND_MAX = 208;
+    const NEAR_WALL_SCALE_MAX = 1.8;
+    const NEAR_WALL_HEAD_ROOM = 6;
+    const NEAR_WALL_BACK_ROOM = 12;
+    const NEAR_WALL_EASE = 0.18;
 
     // The hue on swarmer/circler above is only a starting value: every run rolls both of them
     // fresh, and independently - this run's runts can be blue while its fledglings are purple,
@@ -3748,10 +3777,67 @@
       }
     }
 
+    // How close is the wall the foe is standing against? The raycaster has already written
+    // every column's perpendicular distance into zBuffer for THIS frame, so the answer is just
+    // the nearest of the columns the foe's body covers - no second cast, and it accounts for
+    // side walls in a tight corridor as readily as for the one being faced.
+    function wallDistAt(ex, width) {
+      const lo = Math.max(0, Math.round(ex) - 24);
+      const hi = Math.min(width - 1, Math.round(ex) + 24);
+      let d = Infinity;
+      for (let x = lo; x <= hi; x++) if (zBuffer[x] < d) d = zBuffer[x];
+      return d;
+    }
+
+    // Walk a foe forward out of the wall behind it. GROUND_Y stages the fight on the floor line
+    // of a wall ~1.6 cells off; when what is actually ahead is nearer than that, its floor line
+    // sits LOWER on the canvas than the foe's feet and the foe reads as standing partway up the
+    // masonry rather than in front of it. So: drop the feet to just past that line and grow the
+    // foe by the perspective factor the move implies, capped so it stays framed. The line is
+    // only ever moved DOWN - in open floor `push` is zero and the staging is untouched, exactly
+    // as it was. Returns the feet line to draw on and the size multiplier that goes with it.
+    //
+    // The push is eased on the foe itself rather than taken cold each frame: the sampled wall
+    // distance steps as the hero turns past a corner, and an un-eased foe would jump size with
+    // it. It also means a foe already pulled in relaxes back out over a few frames when the
+    // hero steps away from the wall.
+    function nearWallStaging(e, cfg, ex, width, height, depthScale, depth) {
+      const horizon = height / 2;
+      const base = GROUND_Y - depth * DEPTH_LIFT;
+      const wallDist = wallDistAt(ex, width);
+      // Same projection the floor/ceiling caster uses, so this lands ON the drawn seam rather
+      // than near it: a surface at distance d meets the floor at horizon + (WALL_HEIGHT/2)*h/d.
+      const wallFloorY = isFinite(wallDist)
+        ? horizon + ((WALL_HEIGHT / 2) * height) / Math.max(0.1, wallDist)
+        : GROUND_Y;
+      const front = Math.min(NEAR_WALL_GROUND_MAX, wallFloorY + NEAR_WALL_CLEARANCE);
+      e.nearPush = (e.nearPush || 0) + (Math.max(0, front - GROUND_Y) - (e.nearPush || 0)) * NEAR_WALL_EASE;
+      if (e.nearPush <= 0.5) return { groundY: base, scale: 1 };
+
+      // The front line, eased. DEPTH then rides on top of it - but the room to withdraw into is
+      // exactly the room the wall left, so a boss backing off for its charge stops with its feet
+      // just short of the seam instead of climbing the wall again. Against a tight wall that
+      // makes the withdrawal a short move rather than no move: it still shrinks and rises, which
+      // is what has to read, and standing hard against the masonry is where it would really be.
+      const f = GROUND_Y + e.nearPush;
+      const back = Math.max(wallFloorY - NEAR_WALL_BACK_ROOM, f - DEPTH_LIFT);
+      const groundY = f - depth * (f - back);
+      // Feet twice as far below the horizon means half the distance, so twice the size. Measured
+      // against the depth-0 staging so this is purely the near-wall part - the caller still
+      // multiplies by DEPTH_SHRINK's own factor.
+      let scale = (groundY - horizon) / (GROUND_Y - horizon);
+      // ...but never past the cap, and never taller than the canvas above its own feet: a boss
+      // is two thirds of the view before any of this, and a flyer's bottom edge is its hover
+      // height up from the ground it just moved.
+      const baseH = height * cfg.heightFrac * depthScale;
+      const bottomY = groundY - (e.altitude || 0);
+      scale = Math.min(scale, NEAR_WALL_SCALE_MAX, (bottomY - NEAR_WALL_HEAD_ROOM) / baseH);
+      return { groundY, scale };
+    }
+
     function drawEnemyBody(c, width, height, which) {
       const e = which || combatState.enemy;
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
-      const GROUND_Y = 165;                       // where a grounded enemy's feet sit
       // DEPTH. 0 is the front line, where every fight is normally fought; 1 is the back of the
       // arena, where the boss withdraws for its charge. There is no real third axis in this
       // view, so distance is sold the two ways a flat scene can sell it: the figure shrinks,
@@ -3759,9 +3845,15 @@
       // so backing off narrows the whole arena the way perspective would - a weave that covers
       // 148px of arena reads as a shorter, faster sweep across the back wall.
       const depth = e.depth || 0;
-      const dScale = 1 - DEPTH_SHRINK * depth;
-      const groundY = GROUND_Y - depth * DEPTH_LIFT;
-      const ex = width / 2 + (e.x || 0) * dScale;
+      const depthScale = 1 - DEPTH_SHRINK * depth;
+      const ex = width / 2 + (e.x || 0) * depthScale;
+      // Only DEPTH scales the arena's width. The near-wall pull-in below deliberately doesn't:
+      // widening a pack by the same factor it grows them by would push the outermost of three
+      // runts (x reaches +/-92) clean off a 320px canvas at exactly the moment they are meant
+      // to be in the hero's face.
+      const near = nearWallStaging(e, cfg, ex, width, height, depthScale, depth);
+      const dScale = depthScale * near.scale;
+      const groundY = near.groundY;
       // The winner's dance: once the player is down, the enemy bounces straight up and down on
       // the spot, celebrating. Negative = higher on the canvas; abs(sin) so it only ever leaves
       // the ground and lands, never sinks through it.
@@ -3843,6 +3935,14 @@
 
       const isHurt = e.state === 'hurt';
       c.save();
+      // The procedural knight is drawn at fixed pixel offsets around ey, so the near-wall pull-in
+      // has to reach it as a transform. About (ex, groundY), which is where its feet are - the
+      // figure grows up out of the floor instead of sliding off it.
+      if (near.scale > 1) {
+        c.translate(ex, groundY);
+        c.scale(near.scale, near.scale);
+        c.translate(-ex, -groundY);
+      }
       if (isHurt) c.translate((Math.random() * 8 - 4), 0);
 
       // Spiked Pauldrons
@@ -5224,10 +5324,11 @@
     //     spawn - the player gets a corridor's worth of dungeon before the first ambush.
     //   - markers keep 2 tiles between them, so a cleared stretch stays cleared and a corridor
     //     never turns into a gauntlet of three back-to-back fights.
-    //   - the BOSS does not roam. It is placed first, on the walkable tiles immediately
-    //     adjacent to the exit - one, or two where the exit has two ways in - so the last
-    //     thing between the player and the stairs is always the dread foe. Everything that
-    //     roams is a walker or a flyer.
+    //   - the BOSS does not roam. It is placed first, one tile back from the walkable tiles
+    //     touching the exit - one guard, or two where the exit has two ways in - so the last
+    //     thing between the player and the stairs is always the dread foe, and the fight ends
+    //     a step short of the stairs rather than on their doorstep. Everything that roams is
+    //     a walker or a flyer.
     // Density is ~1 foe per 6 tiles, floored at 4 so even the smallest maze is worth fighting
     // through, capped at 14 so a huge one doesn't become a slog. The guards count towards it.
     const MARKER_MIN_SPACING = 2;
@@ -5250,12 +5351,30 @@
       // the stairs cannot be reached around the back.
       // The spawn tile is excluded on the off chance a small maze puts the two next to each
       // other - being ambushed by the boss before taking a step is not a fight, it is a wall.
-      const approaches = [{ x: exitRoom.x + 1, y: exitRoom.y }, { x: exitRoom.x - 1, y: exitRoom.y },
-                          { x: exitRoom.x, y: exitRoom.y + 1 }, { x: exitRoom.x, y: exitRoom.y - 1 }]
-        .filter(p => walkable.has(`${p.x},${p.y}`) &&
-                     !(p.x === startRoom.x && p.y === startRoom.y));
+      const nbrs = p => [{ x: p.x + 1, y: p.y }, { x: p.x - 1, y: p.y },
+                         { x: p.x, y: p.y + 1 }, { x: p.x, y: p.y - 1 }]
+        .filter(q => walkable.has(`${q.x},${q.y}`));
+      const isStart = p => p.x === startRoom.x && p.y === startRoom.y;
+      const approaches = nbrs(exitRoom).filter(p => !isStart(p));
       _shuffle(approaches);
-      approaches.slice(0, MAX_EXIT_GUARDS).forEach(p => push(p.x, p.y, 'boss'));
+
+      // The guard stands one tile FURTHER BACK than the tile touching the stairs, so the fight
+      // ends a step short of the exit instead of on its doorstep - the player has to walk the
+      // last stretch themselves rather than falling into the stairs out of the boss's reach.
+      // That step back is only safe where the tile behind the approach is still the only way
+      // in: a fork back there would let the player round the boss to the exit, so on a fork
+      // (or a pocket with nothing behind it at all) it holds the doorstep as before.
+      const guardTaken = new Set();
+      for (const a of approaches) {
+        if (guardTaken.size >= MAX_EXIT_GUARDS) break;
+        const back = nbrs(a).filter(q =>
+          !(q.x === exitRoom.x && q.y === exitRoom.y) && !isStart(q));
+        const spot = back.length === 1 ? back[0] : a;
+        const key = `${spot.x},${spot.y}`;
+        if (guardTaken.has(key)) continue;   // two approaches can funnel into one tile
+        guardTaken.add(key);
+        push(spot.x, spot.y, 'boss');
+      }
 
       // --- The roaming foes fill the rest of the maze around them.
       const candidates = passagesList.filter(p =>
@@ -6419,6 +6538,7 @@
       const seconds = Math.max(CRAWL_MIN_SECONDS,
                                (paras.length + (story.hook ? 2 : 1)) * CRAWL_SECONDS_PER_PARAGRAPH);
       crawlText.style.setProperty('--crawl-duration', seconds + 's');
+      crawlReadingUntil = Date.now() + seconds * 1000;
       // Restart cleanly if a previous dungeon left the animation on the node.
       crawlText.classList.remove('rolling');
       void crawlText.offsetWidth;
@@ -6458,6 +6578,7 @@
       stopNarration();
       stopScreenMusic();
       crawlStarted = false;
+      crawlReadingUntil = 0;
       if (crawlStage) crawlStage.style.display = '';
       if (progHeaderText) progHeaderText.textContent = 'Generating Dungeon Assets & Character...';
       if (progHeaderIcon) progHeaderIcon.textContent = '\u23f3';
@@ -7311,6 +7432,10 @@
     function screensaverBlocked() {
       if (screensaverDelayMs <= 0) return true;
       if (narrationActive() || ssAudioPlaying(narrateAudio) || ssAudioPlaying(outroAudio)) return true;
+      // The intro crawl's own scroll duration, independent of narration - covers a story
+      // that shipped with no audio at all, or whose autoplay got blocked before a click
+      // retried it. Without this the crawl text itself has nothing blocking the saver.
+      if (Date.now() < crawlReadingUntil) return true;
       // A battle is real time - the foe keeps swinging between keypresses - so it counts as
       // the game being played throughout. Once the player is down it stops counting.
       if (combatState.inBattle && !combatState.dead) return true;
@@ -7355,8 +7480,35 @@
     }, 500);
 
     // ---- The Options slider ------------------------------------------------
+    // The chosen stop sticks across reloads via localStorage - a screen-saver wait is a
+    // set-once preference. A missing, unparseable or out-of-range value (first run, cleared
+    // storage, a private window, a build with fewer stops) falls back to the one-minute
+    // default; storage being unavailable entirely is swallowed, the setting just won't save.
+    const SCREENSAVER_STOP_KEY = 'comfycrawler.screensaverStop';
+
+    function clampScreensaverStop(idx) {
+      return Math.max(0, Math.min(SCREENSAVER_STOPS.length - 1, idx | 0));
+    }
+
+    function loadScreensaverStop() {
+      try {
+        const raw = localStorage.getItem(SCREENSAVER_STOP_KEY);
+        if (raw === null) return SCREENSAVER_DEFAULT_STOP;
+        const i = parseInt(raw, 10);
+        return (Number.isNaN(i) || i < 0 || i >= SCREENSAVER_STOPS.length)
+          ? SCREENSAVER_DEFAULT_STOP : i;
+      } catch (_) {
+        return SCREENSAVER_DEFAULT_STOP;
+      }
+    }
+
+    function saveScreensaverStop(idx) {
+      try { localStorage.setItem(SCREENSAVER_STOP_KEY, String(clampScreensaverStop(idx))); }
+      catch (_) { /* storage disabled or full - nothing we can do about it */ }
+    }
+
     function applyScreensaverStop(idx) {
-      const i = Math.max(0, Math.min(SCREENSAVER_STOPS.length - 1, idx | 0));
+      const i = clampScreensaverStop(idx);
       screensaverDelayMs = SCREENSAVER_STOPS[i].secs * 1000;
       if (screensaverDelayText) screensaverDelayText.textContent = SCREENSAVER_STOPS[i].label;
       if (screensaverDelayMs <= 0 && screensaverActive) hideScreensaver();
@@ -7364,11 +7516,14 @@
     }
 
     if (screensaverDelayInput) {
-      screensaverDelayInput.value = String(SCREENSAVER_DEFAULT_STOP);
+      const startStop = loadScreensaverStop();
+      screensaverDelayInput.value = String(startStop);
       screensaverDelayInput.addEventListener('input', () => {
-        applyScreensaverStop(parseInt(screensaverDelayInput.value, 10));
+        const i = parseInt(screensaverDelayInput.value, 10);
+        applyScreensaverStop(i);
+        saveScreensaverStop(i);
       });
-      applyScreensaverStop(SCREENSAVER_DEFAULT_STOP);
+      applyScreensaverStop(startStop);
     }
 
     // Boot engine
