@@ -31,10 +31,13 @@
     // braidMaze() turn walls into floor on top of it. Measured over 500 mazes each, the three
     // settings below finish at about 36 / 74 / 123 walkable tiles. The HUD's "x/y Tiles" badge
     // reads passagesList, so it always shows the real number.
+    // `enemyHpMul` scales every foe's maxHp in initEnemy (walker, flyer, boss and both pack
+    // types alike), so the harder mazes also hit back harder. Easy leaves the tuned base
+    // numbers alone; Medium is +25%, Hard is +60%.
     const DIFFICULTIES = {
-      easy:   { grids: 33,  desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit.' },
-      medium: { grids: 66,  desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns and a distant Exit.' },
-      hard:   { grids: 111, desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit.' }
+      easy:   { grids: 33,  enemyHpMul: 1,    desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit.' },
+      medium: { grids: 66,  enemyHpMul: 1.25, desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, and foes with 25% more health.' },
+      hard:   { grids: 111, enemyHpMul: 1.6,  desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit, and foes with 60% more health.' }
     };
     const MAX_GRIDS = 111;
 
@@ -85,6 +88,19 @@
     const btnSettings = document.getElementById('btnSettings');
     const btnCloseSettings = document.getElementById('btnCloseSettings');
     const btnSaveSettings = document.getElementById('btnSaveSettings');
+
+    // History window: the saved-dungeon list, plus the confirm box the trash can opens.
+    const btnHistory = document.getElementById('btnHistory');
+    const modalHistory = document.getElementById('modalHistory');
+    const historyList = document.getElementById('historyList');
+    const historyFootNote = document.getElementById('historyFootNote');
+    const btnCloseHistory = document.getElementById('btnCloseHistory');
+    const btnHistoryOk = document.getElementById('btnHistoryOk');
+    const modalHistoryConfirm = document.getElementById('modalHistoryConfirm');
+    const historyConfirmName = document.getElementById('historyConfirmName');
+    const btnHistoryConfirmClose = document.getElementById('btnHistoryConfirmClose');
+    const btnHistoryConfirmCancel = document.getElementById('btnHistoryConfirmCancel');
+    const btnHistoryConfirmDelete = document.getElementById('btnHistoryConfirmDelete');
 
     const progBarChunks = document.getElementById('progBarChunks');
     const progStatusText = document.getElementById('progStatusText');
@@ -1598,8 +1614,10 @@
     // two of them are never over the same spot.
     function initEnemy(e, key, cfg, i, count) {
       e.variant = key;
-      e.maxHp = cfg.maxHp;
-      e.hp = cfg.maxHp;
+      // Difficulty tax: Medium/Hard mazes field tougher foes (see DIFFICULTIES.enemyHpMul).
+      const hpMul = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).enemyHpMul || 1;
+      e.maxHp = Math.round(cfg.maxHp * hpMul);
+      e.hp = e.maxHp;
       e.state = 'idle';
       e.stateTimer = 0;
       e.attackTimer = cfg.cadence + Math.round((cfg.cadence * i) / count);
@@ -6412,6 +6430,27 @@
       if (!narrationActive()) playScreenMusic('loading');
     }
 
+    // Classic Win98 install-bar: fixed-pitch blocks sized to the trough's actual width, so
+    // the row always reaches the right edge at 100% instead of a static chunk count leaving
+    // a gap (or, before the trough had a real width, a bar that could never show any chunks
+    // at all). Driven by the poll loop while generating, and slammed to 100% by the History
+    // window, which has nothing to wait for.
+    function paintProgressChunks(percent) {
+      if (!progBarChunks) return;
+      const chunkPitch = 12; // .win95-prog-chunk: 10px wide + 2px margin-right
+      const troughWidth = progBarChunks.parentElement
+        ? progBarChunks.parentElement.clientWidth
+        : 0;
+      const maxChunks = Math.max(1, Math.floor(troughWidth / chunkPitch));
+      const chunkCount = Math.round((Math.max(0, Math.min(100, percent)) / 100) * maxChunks);
+      progBarChunks.innerHTML = '';
+      for (let i = 0; i < chunkCount; i++) {
+        const ch = document.createElement('div');
+        ch.className = 'win95-prog-chunk';
+        progBarChunks.appendChild(ch);
+      }
+    }
+
     function resetCrawl() {
       // Before anything else: a second CREATE must not leave the previous dungeon's
       // narrator talking over the new one, or its loading loop running under the menu music
@@ -6496,7 +6535,10 @@
       if (e.code !== 'Enter') return;
       if (screenSetup.classList.contains('hidden')) return;
       if (modalSettings && !modalSettings.classList.contains('hidden')) return;
+      if (modalHistory && !modalHistory.classList.contains('hidden')) return;
+      if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
       if (e.target && e.target.tagName === 'TEXTAREA') return;
+      if (btnCreate.disabled) return;
       e.preventDefault();
       btnCreate.click();
     });
@@ -6532,6 +6574,51 @@
       }
     });
 
+    // Cancelling is not instant on the server side. The worker only unwinds when it reaches
+    // its next checkpoint, and ComfyUI has to be told more than once to drop the job it is
+    // already sampling - so for a second or two after the reload the old run is still alive.
+    // CREATE pressed into that window would queue a whole second chain behind the dying one,
+    // which is the thing the cancel exists to prevent. /api/progress reports `settling` for
+    // exactly this: the button waits until the server says it is genuinely clear.
+    const btnCreateLabel = btnCreate.querySelector('span');
+    const btnCreateText = btnCreateLabel ? btnCreateLabel.textContent : '';
+    let settlingWatchActive = false;
+
+    function setCreateSettling(settling) {
+      btnCreate.disabled = settling;
+      if (btnCreateLabel) {
+        btnCreateLabel.textContent = settling ? '⏳ CLEARING...' : btnCreateText;
+      }
+      btnCreate.title = settling
+        ? 'Still stopping the cancelled run - ComfyUI is being cleared.'
+        : '';
+    }
+
+    // Polls one request at a time (not on an interval) so a slow reply can never stack up,
+    // and returns as soon as the server is free. Safe to call whenever CREATE might be
+    // pressed; a second call while one is already running is a no-op.
+    async function watchForSettling() {
+      if (settlingWatchActive) return;
+      settlingWatchActive = true;
+      try {
+        for (;;) {
+          let settling = false;
+          try {
+            const res = await fetch(`${SERVER_URL}/api/progress`);
+            settling = !!(await res.json()).settling;
+          } catch (err) {
+            // No server to wait on. Never strand the button disabled over a failed poll.
+            settling = false;
+          }
+          setCreateSettling(settling);
+          if (!settling) return;
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } finally {
+        settlingWatchActive = false;
+      }
+    }
+
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       currentThemeName = wallStyle;
@@ -6560,7 +6647,7 @@
       }, 100);
 
       try {
-        await fetch(`${SERVER_URL}/api/generate_dungeon`, {
+        const startRes = await fetch(`${SERVER_URL}/api/generate_dungeon`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -6577,6 +6664,24 @@
           })
         });
 
+        // 409 means a previous run is still being cleared (run_is_settling on the server).
+        // Back out to setup rather than sitting on a progress screen nothing will ever feed,
+        // and let the watcher re-enable CREATE once the server is actually free.
+        if (!startRes.ok) {
+          let msg = 'The server is still clearing the previous run - try again in a moment.';
+          try { msg = (await startRes.json()).error || msg; } catch (err) { /* not JSON */ }
+          clearInterval(timerInterval);
+          generationInFlight = false;
+          resetCrawl();
+          screenProgress.classList.add('hidden');
+          screenSetup.classList.remove('hidden');
+          if (titleButtons) titleButtons.classList.remove('hidden');
+          appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+          watchForSettling();
+          alert(msg);
+          return;
+        }
+
         const pollInterval = setInterval(async () => {
           try {
             const res = await fetch(`${SERVER_URL}/api/progress`);
@@ -6591,22 +6696,7 @@
             // The story lands minutes ahead of the art - start reading immediately.
             if (p.story && !crawlStarted) startCrawl(p.story);
 
-            // Classic Win98 install-bar: fixed-pitch blocks sized to the trough's actual
-            // width, so the row always reaches the right edge at 100% instead of a static
-            // chunk count leaving a gap (or, before the trough had a real width, a bar
-            // that could never show any chunks at all).
-            const chunkPitch = 12; // .win95-prog-chunk: 10px wide + 2px margin-right
-            const troughWidth = progBarChunks.parentElement
-              ? progBarChunks.parentElement.clientWidth
-              : 0;
-            const maxChunks = Math.max(1, Math.floor(troughWidth / chunkPitch));
-            const chunkCount = Math.round((p.percent / 100) * maxChunks);
-            progBarChunks.innerHTML = '';
-            for (let i = 0; i < chunkCount; i++) {
-              const ch = document.createElement('div');
-              ch.className = 'win95-prog-chunk';
-              progBarChunks.appendChild(ch);
-            }
+            paintProgressChunks(p.percent);
 
             if (!p.is_generating && p.completed_bundle) {
               clearInterval(pollInterval);
@@ -6640,6 +6730,284 @@
         appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
       }
     });
+
+
+    // ==========================================
+    // HISTORY - replaying a dungeon that was already generated
+    // ==========================================
+    // The server keeps every finished bundle under dungeon_sessions/ (see
+    // save_dungeon_session in server.py). This window lists them and starts one straight
+    // from disk: no ComfyUI, no waiting, so the loading screen arrives already finished -
+    // the crawl runs, the narrator speaks, and ENTER is live from the first frame.
+    //
+    // What is NOT stored is the maze. A replay re-rolls the layout at whatever difficulty
+    // is currently selected, so the same cast and art still give a genuinely new dungeon.
+
+    // The last listing fetched from the server. null means the fetch itself failed, which
+    // is a different row than "you have not made any dungeons yet".
+    let historyEntries = [];
+    // The entry the confirm box is currently asking about, or null.
+    let historyPendingDelete = null;
+
+    function historyTitleOf(entry) {
+      return ((entry && (entry.location || entry.wall_style)) || 'Unnamed Dungeon').trim();
+    }
+
+    function historySizeText(bytes) {
+      if (!bytes) return '';
+      const mb = bytes / 1048576;
+      return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(1) + ' MB';
+    }
+
+    // A single centered line in the list area - loading, empty, or an error.
+    function setHistoryMessage(text) {
+      if (!historyList) return;
+      historyList.innerHTML = '';
+      const msg = document.createElement('div');
+      msg.className = 'text-xs text-slate-500 font-bold text-center py-8 px-4';
+      msg.textContent = text;
+      historyList.appendChild(msg);
+    }
+
+    // Every string on a row came out of a language model, so all of it goes in through
+    // textContent - the list is built node by node rather than as an HTML string.
+    function buildHistoryRow(entry) {
+      const row = document.createElement('div');
+      row.className = 'win95-box p-1.5 flex items-center gap-2';
+
+      const thumbFrame = document.createElement('div');
+      thumbFrame.className = 'win95-inset w-12 h-12 shrink-0 bg-black flex items-center justify-center overflow-hidden';
+      if (entry.thumb) {
+        const img = document.createElement('img');
+        img.src = entry.thumb;
+        img.alt = '';
+        img.className = 'w-full h-full object-contain pixelated';
+        thumbFrame.appendChild(img);
+      } else {
+        const glyph = document.createElement('span');
+        glyph.className = 'text-lg select-none';
+        glyph.textContent = '🏰';
+        thumbFrame.appendChild(glyph);
+      }
+      row.appendChild(thumbFrame);
+
+      const col = document.createElement('div');
+      col.className = 'flex flex-col min-w-0 flex-1 gap-0.5';
+
+      const title = document.createElement('div');
+      title.className = 'text-xs font-black text-slate-900 truncate';
+      title.textContent = historyTitleOf(entry);
+      col.appendChild(title);
+
+      const cast = document.createElement('div');
+      cast.className = 'text-[10px] font-bold text-blue-900 truncate';
+      const castBits = [entry.hero, entry.boss].filter(Boolean);
+      cast.textContent = castBits.length
+        ? castBits.join('  vs  ')
+        : [entry.player_style, entry.enemy_style].filter(Boolean).join('  vs  ');
+      col.appendChild(cast);
+
+      const meta = document.createElement('div');
+      meta.className = 'text-[10px] text-slate-600 font-bold truncate';
+      const metaBits = [];
+      if (entry.wall_style) metaBits.push(entry.wall_style);
+      if (entry.created_text) metaBits.push(entry.created_text);
+      const size = historySizeText(entry.size);
+      if (size) metaBits.push(size);
+      if (entry.has_music) metaBits.push('♪ music');
+      meta.textContent = metaBits.join('  ·  ');
+      col.appendChild(meta);
+
+      row.appendChild(col);
+
+      const btnStart = document.createElement('button');
+      btnStart.type = 'button';
+      btnStart.className = 'win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
+      btnStart.textContent = '▶ Start';
+      btnStart.title = 'Play this dungeon again - no generation, straight to the loading screen';
+      btnStart.addEventListener('click', () => startHistoryDungeon(entry));
+      row.appendChild(btnStart);
+
+      const btnTrash = document.createElement('button');
+      btnTrash.type = 'button';
+      btnTrash.className = 'win95-btn px-2.5 py-1.5 text-xs shrink-0 hover:bg-red-200';
+      btnTrash.textContent = '🗑️';
+      btnTrash.title = 'Delete this saved dungeon and its assets';
+      btnTrash.addEventListener('click', () => askDeleteHistory(entry));
+      row.appendChild(btnTrash);
+
+      return row;
+    }
+
+    function renderHistoryList() {
+      if (!historyList) return;
+      if (historyEntries === null) {
+        setHistoryMessage('Could not reach the server. Make sure server.py is running.');
+        if (historyFootNote) historyFootNote.textContent = '';
+        return;
+      }
+      if (!historyEntries.length) {
+        setHistoryMessage('No dungeons saved yet. Every dungeon you CREATE is kept here, so you can play it again without generating it again.');
+        if (historyFootNote) historyFootNote.textContent = '';
+        return;
+      }
+      historyList.innerHTML = '';
+      historyEntries.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
+      if (historyFootNote) {
+        const total = historyEntries.reduce((sum, e) => sum + (e.size || 0), 0);
+        const size = historySizeText(total);
+        historyFootNote.textContent =
+          historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
+          + (size ? '  ·  ' + size + ' on disk' : '');
+      }
+    }
+
+    // Always re-read from the server rather than trusting the copy in memory: the folder on
+    // disk is the only record of what actually exists, and it can change behind this page.
+    async function refreshHistory() {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/history`);
+        const data = await res.json();
+        historyEntries = Array.isArray(data.sessions) ? data.sessions : [];
+      } catch (err) {
+        console.error('History fetch error:', err);
+        historyEntries = null;
+      }
+      renderHistoryList();
+    }
+
+    function openHistory() {
+      if (!modalHistory) return;
+      modalHistory.classList.remove('hidden');
+      setHistoryMessage('Reading saved dungeons...');
+      if (historyFootNote) historyFootNote.textContent = '';
+      refreshHistory();
+    }
+
+    function closeHistory() {
+      if (modalHistory) modalHistory.classList.add('hidden');
+      closeDeleteConfirm();
+    }
+
+    // ---- Starting a saved dungeon -----------------------------------------
+    // Deliberately walks the same path btnCreate does, minus the generation: same reset,
+    // same screen swap, same freshly generated maze. The only differences are where the
+    // bundle comes from and that the progress readout is already finished on arrival.
+    async function startHistoryDungeon(entry) {
+      if (!entry) return;
+      // A live generation owns the progress screen; don't let History yank it away.
+      if (generationInFlight) {
+        alert('A dungeon is still being generated. Let it finish first.');
+        return;
+      }
+      closeHistory();
+
+      const wallStyle = entry.wall_style || 'Windows 95';
+      currentThemeName = wallStyle;
+      activeMode = entry.mode || 'v6_krea';
+      const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
+
+      resetCombatForNewDungeon();
+      resetCrawl();
+      screenSetup.classList.add('hidden');
+      screenProgress.classList.remove('hidden');
+      if (titleButtons) titleButtons.classList.add('hidden');
+      appContainer.className = 'win95-box p-1 text-black mode-progress';
+
+      // The maze is never saved with the bundle, so a replay is the same cast on new ground,
+      // sized by whatever difficulty is selected right now.
+      generateAuthentic3DMaze(numGrids);
+      buildExitStairsTexture(wallStyle, wallTexture);
+
+      // Reading tens of megabytes back off disk is quick but not instant, so the screen says
+      // what it is doing instead of sitting on a dead bar.
+      const startTime = Date.now();
+      progTimer.textContent = '0.0s';
+      const timerInterval = setInterval(() => {
+        progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+      }, 100);
+      if (progHeaderIcon) progHeaderIcon.textContent = '📜';
+      if (progHeaderText) progHeaderText.textContent = 'Loading Saved Dungeon...';
+      if (progPhaseText) progPhaseText.textContent = '';
+      progStatusText.textContent = 'Reading ' + historyTitleOf(entry) + ' from history...';
+      progPercentText.textContent = '0%';
+      paintProgressChunks(0);
+
+      try {
+        const res = await fetch(
+          `${SERVER_URL}/api/history_bundle?id=${encodeURIComponent(entry.id)}`);
+        if (!res.ok) throw new Error('The server could not read that saved dungeon.');
+        const bundle = await res.json();
+        clearInterval(timerInterval);
+
+        // Nothing to wait for: fill the bar, then hand the bundle to the same function the
+        // poll loop uses. It starts the crawl, starts the narration, plays the ready chime
+        // and arms ENTER - and pressing ENTER runs enterDungeon(), which stops the narrator
+        // mid-sentence exactly as it does on a freshly generated run.
+        progPercentText.textContent = '100%';
+        paintProgressChunks(100);
+        armEnterDungeon(bundle);
+        if (progHeaderIcon) progHeaderIcon.textContent = '📜';
+        if (progHeaderText) progHeaderText.textContent = 'Loaded from History!';
+      } catch (err) {
+        clearInterval(timerInterval);
+        console.error('History load error:', err);
+        alert('Could not load that saved dungeon - it may have been deleted.\n\n' + err.message);
+        resetCrawl();
+        screenProgress.classList.add('hidden');
+        screenSetup.classList.remove('hidden');
+        if (titleButtons) titleButtons.classList.remove('hidden');
+        appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+        // Whatever went wrong, the list this row came from is now out of date.
+        refreshHistory();
+      }
+    }
+
+    // ---- Deleting a saved dungeon -----------------------------------------
+    // The trash can only ever opens this box; the delete itself lives behind its Delete
+    // button, because what it erases cannot be got back without generating it all again.
+    function askDeleteHistory(entry) {
+      if (!entry || !modalHistoryConfirm) return;
+      historyPendingDelete = entry;
+      if (historyConfirmName) {
+        historyConfirmName.textContent = historyTitleOf(entry)
+          + (entry.created_text ? '  —  ' + entry.created_text : '');
+      }
+      modalHistoryConfirm.classList.remove('hidden');
+    }
+
+    function closeDeleteConfirm() {
+      historyPendingDelete = null;
+      if (modalHistoryConfirm) modalHistoryConfirm.classList.add('hidden');
+    }
+
+    async function confirmDeleteHistory() {
+      const entry = historyPendingDelete;
+      closeDeleteConfirm();
+      if (!entry) return;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/history_delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: entry.id })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || 'The server refused the delete.');
+      } catch (err) {
+        console.error('History delete error:', err);
+        alert('Could not delete that dungeon.\n\n' + err.message);
+      }
+      // Re-listing rather than splicing the row out keeps the window honest about what is
+      // actually left on disk, whether the delete worked or not.
+      refreshHistory();
+    }
+
+    if (btnHistory) btnHistory.addEventListener('click', openHistory);
+    if (btnCloseHistory) btnCloseHistory.addEventListener('click', closeHistory);
+    if (btnHistoryOk) btnHistoryOk.addEventListener('click', closeHistory);
+    if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);
+    if (btnHistoryConfirmCancel) btnHistoryConfirmCancel.addEventListener('click', closeDeleteConfirm);
+    if (btnHistoryConfirmDelete) btnHistoryConfirmDelete.addEventListener('click', confirmDeleteHistory);
 
     // ==========================================
     // SCREEN SAVER - Windows 98 "Starfield Simulation"
@@ -6819,16 +7187,12 @@
         return;
       }
 
+      // Deliberately minimal: no title, no status line, no bar - just the number, tucked in
+      // the corner so it reads as a readout on the stars rather than a loading screen.
       const pct = parseInt((progPercentText && progPercentText.textContent) || '0', 10) || 0;
-      ssLine('GENERATING DUNGEON ASSETS', cx, baseY - big * 0.95, small, 0.6,
-             { rgb: '200,214,255', spacing: 4 });
-      ssLine(pct + '%', cx, baseY, big, 0.95, { spacing: 2 });
-      ssProgressBar(cx, baseY + Math.round(small * 1.4), Math.min(440, Math.round(w * 0.6)), pct);
-      const status = ((progStatusText && progStatusText.textContent) || '').trim();
-      if (status) {
-        ssLine(status.length > 64 ? status.slice(0, 63) + '…' : status,
-               cx, baseY + small * 4.6, small, 0.55, { rgb: '176,176,176' });
-      }
+      const pctSize = Math.max(16, Math.min(30, Math.round(w / 34)));
+      const margin = Math.round(pctSize * 1.2);
+      ssLine(pct + '%', w - margin, h - margin, pctSize, 0.8, { align: 'right', spacing: 1 });
     }
 
     function ssStoryMarqueeText() {
@@ -7008,6 +7372,9 @@
     }
 
     // Boot engine
+    // Catches the reload-out-of-a-cancel case: this page is brand new, but the server may
+    // still be stopping the run the previous page abandoned on its way out.
+    watchForSettling();
     buildDefaultTextures();
     generateAuthentic3DMaze(DIFFICULTIES.medium.grids);
     render3D();

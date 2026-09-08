@@ -196,9 +196,19 @@ GEN_THREAD = None
 
 # Every prompt_id this run handed to ComfyUI. Only used to drain the queue on cancel, so it
 # is never pruned mid-run - deleting an id that already finished is a no-op on ComfyUI's
-# side, and keeping the list append-only means the submit sites stay one line each.
+# side, and keeping the list append-only means the submit sites stay one line each. NOT
+# cleared by the cancel itself: the watchdog below keeps re-reading it, so a prompt the
+# still-unwinding worker manages to submit gets chased too. The next run clears it.
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT_PROMPTS = []
+
+# Bumped by every fresh run. The cancel watchdog captures it and stops the moment it changes,
+# so it can never interrupt the prompts of the run that replaced the one it was chasing.
+_RUN_EPOCH = 0
+
+# The watchdog thread chasing a cancelled run's prompts out of ComfyUI, or None. Alive means
+# ComfyUI may still be executing something of ours - half of what run_is_settling reports.
+_CANCEL_WATCHDOG = None
 
 
 def _bail_if_cancelled():
@@ -224,27 +234,119 @@ def _comfy_post(path, body):
         resp.read()
 
 
+def _cancelled_workers_alive():
+    """True while any abandoned run's worker thread is still going. Such a thread has not hit
+    its unwind checkpoint yet, so it can still hand ComfyUI another prompt."""
+    return any(th.is_alive() for th in list(_CANCELLED_RUNS))
+
+
+def _our_prompts_in_queue():
+    """Split ComfyUI's live queue into (ours running, ours still pending).
+
+    /queue answers {"queue_running": [...], "queue_pending": [...]}, each entry a list of
+    (number, prompt_id, prompt, extra_data, outputs_to_execute) - so [1] is the id."""
+    with urllib.request.urlopen(f"{COMFY_URL}/queue", timeout=10) as resp:
+        q = json.loads(resp.read().decode("utf-8"))
+    with _INFLIGHT_LOCK:
+        ours = set(_INFLIGHT_PROMPTS)
+
+    def mine(key):
+        return [e[1] for e in q.get(key, []) if len(e) > 1 and e[1] in ours]
+    return mine("queue_running"), mine("queue_pending")
+
+
+def _drain_cancelled_prompts(epoch, deadline=60.0):
+    """Body of the cancel watchdog: keep interrupting until ComfyUI is done with every prompt
+    of ours.
+
+    ONE fire-and-forget /interrupt is not enough, which is why a cancelled run used to finish
+    the job it was on and only stop after it. ComfyUI clears its own interrupt flag at the top
+    of every prompt it runs (PromptExecutor.execute_async opens with
+    nodes.interrupt_processing(False)), so an interrupt landing in the gap between two prompts
+    - or a hair before the running one actually starts executing - is simply forgotten, and
+    that job then samples all the way to its SaveImage. Re-posting against the live queue
+    closes that window.
+
+    The interrupt is TARGETED (/interrupt {"prompt_id": ..}), which ComfyUI honours only while
+    that prompt is the one running. That is what keeps this from killing a job the user
+    started from ComfyUI's own UI - the same care the delete-by-id takes with the pending
+    queue, and which the old global interrupt did not take.
+
+    Re-reads _INFLIGHT_PROMPTS every pass rather than working from a snapshot, and keeps
+    watching until the worker thread is DEAD as well as the queue clear. Both halves matter:
+    the worker only unwinds at its next checkpoint, and the submit sites hand ComfyUI a prompt
+    a beat before the checkpoint that follows them - so a cancel that lands during the story
+    job would otherwise find an empty queue, stop, and let the worker queue the textures a
+    tick later with nothing left watching. That orphan then sampled on, exactly as if it had
+    never been cancelled."""
+    started = time.time()
+    while time.time() - started < deadline:
+        if epoch != _RUN_EPOCH:
+            return          # a new run owns ComfyUI now - its prompts are not ours to kill
+        try:
+            running, pending = _our_prompts_in_queue()
+        except Exception as e:
+            print(f"[cancel] queue read failed: {e}")
+            return
+        if not running and not pending:
+            if not _cancelled_workers_alive():
+                print(f"[cancel] ComfyUI clear of the abandoned run after {time.time() - started:.1f}s")
+                return
+        if pending:
+            try:
+                _comfy_post("/queue", {"delete": pending})
+            except Exception as e:
+                print(f"[cancel] queue delete failed: {e}")
+        for pid in running:
+            try:
+                _comfy_post("/interrupt", {"prompt_id": pid})
+            except Exception as e:
+                print(f"[cancel] interrupt of {pid} failed: {e}")
+        time.sleep(0.25)
+    print("[cancel] gave up waiting for ComfyUI to drop the abandoned run")
+
+
 def cancel_comfy_jobs():
     """Drop everything this run gave ComfyUI and return how many prompts that was.
 
     Order matters: delete the still-pending prompts FIRST so that interrupting the running
     one doesn't just promote the next one off the queue. Deletes by id rather than
-    {"clear": true} so a queue the user filled from ComfyUI's own UI is left alone."""
+    {"clear": true} so a queue the user filled from ComfyUI's own UI is left alone.
+
+    The RUNNING job is then chased on a watchdog thread rather than here, for two reasons: it
+    takes repeated interrupts to land (see _drain_cancelled_prompts), and this runs inside the
+    /api/cancel_generation beacon handler while the browser is already tearing the page down
+    and refetching it - and the server takes one request at a time, so blocking here would
+    stall the very reload that asked for the cancel."""
+    global _CANCEL_WATCHDOG
     with _INFLIGHT_LOCK:
         ids = list(_INFLIGHT_PROMPTS)
-        del _INFLIGHT_PROMPTS[:]
-    if not ids:
-        return 0
-    try:
-        _comfy_post("/queue", {"delete": ids})
-    except Exception as e:
-        print(f"[cancel] queue delete failed: {e}")
-    try:
-        _comfy_post("/interrupt", {})
-    except Exception as e:
-        print(f"[cancel] interrupt failed: {e}")
+    if ids:
+        try:
+            _comfy_post("/queue", {"delete": ids})
+        except Exception as e:
+            print(f"[cancel] queue delete failed: {e}")
+    # Started even with nothing tracked yet: a run cancelled before its first submit still has
+    # a live worker that is about to make one, and the watchdog is what catches it.
+    if _CANCEL_WATCHDOG is None or not _CANCEL_WATCHDOG.is_alive():
+        _CANCEL_WATCHDOG = threading.Thread(target=_drain_cancelled_prompts,
+                                            args=(_RUN_EPOCH,), daemon=True)
+        _CANCEL_WATCHDOG.start()
     print(f"[cancel] dropped {len(ids)} ComfyUI prompt(s) from the abandoned run")
     return len(ids)
+
+
+def run_is_settling():
+    """True while a cancelled run is still winding down - either its worker thread has not yet
+    reached the checkpoint that unwinds it, or the watchdog is still chasing its prompts out
+    of ComfyUI.
+
+    Starting a second run on top of that is the thing the cancel exists to prevent: the new
+    chain would queue behind the dying one and the two would trade the card between them. So
+    /api/generate_dungeon refuses while this holds, and CREATE stays disabled."""
+    if _CANCEL_WATCHDOG is not None and _CANCEL_WATCHDOG.is_alive():
+        return True
+    return _cancelled_workers_alive()
 
 
 
@@ -5275,6 +5377,12 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         }
         print("[krea2] v6 bundle complete and packaged!")
 
+        # Keep it, so the History window can replay this dungeon without paying for it
+        # again. Never fatal: a save that fails costs the player nothing they can see.
+        save_dungeon_session(gen_progress["completed_bundle"],
+                             wall_style, player_style, weapon_style, enemy_style,
+                             sound_mode)
+
     except GenerationCancelled as c:
         # Not a failure: the page that asked for this run is gone, and /api/cancel_generation
         # has already drained the ComfyUI queue. Leave progress idle rather than parking an
@@ -5291,6 +5399,140 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["is_generating"] = False
 
 
+# ---------------------------------------------------------------------------
+# Dungeon history. Every finished v6 bundle is written to dungeon_sessions/<id>/ so the
+# setup screen's History window can replay it later without paying ComfyUI for it a second
+# time. Two files per run:
+#   bundle.json - the completed_bundle dict verbatim (base64 data URLs and all), served
+#                 straight back to the browser, which then takes the ordinary
+#                 armEnterDungeon() path as if generation had just finished.
+#   meta.json   - the small listing record (names, styles, timestamp, a 96px thumbnail),
+#                 so drawing the window never has to open a 40MB bundle.
+# The maze itself is generated in the browser and is deliberately NOT stored: replaying a
+# saved dungeon gives the same cast and art on a fresh layout at the current difficulty.
+
+_SESSION_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
+SESSION_THUMB_PX = 96
+
+
+def _session_dir(session_id):
+    """The folder for a session id, or None if the id isn't one we wrote. Keeps the delete
+    and fetch routes from being able to name anything outside dungeon_sessions."""
+    if not isinstance(session_id, str) or not _SESSION_ID_RE.match(session_id):
+        return None
+    return os.path.join(SESSIONS_DIR, session_id)
+
+
+def _session_thumb(bundle):
+    """A small square PNG data URL for the listing - the hero if we have one, else the wall.
+    The full-size asset is several hundred KB; twenty of those would make the window's own
+    fetch heavier than the dungeon it lists."""
+    for key in ("player_face", "player_sprite", "wall_texture"):
+        src = bundle.get(key)
+        if not src:
+            continue
+        try:
+            raw = base64.b64decode(src.split(",", 1)[-1])
+            img = Image.open(io.BytesIO(raw)).convert("RGBA")
+            img.thumbnail((SESSION_THUMB_PX, SESSION_THUMB_PX), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+        except Exception as e:
+            print(f"[history] thumbnail from {key} failed ({e})")
+    return None
+
+
+def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_style,
+                         sound_mode="music_and_sound"):
+    """Persist a finished bundle under dungeon_sessions/. Returns the new id, or None if
+    anything went wrong - a history save must never turn a good run into a failed one."""
+    if not bundle:
+        return None
+    session_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    folder = os.path.join(SESSIONS_DIR, session_id)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        bundle_path = os.path.join(folder, "bundle.json")
+        with open(bundle_path, "w", encoding="utf-8") as f:
+            json.dump(bundle, f, ensure_ascii=True)
+
+        story = bundle.get("story") or {}
+        meta = {
+            "id": session_id,
+            "created": time.time(),
+            # "Sep 8, 2026 9:05 AM" - strftime zero-pads the day and the hour, and the
+            # trailing " 0" -> " " strips both without needing platform-specific %-d/%-I
+            # (which Windows does not support).
+            "created_text": time.strftime("%b %d, %Y %I:%M %p").replace(" 0", " "),
+            "mode": bundle.get("mode", "v6_krea"),
+            "wall_style": wall_style or "",
+            "player_style": (player_style or "").strip(),
+            "weapon_style": (weapon_style or "").strip(),
+            "enemy_style": (enemy_style or "").strip(),
+            "location": story.get("location", ""),
+            "hero": story.get("hero", ""),
+            "foe": story.get("foe", ""),
+            "boss": story.get("boss", ""),
+            "hook": story.get("hook", ""),
+            "sound_mode": sound_mode,
+            "has_music": bool(bundle.get("music")),
+            "has_sfx": bool(bundle.get("sfx")),
+            "has_narration": bool(story.get("audio")),
+            "size": os.path.getsize(bundle_path),
+            "thumb": _session_thumb(bundle),
+        }
+        with open(os.path.join(folder, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=True)
+        print(f"[history] saved {session_id} ({meta['size'] / 1048576:.1f} MB)")
+        return session_id
+    except Exception as e:
+        print(f"[history] could not save this run ({e})")
+        # A half-written folder would show up in the list as a broken row - drop it.
+        try:
+            shutil.rmtree(folder, ignore_errors=True)
+        except Exception:
+            pass
+        return None
+
+
+def list_dungeon_sessions():
+    """Every saved session's meta record, newest first. A folder whose meta.json is missing
+    or unreadable (an interrupted save, a half-finished delete) is skipped rather than
+    breaking the whole listing."""
+    out = []
+    try:
+        names = os.listdir(SESSIONS_DIR)
+    except Exception:
+        return out
+    for name in names:
+        if not _SESSION_ID_RE.match(name):
+            continue
+        meta_path = os.path.join(SESSIONS_DIR, name, "meta.json")
+        if not os.path.exists(os.path.join(SESSIONS_DIR, name, "bundle.json")):
+            continue
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            meta["id"] = name          # the folder is the truth, whatever the file says
+            out.append(meta)
+        except Exception as e:
+            print(f"[history] skipping {name} ({e})")
+    out.sort(key=lambda m: m.get("created", 0), reverse=True)
+    return out
+
+
+def delete_dungeon_session(session_id):
+    """Erase one saved dungeon - bundle, thumbnail, metadata and folder. True if it was
+    there to remove."""
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return False
+    shutil.rmtree(folder)
+    print(f"[history] deleted {session_id}")
+    return True
+
+
 class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/progress":
@@ -5298,9 +5540,53 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(json.dumps(gen_progress, ensure_ascii=True).encode("utf-8"))
+            # `settling` rides along rather than living in gen_progress because it is derived
+            # from thread liveness, not written by the run - it is what keeps CREATE disabled
+            # on a page that reloaded out of a cancel. See run_is_settling.
+            self.wfile.write(json.dumps(dict(gen_progress, settling=run_is_settling()),
+                                        ensure_ascii=True).encode("utf-8"))
             return
-        
+
+        # The History window's listing: meta records only (a name, a date, a 96px thumb),
+        # never the bundles themselves.
+        elif self.path == "/api/history":
+            payload = json.dumps({"sessions": list_dungeon_sessions()},
+                                 ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # One saved dungeon, replayed. bundle.json is already exactly the JSON the poll
+        # loop would have handed the page, so it is streamed from disk unparsed.
+        elif self.path.startswith("/api/history_bundle"):
+            qs = urllib.parse.urlparse(self.path).query
+            session_id = urllib.parse.parse_qs(qs).get("id", [""])[0]
+            folder = _session_dir(session_id)
+            bundle_path = os.path.join(folder, "bundle.json") if folder else None
+            if bundle_path and os.path.exists(bundle_path):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(os.path.getsize(bundle_path)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(bundle_path, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+                return
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False,
+                                         "error": "That saved dungeon is gone."},
+                                        ensure_ascii=True).encode("utf-8"))
+            return
+
         elif self.path == "/" or self.path == "/index.html":
             html_file = os.path.join(PROJECT_DIR, "index.html")
             if os.path.exists(html_file):
@@ -5352,9 +5638,29 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        global GEN_THREAD
+        global GEN_THREAD, _RUN_EPOCH
 
         if self.path == "/api/generate_dungeon":
+            # The page disables CREATE while /api/progress reports settling, so this is the
+            # backstop for a stale tab or a hand-rolled POST: a second chain started on top of
+            # a run that is still being torn out of ComfyUI would queue behind the dying one.
+            if run_is_settling():
+                try:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    if length:
+                        self.rfile.read(length)
+                except Exception:
+                    pass
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(
+                    {"success": False, "settling": True,
+                     "error": "The cancelled run is still clearing ComfyUI - try again in a moment."},
+                    ensure_ascii=True).encode("utf-8"))
+                print("[generate_dungeon] refused - previous run still settling")
+                return
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length).decode("utf-8")
@@ -5380,6 +5686,9 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 # process.
                 with _INFLIGHT_LOCK:
                     del _INFLIGHT_PROMPTS[:]
+                # Retires any cancel watchdog still running: it stops on an epoch change, so
+                # it can never mistake this run's prompts for the ones it was chasing.
+                _RUN_EPOCH += 1
                 _CANCELLED_RUNS.difference_update(
                     [th for th in list(_CANCELLED_RUNS) if not th.is_alive()])
 
@@ -5435,6 +5744,27 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass  # client already gone, or headers were sent before the throw
                 return
+
+        elif self.path == "/api/history_delete":
+            # The trash can in the History window, after the player has confirmed. Erases
+            # the whole folder - bundle, thumbnail and metadata alike.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                removed = delete_dungeon_session(data.get("id"))
+                body = {"success": removed}
+                if not removed:
+                    body["error"] = "That saved dungeon is already gone."
+                code = 200 if removed else 404
+            except Exception as e:
+                print(f"[history] delete failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
 
         elif self.path == "/api/cancel_generation":
             # Beaconed from the page's pagehide handler once the user has confirmed they

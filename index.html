@@ -199,6 +199,16 @@
       text-shadow: 1px 1px #ffffff;
       cursor: default;
     }
+    /* CREATE is disabled while the server is still tearing a cancelled run out of ComfyUI -
+       see watchForSettling in game.js. An id selector because the button's colour comes from
+       Tailwind utility classes (bg-yellow-100 / hover:bg-yellow-200) that a class rule here
+       would lose to. */
+    #btnCreate:disabled {
+      background: #c0c0c0;
+      color: #808080;
+      text-shadow: 1px 1px #ffffff;
+      cursor: default;
+    }
     .dpad-btn {
       width: 44px !important;
       height: 44px !important;
@@ -551,11 +561,17 @@
         </div>
       </div>
 
-      <!-- Footer Buttons: Options + Create Button -->
+      <!-- Footer Buttons: Options + History on the left, Create on the right -->
       <div class="flex justify-between items-center mt-1">
-        <button id="btnSettings" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Options">
-          <span>⚙️ Options</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <button id="btnSettings" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Options">
+            <span>⚙️ Options</span>
+          </button>
+
+          <button id="btnHistory" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Replay a dungeon you have already made">
+            <span>📜 History</span>
+          </button>
+        </div>
 
         <button id="btnCreate" class="win95-btn px-6 py-1.5 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200 font-bold">
           <span>✨ CREATE</span>
@@ -641,6 +657,70 @@
               OK
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY MODAL DIALOG -->
+    <!-- Every finished dungeon is kept server-side under dungeon_sessions/. This window
+         lists them (server: /api/history) and lets the player start one again without
+         paying for generation, or bin one to get the disk space back. Rows are built by
+         renderHistoryList() in game.js. -->
+    <div id="modalHistory" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-2xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>📜 History</span>
+          <button id="btnCloseHistory" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="px-3 text-[11px] text-slate-700 font-bold">
+          Dungeons you have already made. Starting one skips generation completely &ndash; the same
+          hero, foes, art and narration, on a freshly drawn maze at your current difficulty.
+        </div>
+
+        <!-- .win95-inset paints itself black, so the white list ground is overridden inline
+             rather than with a bg- utility - the same way the progress trough above does it. -->
+        <div id="historyList" class="win95-inset mx-3 my-2 p-2 overflow-y-auto flex flex-col gap-1.5"
+             style="background: #ffffff; min-height: 140px; max-height: 52vh;"></div>
+
+        <div class="px-3 pb-3 flex justify-between items-center gap-2">
+          <span id="historyFootNote" class="text-[10px] text-slate-600 font-bold truncate"></span>
+          <button id="btnHistoryOk" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300 shrink-0">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DELETE CONFIRMATION - the trash can never erases anything on its own. Sits above
+         the History window (z-[60]) rather than replacing it, so the list stays visible
+         behind the question. -->
+    <div id="modalHistoryConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>⚠️ Confirm Delete</span>
+          <button id="btnHistoryConfirmClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div class="text-3xl leading-none select-none">🗑️</div>
+          <div class="flex flex-col gap-1 min-w-0">
+            <p class="text-xs font-black text-slate-900">Erase this saved dungeon?</p>
+            <p id="historyConfirmName" class="text-xs font-bold text-blue-900 break-words"></p>
+            <p class="text-[11px] text-slate-700">
+              Its textures, sprites, sound effects, music and narration are deleted from disk.
+              This cannot be undone &ndash; making it again means generating it again.
+            </p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnHistoryConfirmCancel" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Cancel
+          </button>
+          <button id="btnHistoryConfirmDelete" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
+            Delete
+          </button>
         </div>
       </div>
     </div>
