@@ -700,6 +700,23 @@
       _fadeOutScreenMusicNode(fadeSec === undefined ? SCREEN_MUSIC_FADE_OUT : fadeSec);
     }
 
+    // Pull whichever screen loop is up down to `level` of its bed volume (1 puts it back)
+    // without stopping it, so the outro narration can speak over the victory box and hand the
+    // music straight back. The dungeon's own beds have duckDungeonMusic; the screen loops
+    // bypass that bus, so they need their own.
+    // Reads the live gain rather than assuming SCREEN_MUSIC_VOLUME: a duck applied while
+    // playScreenMusic's fade-in is still ramping cancels that ramp, and picking up from
+    // wherever it had got to is what keeps the two from stepping on each other.
+    function duckScreenMusic(level, sec) {
+      const ctx = sfxContext();
+      if (!ctx || !screenMusicNode) return;
+      const g = screenMusicNode.gain.gain;
+      const now = ctx.currentTime;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(SCREEN_MUSIC_VOLUME * level, now + Math.max(0.01, sec));
+    }
+
     // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
     // percussive envelope - because their whole job is to keep the game audible when the
     // generated pack is missing, not to compete with it.
@@ -891,6 +908,7 @@
 
     function openSetupScreen() {
       screenGame.classList.add('hidden');
+      stopOutroNarration();
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
       screenSetup.classList.remove('hidden');
@@ -1220,6 +1238,12 @@
       // fighters unfrozen, at INTRO_TOTAL.
       introFrame: 0,
       pendingXp: 0,             // banked at the kill, paid out when the death fade finishes
+      // The hero's own outro, played once every foe is down and dissolved. winTick counts sim
+      // steps since it began; winIsLevelUp is latched on the first of those and picks which
+      // outro runs - a dithering fade-out on a plain win, or staying on screen to jump for joy
+      // when the win banked a level (the level-up box opens when the hop finishes).
+      winTick: 0,
+      winIsLevelUp: false,
       playerHp: 100,
       playerMaxHp: 100,
       playerStm: 100,
@@ -1525,6 +1549,14 @@
     // dungeon comes back.
     const DEATH_FADE_FRAMES = 40;
     const DEATH_FADE_HOLD = 20;
+    // The hero's send-off after a won fight, in sim ticks. A plain win holds a beat, dithers the
+    // hero out the same way the corpse went, then holds once more on the empty arena before the
+    // dungeon returns. A win that banked a level skips the fade: the hero stays solid and hops
+    // for JOY_HOP ticks (see drawOverTheShoulderPlayer), then the level-up box takes the screen.
+    const WIN_FADE_DELAY = 8;
+    const WIN_FADE_FRAMES = DEATH_FADE_FRAMES;   // dissolve at the same rate the corpse just did
+    const WIN_FADE_HOLD = 10;
+    const WIN_JOY_HOP_FRAMES = 72;
 
     function toggleBattleMode(forceState, forceVariant) {
       if (typeof forceState === 'boolean') {
@@ -1554,6 +1586,8 @@
         // Runs the entrance and, until it finishes, freezes both fighters - see combatTick.
         combatState.introFrame = 0;
         combatState.pendingXp = 0;
+        combatState.winTick = 0;
+        combatState.winIsLevelUp = false;
 
         // The foe the marker was drawn as; a battle started any other way still rolls at random.
         pickEnemyVariant(forceVariant);
@@ -1590,6 +1624,16 @@
       return Math.max(0, Math.min(1, (combatState.introFrame - INTRO_FADE_DELAY) / INTRO_FADE_FRAMES));
     }
 
+    // Fraction of the hero's pixels to draw, the mirror of enemyVisibility for the win outro.
+    // 1 all through the fight, and 1 through a level-up win (that outro is a hop, not a fade);
+    // after a plain win it dithers from 1 to 0 across WIN_FADE_FRAMES and then stays gone.
+    function playerWinVisibility() {
+      if (combatState.winTick <= 0 || combatState.winIsLevelUp) return 1;
+      const t = combatState.winTick - WIN_FADE_DELAY;
+      if (t <= 0) return 1;
+      return Math.max(0, 1 - t / WIN_FADE_FRAMES);
+    }
+
     // Both fighters are held still until the entrance has played out.
     function battleReady() {
       return combatState.inBattle && combatState.introFrame >= INTRO_TOTAL;
@@ -1616,6 +1660,8 @@
     function finishEncounterVictory() {
       const xp = combatState.pendingXp;
       combatState.pendingXp = 0;
+      combatState.winTick = 0;
+      combatState.winIsLevelUp = false;
       if (activeMarker) activeMarker.alive = false;
       activeMarker = null;
       toggleBattleMode(false);
@@ -1665,38 +1711,70 @@
       return line.replace(/\{hero\}/g, hero).replace(/\{area\}/g, area).replace(/\{enemy\}/g, enemy);
     }
 
-    // The other side of DEATH_MESSAGES: the run ended at the stairs instead. Same fill-ins
-    // plus {boss} and {saved} - the champion's title and the people the crawl said it was
-    // going to take, both invented by the story so the outro closes the thread paragraph two
-    // opened. The boss stands on the exit's approach (see placeEnemyMarkers), so every line
-    // can take it as read that the way out went through it.
-    const VICTORY_MESSAGES = [
-      "Congrats {hero}! Good job getting out of {area} - {boss} had it coming. The {saved} have no fear anymore.",
-      "{hero} walks out of {area} alive. {boss} does not. The {saved} sleep tonight because of you.",
-      "That's {area} behind you, {hero}. {boss} is a story now, and the {saved} get to tell it.",
-      "Well done, {hero}! {boss} held {area} for the last time. The {saved} owe you every quiet night from here on.",
-      "You did it, {hero}. {area} is stone again, {boss} is bones, and the {saved} are free of both.",
-      "The stairs at last! {hero} leaves {area} the way {boss} never will. Word reaches the {saved} by morning.",
-      "Daylight, {hero}. You took {area} apart and left {boss} in it. The {saved} can stop counting the days.",
-      "Congratulations, {hero}! {boss} ruled {area} right up until you disagreed. The {saved} have nothing left to fear.",
-      "{hero} climbs out of {area} with {boss}'s reign ended below it. The {saved} will remember the name.",
-      "Out of {area} and into the light, {hero}. {boss} had it coming, and the {saved} have their lives back.",
-      "It's over, {hero}. {area} keeps {boss} now, and you keep your promise to the {saved}.",
-      "Take the air, {hero} - you earned it. {boss} is finished, {area} is emptied, and the {saved} are safe.",
-    ];
+    // The outro that closes the run is written AND narrated server-side (_VICTORY_OUTROS in
+    // server.py): Piper is handed the finished sentence at generation time so the victory box
+    // is read by the same voice that read the crawl. All this end has to do is show the text
+    // and, when the story brought a clip, play it. A run with no story at all (the legacy
+    // v1-v4 modes) keeps the generic line index.html ships with.
+    const VICTORY_TEXT_DEFAULT = victoryText ? victoryText.textContent : '';
 
-    // Fills a VICTORY_MESSAGES line for the run that just ended. {saved} arrives from the
-    // server already stripped of its article (see _story_stake in server.py), because every
-    // line above supplies its own.
-    function victoryOutro() {
-      const story = dungeonStory || {};
-      const hero = (story.hero || '').trim() || 'Warrior';
-      const area = (story.location || '').trim() || 'the dungeon';
-      const boss = (story.boss || '').trim() || enemyBossName || 'whatever ruled it';
-      const saved = (story.saved || '').trim() || 'ones who never came back up';
-      const line = VICTORY_MESSAGES[Math.floor(Math.random() * VICTORY_MESSAGES.length)];
-      return line.replace(/\{hero\}/g, hero).replace(/\{area\}/g, area)
-                 .replace(/\{boss\}/g, boss).replace(/\{saved\}/g, saved);
+    function showVictoryOutro() {
+      if (!victoryText) return;
+      const outro = (dungeonStory && dungeonStory.outro || '').trim();
+      victoryText.textContent = outro || VICTORY_TEXT_DEFAULT;
+    }
+
+    // The clip comes in a beat after the box, once the 'end' sting has landed and the victory
+    // loop is on its way up, and the loop is ducked for as long as the narrator speaks. Same
+    // plain <audio> element the crawl narrator uses - it sits outside the WebAudio graph, so
+    // the duck is the only thing balancing the two.
+    const OUTRO_NARRATE_DELAY_MS = 1400;
+    const OUTRO_MUSIC_DUCK = 0.4;
+    let outroAudio = null;
+    let outroTimer = null;
+    let outroDucked = false;
+
+    // The narrator finished (or never got started). Hands the victory loop its volume back.
+    function endOutroNarration() {
+      if (!outroDucked) return;
+      outroDucked = false;
+      duckScreenMusic(1, 0.9);
+    }
+
+    // Teardown, not the natural end: the player left the box - restart, or out to the menu -
+    // while the narrator was still talking. Both of those routes stop the screen loop
+    // outright, so the duck is dropped rather than ramped back onto a node that is going away.
+    function stopOutroNarration() {
+      if (outroTimer) { clearTimeout(outroTimer); outroTimer = null; }
+      if (outroAudio) {
+        try { outroAudio.pause(); } catch (e) {}
+        outroAudio.removeAttribute('src');
+      }
+      outroDucked = false;
+    }
+
+    function startOutroNarration() {
+      const src = (dungeonStory && dungeonStory.outro_audio) || '';
+      stopOutroNarration();
+      if (!src) return;
+      outroTimer = setTimeout(() => {
+        outroTimer = null;
+        // The box can be gone already - restarting inside the delay is one keypress.
+        if (!victoryModal || victoryModal.classList.contains('hidden')) return;
+        if (!outroAudio) {
+          outroAudio = new Audio();
+          outroAudio.addEventListener('ended', endOutroNarration);
+          outroAudio.addEventListener('error', endOutroNarration);
+        }
+        outroDucked = true;
+        duckScreenMusic(OUTRO_MUSIC_DUCK, 0.5);
+        outroAudio.src = src;
+        const p = outroAudio.play();
+        // A blocked autoplay gets no retry button here - the run is over and the words are
+        // already on screen - but the loop must not stay ducked under a narrator that never
+        // spoke.
+        if (p && p.catch) p.catch(() => endOutroNarration());
+      }, OUTRO_NARRATE_DELAY_MS);
     }
 
     // Player defeat. Until this existed playerHp simply floored at 0 in landEnemyStrike and the
@@ -1746,6 +1824,7 @@
 
       if (defeatModal) defeatModal.classList.add('hidden');
       if (victoryModal) victoryModal.classList.add('hidden');
+      stopOutroNarration();
 
       // Maze back to its start-of-run shape: closed doors (MAP 3), un-thrown switches (MAP 4),
       // and the walkable-tile list without any tiles a since-opened door had added.
@@ -1805,6 +1884,8 @@
       activeMarker = null;
       combatState.introFrame = 0;
       combatState.pendingXp = 0;
+      combatState.winTick = 0;
+      combatState.winIsLevelUp = false;
       combatState.enemies.forEach(e => { e.deathFade = 0; });
       combatState.playerStm = combatState.playerMaxStm;
       combatState.playerHp = combatState.playerMaxHp;
@@ -2154,8 +2235,28 @@
           }
         }
         if (allDown && !stillFading) {
+          // Every foe is gone; now the hero's own outro plays before the dungeon returns. On
+          // the first tick, latch whether this win crosses a level threshold - that decides
+          // between the dithering fade-out (playerWinVisibility) and staying on screen for the
+          // joy hop (drawOverTheShoulderPlayer). Either way the sim stays frozen, the same as a
+          // death or the level-up box, until the outro's tick count is spent.
+          if (combatState.winTick === 0) {
+            combatState.winIsLevelUp =
+              (progression.xp + combatState.pendingXp) >= progression.xpToNext;
+            if (combatState.winIsLevelUp) showFloatingCombatText("LEVEL UP!", 160, 70, "#fde047");
+            // Settle the hero: a strafe held into the killing blow otherwise leaves them
+            // leaning and walk-bobbing through the send-off.
+            combatState.vx = 0;
+            combatState.attackFrame = 0;
+            combatState.hurtFrame = 0;
+            combatState.shieldProgress = 0;
+          }
+          combatState.winTick++;
+          const outroLen = combatState.winIsLevelUp
+            ? WIN_JOY_HOP_FRAMES
+            : WIN_FADE_DELAY + WIN_FADE_FRAMES + WIN_FADE_HOLD;
           updateCombatEffects();
-          finishEncounterVictory();
+          if (combatState.winTick >= outroLen) finishEncounterVictory();
           return;
         }
       }
@@ -2372,8 +2473,10 @@
       const isBlock = combatState.shieldProgress > 0.5;
       // Spent sits BELOW the three action states: whatever the hero is doing this instant wins
       // the expression, and the drained face is what is left over when they are doing nothing
-      // because there is nothing left to do it with.
-      const spent = combatState.dead ? 0 : combatState.exhaustion;
+      // because there is nothing left to do it with. Cleared while dead and through a win outro,
+      // to match the body (drawOverTheShoulderPlayer) - a corpse and a celebrating winner both
+      // drop the panting face.
+      const spent = (combatState.dead || combatState.winTick > 0) ? 0 : combatState.exhaustion;
       const isSpent = spent > 0.35;
 
       // Pick the expression that matches what the player is doing. Hurt wins over attack, which
@@ -2855,9 +2958,13 @@
 
       const px = width / 2 + combatState.playerX;
       const isMoving = Math.abs(combatState.vx) > 0.5;
+      // The victory leap: once every foe is down and the win banked a level, the hero springs
+      // straight up and down on the spot - the mirror of the enemy's winner's dance over a
+      // downed player in drawCombatEnemy.
+      const joyLeap = combatState.winTick > 0 && combatState.winIsLevelUp;
       // How spent the hero is drawn as, 0..1. Zeroed while dead - the corpse has its own pose
-      // and should not also be panting.
-      const spent = combatState.dead ? 0 : combatState.exhaustion;
+      // and should not also be panting - and while celebrating a win.
+      const spent = (combatState.dead || combatState.winTick > 0) ? 0 : combatState.exhaustion;
       // Bob only while actually strafing. The old idle bob ran constantly and, on a sprite with no
       // feet planted animation, read as the character hovering rather than breathing.
       //
@@ -2873,7 +2980,10 @@
       // arrive decelerating into their stance instead of snapping to a stop.
       const slideT = Math.min(1, combatState.introFrame / INTRO_SLIDE_FRAMES);
       const slideIn = Math.pow(1 - slideT, 3) * INTRO_SLIDE_DIST;   // ease-out on the remaining gap
-      const py = height + walkBob + slideIn;
+      // abs(sin) so the leap only ever springs the hero off the floor and drops them back, the
+      // same shape (and rate) as the enemy's victoryHop - negative is up the canvas.
+      const joyHop = joyLeap ? -Math.abs(Math.sin(Date.now() / 130)) * 26 : 0;
+      const py = height + walkBob + slideIn + joyHop;
 
       const attFrame = combatState.attackFrame;
       const hurtFrame = combatState.hurtFrame;
@@ -2897,7 +3007,8 @@
       // the sway a slow drift on top of it, so the hero looks like they are struggling to hold
       // the stance rather than standing at attention with an empty bar.
       const tilt = combatState.vx * 0.012
-                 + spent * (0.075 + Math.sin(Date.now() / 430) * 0.035);
+                 + spent * (0.075 + Math.sin(Date.now() / 430) * 0.035)
+                 + (joyLeap ? Math.sin(Date.now() / 95) * 0.06 : 0);   // celebratory rock
       c.translate(px, py + spent * 4);
       c.rotate(tilt);
 
@@ -2934,13 +3045,6 @@
           }
         } else if (shieldProgress > 0.3) {
           currentFrame = playerSpriteFrames[1] || playerSpriteFrames[0];
-        } else if (spent > 0.2) {
-          // Out of stamina: hold the beaten-up pose. This sits ABOVE the walk frames on
-          // purpose - a hero with nothing left in the tank who strafes should not switch back
-          // to a brisk stride, which was the whole tell that the empty bar meant nothing.
-          // The hurt frame is the only "taking a beating" art the sheet has, and with the
-          // hunch, the heave and the wash below it reads as wrecked rather than as a recoil.
-          currentFrame = playerSpriteFrames[v6Frames ? 6 : 4] || playerSpriteFrames[0];
         } else if (haveWalk && isMoving) {
           // Frames 7 and 8 are opposite phases of one stride, alternated in phase with the
           // existing walk bob so the foot-plant and the bob agree. They are NOT a left-step
@@ -2955,9 +3059,7 @@
           // A side-step is ONE frame per direction, not a cycle, so it would otherwise sit
           // perfectly still while the player strafes. The existing walk bob supplies the
           // missing up-down; the pose frame supplies the stride.
-          if ((spent > 0.2 || (haveWalk && isMoving)) && attFrame <= 0 && hurtFrame <= 0) {
-            c.translate(0, walkBob * 0.6);
-          }
+          if (haveWalk && isMoving && attFrame <= 0 && hurtFrame <= 0) c.translate(0, walkBob * 0.6);
           // Size the character by its measured opaque height and plant its feet just past the
           // bottom edge, so a loose frame crop or a faint ground-shadow blob can't leave the
           // sprite floating in mid-scene. py is already the canvas bottom, so footY is +18.
@@ -3081,6 +3183,7 @@
       _fxC.setTransform(1, 0, 0, 1, 0, 0);
       _fxC.globalAlpha = 1;
       _fxC.globalCompositeOperation = 'source-over';
+      _fxC.filter = 'none';   // the hero's dither-out routes its exhaustion-wash filter through here
       _fxC.clearRect(0, 0, screenWidth, screenHeight);
       return _fxC;
     }
@@ -3317,7 +3420,12 @@
       // bar is the last thing seen of it. That is exactly the window enemyVisibility opens at,
       // and it has to be read off the clock rather than off the lead: in a pack the lead can
       // be the first one down, and the plate belongs to the whole pack.
-      if (combatState.introFrame > INTRO_FADE_DELAY) drawEnemyHpBar(c, width, combatState.enemy);
+      // ...but it comes down the instant the pack's own dissolve is over and the hero's outro
+      // begins: by then the corpse has been gone for the full DEATH_FADE_HOLD and the frame
+      // belongs to the winner.
+      if (combatState.introFrame > INTRO_FADE_DELAY && combatState.winTick === 0) {
+        drawEnemyHpBar(c, width, combatState.enemy);
+      }
     }
 
     function drawEnemyBody(c, width, height, which) {
@@ -5199,7 +5307,16 @@
 
       // Render 3D Combat Entities
       drawCombatEnemy(ctx, screenWidth, screenHeight);
-      drawOverTheShoulderPlayer(ctx, screenWidth, screenHeight);
+      // The hero draws straight into the scene, except part-way through a plain win's dither-out:
+      // then they go through the scratch layer so the Bayer pattern punches holes in the finished
+      // figure, exactly as a dissolving corpse is handled in drawCombatEnemy.
+      const heroVis = playerWinVisibility();
+      if (heroVis >= 1) {
+        drawOverTheShoulderPlayer(ctx, screenWidth, screenHeight);
+      } else if (heroVis > 0) {
+        drawOverTheShoulderPlayer(fxLayer(), screenWidth, screenHeight);
+        blitFxLayer(ctx, heroVis, 1);
+      }
       drawCombatEffects(ctx);
     }
 
@@ -5318,9 +5435,10 @@
       const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
       if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
         winMovesCount.textContent = totalMoves;
-        if (victoryText) victoryText.textContent = victoryOutro();
+        showVictoryOutro();
         playSfx('end', { vary: 0 });
         victoryModal.classList.remove('hidden');
+        startOutroNarration();
         // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
         // and the victory loop scores the box until the player heads back to the menu.
         fadeOutDungeonMusic(0.6);
@@ -5594,9 +5712,10 @@
       } else if (['ArrowRight', 'KeyD'].includes(e.code)) {
         e.preventDefault();
         rotateRight();
-      } else if (e.code === 'Space' || e.code === 'Enter') {
+      } else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyE') {
         // Space is the Use key now. It used to toggle battle mode, which only ever existed so
         // fights could be tested; battles start by walking onto a foe in the corridor instead.
+        // E does the same thing - undocumented, but it's the key hand people reach for.
         e.preventDefault();
         interact();
       }

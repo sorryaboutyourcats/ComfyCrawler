@@ -3535,6 +3535,50 @@ def _story_stake(raw, fallback):
     return text or fallback
 
 
+# The run's last words, read over the victory box by the same narrator who read the crawl.
+# They live here rather than in game.js because the outro is NARRATED: Piper has to be handed
+# the finished sentence at generation time, and a second copy of the list in the client would
+# be a copy that drifts. Every line names all four of the story's own inventions, so the box
+# closes the thread paragraph two opened. The boss stands on the exit's approach (see
+# placeEnemyMarkers in game.js), so each line can take it as read that the way out went
+# through it.
+_VICTORY_OUTROS = [
+    "Congrats {hero}! Good job getting out of {area} - {boss} had it coming. "
+    "The {saved} have no fear anymore.",
+    "{hero} walks out of {area} alive. {boss} does not. "
+    "The {saved} sleep tonight because of you.",
+    "That's {area} behind you, {hero}. {boss} is a story now, and the {saved} get to tell it.",
+    "Well done, {hero}! {boss} held {area} for the last time. "
+    "The {saved} owe you every quiet night from here on.",
+    "You did it, {hero}. {area} is stone again, {boss} is bones, "
+    "and the {saved} are free of both.",
+    "The stairs at last! {hero} leaves {area} the way {boss} never will. "
+    "Word reaches the {saved} by morning.",
+    "Daylight, {hero}. You took {area} apart and left {boss} in it. "
+    "The {saved} can stop counting the days.",
+    "Congratulations, {hero}! {boss} ruled {area} right up until you disagreed. "
+    "The {saved} have nothing left to fear.",
+    "{hero} climbs out of {area} with {boss}'s reign ended below it. "
+    "The {saved} will remember the name.",
+    "Out of {area} and into the light, {hero}. {boss} had it coming, "
+    "and the {saved} have their lives back.",
+    "It's over, {hero}. {area} keeps {boss} now, and you keep your promise to the {saved}.",
+    "Take the air, {hero} - you earned it. {boss} is finished, {area} is emptied, "
+    "and the {saved} are safe.",
+]
+
+
+def _story_outro(story):
+    """Fill one victory line from the story's own names. Never raises - a bad line only
+    costs the outro its text, and the victory box keeps the generic line in index.html."""
+    try:
+        return random.choice(_VICTORY_OUTROS).format(
+            hero=story["hero"], area=story["location"],
+            boss=story["boss"], saved=story["saved"])
+    except Exception:
+        return ""
+
+
 def _lead(name, upper=True):
     """Give a name its article unless it brought one. Without this the fallback crawl reads
     "The The Horde wait in the dark"."""
@@ -3692,6 +3736,10 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
     # duplicate from the crawl rather than reading the same line twice back to back.
     if out["crawl"] and _squash(out["crawl"][-1]) == _squash(out["hook"]):
         out["crawl"].pop()
+
+    # Built here, not in the client, so the same sentence can be handed to Piper - see
+    # _VICTORY_OUTROS. out["boss"] already carries its title by this point.
+    out["outro"] = _story_outro(out)
 
     return out
 
@@ -3909,8 +3957,14 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
     # crawl, which deserves a voice just as much as a model-written one. Order matches the
     # <p> elements startCrawl() builds in game.js: title, each crawl paragraph, then the
     # closing hook line last.
-    voice_name, clips = synthesize_narration([story["location"]] + story["crawl"] + [story["hook"]])
+    # The outro rides along in the same call so it is read by the SAME narrator as the crawl
+    # - synthesize_narration picks its voice per call, so a second call would hand the victory
+    # box the other reader. It is popped straight back off afterwards: it plays over the
+    # victory box, a whole run later, and has no <p> on the loading screen to line up with.
+    narration = [story["location"]] + story["crawl"] + [story["hook"], story["outro"]]
+    voice_name, clips = synthesize_narration(narration)
     story["voice"] = voice_name
+    story["outro_audio"] = clips.pop() if len(clips) == len(narration) else None
     story["audio"] = clips
     if voice_name:
         print(f"[narration] {len(clips)} clip(s) read by {voice_name}")
