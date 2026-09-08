@@ -3404,8 +3404,11 @@ def _singular_creature_name(name):
 
 
 # Generic stakes for when there is no SAVED line to read - a parse failure, a refusal, or
-# a bundle built before the label existed. Plural and article-less, same shape the model is
-# asked for, so the victory outro reads the same either way.
+# a bundle built before the label existed. Plural and article-less, the shape the model is
+# asked for. SAVED no longer feeds the victory outro (that closes on the way out now), but
+# the label still earns its keep: it makes the model commit to a concrete stake for the
+# crawl's second paragraph, it marks where the label block ends so the CRAWL body can be
+# found without the marker, and the normalised phrase ships in the story bundle.
 _STAKE_FALLBACKS = [
     "ones who never came back up",
     "villages that stopped sending word",
@@ -3413,16 +3416,15 @@ _STAKE_FALLBACKS = [
     "names carved beside the door",
 ]
 
-# "All the miners" / "every last homestead" - the leading determiner is stripped because the
-# outro supplies its own ("The <stake> have no fear anymore"). Repeated so "all of the" goes
+# "All the miners" / "every last homestead" - the leading determiner is stripped so the
+# phrase can drop into a sentence that brings its own article. Repeated so "all of the" goes
 # in one pass rather than leaving "the" behind.
 _STAKE_DETERMINER_RE = re.compile(r"^(?:(?:all\s+of|the|a|an|all|every|each)\s+)+", re.IGNORECASE)
 
 
 def _story_stake(raw, fallback):
-    """SAVED names who or what the boss was going to take. It is only ever read inside a
-    sentence that brings its own article, so the determiner and any trailing punctuation
-    come off here rather than in every line that uses it."""
+    """SAVED names who or what the boss was going to take. Normalised to an article-less noun
+    phrase so any sentence that uses it can supply its own determiner and punctuation."""
     text = _story_name(raw, "", max_words=6)
     text = _STAKE_DETERMINER_RE.sub("", text).strip().strip(".,;:!")
     return text or fallback
@@ -3431,33 +3433,27 @@ def _story_stake(raw, fallback):
 # The run's last words, read over the victory box by the same narrator who read the crawl.
 # They live here rather than in game.js because the outro is NARRATED: Piper has to be handed
 # the finished sentence at generation time, and a second copy of the list in the client would
-# be a copy that drifts. Every line names all four of the story's own inventions, so the box
-# closes the thread paragraph two opened. The boss stands on the exit's approach (see
+# be a copy that drifts. Every line names the hero, the dungeon and the boss, and closes on
+# the way out rather than on who was saved. The boss stands on the exit's approach (see
 # placeEnemyMarkers in game.js), so each line can take it as read that the way out went
 # through it.
 _VICTORY_OUTROS = [
-    "Congrats {hero}! Good job getting out of {area} - {boss} had it coming. "
-    "The {saved} have no fear anymore.",
-    "{hero} walks out of {area} alive. {boss} does not. "
-    "The {saved} sleep tonight because of you.",
-    "That's {area} behind you, {hero}. {boss} is a story now, and the {saved} get to tell it.",
-    "Well done, {hero}! {boss} held {area} for the last time. "
-    "The {saved} owe you every quiet night from here on.",
-    "You did it, {hero}. {area} is stone again, {boss} is bones, "
-    "and the {saved} are free of both.",
-    "The stairs at last! {hero} leaves {area} the way {boss} never will. "
-    "Word reaches the {saved} by morning.",
-    "Daylight, {hero}. You took {area} apart and left {boss} in it. "
-    "The {saved} can stop counting the days.",
-    "Congratulations, {hero}! {boss} ruled {area} right up until you disagreed. "
-    "The {saved} have nothing left to fear.",
-    "{hero} climbs out of {area} with {boss}'s reign ended below it. "
-    "The {saved} will remember the name.",
-    "Out of {area} and into the light, {hero}. {boss} had it coming, "
-    "and the {saved} have their lives back.",
-    "It's over, {hero}. {area} keeps {boss} now, and you keep your promise to the {saved}.",
-    "Take the air, {hero} - you earned it. {boss} is finished, {area} is emptied, "
-    "and the {saved} are safe.",
+    "Congrats {hero}! Good job getting out of {area} - {boss} had it coming, "
+    "and you were the one who brought it.",
+    "{hero} walks out of {area} alive. {boss} does not, and that was always the deal.",
+    "That's {area} behind you, {hero}. {boss} is a story now, and you're the one who tells it.",
+    "Well done, {hero}! {boss} held {area} for a long time, and lost it to you in an afternoon.",
+    "You did it, {hero}. {area} is quiet stone again, {boss} is bones, "
+    "and the door is open behind you.",
+    "The stairs at last! {hero} leaves {area} on two feet, the way {boss} never will.",
+    "Daylight, {hero}. You took {area} apart, left {boss} in the wreck of it, "
+    "and climbed out clean.",
+    "Congratulations, {hero}! {boss} ruled {area} right up until you disagreed, "
+    "and the argument is settled.",
+    "{hero} climbs out of {area} with {boss}'s reign ended in the dark below.",
+    "Out of {area} and into the light, {hero}. {boss} had it coming and you saw that it came.",
+    "It's over, {hero}. {area} keeps {boss} now, and you keep the way out.",
+    "Take the air, {hero} - you earned it. {boss} is finished and {area} is nothing but echoes.",
 ]
 
 
@@ -3466,8 +3462,7 @@ def _story_outro(story):
     costs the outro its text, and the victory box keeps the generic line in index.html."""
     try:
         return random.choice(_VICTORY_OUTROS).format(
-            hero=story["hero"], area=story["location"],
-            boss=story["boss"], saved=story["saved"])
+            hero=story["hero"], area=story["location"], boss=story["boss"])
     except Exception:
         return ""
 

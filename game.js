@@ -503,6 +503,22 @@
       });
     }
 
+    // A boss fight scores to the same battle bed as every other duel, so it is pitched down and
+    // slowed to set it apart. playbackRate on the looping source shifts pitch and tempo together
+    // (there is no time-stretch in the Web Audio graph); 1.0 is the track exactly as generated.
+    // The rate is ramped, not snapped, so the bed sags into the boss fight and lifts back out.
+    const BOSS_MUSIC_RATE = 0.82;
+    function setBattleMusicRate(rate, sec) {
+      const ctx = sfxContext();
+      const node = musicNodes.battle;
+      if (!ctx || !node) return;
+      const now = ctx.currentTime;
+      const p = node.src.playbackRate;
+      p.cancelScheduledValues(now);
+      p.setValueAtTime(p.value, now);
+      p.linearRampToValueAtTime(rate, now + Math.max(0.01, sec || 1.5));
+    }
+
     // ---- Main menu music (static, generated once, NOT per-dungeon) -------------
     // sounds/menu_music.wav is a fixed short loop, unlike explore/battle which are themed
     // per playthrough - see generate_menu_music_asset in server.py. Plays from the moment
@@ -1283,9 +1299,17 @@
         altitude: 0,     // 0 = grounded; >0 = hovering height (flyer)
         swoop: 'none',   // flyer: none | diving | striking | rising
         swoopTimer: 0,
-        blockTimer: 0,   // walker: >0 = guarding, the next player strike is largely absorbed
+        blockTimer: 0,   // >0 = guarding; a player strike caught on it does no damage
+        punishTimer: 0,  // walker: >0 = still recovering from its own attack, can't guard (the opening)
         atkCount: 0,     // boss: swings taken in the current patrol phase (3 -> hunt)
         hunting: false,  // boss: walking the player down instead of drifting left/right
+        chargeCount: 0,  // boss: swings thrown since its last charge (5 -> the charge)
+        special: 'none', // boss: phase of the charge - none|back|weave|pause|windup|rush
+        specialTimer: 0,
+        depth: 0,        // 0 = on the front line, where a fight is fought; 1 = back of the arena
+        weaveDir: 1,     // boss: which way it is currently sweeping during the charge's weave
+        lockX: 0,        // boss: the line the charge is coming down, fixed as the rush starts
+        noBlockTimer: 0, // >0 = cannot raise a guard at all (the charge's recovery)
         orbit: 0,        // circler: angle around its holding pattern, radians
         laps: 0,         // circler: full circles flown since its last swoop
         homeX: 0,        // circler: the centre that circle is drawn around
@@ -1329,24 +1353,29 @@
     // It is the guard's real price - the per-frame hold drain is small change next to it - so it
     // is authored per foe rather than derived from damage: a runt's bite is an annoyance you can
     // eat all day, a dread swing takes half the bar and two of them break the guard outright.
-    // canBlock/blockOdds/blockHold: the two foes that fight on the ground guard, and they have
-    // a generated block frame to show for it (server ENEMY_VARIANT_FRAMES). The flyer does not
+    // canBlock/blockHold: the two foes that fight on the ground guard, and they have a
+    // generated block frame to show for it (server ENEMY_VARIANT_FRAMES). The flyer does not
     // - it stays out of reach instead, which is its whole defence, and it has no block frame.
+    // A blow caught on ANY foe's guard now does ZERO damage (it used to chip 25% through).
     //
-    // blockOdds is rolled ONCE PER FRAME, but only while idle (not mid-attack, wind-up or
-    // stagger) and only when no guard is already up, so the raw number is much smaller than
-    // the behaviour it produces. Simulated over 10 minutes of combat, guard uptime / guards
-    // per minute:
-    //   walker  0.006/75  -> 23%, 12.7    now 0.018/90  -> 52%, 23.3
-    //   boss    0.004/110 -> 24%,  8.6    now 0.030/150 -> 74%, 19.5
-    // Those are upper bounds: the sim does not model the player, and a landed hit always
-    // breaks the guard (damage drops to 25% and blockTimer clears), so real uptime is lower.
-    // That break is also why even the boss's near-permanent guard costs the player a weakened
-    // swing rather than stalling the fight - but it does roughly halve effective DPS on it.
+    // The two ground foes guard in different ways:
+    //
+    //  - boss: blockOdds is rolled ONCE PER FRAME while idle (not mid-attack, wind-up or
+    //    stagger) and only when no guard is already up, so the raw number is far smaller than
+    //    the behaviour. 0.030/150 sims to ~74% guard uptime. A landed hit breaks the guard
+    //    (blockTimer clears), so its fight is a rhythm of blocked-then-clean swings rather
+    //    than a wall - the sim's uptime is an upper bound the player's own hits pull down.
+    //
+    //  - walker: reactiveBlock. It does not gamble on a random guard at all - it answers the
+    //    player's swing, snapping its guard up as the strike travels (see tickEnemyAI). A
+    //    caught blow does nothing AND does not break this guard. The ONLY opening is
+    //    punishWindow: for that many frames after the walker commits to its own attack it
+    //    cannot guard, and one hit landed in that gap connects (and spends the gap - see the
+    //    player-strike resolution, where a clean hit clears punishTimer).
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  blockOdds: 0.018, blockHold: 90,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
-      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, blockStm: 20, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,     blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, blockStm: 50, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030, blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
+      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  reactiveBlock: true, punishWindow: 70, blockHold: 60,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, blockStm: 20, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,        blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, blockStm: 50, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030,   blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
 
       // --- PACK FOES. Neither one costs a generation: `recolorOf` names the variant whose
       // sprites they borrow and hue/sat is the filter laid over every frame of them (see
@@ -1379,6 +1408,52 @@
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
     // Full circles a circler flies before it commits to a swoop.
     const CIRCLER_LAPS = 3;
+
+    // --- THE DREAD CHARGE ------------------------------------------------------------------
+    // The boss's set piece, and the only thing in combat that moves in DEPTH. Every
+    // BOSS_CHARGE_EVERY swings it stops fighting the fight it has been fighting, walks off the
+    // front line entirely (e.depth 0 -> 1, where the player's blade cannot reach it at all - see
+    // the reach test in the player-strike resolution), makes a lot of noise, and then comes back
+    // down one line at speed. See tickBossCharge for the phases.
+    //
+    // The three ways it can end are deliberately lopsided, because the whole move is a question
+    // about what the player is willing to spend:
+    //   eaten    - dmg x BOSS_CHARGE_DMG_MULT. Half a full hero off a 30-damage foe.
+    //   guarded  - survivable, and it costs the ENTIRE stamina bar (BOSS_CHARGE_BLOCK_STM is the
+    //              hero's max). No swing and no second guard until that regenerates, which
+    //              against a foe on a 160-frame cadence is most of the way to its next one.
+    //   dodged   - free, and the honest answer. The line is fixed at the PAUSE and never
+    //              re-aimed, so reading the pause buys the whole wind-up to walk off it: 62px
+    //              of travel (BOSS_CHARGE_REACH - it is a body, not an arm) in ~84 frames,
+    //              which the 3.8px/frame strafe covers four times over. The cost is that those
+    //              are 84 frames spent walking instead of hitting, and a hero pinned at the
+    //              wall on the side it aimed at has nowhere to spend them.
+    // And surviving it any of those ways buys BOSS_CHARGE_RECOVER_FRAMES - four seconds where
+    // the boss cannot raise its guard AT ALL. Against something that otherwise holds one up
+    // ~74% of the time, that window is where the fight is actually won.
+    const BOSS_CHARGE_EVERY = 5;            // swings thrown between charges
+    const BOSS_BACK_FRAMES = 34;            // withdrawing off the front line
+    const BOSS_WEAVE_FRAMES = 100;          // the fast left/right, ~1.7s of it
+    const BOSS_PAUSE_FRAMES = 26;           // the dead stop that says the weaving is over
+    const BOSS_WINDUP_FRAMES = 40;          // hunkering down and building
+    const BOSS_RUSH_FRAMES = 18;            // the run in - 0.3s from the back wall to the blade
+    const BOSS_CHARGE_RECOVER_FRAMES = 240; // 4s unable to guard, at the fixed 60fps tick
+    const BOSS_WEAVE_SPEED = 6.4;           // px/frame across the back of the arena
+    const BOSS_WEAVE_RANGE = 96;            // how far either side of centre the weave sweeps
+    const BOSS_CHARGE_DMG_MULT = 1.6;
+    const BOSS_CHARGE_REACH = 62;           // vs. a swing's 44 - it is a body, not an arm
+    // FLAT, not a fraction of playerMaxStm. On a base hero that is the entire bar and the guard
+    // is a total loss; a hero who has taken STAMINA picks (playerMaxStm is BASE + bonusStm)
+    // walks away from the same block with something still in hand. That is the point - it is one
+    // of the few places the stat is worth more than the swings it buys.
+    const BOSS_CHARGE_BLOCK_STM = 100;
+    // How far back a foe has to be before the player's swing stops finding it. The charge spends
+    // every phase but the rush above this, so the entire wind-up is unanswerable.
+    const REACH_DEPTH = 0.3;
+    // Px the horizon pulls a fully withdrawn foe's feet up the canvas, and how much of its size
+    // that distance takes. Purely how depth is SOLD - see drawEnemyBody.
+    const DEPTH_LIFT = 34;
+    const DEPTH_SHRINK = 0.42;
 
     // The hue on swarmer/circler above is only a starting value: every run rolls both of them
     // fresh, and independently - this run's runts can be blue while its fledglings are purple,
@@ -1534,10 +1609,20 @@
       // Boss attack rhythm - see the grounded-AI block: three patrol swings, then a hunt.
       e.atkCount = 0;
       e.hunting = false;
+      // The charge's own clock, which runs across those phases rather than inside one - see
+      // tickBossCharge. Depth is reset with it: a fight can only ever start on the front line.
+      e.chargeCount = 0;
+      e.special = 'none';
+      e.specialTimer = 0;
+      e.depth = 0;
+      e.weaveDir = 1;
+      e.lockX = 0;
+      e.noBlockTimer = 0;
       e.altitude = cfg.hover;
       e.swoop = 'none';
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
+      e.punishTimer = 0;   // walker: frames left in the opening after its own attack
       e.deathFade = 0;
       // Circler: half a circle apart, around a centre at its own spawn x, so two of them are
       // on opposite sides of their patterns and the player never faces both low points at once.
@@ -1605,6 +1690,10 @@
         // The foe the marker was drawn as; a battle started any other way still rolls at random.
         pickEnemyVariant(forceVariant);
 
+        // Now the foe is known: a boss drags the battle bed down in pitch and tempo, anything
+        // else runs it straight (and rides a leftover boss shift back to normal).
+        setBattleMusicRate(combatState.enemy.variant === 'boss' ? BOSS_MUSIC_RATE : 1, 1.5);
+
         const packN = combatState.enemies.length;
         showFloatingCombatText(packN > 1 ? `${combatState.enemy.name} x${packN} APPROACH!`
                                         : `${combatState.enemy.name} APPROACHES!`,
@@ -1618,6 +1707,7 @@
         if (dpadGrid) dpadGrid.classList.remove('hidden');
         if (controlsHeader) controlsHeader.textContent = "CONTROLS (Space: Use):";
         combatState.introFrame = 0;
+        setBattleMusicRate(1, 0.8);   // fight over - any boss pitch-shift slides back to normal
         // Hiding the action bar mid-press means the Block button never receives its pointerup or
         // pointerleave, so keysHeld.block would stay stuck on - and a stuck block drains stamina to
         // 2 and then blocks its own regen forever (see the regen guard in the combat loop).
@@ -2006,9 +2096,15 @@
     // Lifted out of the AI so every foe on the field shares one definition of what a landed
     // blow costs. The popups are nudged towards the striker's own x, so three swarmers landing
     // inside the same second don't stack their text on one spot.
-    function landEnemyStrike(e, dmg, dodgeMsg, blockMsg, hitLabel) {
+    // opts.blockStm overrides what CATCHING this particular blow costs, for strikes whose price
+    // on the shield is a property of the move rather than of the creature throwing it - the
+    // boss's charge is the only one so far, and it takes the whole bar.
+    function landEnemyStrike(e, dmg, dodgeMsg, blockMsg, hitLabel, opts) {
       const tx = 160 + (e.x || 0) * 0.4;
-      const isDodged = Math.abs(combatState.playerX - e.x) > 44;
+      // 44px is a swing's reach. opts.reach widens it for a move that is not a swing - the
+      // boss's charge is its whole body coming down a line, so getting clear of it means
+      // actually getting clear rather than shuffling to the edge of arm's length.
+      const isDodged = Math.abs(combatState.playerX - e.x) > ((opts && opts.reach) || 44);
       const isGuarded = combatState.shieldProgress > 0.6;
       if (isDodged) {
         playSfx('miss_player');
@@ -2023,7 +2119,13 @@
         // how tiring a foe is to turtle against is authored per creature rather than falling
         // out of its damage number.
         const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
-        combatState.playerStm = Math.max(0, combatState.playerStm - (cfg.blockStm || 25));
+        const stmCost = (opts && opts.blockStm != null) ? opts.blockStm : (cfg.blockStm || 25);
+        combatState.playerStm = Math.max(0, combatState.playerStm - stmCost);
+        // A move that prices its own guard is priced loudly. The ordinary per-variant bite is
+        // felt on the bar and doesn't need saying; losing the whole thing to one blow does.
+        if (opts && opts.blockStm != null) {
+          showFloatingCombatText(`-${stmCost} STAMINA!`, tx, 152, "#f97316");
+        }
       } else {
         combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
         combatState.hurtFrame = 1;
@@ -2054,6 +2156,110 @@
       }
     }
 
+    // The boss's charge, one tick of it. Runs INSTEAD of the ordinary grounded AI for as long as
+    // e.special is set - no patrol, no hunt, no cadence clock, no guard - and hands control back
+    // by clearing it. The phases, and what each one is for:
+    //
+    //   back    it withdraws off the front line, shrinking into the arena as it goes. Nothing
+    //           the player does can touch it from here (see REACH_DEPTH).
+    //   weave   fast sweeps across the back wall. This is the noise: it says a charge is coming
+    //           without saying where, so the weave is watched rather than acted on.
+    //   pause   a dead stop, and the moment it AIMS: lockX is taken here, off wherever the
+    //           player is standing, and is never taken again. This is the frame the player is
+    //           meant to start moving on - everything after it is committed to one line.
+    //   windup  it hunkers, builds, and slides onto that line, which is what shows the player
+    //           where the line is. Still out of reach.
+    //   rush    it comes down the line. Depth is spent across the run rather than dropped at
+    //           the end, so it crosses back into the player's reach part-way in and a hit can
+    //           be traded into it on the way past.
+    //
+    // See the constants block by CIRCLER_LAPS for what it costs to eat, guard or dodge.
+    function tickBossCharge(e, cfg) {
+      e.specialTimer--;
+      const spd = cfg.spd || 0.5;
+      if (e.special === 'back') {
+        // The swing that started all this is still landing, so this phase leaves e.state alone
+        // and ticks it out itself - the boss backs away mid-follow-through rather than snapping
+        // to idle on the frame it turns. A hit taken on the way out settles the same way.
+        e.depth = Math.min(1, e.depth + 1 / BOSS_BACK_FRAMES);
+        e.x += (0 - e.x) * 0.08;   // drift towards the middle, so the weave has room either side
+        if ((e.state === 'attack' || e.state === 'hurt') && --e.stateTimer <= 0) e.state = 'idle';
+        if (e.specialTimer <= 0) {
+          e.special = 'weave';
+          e.specialTimer = BOSS_WEAVE_FRAMES;
+          // Open away from the player, so the first sweep crosses the arena rather than
+          // starting on top of them.
+          e.weaveDir = combatState.playerX < 0 ? 1 : -1;
+        }
+      } else if (e.special === 'weave') {
+        e.depth = 1;
+        e.state = 'idle';
+        e.x += e.weaveDir * BOSS_WEAVE_SPEED;
+        if (e.x > BOSS_WEAVE_RANGE) { e.x = BOSS_WEAVE_RANGE; e.weaveDir = -1; }
+        else if (e.x < -BOSS_WEAVE_RANGE) { e.x = -BOSS_WEAVE_RANGE; e.weaveDir = 1; }
+        if (e.specialTimer <= 0) { e.special = 'pause'; e.specialTimer = BOSS_PAUSE_FRAMES; }
+      } else if (e.special === 'pause') {
+        e.state = 'idle';
+        // The aim, taken on the first frame of the stop and never taken again. Everything after
+        // this - the wind-up drift, the run-in - is committed to this line, which is what makes
+        // the pause worth reading: the player has this phase plus the whole wind-up, some 84
+        // frames, to walk off it. A charge that re-aimed later would make the telegraph a lie
+        // and leave the twitch during the rush as the only real answer.
+        if (e.specialTimer === BOSS_PAUSE_FRAMES - 1) {
+          e.lockX = combatState.playerX;
+          showFloatingCombatText("⚠️ IT TAKES AIM!", 160, 52, "#fbbf24");
+        }
+        if (e.specialTimer <= 0) {
+          e.special = 'windup';
+          e.specialTimer = BOSS_WINDUP_FRAMES;
+          e.state = 'telegraph';
+          // Pitched well under even the boss's own low sfxRate - this is the biggest thing it
+          // does, and it should sound like it comes from further away than the rest of the fight.
+          playSfx('attack', { rate: cfg.sfxRate * 0.65 });
+          showFloatingCombatText("⚠️ IT CHARGES!", 160, 62, "#f87171");
+        }
+      } else if (e.special === 'windup') {
+        e.state = 'telegraph';
+        // Settling onto the line it just took - lockX, NOT wherever the player has since moved
+        // to. This is the phase that shows the player which line it is, by lining up on it.
+        e.x += (e.lockX - e.x) * 0.09;
+        if (e.specialTimer <= 0) { e.special = 'rush'; e.specialTimer = BOSS_RUSH_FRAMES; }
+      } else if (e.special === 'rush') {
+        e.state = 'attack';
+        e.depth = Math.max(0, e.depth - 1 / BOSS_RUSH_FRAMES);
+        e.x += (e.lockX - e.x) * 0.35;
+        if (e.specialTimer <= 0) {
+          // Arrival. Snapped onto the line it committed to so the 44px dodge window in
+          // landEnemyStrike is measured against the line the player was given, not against
+          // wherever the lerp happened to have got to.
+          e.depth = 0;
+          e.x = e.lockX;
+          landEnemyStrike(e, Math.round(cfg.dmg * BOSS_CHARGE_DMG_MULT),
+            "SIDESTEPPED THE CHARGE!", "🛡️ CHARGE BLOCKED!", "CHARGE!",
+            { blockStm: BOSS_CHARGE_BLOCK_STM, reach: BOSS_CHARGE_REACH });
+          // Spent, and everything resets to a fresh patrol: the hunt rhythm, the count towards
+          // the next charge, and a full cadence before it swings again. The four seconds with
+          // no guard is what the player was buying by living through it.
+          e.special = 'none';
+          e.stateTimer = 26;
+          e.noBlockTimer = BOSS_CHARGE_RECOVER_FRAMES;
+          e.blockTimer = 0;
+          e.atkCount = 0;
+          e.attackTimer = cfg.cadence;
+          e.vx = (Math.random() < 0.5 ? -spd : spd);
+          // It comes OUT of the charge hunting, for two reasons. It reads right - having just
+          // run the player down it keeps coming rather than wandering off - and it is what
+          // stops the arrival from teleporting: the charge is aimed at the player's real x,
+          // which can be the ±85 strafe limit, while the patrol drift is penned into ±62 and
+          // would snap it back on the first ordinary tick. A hunt owns the full width.
+          // It also settles the rhythm at patrol, patrol, patrol, hunt, charge - see the
+          // count-up in the grounded AI, where the hunted swing is the one that reaches 5.
+          e.hunting = true;
+          if (!combatState.dead) showFloatingCombatText("IT CANNOT GUARD!", 160, 78, "#4ade80");
+        }
+      }
+    }
+
     // One foe's turn: three ways of fighting, chosen off its variant config.
     //   circling (circler)     - laps a circle that dips into reach, then breaks off to swoop
     //   airborne (flyer)       - hovers out of reach, then swoops
@@ -2062,6 +2268,15 @@
     function tickEnemyAI(e) {
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
       if (e.blockTimer > 0) e.blockTimer--;
+      // Frames left in the walker's post-attack opening (see reactiveBlock). Counts down every
+      // frame, including through its own attack and stagger, so the window is real elapsed time.
+      if (e.punishTimer > 0) e.punishTimer--;
+      // Frames left with the guard forced down (the boss's charge recovery). Same deal - real
+      // elapsed time, whatever the foe is doing with the rest of itself.
+      if (e.noBlockTimer > 0) e.noBlockTimer--;
+
+      // A boss mid-charge is not running the ordinary AI at all - see tickBossCharge.
+      if (e.special && e.special !== 'none') { tickBossCharge(e, cfg); return; }
 
       if (cfg.orbitLift) {
         // Circler: instead of the flyer's hover it flies a circle - cos drives the drift across
@@ -2191,12 +2406,23 @@
           if (e.stateTimer <= 0) e.state = 'idle';
         } else {
           e.attackTimer--;
-          // A grounded foe occasionally raises its guard between attacks (see the player-strike
-          // resolution, where e.blockTimer soaks most of a hit). While blockTimer runs, the
-          // renderer swaps in that foe's generated block frame. The swarmer has no guard at
-          // all - blockOdds 0 - which is most of what makes a pack of them killable.
-          if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0
+          // Raising the guard between attacks. While blockTimer runs the renderer swaps in
+          // that foe's generated block frame, and a player strike caught on it does no damage
+          // (see the player-strike resolution).
+          if (cfg.reactiveBlock) {
+            // The walker doesn't gamble - it reacts. The player's swing lands on attackFrame 7;
+            // catching it as early as frame 2 reads as the foe answering it. It guards through
+            // its own wind-up too, so swinging AT the telegraph just gets blocked - the only
+            // gap is punishTimer, the beat after its own attack when it can't get the guard up.
+            if ((e.state === 'idle' || e.state === 'telegraph') && e.punishTimer <= 0
+                && e.noBlockTimer <= 0
+                && combatState.attackFrame >= 2 && combatState.attackFrame < 7) {
+              e.blockTimer = cfg.blockHold || 60;
+            }
+          } else if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0 && e.noBlockTimer <= 0
               && Math.random() < (cfg.blockOdds || 0)) {
+            // Boss (and anything else with blockOdds): an occasional random guard. The swarmer
+            // has none at all - blockOdds 0 - which is most of what makes a pack of them killable.
             e.blockTimer = cfg.blockHold || 75;
             showFloatingCombatText("ENEMY GUARDS", 160 + e.x, 78, "#94a3b8");
           }
@@ -2214,12 +2440,29 @@
             e.state = 'attack';
             e.stateTimer = cfg.slow ? 20 : 14;
             e.blockTimer = 0;
+            // The walker's guard is down for punishWindow frames now - this swing is what opens
+            // it. Set here (on the commit) rather than when the blow lands, so even a dodged or
+            // whiffed enemy swing still leaves the gap.
+            if (cfg.reactiveBlock) e.punishTimer = cfg.punishWindow || 70;
             // Boss rhythm: three swings thrown from the drifting left/right patrol, then it
             // stops wandering and walks the player down for one hunted swing - after which
             // the count resets and the patrol resumes. Riding out the patrol phase at the
             // wall is survivable; riding out the hunt there is not.
             if (cfg.slow) {
-              if (e.hunting) {
+              // Every BOSS_CHARGE_EVERY swings, the patrol/hunt rhythm is put aside and the
+              // charge takes over (tickBossCharge). Counted on the COMMIT, alongside everything
+              // else here, so a swing the player dodged still carries it towards the set piece -
+              // the charge is a clock the player cannot stall by staying out of the way.
+              // This swing still lands: the boss withdraws out of its own follow-through.
+              if (++e.chargeCount >= BOSS_CHARGE_EVERY) {
+                e.chargeCount = 0;
+                e.special = 'back';
+                e.specialTimer = BOSS_BACK_FRAMES;
+                e.blockTimer = 0;
+                e.hunting = false;
+                e.atkCount = 0;
+                showFloatingCombatText("⚠️ IT PULLS BACK!", 160, 58, "#f87171");
+              } else if (e.hunting) {
                 e.hunting = false;      // that was the hunt's payoff - back to patrolling
                 e.atkCount = 0;
               } else if (++e.atkCount >= 3) {
@@ -2360,6 +2603,10 @@
           for (const k of living) {
             const kcfg = ENEMY_VARIANTS[k.variant] || ENEMY_VARIANTS.walker;
             if (kcfg.fly && k.altitude > 34) continue;
+            // ...and a foe that has pulled back off the front line is out of reach the other
+            // way. A charging boss spends every phase but the run-in behind this line, so the
+            // whole wind-up is something the player can only answer with their feet.
+            if ((k.depth || 0) > REACH_DEPTH) continue;
             if (!e || Math.abs(combatState.playerX - k.x) < Math.abs(combatState.playerX - e.x)) e = k;
           }
           if (living.length && !e) {
@@ -2369,41 +2616,50 @@
             showFloatingCombatText("OUT OF REACH!", 160, 90, "#93c5fd");
           } else if (e) {
             const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
-            const guarded = e.blockTimer > 0;
-            // STRENGTH picks ride on the base roll, so +4 is +4 through a guard and armour too
-            // (both of which scale the total) rather than a flat bonus that dwarfs them.
-            let dmg = 24 + progression.bonusAtk + Math.floor(Math.random() * 12);
-            if (guarded) { dmg = Math.max(1, Math.floor(dmg * 0.25)); e.blockTimer = 0; }
-            if (cfg.slow) dmg = Math.floor(dmg * 0.7);   // boss is armoured
-            e.hp = Math.max(0, e.hp - dmg);
-            e.state = 'hurt';
-            e.stateTimer = 12;
-            // Anchored on the foe that was actually hit rather than on the centre line, so in a
-            // pack the number appears over the one that took it.
-            showFloatingCombatText(guarded ? `BLOCKED! -${dmg}` : `-${dmg} SLASH!`,
-              160 + e.x * 0.6 + (Math.random() * 20 - 10), 100, guarded ? "#94a3b8" : "#f87171");
-            // The enemy's own guard soaking the blow reads as a block, not as a wound.
-            // Pitched by cfg.sfxRate - see ENEMY_VARIANTS - so the same clip reads as the
-            // flyer's yelp or the boss's boom depending on who is actually getting hit.
-            playSfx(guarded ? 'block' : 'hit_enemy', { rate: cfg.sfxRate });
+            if (e.blockTimer > 0) {
+              // Caught on the guard: nothing lands - no HP lost, no stagger. The walker keeps
+              // its guard through it (reactiveBlock); every other foe drops it, so the boss
+              // fight stays a rhythm of blocked-then-clean swings instead of a wall.
+              if (!cfg.reactiveBlock) e.blockTimer = 0;
+              showFloatingCombatText("BLOCKED!",
+                160 + e.x * 0.6 + (Math.random() * 20 - 10), 100, "#94a3b8");
+              // Pitched by cfg.sfxRate - see ENEMY_VARIANTS - the boss's boom, the flyer's yelp.
+              playSfx('block', { rate: cfg.sfxRate });
+            } else {
+              // STRENGTH picks ride on the base roll, so +4 is +4 through armour too (which
+              // scales the total) rather than a flat bonus that dwarfs it.
+              let dmg = 24 + progression.bonusAtk + Math.floor(Math.random() * 12);
+              if (cfg.slow) dmg = Math.floor(dmg * 0.7);   // boss is armoured
+              e.hp = Math.max(0, e.hp - dmg);
+              e.state = 'hurt';
+              e.stateTimer = 12;
+              // A clean hit on the walker spends its opening: clearing punishTimer here makes
+              // the read worth exactly one hit, not a combo while it is staggered out of guard.
+              if (cfg.reactiveBlock) e.punishTimer = 0;
+              // Anchored on the foe that was actually hit rather than on the centre line, so in
+              // a pack the number appears over the one that took it.
+              showFloatingCombatText(`-${dmg} SLASH!`,
+                160 + e.x * 0.6 + (Math.random() * 20 - 10), 100, "#f87171");
+              playSfx('hit_enemy', { rate: cfg.sfxRate });
 
-            if (e.hp <= 0) {
-              e.state = 'defeated';
-              e.blockTimer = 0;
-              // Starts the dither-out. combatTick counts it up and calls
-              // finishEncounterVictory() once every corpse has fully dissolved.
-              e.deathFade = 1;
-              // Same species, several sizes: one death cry serves every variant, pitched by
-              // cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
-              playSfx('death_enemy', { rate: cfg.sfxRate });
-              // Banked, not assigned: a pack pays out once, for all of them, when the last
-              // corpse finishes dissolving.
-              const xp = ENEMY_XP[e.variant] || ENEMY_XP.walker;
-              combatState.pendingXp += xp;
-              const left = combatState.enemies.filter(k => k.hp > 0).length;
-              showFloatingCombatText(
-                left ? `DOWN! +${xp} XP (${left} LEFT)` : `VICTORY! +${combatState.pendingXp} XP`,
-                160, 70, "#fde047");
+              if (e.hp <= 0) {
+                e.state = 'defeated';
+                e.blockTimer = 0;
+                // Starts the dither-out. combatTick counts it up and calls
+                // finishEncounterVictory() once every corpse has fully dissolved.
+                e.deathFade = 1;
+                // Same species, several sizes: one death cry serves every variant, pitched by
+                // cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
+                playSfx('death_enemy', { rate: cfg.sfxRate });
+                // Banked, not assigned: a pack pays out once, for all of them, when the last
+                // corpse finishes dissolving.
+                const xp = ENEMY_XP[e.variant] || ENEMY_XP.walker;
+                combatState.pendingXp += xp;
+                const left = combatState.enemies.filter(k => k.hp > 0).length;
+                showFloatingCombatText(
+                  left ? `DOWN! +${xp} XP (${left} LEFT)` : `VICTORY! +${combatState.pendingXp} XP`,
+                  160, 70, "#fde047");
+              }
             }
           }
         }
@@ -3438,13 +3694,16 @@
     function drawCombatEnemy(c, width, height) {
       if (!combatState.inBattle) return;
 
-      // Back to front, by altitude: whatever is highest is furthest up the arena, so it is
-      // laid down first and anything on the floor overlaps it. Sorted on a copy - the array
-      // order is the pack order everywhere else (formOffset, orbit phase) and must not move.
+      // Back to front: whatever is highest up the arena is laid down first, so anything nearer
+      // the camera overlaps it. Both things that push a foe up the canvas count - altitude (a
+      // flyer's hover) and depth (a boss withdrawn for its charge) - weighted so a fully
+      // withdrawn foe sorts behind anything merely airborne. Sorted on a copy: the array order
+      // is the pack order everywhere else (formOffset, orbit phase) and must not move.
       const order = combatState.enemies
         .filter(e => e.hp > 0 || e.deathFade > 0)
         .slice()
-        .sort((a, b) => (b.altitude || 0) - (a.altitude || 0));
+        .sort((a, b) => ((b.altitude || 0) + (b.depth || 0) * 120)
+                      - ((a.altitude || 0) + (a.depth || 0) * 120));
 
       for (const e of order) {
         // Each foe carries its own dissolve, so in a pack one corpse dithers away while the
@@ -3475,12 +3734,21 @@
       const e = which || combatState.enemy;
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
       const GROUND_Y = 165;                       // where a grounded enemy's feet sit
-      const ex = width / 2 + (e.x || 0);
+      // DEPTH. 0 is the front line, where every fight is normally fought; 1 is the back of the
+      // arena, where the boss withdraws for its charge. There is no real third axis in this
+      // view, so distance is sold the two ways a flat scene can sell it: the figure shrinks,
+      // and its feet ride up towards the horizon. Its x offset is pulled in by the same factor,
+      // so backing off narrows the whole arena the way perspective would - a weave that covers
+      // 148px of arena reads as a shorter, faster sweep across the back wall.
+      const depth = e.depth || 0;
+      const dScale = 1 - DEPTH_SHRINK * depth;
+      const groundY = GROUND_Y - depth * DEPTH_LIFT;
+      const ex = width / 2 + (e.x || 0) * dScale;
       // The winner's dance: once the player is down, the enemy bounces straight up and down on
       // the spot, celebrating. Negative = higher on the canvas; abs(sin) so it only ever leaves
       // the ground and lands, never sinks through it.
       const victoryHop = combatState.dead ? -Math.abs(Math.sin(Date.now() / 130)) * 24 : 0;
-      const ey = (GROUND_Y - 70) - (e.altitude || 0) + Math.sin(Date.now() / 200) * 4 + victoryHop;
+      const ey = (groundY - 70) - (e.altitude || 0) + Math.sin(Date.now() / 200) * 4 + victoryHop;
 
       // No telegraph circle - the attack frame shows the wind-up, and the "ENEMY WIND-UP!"
       // floating text still calls it.
@@ -3517,17 +3785,18 @@
         if (frame && frame.complete && frame.naturalWidth > 0) {
           // Size by MEASURED solid content, not the raw frame - a small generation still fills
           // the combat view. heightFrac is per-variant: boss looms, flyer is smaller & airborne.
-          const targetH = Math.round(height * cfg.heightFrac);
-          const maxW = Math.round(width * (cfg.widthFrac || 0.7));
+          const targetH = Math.round(height * cfg.heightFrac * dScale);
+          const maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
           const bob = cfg.fly ? Math.sin(Date.now() / 110) * 4 : Math.sin(Date.now() / 220) * 3;
-          const bottomY = GROUND_Y - (e.altitude || 0) + bob + victoryHop;
+          const bottomY = groundY - (e.altitude || 0) + bob + victoryHop;
 
           c.save();
-          // Ground shadow - fades and shrinks as a flyer climbs.
+          // Ground shadow - fades and shrinks as a flyer climbs, and travels up the canvas with
+          // its owner's feet as a withdrawn foe backs away.
           const sh = cfg.fly ? Math.max(0.14, 1 - (e.altitude || 0) / 90) : 1;
           c.fillStyle = `rgba(0,0,0,${0.28 * sh})`;
           c.beginPath();
-          c.ellipse(width / 2 + (e.x || 0), GROUND_Y + 3, targetH * 0.32 * sh, targetH * 0.08 * sh, 0, 0, Math.PI * 2);
+          c.ellipse(ex, groundY + 3, targetH * 0.32 * sh, targetH * 0.08 * sh, 0, 0, Math.PI * 2);
           c.fill();
 
           if (e.state === 'hurt') { c.translate((Math.random() * 8 - 4), 0); c.globalAlpha = 0.9; }
@@ -6371,6 +6640,372 @@
         appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
       }
     });
+
+    // ==========================================
+    // SCREEN SAVER - Windows 98 "Starfield Simulation"
+    // ==========================================
+    // A full-window black sheet that takes over after a stretch of doing nothing, with the
+    // stars flying out of the middle exactly like the one that shipped with Win98. It only
+    // ever appears when the machine is genuinely unattended: any pointer move, keypress,
+    // button or typed character both resets the countdown and dismisses it, and narration,
+    // a playing video and a live battle hold it off entirely (see screensaverBlocked).
+    //
+    // Everything drawn on it - stars, the generation readout, the story marquee - goes into
+    // the single canvas, which is sized in CSS pixels and stretched by the browser, so the
+    // global `image-rendering: pixelated` gives the whole thing the chunky low-res look of
+    // the original instead of a crisp modern one.
+
+    const screensaverEl = document.getElementById('screensaver');
+    const starfieldCanvas = document.getElementById('starfieldCanvas');
+    const starCtx = starfieldCanvas ? starfieldCanvas.getContext('2d') : null;
+    const screensaverDelayInput = document.getElementById('screensaverDelay');
+    const screensaverDelayText = document.getElementById('screensaverDelayText');
+
+    // Slider stops, left to right. Index 0 is off; the default is index 2 (one minute).
+    const SCREENSAVER_STOPS = [
+      { secs: 0,    label: 'Disabled - the screen saver never starts.' },
+      { secs: 30,   label: 'Starts after 30 seconds of idling.' },
+      { secs: 60,   label: 'Starts after 1 minute of idling.' },
+      { secs: 120,  label: 'Starts after 2 minutes of idling.' },
+      { secs: 300,  label: 'Starts after 5 minutes of idling.' },
+      { secs: 600,  label: 'Starts after 10 minutes of idling.' },
+      { secs: 1800, label: 'Starts after 30 minutes of idling.' },
+      { secs: 3600, label: 'Starts after 1 hour of idling.' }
+    ];
+    const SCREENSAVER_DEFAULT_STOP = 2;
+    let screensaverDelayMs = SCREENSAVER_STOPS[SCREENSAVER_DEFAULT_STOP].secs * 1000;
+
+    let screensaverActive = false;
+    let screensaverShownAt = 0;
+    let screensaverLastActivity = Date.now();
+    let screensaverRaf = null;
+    let screensaverT0 = 0;
+
+    // ---- Stars -------------------------------------------------------------
+    // Model space is a unit frustum: x and y in [-1, 1], z falling from 1 (the far plane,
+    // where a star is a dim speck at the vanishing point) to 0 (the eye). The projection is
+    // the plain x/z divide, so a star's screen distance from centre grows without bound as
+    // it comes at you - which is the whole effect.
+    const STAR_COUNT = 320;
+    const STAR_SPEED = 0.34;      // depth units per second
+    const STAR_NEAR = 0.035;      // recycled once nearer than this, before the divide explodes
+    // The original's palette: white with a few cool and warm greys mixed in, never saturated.
+    const STAR_TINTS = [
+      [255, 255, 255], [255, 255, 255], [255, 255, 255],
+      [216, 224, 255], [255, 240, 216], [192, 192, 192]
+    ];
+    const stars = [];
+
+    function seedStar(st, atFarPlane) {
+      st.x = (Math.random() * 2 - 1);
+      st.y = (Math.random() * 2 - 1);
+      // A fresh field is filled at every depth, or the first second is an empty screen;
+      // recycled stars always come back in at the far plane.
+      st.z = atFarPlane ? 1 : (STAR_NEAR + Math.random() * (1 - STAR_NEAR));
+      st.tint = STAR_TINTS[(Math.random() * STAR_TINTS.length) | 0];
+      return st;
+    }
+    for (let i = 0; i < STAR_COUNT; i++) stars.push(seedStar({}, false));
+
+    function drawStarfield(w, h, dt) {
+      const cx = w / 2, cy = h / 2;
+      // One scale for both axes keeps the field circular rather than stretched to the window.
+      // 0.26 is what makes the far plane land WELL inside the frame: at 0.5 the whole square
+      // of spawn positions already fills the window, so stars appear spread out and drift off
+      // the edge almost at once. This tucks them into the middle third, so each one visibly
+      // accelerates out from the vanishing point - the actual effect being copied here.
+      const scale = Math.max(w, h) * 0.26;
+      for (let i = 0; i < stars.length; i++) {
+        const st = stars[i];
+        st.z -= STAR_SPEED * dt;
+        if (st.z <= STAR_NEAR) { seedStar(st, true); continue; }
+        const sx = cx + (st.x / st.z) * scale;
+        const sy = cy + (st.y / st.z) * scale;
+        // Off the edges it is gone for good - recycling it keeps the density even.
+        if (sx < -8 || sx > w + 8 || sy < -8 || sy > h + 8) { seedStar(st, true); continue; }
+        // Near stars are bigger and brighter; the far ones fade up out of the vanishing
+        // point instead of popping into existence. The size ramp is near^1.5 rather than
+        // near^2 - squared, almost every star stays a single pixel, because a star has to
+        // be nearly dead centre to survive deep enough for the curve to lift it, and the
+        // field ends up an even dusting with no sense of depth at all.
+        const near = 1 - st.z;
+        const size = 1 + Math.round(Math.pow(near, 1.5) * 3.5);
+        const alpha = Math.min(1, 0.10 + near * 1.35);
+        const t = st.tint;
+        starCtx.fillStyle = 'rgba(' + t[0] + ',' + t[1] + ',' + t[2] + ',' + alpha.toFixed(3) + ')';
+        starCtx.fillRect(Math.round(sx), Math.round(sy), size, size);
+      }
+    }
+
+    // ---- Text drawn over the stars ----------------------------------------
+    // Monospace, white on black, no panels: the readouts have to sit in the star field
+    // without turning into a dialog box on top of it.
+    function ssFont(px, bold) {
+      return (bold ? 'bold ' : '') + px + 'px "Lucida Console", "Courier New", monospace';
+    }
+
+    function ssLine(text, x, y, px, alpha, opts) {
+      const o = opts || {};
+      starCtx.font = ssFont(px, o.bold !== false);
+      starCtx.textAlign = o.align || 'center';
+      starCtx.textBaseline = 'alphabetic';
+      try { starCtx.letterSpacing = (o.spacing || 0) + 'px'; } catch (e) { /* older browsers */ }
+      // A soft halo, so a star passing behind a glyph never eats it.
+      starCtx.shadowColor = 'rgba(0,0,0,0.9)';
+      starCtx.shadowBlur = 6;
+      starCtx.fillStyle = 'rgba(' + (o.rgb || '255,255,255') + ',' + alpha + ')';
+      starCtx.fillText(text, x, y);
+      starCtx.shadowBlur = 0;
+      try { starCtx.letterSpacing = '0px'; } catch (e) {}
+    }
+
+    // The Win95 install bar, redrawn in the star field's own palette: a sunken grey trough
+    // of fixed-pitch blocks rather than a smooth modern fill.
+    function ssProgressBar(cx, y, width, percent) {
+      const h = 14, pitch = 12, chunkW = 10;
+      const x = Math.round(cx - width / 2);
+      starCtx.strokeStyle = 'rgba(160,160,160,0.75)';
+      starCtx.lineWidth = 1;
+      starCtx.strokeRect(x + 0.5, y + 0.5, width - 1, h - 1);
+      const inner = width - 6;
+      const maxChunks = Math.max(1, Math.floor(inner / pitch));
+      const chunks = Math.round((Math.max(0, Math.min(100, percent)) / 100) * maxChunks);
+      starCtx.fillStyle = 'rgba(255,255,255,0.92)';
+      for (let i = 0; i < chunks; i++) {
+        starCtx.fillRect(x + 3 + i * pitch, y + 3, chunkW, h - 6);
+      }
+    }
+
+    // One line of text scrolling right to left, tiled so it never leaves a gap.
+    function ssMarquee(w, h, text, t) {
+      const px = Math.max(11, Math.min(19, Math.round(w / 60)));
+      starCtx.font = ssFont(px, true);
+      starCtx.textAlign = 'left';
+      try { starCtx.letterSpacing = '0px'; } catch (e) {}
+      const gap = px * 8;
+      const span = starCtx.measureText(text).width + gap;
+      const y = h - Math.round(px * 1.15);
+      // A hairline rule above the band, so the marquee reads as part of the display.
+      starCtx.fillStyle = 'rgba(255,255,255,0.16)';
+      starCtx.fillRect(0, y - Math.round(px * 1.5), w, 1);
+      starCtx.shadowColor = 'rgba(0,0,0,0.9)';
+      starCtx.shadowBlur = 6;
+      starCtx.fillStyle = 'rgba(255,255,255,0.88)';
+      // ~7 characters a second: quick enough to read the whole line without waiting on it,
+      // slow enough that the words are not a blur.
+      let x = w - ((t * px * 7) % span);
+      while (x > -span) { starCtx.fillText(text, x, y); x -= span; }
+      starCtx.shadowBlur = 0;
+    }
+
+    // ---- What each screen puts on the star field ---------------------------
+    function ssGenerationOverlay(w, h, t) {
+      const done = !!(pendingBundle && btnEnterDungeon && !btnEnterDungeon.disabled);
+      const cx = w / 2;
+      const baseY = Math.round(h * 0.70);
+      const big = Math.max(26, Math.min(64, Math.round(w / 15)));
+      const small = Math.max(10, Math.min(15, Math.round(w / 78)));
+
+      if (done) {
+        // Breathing rather than blinking - a hard blink over a moving star field reads as a
+        // glitch, a slow pulse reads as "waiting for you".
+        const pulse = 0.66 + 0.34 * Math.sin(t * 2.2);
+        ssLine('DONE GENERATING ASSETS', cx, baseY, Math.round(big * 0.62), pulse, { spacing: 3 });
+        const where = ((dungeonStory && dungeonStory.location) || '').trim();
+        ssLine(where ? (where.toUpperCase() + ' IS WAITING') : 'THE DUNGEON IS WAITING',
+               cx, baseY + small * 2.6, small, 0.72, { rgb: '200,214,255', spacing: 2 });
+        ssLine('MOVE THE MOUSE OR PRESS A KEY TO RETURN', cx, h - small * 2.4, small, 0.45,
+               { rgb: '176,176,176', spacing: 1 });
+        return;
+      }
+
+      const pct = parseInt((progPercentText && progPercentText.textContent) || '0', 10) || 0;
+      ssLine('GENERATING DUNGEON ASSETS', cx, baseY - big * 0.95, small, 0.6,
+             { rgb: '200,214,255', spacing: 4 });
+      ssLine(pct + '%', cx, baseY, big, 0.95, { spacing: 2 });
+      ssProgressBar(cx, baseY + Math.round(small * 1.4), Math.min(440, Math.round(w * 0.6)), pct);
+      const status = ((progStatusText && progStatusText.textContent) || '').trim();
+      if (status) {
+        ssLine(status.length > 64 ? status.slice(0, 63) + '…' : status,
+               cx, baseY + small * 4.6, small, 0.55, { rgb: '176,176,176' });
+      }
+    }
+
+    function ssStoryMarqueeText() {
+      const st = dungeonStory || {};
+      const hero = (st.hero || '').trim() || 'the nameless warrior';
+      const where = (st.location || currentThemeName || '').trim() || 'the dungeon';
+      const foe = (st.foe || enemyStyleName || '').trim();
+      const boss = (st.boss || enemyBossName || '').trim();
+      const sep = '   •   ';
+      const parts = [];
+      parts.push(hero.toUpperCase() + ' STILL WALKS ' + where.toUpperCase());
+      parts.push('LEVEL ' + progression.level);
+      parts.push(Math.max(0, Math.round(combatState.playerHp)) + '/' + combatState.playerMaxHp + ' HP');
+      parts.push(totalMoves + (totalMoves === 1 ? ' STEP TAKEN' : ' STEPS TAKEN'));
+      if (passagesList.length) parts.push(visitedTiles.size + '/' + passagesList.length + ' TILES MAPPED');
+      if (foe) parts.push(foe.toUpperCase() + ' PROWLS THE DARK');
+      if (boss) parts.push(boss.toUpperCase() + ' WAITS AT THE END');
+      parts.push('THE DUNGEON IS HOLDING YOUR PLACE');
+      return parts.join(sep) + sep;
+    }
+
+    function ssGameOverlay(w, h, t) {
+      const st = dungeonStory || {};
+      const hero = ((st.hero || '').trim() || 'the nameless warrior').toUpperCase();
+      const where = ((st.location || currentThemeName || '').trim() || 'the dungeon').toUpperCase();
+      const cx = w / 2;
+      const big = Math.max(20, Math.min(46, Math.round(w / 21)));
+      const small = Math.max(10, Math.min(15, Math.round(w / 78)));
+      const baseY = Math.round(h * 0.68);
+      // The name drifts in brightness, so a player who has stopped moving still sees the
+      // screen doing something with their hero rather than a frozen caption.
+      ssLine(hero, cx, baseY, big, 0.72 + 0.2 * Math.sin(t * 1.1), { spacing: 3 });
+      ssLine('LEVEL ' + progression.level + '  •  ' + where, cx, baseY + small * 2.4, small,
+             0.66, { rgb: '200,214,255', spacing: 2 });
+      ssMarquee(w, h, ssStoryMarqueeText(), t);
+    }
+
+    function ssSetupOverlay(w, h, t) {
+      const cx = w / 2;
+      ssLine('COMFYCRAWLER', cx, Math.round(h * 0.70),
+             Math.max(20, Math.min(44, Math.round(w / 22))),
+             0.66 + 0.24 * Math.sin(t * 1.1), { spacing: 6 });
+      ssMarquee(w, h,
+        'COMFYCRAWLER   •   A 3D DUNGEON BUILT OUT OF WHATEVER YOU TYPE   •   ' +
+        'MOVE THE MOUSE OR PRESS A KEY TO RETURN   •   ', t);
+    }
+
+    // ---- Frame -------------------------------------------------------------
+    function sizeStarfield() {
+      if (!starfieldCanvas) return;
+      // Deliberately backed at CSS-pixel size (no devicePixelRatio): on a hi-dpi screen the
+      // browser scales it up under `image-rendering: pixelated`, which is exactly the coarse
+      // pixel grid the 1998 original ran on.
+      const w = Math.max(1, window.innerWidth);
+      const h = Math.max(1, window.innerHeight);
+      if (starfieldCanvas.width !== w) starfieldCanvas.width = w;
+      if (starfieldCanvas.height !== h) starfieldCanvas.height = h;
+    }
+
+    let ssLastFrame = 0;
+    function screensaverFrame(now) {
+      if (!screensaverActive) { screensaverRaf = null; return; }
+      screensaverRaf = requestAnimationFrame(screensaverFrame);
+      sizeStarfield();
+      const w = starfieldCanvas.width, h = starfieldCanvas.height;
+      // Clamped, so a tab that was backgrounded doesn't warp the whole field forward at once.
+      const dt = Math.min(0.05, Math.max(0, (now - ssLastFrame) / 1000));
+      ssLastFrame = now;
+      const t = (now - screensaverT0) / 1000;
+
+      starCtx.fillStyle = '#000000';
+      starCtx.fillRect(0, 0, w, h);
+      drawStarfield(w, h, dt);
+
+      if (!screenProgress.classList.contains('hidden')) ssGenerationOverlay(w, h, t);
+      else if (!screenGame.classList.contains('hidden')) ssGameOverlay(w, h, t);
+      else ssSetupOverlay(w, h, t);
+    }
+
+    // ---- Show / hide / idle ------------------------------------------------
+    function showScreensaver() {
+      if (screensaverActive || !screensaverEl || !starCtx) return;
+      screensaverActive = true;
+      screensaverShownAt = Date.now();
+      sizeStarfield();
+      // A fresh field every time, so it always opens on the same sparse warp.
+      for (let i = 0; i < stars.length; i++) seedStar(stars[i], false);
+      screensaverEl.classList.remove('hidden');
+      screensaverT0 = ssLastFrame = performance.now();
+      screensaverRaf = requestAnimationFrame(screensaverFrame);
+    }
+
+    function hideScreensaver() {
+      if (!screensaverActive) return;
+      screensaverActive = false;
+      if (screensaverRaf) { cancelAnimationFrame(screensaverRaf); screensaverRaf = null; }
+      if (screensaverEl) screensaverEl.classList.add('hidden');
+      screensaverLastActivity = Date.now();
+    }
+
+    function ssAudioPlaying(el) {
+      return !!(el && el.src && !el.paused && !el.ended);
+    }
+
+    function ssVideoPlaying() {
+      const vids = document.querySelectorAll('video');
+      for (let i = 0; i < vids.length; i++) {
+        const v = vids[i];
+        if (!v.paused && !v.ended && v.readyState > 2) return true;
+      }
+      return false;
+    }
+
+    // Anything here means the machine is not actually unattended, so the countdown is held
+    // at zero rather than merely paused - the full wait has to elapse after it clears.
+    function screensaverBlocked() {
+      if (screensaverDelayMs <= 0) return true;
+      if (narrationActive() || ssAudioPlaying(narrateAudio) || ssAudioPlaying(outroAudio)) return true;
+      // A battle is real time - the foe keeps swinging between keypresses - so it counts as
+      // the game being played throughout. Once the player is down it stops counting.
+      if (combatState.inBattle && !combatState.dead) return true;
+      if (ssVideoPlaying()) return true;
+      return false;
+    }
+
+    function noteScreensaverActivity(e) {
+      screensaverLastActivity = Date.now();
+      if (!screensaverActive) return;
+      // The overlay appears on the same tick some browsers deliver a synthetic move for, so
+      // ignore the first fraction of a second or it would dismiss itself instantly.
+      if (Date.now() - screensaverShownAt < 350) return;
+      hideScreensaver();
+      // The input that woke the machine is spent waking it: it must not also type a
+      // character into the prompt behind the overlay or take a step in the dungeon.
+      if (e) {
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      }
+    }
+
+    // Capture phase on window, so this runs before game.js's own key handlers (which are
+    // bubble-phase on window) and can swallow the waking keypress.
+    ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'wheel',
+     'touchstart', 'touchmove', 'keydown', 'keyup', 'input', 'paste'
+    ].forEach(type => window.addEventListener(type, noteScreensaverActivity,
+                                              { capture: true, passive: false }));
+
+    window.addEventListener('resize', () => { screensaverLastActivity = Date.now(); sizeStarfield(); });
+
+    setInterval(() => {
+      if (screensaverBlocked()) {
+        // Never leave it up once something starts talking or a fight begins.
+        if (screensaverActive) hideScreensaver();
+        screensaverLastActivity = Date.now();
+        return;
+      }
+      if (screensaverActive) return;
+      if (Date.now() - screensaverLastActivity >= screensaverDelayMs) showScreensaver();
+    }, 500);
+
+    // ---- The Options slider ------------------------------------------------
+    function applyScreensaverStop(idx) {
+      const i = Math.max(0, Math.min(SCREENSAVER_STOPS.length - 1, idx | 0));
+      screensaverDelayMs = SCREENSAVER_STOPS[i].secs * 1000;
+      if (screensaverDelayText) screensaverDelayText.textContent = SCREENSAVER_STOPS[i].label;
+      if (screensaverDelayMs <= 0 && screensaverActive) hideScreensaver();
+      screensaverLastActivity = Date.now();
+    }
+
+    if (screensaverDelayInput) {
+      screensaverDelayInput.value = String(SCREENSAVER_DEFAULT_STOP);
+      screensaverDelayInput.addEventListener('input', () => {
+        applyScreensaverStop(parseInt(screensaverDelayInput.value, 10));
+      });
+      applyScreensaverStop(SCREENSAVER_DEFAULT_STOP);
+    }
 
     // Boot engine
     buildDefaultTextures();

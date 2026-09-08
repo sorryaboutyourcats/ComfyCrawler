@@ -290,6 +290,75 @@
       gap: 4px !important;
       width: 220px !important;
     }
+
+    /* ---- Screen saver: Windows 98 "Starfield Simulation" ------------------
+       A fixed, full-window black sheet above every screen and modal (those are z-50).
+       Everything on it - the stars, the generation readout, the story marquee - is drawn
+       into the one canvas, which is sized in CSS pixels and stretched by the browser, so
+       the global `image-rendering: pixelated` gives it the chunky look of the original. */
+    #screensaver {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #000000;
+      overflow: hidden;
+      cursor: none;
+    }
+    #starfieldCanvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Win95 trackbar for the screen saver timeout: a sunken groove with a chunky raised
+       thumb, instead of the browser's modern pill. */
+    input[type="range"].win95-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 20px;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type="range"].win95-slider::-webkit-slider-runnable-track {
+      height: 6px;
+      background: #808080;
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+    }
+    input[type="range"].win95-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 20px;
+      margin-top: -7px;
+      background: #c0c0c0;
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+      box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+    }
+    input[type="range"].win95-slider::-moz-range-track {
+      height: 6px;
+      background: #808080;
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+    }
+    input[type="range"].win95-slider::-moz-range-thumb {
+      width: 12px;
+      height: 20px;
+      border-radius: 0;
+      background: #c0c0c0;
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+    }
   </style>
 </head>
 <body>
@@ -496,7 +565,9 @@
 
     <!-- CONFIGURATION & OPTIONS MODAL DIALOG -->
     <div id="modalSettings" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
-      <div class="win95-box w-full max-w-md p-1 shadow-2xl">
+      <!-- The dialog scrolls rather than overflowing: with the screen saver row added, the
+           four sections are taller than a short window and the OK button was falling off. -->
+      <div class="win95-box w-full max-w-md p-1 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div class="win95-title flex items-center justify-between mb-2">
           <span>⚙️ Options</span>
           <button id="btnCloseSettings" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
@@ -550,6 +621,19 @@
               <option value="skip">Skip sound generation</option>
             </select>
             <div class="text-[10px] text-slate-500 font-bold">Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800" for="screensaverDelay">
+              Screen Saver Wait (Starfield):
+            </label>
+            <input id="screensaverDelay" class="win95-slider" type="range" min="0" max="7" step="1" value="2"
+                   aria-describedby="screensaverDelayText" />
+            <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
+              <span>Off</span><span>30s</span><span>1m</span><span>2m</span><span>5m</span><span>10m</span><span>30m</span><span>1h</span>
+            </div>
+            <div class="text-[11px] text-blue-900 font-bold" id="screensaverDelayText">Starts after 1 minute of idling.</div>
+            <div class="text-[10px] text-slate-500 font-bold">The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
           </div>
 
           <div class="flex justify-end mt-2">
@@ -775,6 +859,14 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- SCREEN SAVER OVERLAY
+       Sits outside #appContainer and above every modal (z-50) so it genuinely takes the
+       whole window. Stars, the generation readout and the story marquee are all painted
+       into this one canvas by game.js. -->
+  <div id="screensaver" class="hidden">
+    <canvas id="starfieldCanvas"></canvas>
   </div>
 
   <script src="game.js"></script>
