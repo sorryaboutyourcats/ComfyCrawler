@@ -226,14 +226,14 @@ for typed in ("chat", "Chat", "twitch chat", "stream chat", "chatters", "emotes"
     lit = srv._enemy_literal(typed)
     ck(lit is not None, f"{typed!r} should get the hand-tuned subject")
     if lit:
-        # a COLOURED bubble the person HOLDS. White is matted away with the background and a
-        # bubble floating clear of the body is deleted by keep_largest_figure - both were
-        # rendered, and both came back as a person and no bubble at all.
-        ck("purple speech bubble" in lit and "emojis" in lit,
-           f"{typed!r} lost the bubble: {lit!r}")
+        # a COLOURED bubble ABOVE the head. White is matted away with the background, and a
+        # held placard covers the foe's face - both were rendered and both were reported.
+        ck(srv._CHAT_ENEMY_MARK in lit and "over their head" in lit,
+           f"{typed!r} lost the bubble or its placement: {lit!r}")
         ck("white" not in lit, f"a white bubble is cut away with the background: {lit!r}")
+        ck("holding" not in lit, f"a held bubble covers the foe's face: {lit!r}")
         # the PERSON has to be the head noun: "chat-bubble viewer" draws a bubble and nobody
-        ck(any(lit.startswith(p + " holding ") for p in srv._CHAT_ENEMY_PEOPLE),
+        ck(any(lit.startswith(p + " with ") for p in srv._CHAT_ENEMY_PEOPLE),
            f"person is not the head noun: {lit!r}")
         ck(len(lit.split()) <= 12, f"subject too long to be repeated eight times: {lit!r}")
 # word boundaries, so somebody who typed an actual robot still gets one
@@ -241,6 +241,32 @@ for typed in ("chatbot", "chatbots", "gummy bear", "stick of computer RAM", "", 
     ck(srv._enemy_literal(typed) is None, f"{typed!r} should not be overridden")
 # it really is rolled per dungeon rather than fixed
 ck(len({srv._enemy_literal("chat") for _ in range(60)}) > 1, "the person never varies")
+
+# The placement clause rides on the LOOK lines, not on the subject the bestiary repeats eight
+# times, and it must reach EVERY variant - the bubble has to touch the figure
+# (keep_largest_figure keeps one connected blob) and sit above the face rather than over it.
+# It goes in FRONT: appended after the flyer wings the bubble did not render at all, on two
+# seeds; the same two seeds drew it with the clause moved to the front.
+sp_chat = {"walker": {"look": "Young man in a green shirt, squatting low.", "name": "A"},
+           "flyer":  {"look": "A young man with insect wings", "name": "B"},
+           "boss":   {"look": "", "name": "C"}}
+out = srv._enemy_look_lead(sp_chat, srv._enemy_literal("chat"))
+for v in ("walker", "flyer"):
+    ck(out[v]["look"].startswith(srv._CHAT_ENEMY_LOOK + ", "),
+       f"{v} did not LEAD with the placement: {out[v]['look']!r}")
+    ck(", ," not in out[v]["look"] and ".," not in out[v]["look"],
+       f"{v} punctuation: {out[v]['look']!r}")
+ck(out["walker"]["look"].endswith("young man in a green shirt, squatting low"),
+   f"the designed look was damaged: {out['walker']['look']!r}")
+ck(out["boss"]["look"] == "", "an empty look should be left alone, not turned into a bare clause")
+# every other theme is untouched
+sp_other = {"walker": {"look": "A moss-covered dire bear with heavy claws", "name": "A"}}
+ck(srv._enemy_look_lead(sp_other, "gummy bear")["walker"]["look"]
+   == "A moss-covered dire bear with heavy claws", "a non-chat theme was given the clause")
+ck(srv._enemy_look_lead(None, srv._enemy_literal("chat")) is None, "None species must pass through")
+# and it is actually wired into the designer
+ck("_enemy_look_lead(species, enemy_style)" in inspect.getsource(srv.generate_enemy_species),
+   "generate_enemy_species does not apply the placement clause")
 
 # the override is applied AFTER the reply is parsed (so _theme_enemy_subject cannot trim the
 # bubble off it - "young woman | with a speech bubble..." is a two-word head with a long tail,

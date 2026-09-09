@@ -369,6 +369,19 @@
       border-right: 2px solid #808080;
       border-bottom: 2px solid #808080;
     }
+
+    /* Victory confetti: a full-bleed sheet inside #victoryModal, painted by game.js.
+       It sits behind the win95 box (bumped to z-10) so the outro text stays readable,
+       and over the modal's own dark wash. pointer-events:none so the "Back to Main
+       Menu" button underneath still takes the click. */
+    #confettiCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
   </style>
 </head>
 <body>
@@ -866,7 +879,8 @@
             </div>
 
             <div id="victoryModal" class="absolute inset-0 bg-black/60 z-30 flex items-center justify-center p-4 hidden">
-              <div class="win95-box p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-yellow-400">
+              <canvas id="confettiCanvas"></canvas>
+              <div class="win95-box relative z-10 p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-yellow-400">
                 <div class="text-3xl">🏆</div>
                 <h3 class="font-black text-sm text-yellow-900">DUNGEON ESCAPED!</h3>
                 <p id="victoryText" class="text-xs text-slate-800">You climbed the stairs out and conquered the dungeon!</p>
@@ -874,7 +888,7 @@
                   Steps taken: <span id="winMovesCount">0</span>
                 </div>
                 <button id="btnPlayAgain" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full mt-1">
-                  ✨ Create New Dungeon
+                  ← Back to Main Menu
                 </button>
               </div>
             </div>

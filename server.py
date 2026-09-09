@@ -2919,6 +2919,7 @@ def generate_enemy_species(enemy_style):
         if not species:
             print(f"[species] reply did not carry all six foe labels - deriving instead\n{raw[:300]}")
             return None
+        species = _enemy_look_lead(species, enemy_style)
         for v in ENEMY_VARIANT_NAMES:
             print(f"[species] {v:6s} {species[v]['name']!r} - {species[v]['look']}")
         print(f"[species] three foes designed in {time.time()-t0:.1f}s")
@@ -3086,29 +3087,49 @@ def _theme_inline(value):
 # person and the next run is somebody else - the "random people" half of the request. All
 # three variants still differ, because the bestiary designs them separately from this subject.
 #
-# Longer than the eight words _theme_enemy_subject trims a designed line to, and every word
-# is load-bearing - this was measured on rendered sprites, and three of them were drawn and
-# then thrown away by the pipeline itself:
+# WHERE THE BUBBLE GOES IS THE WHOLE JOB, and all of this was measured on rendered sprites
+# rather than reasoned about - three earlier wordings were drawn and then thrown away by the
+# pipeline itself, and a fourth hid the foe behind its own prop:
 #
-#  * HELD, NOT FLOATING OVERHEAD. "...with a speech bubble full of emojis overhead" rendered
-#    the person perfectly and keep_largest_figure then deleted the bubble: it keeps only the
-#    largest connected blob, and a bubble hovering clear of the body is a second blob. The
-#    same rule the block-pose force field already lives under (see ENEMY_BLOCK_POSES) - it
-#    has to TOUCH the subject. Held in the hands does that, and it is also what the reference
-#    the request came with looks like: people holding speech-bubble placards.
 #  * A COLOUR, NEVER WHITE. A white bubble is drawn and then matted away - these sprites are
 #    cut out of a pure white background, so white-on-white is invisible to BiRefNet and to
 #    the eye. Purple survives the cut, reads as chat, and stays clear of the cyan the block
 #    pose paints its barrier in, which a cyan bubble was getting confused with.
-#  * "SIGN", and held up rather than beside the head. Without the noun the bubble grows until
-#    it hides the person behind it; "beside his head" framed a chest-up BUST, which
-#    drawEnemyContent then scales against the idle frame and blows up into the camera.
+#  * IT MUST TOUCH THE FIGURE. keep_largest_figure keeps one connected blob, so a bubble
+#    floating clear of the body is either deleted or - being the bigger shape - deletes the
+#    foe. Sitting on the head with the tail down into the hair connects it. Same rule the
+#    block-pose force field already lives under (see ENEMY_BLOCK_POSES).
+#  * OVER THE HEAD, NOT HELD AND NOT BESIDE IT. "holding a speech bubble sign" drew the
+#    reference photo faithfully and the placard then covered the foe's face in the corridor,
+#    which is what the player reported. "Beside his head" is worse than either: the bubble
+#    came back missing altogether on that wording, and an earlier try at it framed a chest-up
+#    BUST, which drawEnemyContent scales against the idle frame and blows up into the camera.
+#  * A FEW BIG FACES, NOT A CRUST OF SMALL ONES. "covered in emojis" packs eighty tiny faces
+#    that collapse into a purple smear at corridor scale; three big ones stay readable.
+#
+# The last two live in _CHAT_ENEMY_LOOK rather than in the subject, because the subject is
+# repeated eight times inside the bestiary prompt and this is a 4B model that starts dropping
+# labels when that prompt grows (see THEME_BRIEF_ATTEMPTS for what that failure looks like).
 _CHAT_ENEMY_PEOPLE = [
     "young man", "young woman", "teenage boy", "teenage girl", "bearded man",
     "old man", "old woman", "guy in headphones", "girl in glasses", "hooded teenager",
 ]
 
-_CHAT_ENEMY_SUBJECT = "{person} holding a purple speech bubble sign covered in emojis"
+_CHAT_ENEMY_SUBJECT = "{person} with a purple emoji speech bubble over their head"
+
+# Put in FRONT of every LOOK line of this family on its way to krea2 - see _enemy_look_lead.
+# It is the placement the image model needs and the bestiary has no reason to invent: bubble
+# ABOVE the head, tail DOWN into the hair (contact), few and large faces.
+#
+# IN FRONT, NOT APPENDED, and that is not a style choice - it was the difference between a
+# bubble and no bubble. Appended to the end of the flyer line ("...hovering midair with
+# feathered wings spread wide...") the bubble vanished on both seeds tried; moved to the
+# front of the same line, on the SAME two seeds, it rendered both times. A late clause is
+# competing with everything already drawn, and wings win.
+_CHAT_ENEMY_MARK = "purple emoji speech bubble"
+_CHAT_ENEMY_LOOK = ("A purple speech bubble sits in the air above their head with three big "
+                    "yellow emoji faces in it, its pointed tail reaching down to touch their "
+                    "hair")
 
 # Matched on WORD boundaries, not as substrings, so "chatbot" stays a robot for anyone who
 # actually typed one - it is only the bare idea of chat that has no picture of its own.
@@ -3124,6 +3145,27 @@ def _enemy_literal(enemy_style):
     if ui and any(match_word(re.escape(w), ui) for w in _CHAT_ENEMY_WORDS):
         return _CHAT_ENEMY_SUBJECT.format(person=random.choice(_CHAT_ENEMY_PEOPLE))
     return None
+
+
+def _enemy_look_lead(species, enemy_style):
+    """Put this family's hand-tuned placement clause in FRONT of each designed LOOK line.
+
+    Kept OUT of the subject and bolted on here instead, for two reasons. The subject is
+    repeated eight times inside the bestiary prompt, where every extra word costs reliability
+    on a 4B model; and the clause is a drawing instruction, not part of the foe's identity -
+    the bestiary has no reason to invent "its tail reaches down to touch their hair" and no
+    reason to keep it if it did. Landing it here puts it in every variant and every pose
+    frame, since all of them are built from these LOOK lines.
+
+    Returns `species` unchanged for every other theme."""
+    if not species or _CHAT_ENEMY_MARK not in (enemy_style or "").lower():
+        return species
+    for v in species.values():
+        look = (v.get("look") or "").strip().rstrip(".").strip()
+        if look:
+            v["look"] = f"{_CHAT_ENEMY_LOOK}, {_theme_inline(look)}"
+    print(f"[species] led all {len(species)} LOOK lines with the hand-tuned bubble placement")
+    return species
 
 
 THEME_BRIEF_SYSTEM = (

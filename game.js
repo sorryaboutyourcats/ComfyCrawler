@@ -9,6 +9,7 @@
     const btnPlayAgain = document.getElementById('btnPlayAgain');
     const winMovesCount = document.getElementById('winMovesCount');
     const victoryText = document.getElementById('victoryText');
+    const confettiCanvas = document.getElementById('confettiCanvas');
     const defeatModal = document.getElementById('defeatModal');
     const defeatText = document.getElementById('defeatText');
     const deadMovesCount = document.getElementById('deadMovesCount');
@@ -1107,6 +1108,7 @@
     function openSetupScreen() {
       screenGame.classList.add('hidden');
       stopOutroNarration();
+      stopConfetti();
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
       screenSetup.classList.remove('hidden');
@@ -2091,6 +2093,137 @@
       victoryText.textContent = outro || VICTORY_TEXT_DEFAULT;
     }
 
+    // ==========================================
+    // VICTORY CONFETTI
+    // ==========================================
+    // Painted onto #confettiCanvas, the full-bleed sheet behind the win95 victory box.
+    // It is a one-shot: three timed drops from above plus two corner poppers firing
+    // inward, all under gravity, and the rAF loop retires itself the frame the last
+    // scrap leaves the canvas - nothing keeps spinning behind the box or the screensaver.
+    // stopConfetti() is the hard cut for leaving the box early (menu / restart).
+    const confettiCtx = confettiCanvas ? confettiCanvas.getContext('2d') : null;
+    const CONFETTI_COLORS = ['#ef4444', '#f97316', '#facc15', '#22c55e',
+                             '#3b82f6', '#a855f7', '#ec4899', '#ffffff'];
+    let confettiPieces = [];
+    let confettiRaf = 0;
+    let confettiLast = 0;
+    const confettiTimers = [];
+
+    function sizeConfettiCanvas() {
+      if (!confettiCanvas) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = confettiCanvas.clientWidth || confettiCanvas.offsetWidth || 640;
+      const h = confettiCanvas.clientHeight || confettiCanvas.offsetHeight || 480;
+      confettiCanvas.width = Math.round(w * dpr);
+      confettiCanvas.height = Math.round(h * dpr);
+      if (confettiCtx) confettiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    // A drop: `n` scraps seeded across the top edge, drifting down and sideways.
+    function confettiDrop(n) {
+      const w = confettiCanvas.clientWidth || 640;
+      for (let i = 0; i < n; i++) {
+        confettiPieces.push({
+          x: Math.random() * w,
+          y: -20 - Math.random() * 120,
+          vx: (Math.random() - 0.5) * 2.4,
+          vy: 2 + Math.random() * 3,
+          rot: Math.random() * Math.PI,
+          vr: (Math.random() - 0.5) * 0.4,
+          size: 5 + Math.random() * 6,
+          color: CONFETTI_COLORS[(Math.random() * CONFETTI_COLORS.length) | 0],
+          round: Math.random() < 0.18,
+        });
+      }
+    }
+
+    // A popper: `n` scraps launched from one bottom corner in a fan aimed up and inward.
+    function confettiPopper(fromLeft, n) {
+      const w = confettiCanvas.clientWidth || 640;
+      const h = confettiCanvas.clientHeight || 480;
+      for (let i = 0; i < n; i++) {
+        const spread = (Math.random() - 0.5) * 0.7;              // radians off the aim
+        // Aim up-and-inward: ~ -53 deg from the left corner, its mirror from the right.
+        const aim = (fromLeft ? -Math.PI / 3.4 : -Math.PI + Math.PI / 3.4) + spread;
+        const speed = 7 + Math.random() * 7;
+        confettiPieces.push({
+          x: fromLeft ? -8 : w + 8,
+          y: h + 8,
+          vx: Math.cos(aim) * speed,
+          vy: Math.sin(aim) * speed,
+          rot: Math.random() * Math.PI,
+          vr: (Math.random() - 0.5) * 0.5,
+          size: 5 + Math.random() * 6,
+          color: CONFETTI_COLORS[(Math.random() * CONFETTI_COLORS.length) | 0],
+          round: Math.random() < 0.18,
+        });
+      }
+    }
+
+    function confettiFrame(now) {
+      if (!confettiCtx) return;
+      const dt = confettiLast ? Math.min((now - confettiLast) / 16.667, 3) : 1;
+      confettiLast = now;
+      const w = confettiCanvas.clientWidth || 640;
+      const h = confettiCanvas.clientHeight || 480;
+
+      // clearRect runs in the dpr-scaled space set by setTransform, so CSS px are right here.
+      confettiCtx.clearRect(0, 0, w, h);
+      for (let i = confettiPieces.length - 1; i >= 0; i--) {
+        const p = confettiPieces[i];
+        p.vy += 0.16 * dt;            // gravity
+        p.vx *= Math.pow(0.99, dt);   // air drag
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.rot += p.vr * dt;
+
+        if (p.y > h + 24) { confettiPieces.splice(i, 1); continue; }
+
+        confettiCtx.save();
+        confettiCtx.translate(p.x, p.y);
+        confettiCtx.rotate(p.rot);
+        confettiCtx.fillStyle = p.color;
+        if (p.round) {
+          confettiCtx.beginPath();
+          confettiCtx.arc(0, 0, p.size * 0.5, 0, Math.PI * 2);
+          confettiCtx.fill();
+        } else {
+          confettiCtx.fillRect(-p.size * 0.5, -p.size * 0.35, p.size, p.size * 0.7);
+        }
+        confettiCtx.restore();
+      }
+
+      if (confettiPieces.length > 0) {
+        confettiRaf = requestAnimationFrame(confettiFrame);
+      } else {
+        confettiRaf = 0;
+      }
+    }
+
+    function startConfetti() {
+      if (!confettiCtx) return;
+      stopConfetti();
+      sizeConfettiCanvas();
+      window.addEventListener('resize', sizeConfettiCanvas);
+
+      confettiDrop(90);
+      confettiPopper(true, 45);
+      confettiPopper(false, 45);
+      confettiTimers.push(setTimeout(() => confettiDrop(50), 350));
+      confettiTimers.push(setTimeout(() => confettiDrop(40), 800));
+
+      confettiLast = 0;
+      if (!confettiRaf) confettiRaf = requestAnimationFrame(confettiFrame);
+    }
+
+    function stopConfetti() {
+      while (confettiTimers.length) clearTimeout(confettiTimers.pop());
+      if (confettiRaf) { cancelAnimationFrame(confettiRaf); confettiRaf = 0; }
+      confettiPieces = [];
+      window.removeEventListener('resize', sizeConfettiCanvas);
+      if (confettiCtx) confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height); // device px - covers all
+    }
+
     // The clip comes in a beat after the box, once the 'end' sting has landed and the victory
     // loop is on its way up, and the loop is ducked for as long as the narrator speaks. Same
     // plain <audio> element the crawl narrator uses - it sits outside the WebAudio graph, so
@@ -2192,6 +2325,7 @@
       if (defeatModal) defeatModal.classList.add('hidden');
       if (victoryModal) victoryModal.classList.add('hidden');
       stopOutroNarration();
+      stopConfetti();
 
       // Maze back to its start-of-run shape: closed doors (MAP 3), un-thrown switches (MAP 4),
       // and the walkable-tile list without any tiles a since-opened door had added.
@@ -2671,15 +2805,17 @@
         // means all the way to the wall.
         const range = cfg.slow ? (e.hunting ? 85 : 62) : 85;
         const spd = cfg.spd || (cfg.slow ? 0.5 : 0.9);
+        // Below 30% HP a TIMID foe loses its nerve and backs away instead of closing. Only
+        // the lone walker is: the boss never breaks off once it is hunting, and a swarmer
+        // is meant to keep coming - three of them peeling away at 11 HP would turn the back
+        // half of every swarm fight into a chase. A foe in full retreat also stops working
+        // its guard (see reactiveBlock below) - it is running, not parrying - so a fled
+        // walker can be put down instead of turtling backwards all the way to the wall.
+        const flees = cfg.timid && e.hp <= e.maxHp * 0.3;
         if (e.state !== 'attack' && e.state !== 'telegraph') {
           if (!cfg.slow || e.hunting) {
             const gap = (combatState.playerX + (e.formOffset || 0)) - e.x;
             const toward = gap < 0 ? -1 : 1;
-            // Below 30% HP a TIMID foe loses its nerve and backs away instead of closing. Only
-            // the lone walker is: the boss never breaks off once it is hunting, and a swarmer
-            // is meant to keep coming - three of them peeling away at 11 HP would turn the back
-            // half of every swarm fight into a chase.
-            const flees = cfg.timid && e.hp <= e.maxHp * 0.3;
             // A hunt closes faster than the patrol drift, but 0.8px/frame is still a fifth of
             // the player's 3.8px strafe - it is outrunnable, just not ignorable.
             e.vx = (flees ? -toward : toward) * (e.hunting ? spd * 1.6 : spd);
@@ -2705,7 +2841,11 @@
             // catching it as early as frame 2 reads as the foe answering it. It guards through
             // its own wind-up too, so swinging AT the telegraph just gets blocked - the only
             // gap is punishTimer, the beat after its own attack when it can't get the guard up.
-            if ((e.state === 'idle' || e.state === 'telegraph') && e.punishTimer <= 0
+            // Once it breaks and runs (flees) the guard stops coming up at all, and any guard
+            // already raised drops - a foe in full retreat is running, not parrying.
+            if (flees) {
+              e.blockTimer = 0;
+            } else if ((e.state === 'idle' || e.state === 'telegraph') && e.punishTimer <= 0
                 && e.noBlockTimer <= 0
                 && combatState.attackFrame >= 2 && combatState.attackFrame < 7) {
               e.blockTimer = cfg.blockHold || 60;
@@ -4757,7 +4897,19 @@
     // (aiDoorImg) when it decoded, otherwise paints a procedural banded slab over the wall.
     function buildDoorTexture(baseWallImageData, styleName = "Windows 95") {
       if (aiDoorImg && aiDoorImg.complete && aiDoorImg.naturalWidth > 0) {
-        doorTexture = imageToTexture(aiDoorImg);
+        // Mirror the slab horizontally. The wall raycaster flips texX on the face the player
+        // actually walks up to a door from (see render3D's `side === 0 && rayDirX > 0` etc.),
+        // which is harmless on tiling wall art but reads as backwards text / handle-on-the-
+        // wrong-side on the door's AI cutout. Pre-flipping the source cancels that out so the
+        // door reads correctly on approach.
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = TEX_SIZE;
+        const c = cv.getContext('2d');
+        c.imageSmoothingEnabled = false;
+        c.translate(TEX_SIZE, 0);
+        c.scale(-1, 1);
+        c.drawImage(aiDoorImg, 0, 0, TEX_SIZE, TEX_SIZE);
+        doorTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
         return;
       }
       const cv = document.createElement('canvas');
@@ -6281,6 +6433,7 @@
         showVictoryOutro();
         playSfx('end', { vary: 0 });
         victoryModal.classList.remove('hidden');
+        startConfetti();
         startOutroNarration();
         // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
         // and the victory loop scores the box until the player heads back to the menu.
@@ -7737,22 +7890,23 @@
       const st = dungeonStory || {};
       const hero = (st.hero || '').trim() || 'the nameless warrior';
       const where = (st.location || currentThemeName || '').trim() || 'the dungeon';
-      const foe = (st.foe || enemyStyleName || '').trim();
       const boss = (st.boss || enemyBossName || '').trim();
+      const won = !!(victoryModal && !victoryModal.classList.contains('hidden'));
       const sep = '   •   ';
       const parts = [];
-      parts.push(hero.toUpperCase() + ' STILL WALKS ' + where.toUpperCase());
+      parts.push(won
+        ? hero.toUpperCase() + ' COMPLETES THE DUNGEON'
+        : hero.toUpperCase() + ' STILL WALKS ' + where.toUpperCase());
       parts.push('LEVEL ' + progression.level);
       parts.push(Math.max(0, Math.round(combatState.playerHp)) + '/' + combatState.playerMaxHp + ' HP');
       parts.push(totalMoves + (totalMoves === 1 ? ' STEP TAKEN' : ' STEPS TAKEN'));
       if (passagesList.length) parts.push(visitedTiles.size + '/' + passagesList.length + ' TILES MAPPED');
-      if (foe) parts.push(foe.toUpperCase() + ' PROWLS THE DARK');
       if (boss) {
         parts.push(bossDefeated
           ? hero.toUpperCase() + ' HAS DEFEATED ' + boss.toUpperCase()
           : boss.toUpperCase() + ' WAITS AT THE END');
       }
-      parts.push('THE DUNGEON IS HOLDING YOUR PLACE');
+      parts.push(won ? 'THE DUNGEON REMEMBERS YOUR NAME' : 'THE DUNGEON IS HOLDING YOUR PLACE');
       return parts.join(sep) + sep;
     }
 
