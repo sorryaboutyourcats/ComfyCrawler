@@ -167,6 +167,77 @@
     let ctx = viewportCanvas.getContext('2d');
     let imgData = ctx.createImageData(screenWidth, screenHeight);
     let buffer = imgData.data;
+    // A 32-bit window onto the same pixels. The opaque passes (floor, ceiling, walls) write a
+    // whole pixel with one store through this instead of four separate byte writes through
+    // `buffer` - four stores plus four clamp-and-round conversions per pixel is a real slice of
+    // the fill cost at 76,800 pixels a frame. The blend passes further down (exit stairwell,
+    // open gates, and everything drawn with the 2D context) still go through `buffer`, since
+    // they read the existing pixel back before mixing into it.
+    //
+    // Byte order inside that word is the machine's, not the canvas's, so work it out once
+    // rather than assuming little-endian.
+    let buf32 = new Uint32Array(buffer.buffer);
+    const LITTLE_ENDIAN = (() => {
+      const probe = new ArrayBuffer(4);
+      new Uint32Array(probe)[0] = 0x01020304;
+      return new Uint8Array(probe)[0] === 0x04;
+    })();
+    const PIX_R_SHIFT = LITTLE_ENDIAN ? 0 : 24;
+    const PIX_G_SHIFT = LITTLE_ENDIAN ? 8 : 16;
+    const PIX_B_SHIFT = LITTLE_ENDIAN ? 16 : 8;
+    const PIX_ALPHA = LITTLE_ENDIAN ? 0xFF000000 : 0x000000FF;
+
+    // ==========================================
+    // FRAME RATE CAP
+    // ==========================================
+    // requestAnimationFrame offers a frame as often as the display will take one - 60 a second
+    // on most screens, 144 or 240 on a fast one. Every one of those offers costs a full
+    // software raycast, and on a high-refresh monitor that is the single biggest thing the page
+    // does. This is the ceiling on how many of them we actually accept.
+    //
+    // It caps DRAWING only. Combat runs on its own fixed-timestep accumulator (see SIM_STEP),
+    // so the fight ticks 60 times a second whatever this is set to - turning the cap down
+    // makes the picture update less often, never the game run slower.
+    //
+    // Three loops draw the viewport - the main combatFrame, and the move/turn tweens in
+    // animate3D and animateBump - but only ever one of them per frame, so they share this one
+    // budget rather than each keeping their own (which would let a tween draw at 2x the cap).
+    const MIN_FPS_CAP = 24;
+    const MAX_FPS_CAP = 240;
+    const DEFAULT_FPS_CAP = 60;
+    const FPS_CAP_KEY = 'comfycrawler.maxFps';
+    let maxFps = DEFAULT_FPS_CAP;
+    let minFrameMs = 1000 / DEFAULT_FPS_CAP;
+    let nextViewportDraw = 0;
+
+    // True at most once per minFrameMs, and consumes that slot when it says so.
+    function viewportFrameAllowed(now) {
+      // A millisecond of slack, because a 60Hz display hands out frames at 16.666ms and a 60fps
+      // cap wants one every 16.667ms - without it every other frame would miss and the cap
+      // would quietly halve itself to 30.
+      if (now < nextViewportDraw - 1) return false;
+      // Deadline-based rather than "last draw + interval", so the rate doesn't drift slower
+      // than asked. Re-anchored to now whenever we have fallen a whole interval behind, so a
+      // stall doesn't leave a backlog of deadlines to burn through at full speed.
+      nextViewportDraw = (nextViewportDraw < now - minFrameMs)
+        ? now + minFrameMs
+        : nextViewportDraw + minFrameMs;
+      return true;
+    }
+
+    function clampFpsCap(v) {
+      const n = Math.round(Number(v));
+      if (!Number.isFinite(n)) return DEFAULT_FPS_CAP;
+      return Math.max(MIN_FPS_CAP, Math.min(MAX_FPS_CAP, n));
+    }
+
+    function applyFpsCap(v) {
+      maxFps = clampFpsCap(v);
+      minFrameMs = 1000 / maxFps;
+      // Raising the cap should take effect on the very next frame rather than after the old,
+      // longer interval has run out.
+      nextViewportDraw = 0;
+    }
 
     let wallTexture = null;
     let ceilingTexture = null;
@@ -886,6 +957,96 @@
     let exitRoom = { x: 5, y: 5 };
     let startRoom = { x: 1, y: 1 };
     let zBuffer = new Float64Array(screenWidth);
+    // Per-column vertical extent of the wall the DDA pass drew, so the floor/ceiling pass can
+    // skip every pixel a wall is about to cover. See the "Wall Casting" note in render3D.
+    let wallTop = new Int32Array(screenWidth);
+    let wallBot = new Int32Array(screenWidth);
+
+    // ==========================================
+    // LANTERN LIGHTMAP
+    // ==========================================
+    // Lantern light used to be summed per PIXEL: the floor/ceiling pass walked the whole
+    // lanternList with a Math.hypot for every one of the 76,800 pixels, and the wall pass did
+    // the same for every column. That is O(pixels * lanterns) per frame - and lanternList
+    // grows with the maze, because lanterns are stamped on every third eligible wall tile.
+    // Which is exactly why Hard ran slower than Medium and Medium slower than Easy: the maze
+    // got bigger, so every pixel got more expensive. Nothing about the light was changing
+    // frame to frame; we were recomputing a static field 60 times a second.
+    //
+    // So bake it once per maze into a grid of samples and read it back with a bilinear tap.
+    // Per-pixel cost stops depending on the lantern count entirely, which is what makes the
+    // three difficulties render at the same speed.
+    //
+    // Two fields, because the two surfaces were always lit with different constants: floors
+    // and ceilings fall off over 2.8 world units at 0.65 strength, walls over 3.2 at 0.75.
+    const LIGHT_SUBDIV = 16;            // samples per map cell, each axis (0.0625 world units)
+    const LIGHT_FLOOR_RADIUS = 2.8;
+    const LIGHT_FLOOR_GAIN = 0.65;
+    const LIGHT_WALL_RADIUS = 3.2;
+    const LIGHT_WALL_GAIN = 0.75;
+    let lightMapW = 0;
+    let lightMapH = 0;
+    let floorLightMap = null;
+    let wallLightMap = null;
+
+    function buildLightMaps() {
+      lightMapW = Math.max(2, MAP_WIDTH * LIGHT_SUBDIV + 1);
+      lightMapH = Math.max(2, MAP_HEIGHT * LIGHT_SUBDIV + 1);
+      floorLightMap = new Float32Array(lightMapW * lightMapH);
+      wallLightMap = new Float32Array(lightMapW * lightMapH);
+      // Even a mazeless map gets its (all-zero) buffers, so the samplers never see null.
+      if (!lanternList.length) return;
+
+      const wr2 = LIGHT_WALL_RADIUS * LIGHT_WALL_RADIUS;
+      for (let li = 0; li < lanternList.length; li++) {
+        const lx = lanternList[li].x + 0.5;
+        const ly = lanternList[li].y + 0.5;
+        // Only the samples inside the LARGER of the two radii can be touched at all, so the
+        // bake is O(lanterns * r^2) rather than O(lanterns * map).
+        const i0 = Math.max(0, Math.floor((lx - LIGHT_WALL_RADIUS) * LIGHT_SUBDIV));
+        const i1 = Math.min(lightMapW - 1, Math.ceil((lx + LIGHT_WALL_RADIUS) * LIGHT_SUBDIV));
+        const j0 = Math.max(0, Math.floor((ly - LIGHT_WALL_RADIUS) * LIGHT_SUBDIV));
+        const j1 = Math.min(lightMapH - 1, Math.ceil((ly + LIGHT_WALL_RADIUS) * LIGHT_SUBDIV));
+        for (let j = j0; j <= j1; j++) {
+          const dy = j / LIGHT_SUBDIV - ly;
+          const dy2 = dy * dy;
+          const row = j * lightMapW;
+          for (let i = i0; i <= i1; i++) {
+            const dx = i / LIGHT_SUBDIV - lx;
+            const d2 = dx * dx + dy2;
+            if (d2 >= wr2) continue;
+            const d = Math.sqrt(d2);
+            wallLightMap[row + i] += (1 - d / LIGHT_WALL_RADIUS) * LIGHT_WALL_GAIN;
+            if (d < LIGHT_FLOOR_RADIUS) {
+              floorLightMap[row + i] += (1 - d / LIGHT_FLOOR_RADIUS) * LIGHT_FLOOR_GAIN;
+            }
+          }
+        }
+      }
+    }
+
+    // Bilinear tap into a baked field. Bilinear rather than nearest because a wall column is
+    // lit by a single sample: nearest-neighbour would step the brightness in visible 0.125-unit
+    // bands across a wall face as the player slid along it.
+    function sampleLight(map, wx, wy) {
+      if (!map) return 0;
+      let fx = wx * LIGHT_SUBDIV;
+      let fy = wy * LIGHT_SUBDIV;
+      // Rays near the horizon run far outside the map; clamping to the border is correct
+      // because the border samples are unlit anyway.
+      if (!(fx > 0)) fx = 0; else if (fx > lightMapW - 1.001) fx = lightMapW - 1.001;
+      if (!(fy > 0)) fy = 0; else if (fy > lightMapH - 1.001) fy = lightMapH - 1.001;
+      const ix = fx | 0;
+      const iy = fy | 0;
+      const tx = fx - ix;
+      const ty = fy - iy;
+      const r0 = iy * lightMapW + ix;
+      const r1 = r0 + lightMapW;
+      const a = map[r0], b = map[r0 + 1], c = map[r1], d = map[r1 + 1];
+      const top = a + (b - a) * tx;
+      const bot = c + (d - c) * tx;
+      return top + (bot - top) * ty;
+    }
 
     let activeMode = 'v6_krea';
     let currentThemeName = "Windows 95";
@@ -2795,6 +2956,20 @@
       // backlog and let combat run in slow motion rather than spiral trying to catch up.
       if (steps === MAX_SIM_STEPS) simAccumulator = 0;
 
+      // Nothing below this line changes the game - it only paints it - so everything below is
+      // skippable. Three reasons to skip:
+      //
+      //  - The screensaver is up and covering the whole window. Raycasting a dungeon nobody
+      //    can see was pure waste (and it never comes up mid-fight: a live battle counts as
+      //    activity, so the starfield can't cut in over one).
+      //  - A move or turn tween is running. It owns the viewport for its 160ms (see animate3D)
+      //    and takes the frame budget for itself, so bailing here rather than after the cap
+      //    check is what leaves the slot for it to spend.
+      //  - We are already at the player's chosen frame rate ceiling.
+      if (screensaverActive) return;
+      if (player.isAnimating) return;
+      if (!viewportFrameAllowed(now)) return;
+
       if (playerHpBar) playerHpBar.style.width = `${(combatState.playerHp / combatState.playerMaxHp) * 100}%`;
       if (playerHpText) playerHpText.textContent = `${Math.ceil(combatState.playerHp)}/${combatState.playerMaxHp}`;
       if (playerStmBar) {
@@ -2809,8 +2984,7 @@
       if (playerStmText) playerStmText.textContent = `${Math.ceil(combatState.playerStm)}/${combatState.playerMaxStm}`;
 
       renderDoomFace();
-      // While a move/turn tween is running it owns the raycast (see animate3D), so skip ours.
-      if (activeMode !== 'v1_video' && !player.isAnimating) {
+      if (activeMode !== 'v1_video') {
         render3D();
       }
     }
@@ -3532,18 +3706,37 @@
 
     // Clear and hand back the offscreen scratch view, sized exactly like the viewport so
     // anything drawn into it lands on the same pixel when blitted back.
-    function fxLayer() {
+    // `dirty`, when given, is the box the caller is about to draw inside - everything the
+    // layer touches this cycle. It is a promise, not a clip: the clear, the shade, the dissolve
+    // and the final blit all shrink to it, so anything drawn outside it is silently lost.
+    //
+    // Worth passing wherever it is known, because every one of those four steps is otherwise a
+    // full 320x240 canvas operation, and a caller in a loop pays for all four per iteration -
+    // drawWorldEnemies puts a whole corridor of foes through here every single frame. A marker
+    // twenty pixels wide was costing four screen-sized composites.
+    let _fxX = 0, _fxY = 0, _fxW = 0, _fxH = 0;
+    function fxLayer(dirty) {
       if (!_fxCanvas) {
         _fxCanvas = document.createElement('canvas');
         _fxCanvas.width = screenWidth;
         _fxCanvas.height = screenHeight;
         _fxC = _fxCanvas.getContext('2d');
       }
+      if (dirty) {
+        _fxX = Math.max(0, Math.floor(dirty.x));
+        _fxY = Math.max(0, Math.floor(dirty.y));
+        _fxW = Math.min(screenWidth, Math.ceil(dirty.x + dirty.w)) - _fxX;
+        _fxH = Math.min(screenHeight, Math.ceil(dirty.y + dirty.h)) - _fxY;
+        if (_fxW < 0) _fxW = 0;
+        if (_fxH < 0) _fxH = 0;
+      } else {
+        _fxX = 0; _fxY = 0; _fxW = screenWidth; _fxH = screenHeight;
+      }
       _fxC.setTransform(1, 0, 0, 1, 0, 0);
       _fxC.globalAlpha = 1;
       _fxC.globalCompositeOperation = 'source-over';
       _fxC.filter = 'none';   // the hero's dither-out routes its exhaustion-wash filter through here
-      _fxC.clearRect(0, 0, screenWidth, screenHeight);
+      _fxC.clearRect(_fxX, _fxY, _fxW, _fxH);
       return _fxC;
     }
 
@@ -3570,23 +3763,25 @@
     // Both effects are clipped to what was actually drawn (source-atop / destination-out), so
     // the empty rest of the scratch canvas stays empty and the scene shows through it.
     function blitFxLayer(c, keep = 1, shade = 1) {
-      if (keep <= 0) return;
-      // Both fills below cover the whole layer, and a pattern fill is laid down in the CURRENT
-      // transform - so reset it, whatever the caller was drawing with.
+      if (keep <= 0 || _fxW <= 0 || _fxH <= 0) return;
+      // Both fills below cover the layer's dirty box, and a pattern fill is laid down in the
+      // CURRENT transform - so reset it, whatever the caller was drawing with. Resetting also
+      // keeps the dither pattern anchored to the canvas origin rather than to the box, so a
+      // partial fill lands on the same 4x4 phase a full-canvas one would have.
       _fxC.setTransform(1, 0, 0, 1, 0, 0);
       _fxC.globalAlpha = 1;
       if (shade < 1) {
         _fxC.globalCompositeOperation = 'source-atop';
         _fxC.fillStyle = `rgba(0,0,0,${(1 - shade).toFixed(3)})`;
-        _fxC.fillRect(0, 0, screenWidth, screenHeight);
+        _fxC.fillRect(_fxX, _fxY, _fxW, _fxH);
       }
       if (keep < 1) {
         _fxC.globalCompositeOperation = 'destination-out';
         _fxC.fillStyle = ditherErasePattern(keep);
-        _fxC.fillRect(0, 0, screenWidth, screenHeight);
+        _fxC.fillRect(_fxX, _fxY, _fxW, _fxH);
       }
       _fxC.globalCompositeOperation = 'source-over';
-      c.drawImage(_fxCanvas, 0, 0);
+      c.drawImage(_fxCanvas, _fxX, _fxY, _fxW, _fxH, _fxX, _fxY, _fxW, _fxH);
     }
 
     // ==========================================
@@ -3714,7 +3909,12 @@
         // read as lit from within.
         const shade = Math.max(0.45, 1.0 / (1.0 + v.tY * 0.30));
 
-        const f = fxLayer();
+        // The clip band above is already the exact extent of everything drawn below - sprite,
+        // spread, wobble and ground shadow - so handing it to the layer as its dirty box cannot
+        // change a visible pixel, and it turns four full-canvas composites per marker into four
+        // small ones.
+        const clipL = Math.max(0, spanL);
+        const f = fxLayer({ x: clipL, y: clipTop, w: Math.min(screenWidth, spanR + 1) - clipL, h: clipH });
         // Ground shadows first, so they are shaded and clipped with the bodies.
         f.fillStyle = 'rgba(0,0,0,0.34)';
         for (const k of members) {
@@ -5293,6 +5493,10 @@
         }
       }
 
+      // The lantern set is final, so bake its light field now - once - instead of re-summing
+      // it per pixel every frame. See buildLightMaps.
+      buildLightMaps();
+
       passagesList = [];
       for (let y = 1; y < MAP_HEIGHT - 1; y++) {
         for (let x = 1; x < MAP_WIDTH - 1; x++) {
@@ -5466,57 +5670,15 @@
       const planeX = -dirY * Math.tan(halfFov);
       const planeY = dirX * Math.tan(halfFov);
 
-      // Floor & Ceiling Casting
-      for (let y = 0; y < screenHeight; y++) {
-        const isFloor = y > screenHeight / 2;
-        const p = isFloor ? (y - screenHeight / 2) : (screenHeight / 2 - y);
-        if (p === 0) continue;
-
-        // Eye level sits at half the wall height, so this has to track WALL_HEIGHT or the floor and
-        // ceiling planes stop meeting the walls where they should.
-        const posZ = (WALL_HEIGHT / 2) * screenHeight;
-        const rowDist = posZ / p;
-
-        const stepX = rowDist * (planeX * 2) / screenWidth;
-        const stepY = rowDist * (planeY * 2) / screenWidth;
-
-        let floorX = posX + rowDist * (dirX - planeX);
-        let floorY = posY + rowDist * (dirY - planeY);
-
-        const tex = isFloor ? floorTexture : ceilingTexture;
-        const texData = tex.data;
-
-        for (let x = 0; x < screenWidth; x++) {
-          // See SURFACE_TEXELS. One texture per map cell; the mask wraps at the cell boundary.
-          const tx = Math.floor(floorX * SURFACE_TEXELS) & (TEX_SIZE - 1);
-          const ty = Math.floor(floorY * SURFACE_TEXELS) & (TEX_SIZE - 1);
-
-          let lanternLight = 0;
-          for (let li = 0; li < lanternList.length; li++) {
-            const lx = lanternList[li].x + 0.5;
-            const ly = lanternList[li].y + 0.5;
-            const d = Math.hypot(floorX - lx, floorY - ly);
-            if (d < 2.8) {
-              lanternLight += (1.0 - d / 2.8) * 0.65;
-            }
-          }
-
-          floorX += stepX;
-          floorY += stepY;
-
-          const tIdx = (ty * TEX_SIZE + tx) * 4;
-          const pIdx = (y * screenWidth + x) * 4;
-          const baseShade = Math.max(0.35, Math.min(1.0, 1.0 - (rowDist * 0.15)));
-          const finalShade = Math.min(1.0, baseShade + lanternLight);
-
-          buffer[pIdx] = Math.min(255, texData[tIdx] * finalShade + (lanternLight * 25));
-          buffer[pIdx + 1] = Math.min(255, texData[tIdx + 1] * finalShade + (lanternLight * 15));
-          buffer[pIdx + 2] = Math.min(255, texData[tIdx + 2] * finalShade);
-          buffer[pIdx + 3] = 255;
-        }
-      }
-
       // Wall Casting
+      //
+      // Walls go FIRST, before the floor and ceiling, which is the reverse of how this used to
+      // read. The old order cast every one of the 76,800 floor/ceiling pixels and then painted
+      // walls straight over the top of them - in a corridor that is most of the screen thrown
+      // away, shaded and texture-sampled for nothing. Casting walls first lets each column
+      // record the band it covers (wallTop/wallBot below), so the floor/ceiling pass can skip
+      // those pixels outright. The two passes write disjoint pixels, so the visible result is
+      // identical; we simply stop drawing everything at once.
       for (let x = 0; x < screenWidth; x++) {
         const cameraX = (2 * x) / screenWidth - 1;
         const rayDirX = dirX + planeX * cameraX;
@@ -5584,6 +5746,14 @@
         const clampedStart = Math.max(0, drawStart);
         const clampedEnd = Math.min(screenHeight - 1, drawEnd);
 
+        // What the floor/ceiling pass must not bother drawing. When the band comes out empty
+        // (a wall so distant it projects to under a pixel) clampedStart ends up above
+        // clampedEnd, and the `y >= top && y <= bot` test below simply never matches.
+        wallTop[x] = clampedStart;
+        wallBot[x] = clampedEnd;
+
+        if (clampedStart > clampedEnd) continue;
+
         let wallX;
         if (side === 0) wallX = posY + perpWallDist * rayDirY;
         else wallX = posX + perpWallDist * rayDirX;
@@ -5604,18 +5774,10 @@
         }
         const wallData = wallTexToUse.data;
 
-        let wallLanternLight = 0;
+        // One tap into the baked field instead of a walk down lanternList - see buildLightMaps.
         const wallWorldX = side === 0 ? mapX : (posX + perpWallDist * rayDirX);
         const wallWorldY = side === 1 ? mapY : (posY + perpWallDist * rayDirY);
-
-        for (let li = 0; li < lanternList.length; li++) {
-          const lx = lanternList[li].x + 0.5;
-          const ly = lanternList[li].y + 0.5;
-          const d = Math.hypot(wallWorldX - lx, wallWorldY - ly);
-          if (d < 3.2) {
-            wallLanternLight += (1.0 - d / 3.2) * 0.75;
-          }
-        }
+        const wallLanternLight = sampleLight(wallLightMap, wallWorldX, wallWorldY);
 
         const sideShade = side === 1 ? 0.82 : 1.0;
         const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
@@ -5626,6 +5788,10 @@
         // which state a switch is in.
         const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
 
+        // Constant down the whole column, so hoisted out of the per-pixel loop.
+        const addR = wallLanternLight * 35;
+        const addG = wallLanternLight * 20;
+
         // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
         // unchanged), but are now only WALL_HEIGHT tall - so squeezing the whole texture in
         // vertically compressed it by 0.62 and made bark and brick read as 1.6x too wide. Showing
@@ -5635,17 +5801,82 @@
         const texTop = (TEX_SIZE * (1 - WALL_HEIGHT)) / 2;
         let texPos = texTop + (clampedStart - screenHeight / 2 + lineHeight / 2) * step;
 
+        // One 32-bit store per pixel instead of four 8-bit ones - see PIX_ALPHA.
+        let pIdx32 = clampedStart * screenWidth + x;
         for (let y = clampedStart; y <= clampedEnd; y++) {
-          const texY = Math.min(TEX_SIZE - 1, Math.max(0, Math.floor(texPos)));
+          let texY = texPos | 0;
+          if (texY < 0) texY = 0; else if (texY > TEX_SIZE - 1) texY = TEX_SIZE - 1;
           texPos += step;
 
           const tIdx = (texY * TEX_SIZE + texX) * 4;
-          const pIdx = (y * screenWidth + x) * 4;
 
-          buffer[pIdx] = Math.min(255, wallData[tIdx] * finalShade + (wallLanternLight * 35));
-          buffer[pIdx + 1] = Math.min(255, wallData[tIdx + 1] * finalShade + (wallLanternLight * 20));
-          buffer[pIdx + 2] = Math.min(255, wallData[tIdx + 2] * finalShade);
-          buffer[pIdx + 3] = 255;
+          const r = wallData[tIdx] * finalShade + addR;
+          const g = wallData[tIdx + 1] * finalShade + addG;
+          const b = wallData[tIdx + 2] * finalShade;
+          buf32[pIdx32] = PIX_ALPHA
+            | ((r > 255 ? 255 : r) << PIX_R_SHIFT)
+            | ((g > 255 ? 255 : g) << PIX_G_SHIFT)
+            | ((b > 255 ? 255 : b) << PIX_B_SHIFT);
+          pIdx32 += screenWidth;
+        }
+      }
+
+      // Floor & Ceiling Casting
+      //
+      // Runs AFTER the walls and skips every pixel they already cover - see the note up there.
+      for (let y = 0; y < screenHeight; y++) {
+        const isFloor = y > screenHeight / 2;
+        const p = isFloor ? (y - screenHeight / 2) : (screenHeight / 2 - y);
+        if (p === 0) continue;
+
+        // Eye level sits at half the wall height, so this has to track WALL_HEIGHT or the floor and
+        // ceiling planes stop meeting the walls where they should.
+        const posZ = (WALL_HEIGHT / 2) * screenHeight;
+        const rowDist = posZ / p;
+
+        const stepX = rowDist * (planeX * 2) / screenWidth;
+        const stepY = rowDist * (planeY * 2) / screenWidth;
+
+        let floorX = posX + rowDist * (dirX - planeX);
+        let floorY = posY + rowDist * (dirY - planeY);
+
+        const tex = isFloor ? floorTexture : ceilingTexture;
+        const texData = tex.data;
+
+        // Distance shading is constant along a row, so it comes out of the inner loop.
+        const baseShade = Math.max(0.35, Math.min(1.0, 1.0 - (rowDist * 0.15)));
+
+        let pIdx32 = y * screenWidth;
+        for (let x = 0; x < screenWidth; x++, pIdx32++) {
+          // A wall column already owns this pixel: step the texture coordinates on and move
+          // along without sampling, lighting or writing anything.
+          if (y >= wallTop[x] && y <= wallBot[x]) {
+            floorX += stepX;
+            floorY += stepY;
+            continue;
+          }
+
+          // See SURFACE_TEXELS. One texture per map cell; the mask wraps at the cell boundary.
+          const tx = Math.floor(floorX * SURFACE_TEXELS) & (TEX_SIZE - 1);
+          const ty = Math.floor(floorY * SURFACE_TEXELS) & (TEX_SIZE - 1);
+
+          // Baked lantern field, one bilinear tap - this is the read that used to walk every
+          // lantern in the maze for every pixel on the screen.
+          const lanternLight = sampleLight(floorLightMap, floorX, floorY);
+
+          floorX += stepX;
+          floorY += stepY;
+
+          const tIdx = (ty * TEX_SIZE + tx) * 4;
+          const finalShade = baseShade + lanternLight > 1.0 ? 1.0 : baseShade + lanternLight;
+
+          const r = texData[tIdx] * finalShade + (lanternLight * 25);
+          const g = texData[tIdx + 1] * finalShade + (lanternLight * 15);
+          const b = texData[tIdx + 2] * finalShade;
+          buf32[pIdx32] = PIX_ALPHA
+            | ((r > 255 ? 255 : r) << PIX_R_SHIFT)
+            | ((g > 255 ? 255 : g) << PIX_G_SHIFT)
+            | ((b > 255 ? 255 : b) << PIX_B_SHIFT);
         }
       }
 
@@ -5728,6 +5959,7 @@
       if (doorOpenTexture && doorList.length) {
         const gData = doorOpenTexture.data;
         const NEAR = 0.2;
+        const invDetCam = 1.0 / (planeX * dirY - dirX * planeY);
 
         for (const d of doorList) {
           if (!d.opened) continue;
@@ -5740,7 +5972,32 @@
           const ey = d.axis === 'x' ? 0 : 1;
           const Ax = p1x - posX, Ay = p1y - posY;
 
-          for (let x = 0; x < screenWidth; x++) {
+          // Which screen columns can this doorway possibly touch?
+          //
+          // Every open gate in the maze used to solve a ray/segment intersection for all 320
+          // columns, whether it was in front of the player or three rooms behind them. A
+          // straight world segment projects to a straight span of screen columns, so both
+          // endpoints through the camera transform bound it exactly - and a gate that is off
+          // screen or behind the player costs two multiplies instead of 320 solves.
+          const Bx = Ax + ex, By = Ay + ey;
+          const t1Y = invDetCam * (-planeY * Ax + planeX * Ay);
+          const t2Y = invDetCam * (-planeY * Bx + planeX * By);
+          let colFrom = 0, colTo = screenWidth - 1;
+          if (t1Y <= NEAR && t2Y <= NEAR) continue;         // wholly behind the camera
+          if (t1Y > NEAR && t2Y > NEAR) {
+            // Both ends in front, so the span between their projections is the whole doorway.
+            // A single end behind the camera throws the projection out to infinity, and that
+            // case just keeps the full sweep - it only happens standing in the gateway itself.
+            const t1X = invDetCam * (dirY * Ax - dirX * Ay);
+            const t2X = invDetCam * (dirY * Bx - dirX * By);
+            const sx1 = (screenWidth / 2) * (1 + t1X / t1Y);
+            const sx2 = (screenWidth / 2) * (1 + t2X / t2Y);
+            colFrom = Math.max(0, Math.floor(Math.min(sx1, sx2)));
+            colTo = Math.min(screenWidth - 1, Math.ceil(Math.max(sx1, sx2)));
+            if (colFrom > colTo) continue;                  // projects clean off the screen
+          }
+
+          for (let x = colFrom; x <= colTo; x++) {
             const cameraX = 2 * x / screenWidth - 1;
             const rdx = dirX + planeX * cameraX;
             const rdy = dirY + planeY * cameraX;
@@ -5759,17 +6016,19 @@
             const startY = Math.max(0, Math.floor(topY));
             const endY = Math.min(screenHeight - 1, Math.ceil(topY + spriteH));
             const shade = 1.0 / (1.0 + t * 0.38);
+            const texScale = DOOR_SPR_H / spriteH;
 
             for (let y = startY; y <= endY; y++) {
-              const texY = Math.floor(((y - topY) * DOOR_SPR_H) / spriteH);
+              const texY = Math.floor((y - topY) * texScale);
               if (texY < 0 || texY >= DOOR_SPR_H) continue;
               const sIdx = (texY * DOOR_SPR_W + texX) * 4;
               const alpha = gData[sIdx + 3] / 255;
               if (alpha <= 0.05) continue;
               const pIdx = (y * screenWidth + x) * 4;
-              buffer[pIdx]     = Math.min(255, buffer[pIdx]     * (1 - alpha) + gData[sIdx]     * shade * alpha);
-              buffer[pIdx + 1] = Math.min(255, buffer[pIdx + 1] * (1 - alpha) + gData[sIdx + 1] * shade * alpha);
-              buffer[pIdx + 2] = Math.min(255, buffer[pIdx + 2] * (1 - alpha) + gData[sIdx + 2] * shade * alpha);
+              const inv = 1 - alpha;
+              buffer[pIdx]     = Math.min(255, buffer[pIdx]     * inv + gData[sIdx]     * shade * alpha);
+              buffer[pIdx + 1] = Math.min(255, buffer[pIdx + 1] * inv + gData[sIdx + 1] * shade * alpha);
+              buffer[pIdx + 2] = Math.min(255, buffer[pIdx + 2] * inv + gData[sIdx + 2] * shade * alpha);
             }
           }
         }
@@ -5951,8 +6210,13 @@
         player.posY = startY + (targetY - startY) * ease;
         player.angle = startAngle + (targetAngle - startAngle) * ease;
 
-        render3D();
-        drawMinimap();
+        // The tween owns the viewport while it runs (combatFrame stands down for it), so it
+        // spends the shared frame budget here. The last frame always draws whatever the cap
+        // says, so the step lands exactly on the target tile instead of a hair short of it.
+        if (progress >= 1.0 || viewportFrameAllowed(now)) {
+          render3D();
+          drawMinimap();
+        }
 
         if (progress < 1.0) {
           requestAnimationFrame(step);
@@ -6009,8 +6273,10 @@
           player.posY = startY;
         }
 
-        render3D();
-        drawMinimap();
+        if (elapsed >= TOTAL || viewportFrameAllowed(now)) {
+          render3D();
+          drawMinimap();
+        }
 
         if (elapsed < TOTAL) {
           requestAnimationFrame(step);
@@ -7406,6 +7672,11 @@
     function screensaverFrame(now) {
       if (!screensaverActive) { screensaverRaf = null; return; }
       screensaverRaf = requestAnimationFrame(screensaverFrame);
+      // Shares the viewport's frame budget - the starfield is the only thing drawing while it
+      // is up, and it is a full-window canvas, so the cap means what it says here too. Gated
+      // before ssLastFrame moves, so a skipped frame still hands its milliseconds to the next
+      // one and the warp keeps its real-time speed.
+      if (!viewportFrameAllowed(now)) return;
       sizeStarfield();
       const w = starfieldCanvas.width, h = starfieldCanvas.height;
       // Clamped, so a tab that was backgrounded doesn't warp the whole field forward at once.
@@ -7542,6 +7813,45 @@
       if (screensaverDelayText) screensaverDelayText.textContent = SCREENSAVER_STOPS[i].label;
       if (screensaverDelayMs <= 0 && screensaverActive) hideScreensaver();
       screensaverLastActivity = Date.now();
+    }
+
+    // ---- Max frame rate ----------------------------------------------------
+    // Sticks across reloads for the same reason the screensaver wait does: it is a property of
+    // the machine the game is being played on, not of the dungeon being played.
+    const maxFpsSlider = document.getElementById('maxFpsSlider');
+    const maxFpsValue = document.getElementById('maxFpsValue');
+
+    function loadFpsCap() {
+      try {
+        const raw = localStorage.getItem(FPS_CAP_KEY);
+        return raw === null ? DEFAULT_FPS_CAP : clampFpsCap(raw);
+      } catch (_) {
+        return DEFAULT_FPS_CAP;
+      }
+    }
+
+    function saveFpsCap(v) {
+      try { localStorage.setItem(FPS_CAP_KEY, String(clampFpsCap(v))); }
+      catch (_) { /* storage disabled or full - nothing we can do about it */ }
+    }
+
+    function showFpsCap(v) {
+      applyFpsCap(v);
+      if (maxFpsValue) maxFpsValue.textContent = `${maxFps} FPS`;
+    }
+
+    if (maxFpsSlider) {
+      maxFpsSlider.min = String(MIN_FPS_CAP);
+      maxFpsSlider.max = String(MAX_FPS_CAP);
+      const startFps = loadFpsCap();
+      maxFpsSlider.value = String(startFps);
+      maxFpsSlider.addEventListener('input', () => {
+        showFpsCap(maxFpsSlider.value);
+        saveFpsCap(maxFpsSlider.value);
+      });
+      showFpsCap(startFps);
+    } else {
+      applyFpsCap(loadFpsCap());
     }
 
     if (screensaverDelayInput) {

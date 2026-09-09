@@ -626,6 +626,26 @@
             <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
           </div>
 
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800" for="maxFpsSlider">
+              Max Frame Rate: <span id="maxFpsValue" class="text-blue-900">60 FPS</span>
+            </label>
+            <input id="maxFpsSlider" class="win95-slider" type="range" min="24" max="240" step="1" value="60"
+                   aria-describedby="maxFpsHint" />
+            <!-- Ends only. The track is linear over 24-240, so evenly spaced tick labels would
+                 sit nowhere near the values they name - and the readout in the label above
+                 already shows the exact number while you drag. -->
+            <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
+              <span>24</span><span>240</span>
+            </div>
+            <!-- Hidden for now - may be shown again later. -->
+            <div class="text-[10px] text-slate-500 font-bold" id="maxFpsHint" hidden>
+              The ceiling on how often the dungeon is redrawn. Your monitor is still the real
+              limit &ndash; this only ever asks for fewer frames than it offers. Combat keeps its
+              own 60-per-second clock, so lowering this never slows the fight down.
+            </div>
+          </div>
+
           <div id="soundModeRow" class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800">
               Sound Generation:
