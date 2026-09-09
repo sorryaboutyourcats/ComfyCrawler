@@ -236,6 +236,16 @@
       border-bottom: 2px solid #ffffff;
       box-shadow: inset 1px 1px #0a0a0a;
     }
+    /* The death box's keyboard cursor (↑↓ move it, SPACE/ENTER takes it). Blue ground so
+       the highlight reads on either button - the red "Restart" and the yellow "Main Menu". */
+    .deadchoice.selected {
+      background: #bfdbfe;
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+    }
     canvas, img, svg {
       image-rendering: pixelated !important;
     }
@@ -842,11 +852,11 @@
                 <div class="text-[11px] font-bold text-blue-900 bg-blue-100 px-3 py-1 rounded w-full">
                   Steps taken: <span id="deadMovesCount">0</span>
                 </div>
-                <button id="btnRestartDungeon" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-200 hover:bg-red-300 w-full mt-1">
+                <button id="btnRestartDungeon" class="deadchoice win95-btn px-4 py-1.5 text-xs text-black bg-red-200 hover:bg-red-300 w-full mt-1">
                   🔄 Restart Dungeon
                 </button>
-                <button id="btnDeadNewDungeon" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full">
-                  ✨ Create New Dungeon
+                <button id="btnDeadMainMenu" class="deadchoice win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full">
+                  ← Back to Main Menu
                 </button>
               </div>
             </div>

@@ -14,7 +14,7 @@
     const defeatText = document.getElementById('defeatText');
     const deadMovesCount = document.getElementById('deadMovesCount');
     const btnRestartDungeon = document.getElementById('btnRestartDungeon');
-    const btnDeadNewDungeon = document.getElementById('btnDeadNewDungeon');
+    const btnDeadMainMenu = document.getElementById('btnDeadMainMenu');
 
     // Engine mode is fixed at v6 (see activeMode below) - the picker was removed. The krea2
     // resolution / steps / portrait-res number inputs were removed too (never adjusted); the
@@ -2025,6 +2025,13 @@
       combatState.pendingXp = 0;
       combatState.winTick = 0;
       combatState.winIsLevelUp = false;
+      // A won fight hands the hero back to exploration with a full bar. Regen is a flat 27/s
+      // everywhere (see the combat loop), so a drained bar would just race itself back to full
+      // over the next few corridor steps anyway - snapping it here skips the pointless crawl and
+      // opens every encounter fresh. The lock has to lift with it, or the regen guard stamps the
+      // refill straight back to zero for its two seconds. Matches the level-up refill.
+      combatState.playerStm = combatState.playerMaxStm;
+      combatState.exhaustLock = 0;
       // The boss going down is a story beat the screensaver marquee should reflect even before
       // the player walks the last stretch to the exit - see ssStoryMarqueeText.
       if ((activeMarker && activeMarker.variant === 'boss') ||
@@ -2311,6 +2318,8 @@
       // A beat before the box, so the death cry and the hurt frame land first.
       setTimeout(() => {
         if (defeatModal) defeatModal.classList.remove('hidden');
+        deadChoiceIndex = 0;   // keyboard cursor starts on "Restart Dungeon"
+        syncDeadChoice();
         playScreenMusic('death');
       }, 700);
     }
@@ -2367,7 +2376,24 @@
     }
 
     if (btnRestartDungeon) btnRestartDungeon.addEventListener('click', restartDungeon);
-    if (btnDeadNewDungeon) btnDeadNewDungeon.addEventListener('click', openSetupScreen);
+    if (btnDeadMainMenu) btnDeadMainMenu.addEventListener('click', openSetupScreen);
+
+    // Death-box keyboard cursor: which of the two buttons Enter/Space will take.
+    // 0 = Restart Dungeon, 1 = Back to Main Menu. killPlayer() resets it to 0 each death.
+    const deadChoiceBtns = [btnRestartDungeon, btnDeadMainMenu];
+    let deadChoiceIndex = 0;
+    function syncDeadChoice() {
+      deadChoiceBtns.forEach((b, i) => { if (b) b.classList.toggle('selected', i === deadChoiceIndex); });
+    }
+    function moveDeadSelection(delta) {
+      const n = deadChoiceBtns.length;
+      deadChoiceIndex = (deadChoiceIndex + delta + n) % n;
+      syncDeadChoice();
+      playSfx('turn', { gain: 0.4 });
+    }
+    function takeDeadChoice() {
+      (deadChoiceIndex === 0 ? restartDungeon : openSetupScreen)();
+    }
 
     // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
     // attack/hurt frames) carried over from the previous dungeon - so a run started while blocking
@@ -6675,6 +6701,26 @@
           // otherwise see the now-visible setup screen and fire CREATE.
           e.stopImmediatePropagation();
           openSetupScreen();
+        }
+        return;
+      }
+
+      // The death box is up: ↑↓ (also ←→ / WASD) move the cursor between its two buttons -
+      // "Restart Dungeon" and "Back to Main Menu" - and Enter/Space takes the highlighted
+      // one, so a lost run never needs the mouse or a reach for Tab to leave or retry.
+      if (defeatModal && !defeatModal.classList.contains('hidden')) {
+        if (['ArrowUp', 'KeyW', 'ArrowLeft', 'KeyA'].includes(e.code)) {
+          e.preventDefault();
+          moveDeadSelection(-1);
+        } else if (['ArrowDown', 'KeyS', 'ArrowRight', 'KeyD'].includes(e.code)) {
+          e.preventDefault();
+          moveDeadSelection(1);
+        } else if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') {
+          e.preventDefault();
+          // Same guard as the victory box: "Back to Main Menu" un-hides the setup screen, and
+          // the setup-screen listener below must not see it and fire CREATE on this keypress.
+          e.stopImmediatePropagation();
+          takeDeadChoice();
         }
         return;
       }
