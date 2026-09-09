@@ -2718,6 +2718,63 @@ _SPECIES_HIJACK = re.compile(
     r"crowns?|gauntlets?|greaves?|breastplates?|cuirass|spiked|spikes|humanoid|torso|"
     r"knights?|warriors?|demons?|colossus|golems?|juggernauts?|behemoths?|warlords?)\b", re.I)
 
+# The ARMOUR family, stripped from EVERY subject including creatures. The rest of
+# _SPECIES_HIJACK above still applies to objects only.
+#
+# That object-only gate was written when the subject was always a typed noun with a strong
+# visual prior, where keeping the costume words costs only "a slightly plainer gargoyle". It
+# does not hold for a PERSON. The theme brief now routinely designs people - a dungeon typed
+# as "chat" resolves to "chat-bubble twitch viewer" - KIND correctly answers CREATURE, the
+# costume words are kept, and "A squat, ARMORED chat-bubble twitch viewer with glowing cyan
+# edges" rendered a black-and-cyan armoured MECH with no person and no chat bubble in it at
+# all. A person is a weak enough prior that "armoured" simply replaces them.
+#
+# Proof it is this one word rather than the concept: the BOSS of that same family, "stacked,
+# pulsing chat-bubble twitch viewers fused into a towering mass", carried no armour word and
+# rendered a perfect golem built out of chat bubbles.
+#
+# Deliberately NARROW - only words that name a suit of armour. "spiked", "crowned" and
+# "helmet" stay creature-only: those genuinely do improve a gargoyle, and none of them has
+# been observed eating a subject on its own.
+#
+# Removed WORD BY WORD, not clause by clause. _strip_clauses drops the whole comma-separated
+# clause it matched, which is right for an object wearing a costume description but wrong
+# here: in "A squat, armored chat-bubble twitch viewer with glowing cyan edges" the offending
+# adjective sits in the same clause as the subject, so dropping the clause deletes the foe and
+# leaves "A squat, thick knuckles, and a mouth full of pixelated teeth". Only the adjective
+# goes; everything the clause says about the subject stays.
+_SPECIES_ARMOUR = re.compile(
+    r"\b(?:armou?r-?plated|armou?red|armou?r|plated|plating|pauldrons?|breastplates?|"
+    r"cuirass|greaves?|mechs?|mecha)\b", re.I)
+
+# Tidies up after a word removal: doubled spaces, a space before punctuation, an orphaned
+# hyphen left by a compound, and a comma or "and" left leading the sentence.
+_SPECIES_TIDY = [
+    (re.compile(r"\s*-\s*(?=[,.]|$)"), ""),
+    (re.compile(r"(?<=\s)-\s+"), ""),
+    (re.compile(r"\s{2,}"), " "),
+    (re.compile(r"\s+([,.])"), r"\1"),
+    (re.compile(r",\s*(?=,)"), ""),
+    (re.compile(r"^[\s,]*(?:and\s+)?"), ""),
+    # "An armour-plated gargoyle" -> "An gargoyle" once the compound goes; fix the article.
+    (re.compile(r"\b([Aa])n(?=\s+[^aeiouAEIOU\s])"), r"\1"),
+]
+
+
+def _strip_words(look, pattern, why):
+    """Delete just the matched WORDS, keeping the rest of their clause. Returns the original
+    if the result would be too thin to be a description."""
+    out = pattern.sub("", look or "")
+    for rx, rep in _SPECIES_TIDY:
+        out = rx.sub(rep, out)
+    out = out.strip().strip(",").strip()
+    if len(out.split()) < 3:
+        return look
+    if out != (look or "").strip():
+        dropped = sorted(set(m.group(0) for m in pattern.finditer(look or "")))
+        print(f"[species] removed {why} word(s) {dropped}")
+    return out
+
 
 def _strip_clauses(look, pattern, why):
     """Drop any comma-separated clause matching `pattern`. Keeps the original if that would
@@ -2820,6 +2877,8 @@ def parse_enemy_species(text):
         if not entry.get("look") or not entry.get("name"):
             return None
         look = _strip_negations(entry["look"])
+        # Armour goes for everyone; the rest of the costume vocabulary for objects only.
+        look = _strip_words(look, _SPECIES_ARMOUR, "armour")
         if not is_creature:
             look = _strip_clauses(look, _SPECIES_HIJACK, "costume-noun")
         out[v] = {"name": entry["name"], "look": look, "guard": mode}
@@ -2893,7 +2952,20 @@ def generate_enemy_species(enemy_style):
 # hand-built chat template, same never-raises contract, same negation stripping.
 
 THEME_BRIEF_MAX_TOKENS = 520      # eight one-line answers; species proves 8 labels at 320
-THEME_BRIEF_TEMPERATURE = 0.8     # a little tighter than the bestiary - this is art direction
+# Measured failure rate on the eight-label shape is roughly one attempt in three, so ONE retry
+# still let a whole dungeon through on the typed words (a run of "internet / memes / chat"
+# fell back and drew generic scale-monsters). Three attempts takes that to a few percent, and
+# costs nothing on the runs that answer first time. See generate_theme_brief for the two
+# degenerate modes this is re-rolling past.
+THEME_BRIEF_ATTEMPTS = 3
+# Well below the bestiary's 0.9. That one is being asked to INVENT three foes; this one is
+# being asked to obey a dozen rules, and the two want opposite things from sampling. At 0.8 a
+# theme typed as "chat" wandered across "twitch viewer with a chat bubble overhead", "person
+# wearing a chat bubble helmet" and "face obscured by a broken monitor" on consecutive runs,
+# and roughly one attempt in three ignored the reply format altogether. 0.6 was too far the
+# other way: it answered the ENEMY line with bare "person" and "chatbot", dropping the very
+# qualifier that made it that idea, so 0.7 is the settled middle.
+THEME_BRIEF_TEMPERATURE = 0.7
 
 # The surface slots are only asked for when no keyword bucket matched. Every extra required
 # label is another line the reply can come back missing (the lesson _vlm_wants_rotors paid
@@ -2929,13 +3001,55 @@ _THEME_ENEMY_JOINER = re.compile(
     r"which)\s+", re.I)
 
 
+THEME_ENEMY_MAX_WORDS = 8
+THEME_ENEMY_MAX_TAIL = 5     # a qualifier longer than this is a LOOK, not part of the name
+
+# Words a truncated subject must not END on - articles, prepositions and conjunctions
+# that promise something the cut threw away.
+_THEME_ENEMY_TAIL_WORDS = {"a", "an", "the", "and", "or", "with", "of", "in", "on",
+                           "at", "to", "for", "from", "by", "over", "under", "into",
+                           "that", "which", "its", "their", "his", "her"}
+
+
 def _theme_enemy_subject(value):
-    """Reduce a designed ENEMY line to the short subject the species designer wants."""
+    """Reduce a designed ENEMY line to the short subject the species designer wants.
+
+    CUT AT A JOINER ONLY WHEN AT LEAST TWO WORDS COME BEFORE IT. That one condition is what
+    separates a subject wearing a description from a compound subject:
+
+        "armored tank | with chrome plating and glowing red eye sockets"  -> "armored tank"
+        "person | with a chat bubble over their head"                     -> keep going
+
+    In the first the head is already the whole subject and the tail is the look the species
+    designer is supposed to invent for itself. In the second the head is a bare "person" and
+    the qualifier IS the subject - cutting there throws away the entire idea, which for an
+    enemy typed as "chat" is the difference between a Twitch viewer and a generic man.
+    Anything that survives all that and is still rambling gets truncated on word count."""
     head = value.split(",")[0].strip()
-    head = _THEME_ENEMY_JOINER.split(head, 1)[0].strip()
-    # A ONE-WORD head is the good case, not a degenerate one - "devil", "bagel", "taco" are
-    # exactly the shape of the presets that already work, so only a cut down to nothing falls
-    # back to the full line.
+    for m in _THEME_ENEMY_JOINER.finditer(head):
+        before, after = head[:m.start()].strip(), head[m.end():].strip()
+        # Two conditions, and both are needed. A one-word head means the qualifier IS the
+        # subject ("person | with a chat bubble"). A SHORT tail means the qualifier is part of
+        # the name rather than a look ("twitch viewer | with a glowing chat bubble"). Only a
+        # real head carrying a real description gets cut.
+        if len(before.split()) >= 2 and len(after.split()) > THEME_ENEMY_MAX_TAIL:
+            head = before
+            break
+    words = head.split()
+    if len(words) > THEME_ENEMY_MAX_WORDS:
+        # Back off to the last clean break rather than stopping mid-phrase - a hard cut leaves
+        # a dangling connective ("person with a chat bubble over") that reads as a truncation
+        # to the image model as much as it does to a person.
+        # Prefer the last PHRASE boundary that fits over a hard cut at the word limit: chopping
+        # on the count alone leaves a dangling adjective ("tall filing cabinet with legs and
+        # glowing"), which is no better than the dangling preposition it replaced.
+        breaks = [i for i, w in enumerate(words)
+                  if 2 <= i <= THEME_ENEMY_MAX_WORDS
+                  and w.lower().strip(",") in _THEME_ENEMY_TAIL_WORDS]
+        words = words[:breaks[-1]] if breaks else words[:THEME_ENEMY_MAX_WORDS]
+        while len(words) > 1 and words[-1].lower().strip(",") in _THEME_ENEMY_TAIL_WORDS:
+            words.pop()
+        head = " ".join(words).rstrip(",")
     return head if head else value
 
 
@@ -2948,6 +3062,69 @@ def _theme_inline(value):
     if head[1:].islower() or len(head) == 1:
         out = out[:1].lower() + out[1:]
     return out
+
+# ---------------------------------------------------------------------------
+# Hand-tuned ENEMY subjects - the words the set designer cannot be trusted with.
+# ---------------------------------------------------------------------------
+# The same escape hatch _style_bucket() is for the surfaces: when a typed word has a picture
+# everyone already agrees on and the model keeps missing it, answer it in code and skip the
+# argument. "chat" earned this one, reported from play as "they all look like robots".
+#
+# Every reading the designer offered was a THING rather than a PERSON - "floating chat
+# bubble", "chat terminal", "chatbot". A thing goes into the bestiary as KIND: OBJECT, and
+# that brief's rule 2 then asks for "machinery, mountings, housings and moving parts" to stop
+# an object growing a face. Correct for a RAM stick, and for chat it produces three robots
+# every single run - the failure is upstream of the bestiary, in what it was handed.
+#
+# What a person actually pictures on hearing "chat" is PEOPLE TALKING, and the emotes they
+# talk in. So the subject is a person carrying the bubble, in the shape already proven to
+# render both halves: the PERSON is the head noun and the bubble is what they hold. Written
+# the other way round - "chat-bubble twitch viewer" - it renders a bubble and nobody (see
+# _theme_enemy_subject).
+#
+# The person is ROLLED PER DUNGEON, so the run's three foes are one family of one kind of
+# person and the next run is somebody else - the "random people" half of the request. All
+# three variants still differ, because the bestiary designs them separately from this subject.
+#
+# Longer than the eight words _theme_enemy_subject trims a designed line to, and every word
+# is load-bearing - this was measured on rendered sprites, and three of them were drawn and
+# then thrown away by the pipeline itself:
+#
+#  * HELD, NOT FLOATING OVERHEAD. "...with a speech bubble full of emojis overhead" rendered
+#    the person perfectly and keep_largest_figure then deleted the bubble: it keeps only the
+#    largest connected blob, and a bubble hovering clear of the body is a second blob. The
+#    same rule the block-pose force field already lives under (see ENEMY_BLOCK_POSES) - it
+#    has to TOUCH the subject. Held in the hands does that, and it is also what the reference
+#    the request came with looks like: people holding speech-bubble placards.
+#  * A COLOUR, NEVER WHITE. A white bubble is drawn and then matted away - these sprites are
+#    cut out of a pure white background, so white-on-white is invisible to BiRefNet and to
+#    the eye. Purple survives the cut, reads as chat, and stays clear of the cyan the block
+#    pose paints its barrier in, which a cyan bubble was getting confused with.
+#  * "SIGN", and held up rather than beside the head. Without the noun the bubble grows until
+#    it hides the person behind it; "beside his head" framed a chest-up BUST, which
+#    drawEnemyContent then scales against the idle frame and blows up into the camera.
+_CHAT_ENEMY_PEOPLE = [
+    "young man", "young woman", "teenage boy", "teenage girl", "bearded man",
+    "old man", "old woman", "guy in headphones", "girl in glasses", "hooded teenager",
+]
+
+_CHAT_ENEMY_SUBJECT = "{person} holding a purple speech bubble sign covered in emojis"
+
+# Matched on WORD boundaries, not as substrings, so "chatbot" stays a robot for anyone who
+# actually typed one - it is only the bare idea of chat that has no picture of its own.
+_CHAT_ENEMY_WORDS = ("chat", "chats", "chatroom", "chatrooms", "chatter", "chatters",
+                     "chatting", "emote", "emotes", "emoji", "emojis", "emoticon",
+                     "emoticons")
+
+
+def _enemy_literal(enemy_style):
+    """The hand-tuned ENEMY subject for a typed word the designer keeps getting wrong, or
+    None for everything else, which goes through generate_theme_brief as before."""
+    ui = (enemy_style or "").strip().lower()
+    if ui and any(match_word(re.escape(w), ui) for w in _CHAT_ENEMY_WORDS):
+        return _CHAT_ENEMY_SUBJECT.format(person=random.choice(_CHAT_ENEMY_PEOPLE))
+    return None
+
 
 THEME_BRIEF_SYSTEM = (
     "You are the set designer for a 1990s first-person dungeon crawler. You are given the "
@@ -2965,9 +3142,101 @@ _THEME_BRIEF_SURFACES = """- WALL: the material the corridor walls are made of.
 - FLOOR: the material underfoot.
 - CEILING: the material overhead.
 - LANTERN: ONE object from this world that could glow and light the corridor.
-- DOOR: ONE closed door from this world, and the archway around it.
+- DOOR: ONE door, SHUT, filling the opening as a solid slab you cannot see past, plus the
+  archway around it. Say what the door leaf itself is made of, not just its frame - a word
+  like "doorway", "portal" or "opening" describes a hole and gets you an empty arch.
 - SWITCH: ONE small hand-sized object from this world, used as a lever handle.
 """
+
+# The rules, split by which request shape needs them and numbered at build time.
+#
+# KEEP THESE SHORT. Every one of them was earned by a real failure, and the temptation is to
+# explain each one at length - but this runs on a 4B model, and the rules block grew to 6.6KB
+# across one afternoon of doing exactly that. The cost was not subtle: roughly one attempt in
+# three stopped answering in the required format at all (empty reply, a bare "user" line, or
+# THEME_BRIEF_SYSTEM echoed back), and the ENEMY line started collapsing to bare nouns like
+# "person" because it could no longer hold every competing instruction at once. Say each rule
+# once, in a sentence or two, and put the reasoning in a comment here instead of in the prompt.
+#
+# A bucketed theme is only asked for WEAPON and ENEMY, so it must not be shipped the surface
+# rules as well - that is the entire point of having a short shape.
+
+# Rule 2 (surfaces are a material OR a WALLPAPER of the theme's imagery) is what broke the
+# "internet = server racks" reading: the brief used to demand a MATERIAL, and the only material
+# answer for an idea is the hardware behind it. The existing `cat` and `people` keyword buckets
+# have always been wallpapers, so this only lets the designed path do what they already do.
+_THEME_RULES_SURFACE = [
+    """WALL, FLOOR and CEILING are one surface seen up close - either a material ("cracked red
+   brick with white mortar") or a wallpaper of the theme's own pictures repeated edge to edge
+   ("dense repeating browser windows on navy"). Never a room, never a scene.""",
+    """Those three must tile: an even repeating surface with no single big object, because one
+   copy covers one square of the map and a focal point repeats down the whole corridor.""",
+    """LANTERN, DOOR and SWITCH are one object each, three different objects, each obviously
+   from THIS theme - a plain iron dungeon door belongs to no theme and is always wrong. The
+   door is SHUT: a solid slab you cannot see past. Say what the leaf is made of.""",
+    """Those three surfaces are lit by one lantern and the game darkens them further with
+   distance, so keep them mid-tone or pale with the detail visible. Near-black arrives on
+   screen as an empty void. If the theme is a black thing, say what is bright on it.""",
+]
+
+# The ENEMY rule is the one under the most tension: it has to be short (it becomes the {enemy}
+# the bestiary brief repeats eight times), it has to keep whatever qualifier makes it that idea
+# ("chat" -> a person WITH A BUBBLE, not a person), and the thing it fundamentally IS has to
+# land last because that is the word the picture gets built around ("chat-bubble viewer" drew a
+# bubble and no person). Earlier drafts spent a paragraph on each of those and the model
+# answered "person".
+_THEME_RULES_SUBJECT = [
+    """WEAPON is one object held and swung in one hand, with a grip, reading correctly after
+   the word "a". If the idea is a picture rather than a tool, mount it - a placard on a stick,
+   a framed board with a handle - rather than swapping it for an unrelated novelty.""",
+    """ENEMY is a NAME, not a description: the thing typed on the ENEMY line made concrete, in
+   at most eight words, never a subject borrowed from the theme instead. End on the word for
+   what it fundamentally IS, and keep whatever it must carry or wear to still read as that
+   idea. A name so bare it would suit any dungeon has failed.""",
+]
+
+_THEME_RULES_ALWAYS_HEAD = [
+    """Write physical description only - material, build, parts, and COLOURS. Always name the
+   colours.""",
+]
+
+# Rule "pictures not plumbing" is the headline fix of this round. The example must stay
+# uncopyable: an earlier version named a concrete answer and the model handed that exact string
+# back as the enemy of two unrelated themes.
+_THEME_RULES_ALWAYS_TAIL = [
+    """An idea is drawn as its PICTURES, not its PLUMBING. For a word that is an idea, a
+   pastime or a service, draw the things a person actually pictures on hearing it: its icons
+   and symbols, the screens, pages, windows and signs it lives on, the links drawn between
+   things. Never the equipment that runs it out of sight.""",
+    """If the idea is pictures with words on them - a meme, a sign, a screen, a speech bubble -
+   name the picture it carries and say the caption is short bold white block capitals with a
+   heavy black outline. Without the words on it a meme is just a photo of an animal.""",
+    """Describe only what is IN the picture. Never write what something is not, or lacks - every
+   word you write gets drawn.""",
+    """If the typed word is already a specific physical thing, keep it, adding at most a few
+   words of material and colour.""",
+    """One line each, under 25 words. No story, no mood, no explanation.""",
+]
+
+
+def _theme_rules(want_surfaces):
+    """The numbered rule block for one request shape."""
+    rules = list(_THEME_RULES_ALWAYS_HEAD)
+    if want_surfaces:
+        rules += _THEME_RULES_SURFACE[:3]
+    rules += _THEME_RULES_SUBJECT
+    rules += _THEME_RULES_ALWAYS_TAIL[:3]
+    if want_surfaces:
+        rules += _THEME_RULES_SURFACE[3:]
+    rules += _THEME_RULES_ALWAYS_TAIL[3:]
+    out = []
+    for i, body in enumerate(rules, 1):
+        lines = body.split("\n")
+        pad = " " * (len(str(i)) + 2)
+        out.append(f"{i}. " + lines[0].strip()
+                   + "".join("\n" + pad + l.strip() for l in lines[1:]))
+    return "\n".join(out)
+
 
 _THEME_BRIEF_USER = """A player typed these words to describe a dungeon they want to explore:
 
@@ -2984,32 +3253,7 @@ Describe:
 {slots}
 Rules. Every line is fed straight to an image generator, so:
 
-1. Write only physical description: material, surface, build, parts, and COLOURS. Always name
-   the colours. A line with no colour in it is the main way this job goes wrong.
-2. WALL, FLOOR and CEILING are a MATERIAL, never a place and never a scene. "A server room" is
-   WRONG. "Racked black server blades with blue status LEDs and bundled grey cables" is right.
-   Name the stuff the surface is made of, as if describing a close-up swatch of it.
-3. WALL, FLOOR and CEILING must be an EVEN, REPEATING surface with no single big object in it.
-   One copy of that texture covers one square of the map, so anything that reads as a single
-   focal point appears again in every square of the corridor.
-4. LANTERN, DOOR and SWITCH are exactly ONE object each, and the three must be three DIFFERENT
-   objects, not the same one three times.
-5. WEAPON is ONE object a person could hold and swing in one hand. Give it a handle or a grip.
-   It must read correctly after the word "a", because that is how it gets used.
-6. ENEMY is the NAME of ONE creature or object that could stand in a corridor and fight.
-   This one is different from all the others: give the thing itself and a word or two of
-   colour or material, and STOP. At most five words. Do not describe its parts, its pose or
-   what it is doing - something else designs all of that from the name you give.
-7. Describe ONLY what is in the picture. NEVER write what something is not, or lacks, or
-   should not look like. Every single word you write will be drawn.
-8. The WALL, FLOOR and CEILING are lit by a lantern in a dark corridor, and the game darkens
-   them further with distance. Give them mid-tone or pale colouring, catching the light, with
-   their detail plainly visible. A near-black surface arrives on screen as an empty void, which
-   is the same as having drawn nothing. If the theme is a black thing, say what is bright on
-   it: the pale dust on it, the light it reflects, the glow coming off its markings.
-9. If what the player typed is ALREADY a specific physical thing, keep it. Repeat it back,
-   adding at most a few words of material and colour. Never swap it for something else.
-10. One line each, under 25 words. No story, no mood, no explanation.
+{rules}
 
 Reply using EXACTLY these labels, each on its own line, in this order. No preamble, no
 markdown, no commentary, no asterisks:
@@ -3029,7 +3273,7 @@ def _theme_brief_prompt(wall_style, weapon_style, enemy_style, want_surfaces):
         wall=(wall_style or "").strip() or "a forgotten place",
         weapon=(weapon_style or "").strip() or "a sword",
         enemy=(enemy_style or "").strip() or "something that shambles",
-        slots=body, labels=labels)
+        slots=body, labels=labels, rules=_theme_rules(want_surfaces))
     return (
         "<|im_start|>system\n" + THEME_BRIEF_SYSTEM + "<|im_end|>\n"
         "<|im_start|>user\n" + user + "<|im_end|>\n"
@@ -3084,14 +3328,23 @@ def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=Tr
     buckets' surface prompts are literals that ignore the brief anyway - so the reply only has
     to carry WEAPON and ENEMY, and a two-label reply is far harder to come back malformed.
 
-    ONE RETRY ON A FRESH SEED, and it is not optional. Measured over 6 live samples across two
-    themes, roughly one reply in six is degenerate in a very specific way: the model echoes
-    THEME_BRIEF_SYSTEM back word for word and answers nothing at all (both observed failures
-    returned a byte-identical 278-character string, on two unrelated themes). It is a sampling
-    outcome rather than a prompt fault - the same theme and the same prompt succeed on the
-    seeds either side of it - so re-rolling the seed is the entire fix, and it costs nothing on
-    the runs that work first time. Same shape as the _portrait_frame_diff retry."""
+RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
+    degenerate ways, both sampling outcomes rather than prompt faults - the same theme and the
+    same prompt succeed on the seeds either side:
+      - it echoes THEME_BRIEF_SYSTEM back word for word and answers nothing (two failures on
+        two unrelated themes returned a byte-identical 278-character string);
+      - it returns an empty string, or a bare "user" line.
+    Re-rolling the seed is the entire fix. One retry was not enough: measured roughly one
+    attempt in three failing on the eight-label shape, which still let a whole dungeon through
+    on the raw typed words. Hence THEME_BRIEF_ATTEMPTS. Same shape as the
+    _portrait_frame_diff retry."""
     slots = THEME_SURFACE_SLOTS + THEME_SUBJECT_SLOTS if want_surfaces else THEME_SUBJECT_SLOTS
+    # A hand-tuned enemy wins over whatever comes back, and it also has to survive the reply
+    # failing altogether - the failure path returns the typed word raw, which for "chat" is
+    # the robot bug by another route. ENEMY is still ASKED for: the reply shape is what all
+    # the reliability numbers here were measured on, and dropping a label off the short shape
+    # to save a line the designer answers well enough is not worth re-measuring.
+    literal = _enemy_literal(enemy_style)
 
     def _attempt():
         payload = {
@@ -3123,28 +3376,35 @@ def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=Tr
 
     try:
         t0 = time.time()
-        raw, brief = _attempt()
-        # Re-roll when the reply lost MOST of its labels, not only when it lost all of them - a
-        # badly truncated reply is the same coin flip and just as cheap to redo. A merely
+        # Re-roll when the reply lost MOST of its labels, not only when it lost all of them -
+        # a badly truncated reply is the same coin flip and just as cheap to redo. A merely
         # partial reply is KEPT: parse_theme_brief already falls back per slot, so a good WALL
         # next to a missing SWITCH is still strictly better than the raw typed word.
-        if len(brief) * 2 < len(slots):
-            print(f"[theme] reply carried {len(brief)}/{len(slots)} labels, "
-                  f"re-rolling the seed once - {raw[:160]!r}")
+        for attempt in range(1, THEME_BRIEF_ATTEMPTS + 1):
             raw, brief = _attempt()
+            if len(brief) * 2 >= len(slots):
+                break
+            if attempt < THEME_BRIEF_ATTEMPTS:
+                print(f"[theme] attempt {attempt} carried {len(brief)}/{len(slots)} labels, "
+                      f"re-rolling the seed - {raw[:160]!r}")
         if not brief:
             print(f"[theme] reply still carried none of the {len(slots)} labels - "
                   f"using the typed words as they are - {raw[:200]!r}")
-            return None
+            return {"enemy": literal} if literal else None
+        if literal:
+            brief["enemy"] = literal
         for s in slots:
             got = brief.get(s)
+            if s == "enemy" and literal:
+                print(f"[theme] {s:8s} {got}  (hand-tuned, the designed line is ignored)")
+                continue
             print(f"[theme] {s:8s} {got if got else '(missing - using the typed words)'}")
         print(f"[theme] set designed in {time.time()-t0:.1f}s")
         return brief
     except Exception as e:
         print(f"[theme Error] {e} - using the typed words as they are")
         PROGRESS.finish_job("theme_brief")
-        return None
+        return {"enemy": literal} if literal else None
 
 def _a_or_an(noun):
     return ("an " if noun[:1].lower() in "aeiou" else "a ") + noun
@@ -3601,18 +3861,21 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None):
         make_seamless_4way(w_path, blend_pixels=12)
         make_seamless_4way(c_path, blend_pixels=12)
         make_seamless_4way(f_path, blend_pixels=12)
-        # Only the DESIGNED path can hand back an unreadably dark surface, so the lift is
-        # gated on these three textures actually having been designed. The test is the "wall"
-        # slot, not the brief itself: a bucketed theme still gets a truthy brief (it carries
-        # weapon + enemy), and gating on that would have let this repaint hand-tuned bucket
-        # art - the sci-fi bucket's "dark spaceship hull" is deliberately dark and must stay
-        # that way. See _lift_dark_surface for the measurements.
-        if (brief or {}).get("wall"):
-            for pth, lbl in ((w_path, "wall"), (c_path, "ceiling"), (f_path, "floor")):
-                _lift_dark_surface(pth, lbl)
-
         # Door: a single full-cell surface - NOT tiled, so no make_seamless_4way.
         d_path = _p("d_save")
+
+        # Only the DESIGNED path can hand back an unreadably dark surface, so the lift is
+        # gated on these textures actually having been designed. The test is the "wall" slot,
+        # not the brief itself: a bucketed theme still gets a truthy brief (it carries weapon
+        # + enemy), and gating on that would have let this repaint hand-tuned bucket art - the
+        # sci-fi bucket's "dark spaceship hull" is deliberately dark and must stay that way.
+        # The door is included because it is a full-cell OPAQUE surface drawn in the corridor
+        # just like a wall; the lantern and switch are not, being BiRefNet cutouts on
+        # transparency. See _lift_dark_surface for the measurements.
+        if (brief or {}).get("wall"):
+            for pth, lbl in ((w_path, "wall"), (c_path, "ceiling"), (f_path, "floor"),
+                             (d_path, "door")):
+                _lift_dark_surface(pth, lbl)
         # Switch: one BiRefNet cutout, trimmed to its own alpha box like the lantern.
         s_path = _p("s_save")
         _save_tight(s_path)

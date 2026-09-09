@@ -284,6 +284,7 @@
     let enemyFrames = null;
     let enemyStyleName = '';   // common foe name (walker/flyer)
     let enemyBossName = '';    // boss's own name (boss variant only)
+    let bossDefeated = false;  // latched once the boss encounter is won - flips the screensaver's boss line
     // Each foe's own invented name (server bundle.enemy_names), when the three were designed
     // as separate species rather than derived from one another. Takes precedence over the
     // tag+common-name fallback below, because these really are three different creatures.
@@ -1431,8 +1432,11 @@
 
     // One gate for every input path - the keyboard handler, the D-pad and the combat buttons
     // all check this, so the level-up box really does stop the game rather than just covering it.
+    // The victory box locks input the same way: once the player has taken the stairs out, the
+    // run is over and the character must not be walked around behind the outro. It stays locked
+    // until a full reset (restartDungeon / back to menu) hides the box again.
     function inputLocked() {
-      return levelUpOpen;
+      return levelUpOpen || (victoryModal && !victoryModal.classList.contains('hidden'));
     }
 
     const btnCombatDodgeL = document.getElementById('btnCombatDodgeL');
@@ -1505,7 +1509,10 @@
         orbit: 0,        // circler: angle around its holding pattern, radians
         laps: 0,         // circler: full circles flown since its last swoop
         homeX: 0,        // circler: the centre that circle is drawn around
-        formOffset: 0,   // swarmer: the spot in the pack it holds, px either side of the player
+        slotX: 0,        // circler: the centre its pack slot OWNS - homeX returns here after a swoop
+        orbitBase: 0,    // circler: the phase its pack slot owns, so a pack re-forms fanned out
+        formOffset: 0,   // swarmer: the spot it walks to, px either side of the player
+        diveOffset: 0,   // circler: the spot it dives at, px either side of the player
         deathFade: 0     // >0 once killed: ticks up while the corpse dithers away
       },
       faceState: 'idle',
@@ -1682,6 +1689,11 @@
     const NEAR_WALL_HEAD_ROOM = 6;
     const NEAR_WALL_BACK_ROOM = 12;
     const NEAR_WALL_EASE = 0.18;
+    // A flyer hovers a fixed height off the floor line, so when the near-wall pull-in walks the
+    // whole staging DOWN the canvas the flyer rides down with it and ends up sitting in the
+    // hero's face at chest height rather than up out of reach. Lift it back up by this fraction
+    // of the pull-in distance, so a flyer pressed against a wall still reads as airborne.
+    const NEAR_WALL_FLY_LIFT = 0.4;
 
     // The hue on swarmer/circler above is only a starting value: every run rolls both of them
     // fresh, and independently - this run's runts can be blue while its fledglings are purple,
@@ -1797,13 +1809,17 @@
       return key;
     }
 
-    // Each foe is its own species with its own invented name ("Gravewing Shrike"), so use that
-    // when the server sent one - no "FLYING " tag, because a flyer that was designed to fly is
-    // not a tagged version of the walker.
-    // Without them (older bundle, or the naming call failed and the three were derived from one
-    // sprite) fall back to the tag + the story's common foe name, with the boss taking the
-    // story's champion title so the crawl text and the health bar agree:
-    // "THE HORDE", "FLYING THE HORDE", "DREAD THE OVERCLOCKED".
+    // Grunt and flyer are each their own species with its own invented name ("Gravewing
+    // Shrike"), so use that when the server sent one - no "FLYING " tag, because a flyer that
+    // was designed to fly is not a tagged version of the walker. Without one (older bundle, or
+    // the naming call failed) fall back to the tag + the story's common foe name: "THE HORDE",
+    // "FLYING THE HORDE".
+    // The boss is different: it always fights under the story's own champion title
+    // (enemyBossName, e.g. "DREAD THE OVERCLOCKED") rather than its species name, because that
+    // title is the same one already baked into the intro crawl, the victory outro and the
+    // screensaver marquee (see ssStoryMarqueeText) - naming it anything else here would make
+    // combat disagree with all three. Species name and tag+style are only a fallback for when
+    // the story never produced a boss title.
     // A pack foe never has a generated name of its own - it wears its base variant's name under
     // its own tag, which is exactly what it looks like: "RUNT GRAVEWING SHRIKE".
     function enemyDisplayName(key, cfg) {
@@ -1812,10 +1828,13 @@
           || (enemyStyleName || 'nightstalker');
         return (cfg.tag + baseName).toUpperCase();
       }
+      if (key === 'boss') {
+        const name = enemyBossName || (enemyVariantNames && enemyVariantNames.boss || '').trim()
+          || (cfg.tag + (enemyStyleName || 'nightstalker'));
+        return name.toUpperCase();
+      }
       const ownName = (enemyVariantNames && enemyVariantNames[key] || '').trim();
-      const name = ownName || (key === 'boss'
-        ? (enemyBossName || (cfg.tag + (enemyStyleName || 'nightstalker')))
-        : (cfg.tag + (enemyStyleName || 'nightstalker')));
+      const name = ownName || (cfg.tag + (enemyStyleName || 'nightstalker'));
       return name.toUpperCase();
     }
 
@@ -1856,13 +1875,22 @@
       e.deathFade = 0;
       // Circler: half a circle apart, around a centre at its own spawn x, so two of them are
       // on opposite sides of their patterns and the player never faces both low points at once.
-      e.orbit = (Math.PI * 2 * i) / count;
+      // slotX/orbitBase are that arrangement kept as the slot this one OWNS for the whole
+      // fight, rather than only the state it happened to start in - a swoop ends by flying
+      // back to them (see the 'rising' branch), which is what stops a pack that dived on the
+      // same spot from re-forming as one creature.
+      e.orbitBase = (Math.PI * 2 * i) / count;
+      e.orbit = e.orbitBase;
       e.laps = 0;
       e.homeX = e.x;
+      e.slotX = e.x;
       // Where in the pack a swarmer tries to stand, relative to the player. Kept inside the
       // 44px dodge window in landEnemyStrike, so standing still really does let all three
-      // connect - stepping aside is what shakes the flankers off.
+      // connect - stepping aside is what shakes the flankers off. A circler holds the same
+      // spread while it dives, but takes its place in the line at the moment it breaks off
+      // rather than owning one - see packDiveOffset.
       e.formOffset = count > 1 ? (i - (count - 1) / 2) * 30 : 0;
+      e.diveOffset = e.formOffset;
     }
 
     // How the entrance plays, in sim ticks. The hero slides up into frame first; the foe
@@ -1995,6 +2023,12 @@
       combatState.pendingXp = 0;
       combatState.winTick = 0;
       combatState.winIsLevelUp = false;
+      // The boss going down is a story beat the screensaver marquee should reflect even before
+      // the player walks the last stretch to the exit - see ssStoryMarqueeText.
+      if ((activeMarker && activeMarker.variant === 'boss') ||
+          (combatState.enemy && combatState.enemy.variant === 'boss')) {
+        bossDefeated = true;
+      }
       if (activeMarker) activeMarker.alive = false;
       activeMarker = null;
       toggleBattleMode(false);
@@ -2215,6 +2249,7 @@
       // the refill below, since it is what puts playerMaxHp back to BASE_MAX_HP.
       resetProgression();
       activeMarker = null;
+      bossDefeated = false;   // a fresh/rolled-back run has the boss standing again
       combatState.introFrame = 0;
       combatState.pendingXp = 0;
       combatState.winTick = 0;
@@ -2374,6 +2409,20 @@
     // across the arena, and the result is clamped a little wider than the ±85 patrol range so
     // the outside of a squeezed pack can still be reached.
     const MIN_PACK_GAP = 30;
+    // Where in the line abreast a diving flier aims, relative to the player. It is decided off
+    // the order the pack is CURRENTLY flying in rather than off its slot number, because the
+    // two circles overlap: the one that spawned on the left is regularly the one on the right
+    // by the time it breaks off, and aiming by slot would send the pair swapping sides through
+    // each other over the player's head. Leftmost takes the leftmost slot and nobody crosses.
+    // The spread is kept inside landEnemyStrike's 44px reach, so a player who stands still
+    // still eats every one of them.
+    function packDiveOffset(e) {
+      const living = combatState.enemies.filter(o => o.hp > 0);
+      if (living.length < 2) return 0;
+      living.sort((a, b) => a.x - b.x);
+      return (living.indexOf(e) - (living.length - 1) / 2) * 30;
+    }
+
     function separatePack(e) {
       for (const o of combatState.enemies) {
         if (o === e || o.hp <= 0) continue;
@@ -2514,7 +2563,8 @@
         // and inside the player's 34px reach at the bottom of it. That is its whole weakness:
         // the flyer can only be hit during its own swoop, this one hands the player a window
         // on every lap. After CIRCLER_LAPS circles it breaks off and dives exactly like a
-        // flyer, then slides back into the pattern wherever it ended up.
+        // flyer, then climbs back into the slot it holds in the pack - same centre, same phase
+        // it spawned with, so a pair is as fanned out on its tenth lap as on its first.
         if (e.state === 'hurt') {
           e.stateTimer--;
           if (e.stateTimer <= 0 && e.swoop === 'none') e.state = 'idle';
@@ -2523,8 +2573,9 @@
         if (e.swoop === 'none') {
           e.orbit = (e.orbit + cfg.orbitSpeed) % (Math.PI * 2);
           // laps counts CIRCLES FLOWN, fractionally, rather than wraps of e.orbit - the two
-          // came apart the moment a circler could rejoin its pattern part-way round (see the
-          // 'rising' branch), which made the first lap after a swoop as short as a quarter turn.
+          // are not the same thing for anyone whose slot phase isn't 0. The second of a pair
+          // flies from pi, so its first wrap past 2pi comes half a circle in; counting wraps
+          // would have it break off on a half lap, every lap.
           e.laps += cfg.orbitSpeed / (Math.PI * 2);
           e.x = e.homeX + Math.cos(e.orbit) * cfg.orbitRX;
           // Minus sin: the low point of the lap is at orbit = pi/2 and the high point at
@@ -2533,12 +2584,16 @@
           e.altitude = cfg.hover - Math.sin(e.orbit) * cfg.orbitLift;
           if (e.laps >= CIRCLER_LAPS && e.state !== 'hurt') {
             e.laps = 0;
+            e.diveOffset = packDiveOffset(e);
             e.swoop = 'diving'; e.swoopTimer = 24; e.state = 'telegraph';
             showFloatingCombatText("⚠️ IT BREAKS OFF!", 160 + e.x * 0.5, 58, "#fbbf24");
           }
         } else if (e.swoop === 'diving') {
           e.altitude += (0 - e.altitude) * 0.22;
-          e.x += (combatState.playerX - e.x) * 0.16;
+          // Aimed at its own place in the line rather than at the player exactly, so a pack
+          // that breaks off together arrives shoulder to shoulder instead of stacking on the
+          // one pixel the player is standing on - see packDiveOffset.
+          e.x += ((combatState.playerX + (e.diveOffset || 0)) - e.x) * 0.16;
           if (e.swoopTimer <= 0) {
             e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
             landEnemyStrike(e, cfg.dmg, "DODGED THE DIVE!", "🛡️ DIVE BLOCKED!", "DIVE!");
@@ -2546,18 +2601,24 @@
         } else if (e.swoop === 'striking') {
           if (e.swoopTimer <= 0) { e.swoop = 'rising'; e.swoopTimer = 26; }
         } else if (e.swoop === 'rising') {
-          e.altitude += (cfg.hover - e.altitude) * 0.16;
+          // Climb back into the slot this one OWNS, not into wherever the dive left it. The
+          // point it is rejoining at - its slot's centre, at its slot's phase - is flown to
+          // across the whole 26-frame climb, x and altitude together, so the pattern is picked
+          // up from the spot it is standing on and nothing teleports.
+          // Re-centring the circle on its current x instead (what this used to do) is what
+          // collapsed a pack: two circlers dive at the same target, so both came out of the
+          // swoop with their circles centred on the same few pixels AND - the angle being
+          // solved by acos from an x that was now its own centre, which is the same answer for
+          // every one of them - sharing a phase as well. Perfect formation on spawn, one
+          // sprite with two health bars from the first swoop on.
+          const homeTX = e.slotX + Math.cos(e.orbitBase) * cfg.orbitRX;
+          const homeTY = cfg.hover - Math.sin(e.orbitBase) * cfg.orbitLift;
+          e.x += (homeTX - e.x) * 0.16;
+          e.altitude += (homeTY - e.altitude) * 0.16;
           if (e.swoopTimer <= 0) {
             e.swoop = 'none'; e.state = 'idle';
-            // Rejoin the pattern around where it actually is. Both halves matter: the centre
-            // is re-pinned near where it climbed out (clamped so the circle stays on screen),
-            // and the ANGLE is solved from its current x - acos gives the two candidates and
-            // the 2pi- form picks the upper half of the circle, where sin is negative and the
-            // altitude is at or above hover. Snapping orbit to 0 instead would have flung it
-            // a full radius sideways on the frame it re-entered the pattern.
-            e.homeX = Math.max(-30, Math.min(30, e.x));
-            const t = Math.max(-1, Math.min(1, (e.x - e.homeX) / cfg.orbitRX));
-            e.orbit = (Math.PI * 2) - Math.acos(t);
+            e.homeX = e.slotX;
+            e.orbit = e.orbitBase;
             e.laps = 0;
           }
         }
@@ -4034,7 +4095,15 @@
         : GROUND_Y;
       const front = Math.min(NEAR_WALL_GROUND_MAX, wallFloorY + NEAR_WALL_CLEARANCE);
       e.nearPush = (e.nearPush || 0) + (Math.max(0, front - GROUND_Y) - (e.nearPush || 0)) * NEAR_WALL_EASE;
-      if (e.nearPush <= 0.5) return { groundY: base, scale: 1 };
+      if (e.nearPush <= 0.5) return { groundY: base, scale: 1, lift: 0 };
+
+      // A flyer rides the pull-in down the canvas with everything else; lift it back up a share
+      // of that drop so it still hangs overhead rather than in the hero's face. Grounded foes
+      // are meant to come down to eye level, so they get nothing - and the lift fades out with
+      // the flyer's own altitude, so a diving swoop still reaches the floor instead of pulling
+      // its strike short against a wall.
+      const hoverFrac = cfg.hover > 0 ? Math.min(1, (e.altitude || 0) / cfg.hover) : 0;
+      const lift = cfg.fly ? e.nearPush * NEAR_WALL_FLY_LIFT * hoverFrac : 0;
 
       // The front line, eased. DEPTH then rides on top of it - but the room to withdraw into is
       // exactly the room the wall left, so a boss backing off for its charge stops with its feet
@@ -4054,9 +4123,9 @@
       // is two thirds of the view before any of this, and a flyer's bottom edge is its hover
       // height up from the ground it just moved.
       const baseH = height * cfg.heightFrac * depthScale;
-      const bottomY = groundY - (e.altitude || 0);
+      const bottomY = groundY - (e.altitude || 0) - lift;
       scale = Math.min(scale, NEAR_WALL_SCALE_MAX, (bottomY - NEAR_WALL_HEAD_ROOM) / baseH);
-      return { groundY, scale };
+      return { groundY, scale, lift };
     }
 
     function drawEnemyBody(c, width, height, which) {
@@ -4078,11 +4147,15 @@
       const near = nearWallStaging(e, cfg, ex, width, height, depthScale, depth);
       const dScale = depthScale * near.scale;
       const groundY = near.groundY;
+      // Near-wall flyer lift (see NEAR_WALL_FLY_LIFT) - folded into altitude everywhere the foe's
+      // hover height is read, so the sprite, its shadow fade and the procedural body all rise
+      // together. Zero for grounded foes and whenever the pull-in isn't active.
+      const altLift = near.lift || 0;
       // The winner's dance: once the player is down, the enemy bounces straight up and down on
       // the spot, celebrating. Negative = higher on the canvas; abs(sin) so it only ever leaves
       // the ground and lands, never sinks through it.
       const victoryHop = combatState.dead ? -Math.abs(Math.sin(Date.now() / 130)) * 24 : 0;
-      const ey = (groundY - 70) - (e.altitude || 0) + Math.sin(Date.now() / 200) * 4 + victoryHop;
+      const ey = (groundY - 70) - (e.altitude || 0) - altLift + Math.sin(Date.now() / 200) * 4 + victoryHop;
 
       // No telegraph circle - the attack frame shows the wind-up, and the "ENEMY WIND-UP!"
       // floating text still calls it.
@@ -4122,12 +4195,12 @@
           const targetH = Math.round(height * cfg.heightFrac * dScale);
           const maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
           const bob = cfg.fly ? Math.sin(Date.now() / 110) * 4 : Math.sin(Date.now() / 220) * 3;
-          const bottomY = groundY - (e.altitude || 0) + bob + victoryHop;
+          const bottomY = groundY - (e.altitude || 0) - altLift + bob + victoryHop;
 
           c.save();
           // Ground shadow - fades and shrinks as a flyer climbs, and travels up the canvas with
           // its owner's feet as a withdrawn foe backs away.
-          const sh = cfg.fly ? Math.max(0.14, 1 - (e.altitude || 0) / 90) : 1;
+          const sh = cfg.fly ? Math.max(0.14, 1 - ((e.altitude || 0) + altLift) / 90) : 1;
           c.fillStyle = `rgba(0,0,0,${0.28 * sh})`;
           c.beginPath();
           c.ellipse(ex, groundY + 3, targetH * 0.32 * sh, targetH * 0.08 * sh, 0, 0, Math.PI * 2);
@@ -4528,13 +4601,14 @@
     // narrower and darker, converging on a vanishing point just under eye level - which is
     // exactly where descending steps go.
     //
-    // The 256x128 canvas is authored at the aspect the renderer will draw it at (one cell wide
-    // by ~0.92 of a wall tall, which works out near 2:1 at every distance because both scale as
-    // 1/d), so the steps are not squashed on screen.
+    // The 256x128 canvas is authored at roughly the aspect the renderer draws it at (one cell
+    // wide by a full wall tall), so the steps are not badly squashed on screen.
     const EXIT_SPR_W = 256, EXIT_SPR_H = 128;
-    // How much of a wall's height the stairwell opening takes, measured up from the floor.
-    // 0.92 leaves a course of stone above the lintel rather than running into the ceiling.
-    const EXIT_STAIRS_WALL_FRAC = 0.92;
+    // How much of a wall's height the stairwell sprite takes, measured up from the floor.
+    // 1.0 runs the stone surround clear up to the ceiling - anything less leaves a strip of
+    // corridor wall showing between the top of the frame and the ceiling (see the lintel course
+    // baked into the texture, which is what reads as "stone above the arch" now).
+    const EXIT_STAIRS_WALL_FRAC = 1.0;
     function buildExitStairsTexture(styleName = "Windows 95", sourceWallImageData = null) {
       const cv = document.createElement('canvas');
       cv.width = EXIT_SPR_W;
@@ -5225,27 +5299,44 @@
     // Restricted to the region past the last gate, which is what keeps all N doors standing
     // between the player and the Exit; the gates were planned against the old exit, and moving
     // it around inside the final region cannot put it in front of any of them.
+    //
+    // The Exit must be a DEAD END - stairs at the end of a hallway, walls on the other three
+    // sides. That is a hard requirement, not a tie-break: one way in is what lets ONE boss
+    // stand between the player and the stairs. An Exit on a corner or a junction has two ways
+    // in, and guarding both would take two bosses (see placeEnemyMarkers). Distance only
+    // chooses between dead ends. Nothing carves after this point - braidMaze has already run,
+    // the gate pass only stamps floor into walls and the lantern pass only touches MAP===1 -
+    // so a dead end picked here is still a dead end on the map the player walks.
     function relocateExit(plan, regionOf) {
       const lastId = plan ? plan.regionSeeds.length - 1 : 0;
       // Doors are not stamped yet, so this floods the maze as it will be with every gate open -
       // i.e. the real walking distance once the player has earned their way through.
       const dist = _flood(startRoom, (x, y) => MAP[y][x] === 0);
-      let best = null, bestScore = -1;
+      // Planned door tiles are also still plain floor here. A dead end whose one way in is
+      // about to become a door has nowhere for the boss to stand - the guard needs a walkable
+      // approach - so those are passed over too.
+      const gateKeys = new Set((plan ? plan.gates : []).map((g) => _tileKey(g.tile.x, g.tile.y)));
+      let best = null, bestDist = -1;           // furthest dead end - what we actually want
+      let anyCell = null, anyDist = -1;         // furthest cell of any shape, last resort only
       dist.forEach((e, key) => {
         if (e.x % 2 !== 1 || e.y % 2 !== 1) return;         // cells only, never a connector
         if (plan && regionOf.get(key) !== lastId) return;
-        let floorNb = 0;
+        const floorNb = [];
         for (const d of _ORTHO) {
           const nx = e.x + d.dx, ny = e.y + d.dy;
-          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) floorNb++;
+          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) {
+            floorNb.push({ x: nx, y: ny });
+          }
         }
-        // Distance is the point; the dead-end nudge only breaks ties between tiles that are
-        // already about as far out as each other, so the Exit still tends to sit at the end of
-        // something rather than in the middle of a thoroughfare.
-        const score = e.dist * 4 + (floorNb <= 1 ? 6 : 0);
-        if (score > bestScore) { bestScore = score; best = { x: e.x, y: e.y }; }
+        if (e.dist > anyDist) { anyDist = e.dist; anyCell = { x: e.x, y: e.y }; }
+        if (floorNb.length !== 1) return;                   // corner or junction - two ways in
+        if (gateKeys.has(_tileKey(floorNb[0].x, floorNb[0].y))) return;
+        if (e.dist > bestDist) { bestDist = e.dist; best = { x: e.x, y: e.y }; }
       });
-      if (best) exitRoom = best;
+      // A last gate region with no dead end in it at all is possible (heavy braiding on a small
+      // maze can open every one of them). The Exit then falls back to the furthest cell it can
+      // find, and the single guard covers the way the player arrives - see placeEnemyMarkers.
+      exitRoom = best || anyCell || exitRoom;
     }
 
     // Phase 3: stamp the planned doors and, for each, find one wall switch the player can
@@ -5552,15 +5643,14 @@
     //     spawn - the player gets a corridor's worth of dungeon before the first ambush.
     //   - markers keep 2 tiles between them, so a cleared stretch stays cleared and a corridor
     //     never turns into a gauntlet of three back-to-back fights.
-    //   - the BOSS does not roam. It is placed first, one tile back from the walkable tiles
-    //     touching the exit - one guard, or two where the exit has two ways in - so the last
-    //     thing between the player and the stairs is always the dread foe, and the fight ends
-    //     a step short of the stairs rather than on their doorstep. Everything that roams is
-    //     a walker or a flyer.
+    //   - the BOSS does not roam, and there is only ever ONE of it. The Exit is a dead end at
+    //     the end of a hallway (see relocateExit), so a single guard placed one tile back down
+    //     that hallway is unavoidable: the last thing between the player and the stairs is
+    //     always the dread foe, met a step short of the stairs rather than on their doorstep.
+    //     Everything that roams is a walker or a flyer.
     // Density is ~1 foe per 6 tiles, floored at 4 so even the smallest maze is worth fighting
-    // through, capped at 14 so a huge one doesn't become a slog. The guards count towards it.
+    // through, capped at 14 so a huge one doesn't become a slog. The guard counts towards it.
     const MARKER_MIN_SPACING = 2;
-    const MAX_EXIT_GUARDS = 2;
     function placeEnemyMarkers() {
       enemyMarkers = [];
       activeMarker = null;
@@ -5572,11 +5662,10 @@
       const push = (x, y, variant) =>
         enemyMarkers.push({ x, y, variant, alive: true, phase: Math.random() * Math.PI * 2 });
 
-      // --- The exit guard(s). The exit is normally the far dead end of the maze, so this is
-      // usually a single boss standing in the only corridor that reaches it - unavoidable, and
-      // visible from down that corridor because markerScaleFor draws it half again as large as
-      // anything else. Braiding can leave the exit with a second approach; both get a guard, so
-      // the stairs cannot be reached around the back.
+      // --- The exit guard. ONE boss, because relocateExit hands us an Exit that is a dead end:
+      // a single corridor reaches the stairs, so a single foe standing in it cannot be walked
+      // around. It is visible from down that corridor because markerScaleFor draws it half
+      // again as large as anything else.
       // The spawn tile is excluded on the off chance a small maze puts the two next to each
       // other - being ambushed by the boss before taking a step is not a fight, it is a wall.
       const nbrs = p => [{ x: p.x + 1, y: p.y }, { x: p.x - 1, y: p.y },
@@ -5584,7 +5673,19 @@
         .filter(q => walkable.has(`${q.x},${q.y}`));
       const isStart = p => p.x === startRoom.x && p.y === startRoom.y;
       const approaches = nbrs(exitRoom).filter(p => !isStart(p));
-      _shuffle(approaches);
+      // Normally there is exactly one of these. Where relocateExit had to fall back to a cell
+      // with several ways in, the one guard takes the approach the player reaches FIRST - the
+      // way in they will actually walk - rather than a random one. Doors count as passable
+      // here for the same reason relocateExit floods with them open: the player will have
+      // opened them by the time they are this deep.
+      if (approaches.length > 1) {
+        const fromStart = _flood(startRoom, (x, y) => MAP[y][x] === 0 || MAP[y][x] === 3);
+        const walkDist = (p) => {
+          const e = fromStart.get(_tileKey(p.x, p.y));
+          return e ? e.dist : Infinity;
+        };
+        approaches.sort((a, b) => walkDist(a) - walkDist(b));
+      }
 
       // The guard stands one tile FURTHER BACK than the tile touching the stairs, so the fight
       // ends a step short of the exit instead of on its doorstep - the player has to walk the
@@ -5592,15 +5693,11 @@
       // That step back is only safe where the tile behind the approach is still the only way
       // in: a fork back there would let the player round the boss to the exit, so on a fork
       // (or a pocket with nothing behind it at all) it holds the doorstep as before.
-      const guardTaken = new Set();
-      for (const a of approaches) {
-        if (guardTaken.size >= MAX_EXIT_GUARDS) break;
+      if (approaches.length) {
+        const a = approaches[0];
         const back = nbrs(a).filter(q =>
           !(q.x === exitRoom.x && q.y === exitRoom.y) && !isStart(q));
         const spot = back.length === 1 ? back[0] : a;
-        const key = `${spot.x},${spot.y}`;
-        if (guardTaken.has(key)) continue;   // two approaches can funnel into one tile
-        guardTaken.add(key);
         push(spot.x, spot.y, 'boss');
       }
 
@@ -7650,7 +7747,11 @@
       parts.push(totalMoves + (totalMoves === 1 ? ' STEP TAKEN' : ' STEPS TAKEN'));
       if (passagesList.length) parts.push(visitedTiles.size + '/' + passagesList.length + ' TILES MAPPED');
       if (foe) parts.push(foe.toUpperCase() + ' PROWLS THE DARK');
-      if (boss) parts.push(boss.toUpperCase() + ' WAITS AT THE END');
+      if (boss) {
+        parts.push(bossDefeated
+          ? hero.toUpperCase() + ' HAS DEFEATED ' + boss.toUpperCase()
+          : boss.toUpperCase() + ' WAITS AT THE END');
+      }
       parts.push('THE DUNGEON IS HOLDING YOUR PLACE');
       return parts.join(sep) + sep;
     }

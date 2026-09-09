@@ -49,24 +49,40 @@ ck(b["enemy"] == "swarming green chat-bubble spirit", b.get("enemy"))
 # ENEMY is cut back to a short SUBJECT - it becomes the {enemy} the species brief repeats
 # eight times, so a bolted-on look (especially a costume noun like "armored") must not ride in
 for raw, want in (
+    # a real head carrying a real LOOK: cut, the species designer invents the look itself
     ("armored tank with chrome plating and glowing red eye sockets", "armored tank"),
-    ("gummy bear with translucent pink skin, standing on two legs", "gummy bear"),
-    ("mannequin head wearing a gold-trimmed suit, mouth open", "mannequin head"),
-    ("bagel-shaped creature which lunges forward", "bagel-shaped creature"),
+    ("gummy bear with translucent pink skin and black eyes, standing", "gummy bear"),
+    ("mannequin head wearing a gold-trimmed suit with plastic eyes", "mannequin head"),
+    ("floating chat bubble with glowing eyes and glitching text inside", "floating chat bubble"),
+    # a ONE-WORD head means the qualifier IS the subject - cutting there would turn the
+    # enemy typed as "chat" into a generic man
+    ("person with a chat bubble over their head", "person with a chat bubble over their head"),
+    # a SHORT tail is part of the name, not a look
+    ("twitch viewer with a glowing chat bubble", "twitch viewer with a glowing chat bubble"),
+    # the person must stay the head noun - "a chat-bubble viewer" draws a bubble and no person
+    ("twitch viewer with a chat bubble overhead", "twitch viewer with a chat bubble overhead"),
+    ("blob with three eyes", "blob with three eyes"),
     # " of " is not a joiner: this preset's whole point is that bare "ram" renders a sheep
     ("stick of computer RAM", "stick of computer RAM"),
     ("moss-covered dire bear", "moss-covered dire bear"),
-    # a ONE-WORD subject is the good case, not a degenerate one - it is the shape of the
-    # presets that already work ("taco"), so it is kept rather than rejected
-    ("blob with three eyes", "blob"),
-    ("trump figure made of gold foil and plastic eyes", "trump figure"),
+    # over the word cap: cut at the last PHRASE boundary that fits, never mid-phrase, so the
+    # result never ends on a dangling preposition or adjective
+    ("devil with crimson skin and glowing red eyes", "devil with crimson skin and glowing red eyes"),
+    ("tall filing cabinet with legs and glowing red eyes", "tall filing cabinet with legs"),
+    ("trump figure made of gold foil and plastic eyes", "trump figure made of gold foil"),
     # only a cut down to nothing falls back to the whole line
     ("with nothing before it", "with nothing before it"),
 ):
     ck(srv._theme_enemy_subject(raw) == want,
        f"_theme_enemy_subject({raw!r}) -> {srv._theme_enemy_subject(raw)!r}, want {want!r}")
 ck(srv.parse_theme_brief("ENEMY: A tall filing cabinet with legs and glowing red eyes", ALL)
-   ["enemy"] == "tall filing cabinet", "trim + inline did not compose")
+   ["enemy"] == "tall filing cabinet with legs", "trim + inline did not compose")
+# a truncated subject must never end on a connective or a dangling adjective
+for raw in ("tall filing cabinet with legs and glowing red eyes",
+            "trump figure made of gold foil and plastic eyes",
+            "mannequin head wearing a gold-trimmed suit with plastic eyes"):
+    tail = srv._theme_enemy_subject(raw).split()[-1].lower()
+    ck(tail not in srv._THEME_ENEMY_TAIL_WORDS, f"{raw!r} left a dangling {tail!r}")
 ck(b["weapon"].startswith("coiled blue ethernet"), b.get("weapon"))
 ck(b["wall"].startswith("dense black server blades"), b.get("wall"))
 ck(b["lantern"].startswith("A splayed fibre-optic"), b.get("lantern"))
@@ -167,6 +183,72 @@ ck(out.mode == "RGBA" and out.getchannel("A").getextrema() == (128, 128),
    f"alpha not preserved: {out.mode} {out.getchannel('A').getextrema() if out.mode=='RGBA' else ''}")
 # a missing file must not raise - a bad texture beats a crashed bundle
 srv._lift_dark_surface(os.path.join(tmpd, "nope.png"), "unit-missing")
+
+# ---- armour is stripped from EVERY subject, by WORD not by clause ----------------
+# A person is a weak enough prior that "armoured" replaces them outright: "A squat, armored
+# chat-bubble twitch viewer" rendered a mech with no person and no bubble in it.
+for raw, must_keep, must_drop in (
+    ("A squat, armored chat-bubble twitch viewer with glowing cyan edges, thick knuckles",
+     "chat-bubble twitch viewer", "armored"),
+    ("Massive stick of computer RAM, armored with cracked gold plating, towering",
+     "stick of computer RAM", "armored"),
+    ("An armour-plated gargoyle with mossy stone wings", "gargoyle", "armour-plated"),
+):
+    out = srv._strip_words(raw, srv._SPECIES_ARMOUR, "armour")
+    ck(must_keep in out, f"armour strip ate the subject: {raw!r} -> {out!r}")
+    ck(must_drop not in out.lower(), f"armour survived: {out!r}")
+ck(srv._strip_words("An armour-plated gargoyle with wings", srv._SPECIES_ARMOUR, "a")
+   .startswith("A gargoyle"), "article not repaired after a compound was removed")
+# creature ornament that is NOT armour stays - it makes a gargoyle better
+kept = "A crowned gargoyle with spiked helmet and mossy wings"
+ck(srv._strip_words(kept, srv._SPECIES_ARMOUR, "armour") == kept, "ornament was stripped")
+
+# and end to end through the parser: CREATURE keeps its crown but loses its armour
+reply = ("KIND: CREATURE" + chr(10) + "GUARD: ARMS" + chr(10) +
+         "GRUNT_NAME: Bubble Grunt" + chr(10) +
+         "GRUNT_LOOK: A squat, armored chat-bubble twitch viewer with glowing cyan edges" + chr(10) +
+         "FLYER_NAME: Airbubble" + chr(10) +
+         "FLYER_LOOK: Chat-bubble twitch viewer with translucent membrane wings" + chr(10) +
+         "BOSS_NAME: MegaChat" + chr(10) +
+         "BOSS_LOOK: Stacked chat-bubble twitch viewers fused into a towering mass" + chr(10))
+sp = srv.parse_enemy_species(reply)
+ck(sp is not None, "species reply did not parse")
+if sp:
+    ck("armored" not in sp["walker"]["look"].lower(), f"armour survived: {sp['walker']['look']!r}")
+    ck("chat-bubble twitch viewer" in sp["walker"]["look"],
+       f"strip ate the subject: {sp['walker']['look']!r}")
+
+# ---- the hand-tuned ENEMY subject ----------------------------------------------
+# "chat" has no picture of its own, and every reading the designer offered was a THING - a
+# floating bubble, a terminal, a bot. A thing is KIND: OBJECT in the bestiary, whose rule 2
+# then asks for machinery and housings, which is why every run came back as three robots.
+for typed in ("chat", "Chat", "twitch chat", "stream chat", "chatters", "emotes", "emoji"):
+    lit = srv._enemy_literal(typed)
+    ck(lit is not None, f"{typed!r} should get the hand-tuned subject")
+    if lit:
+        # a COLOURED bubble the person HOLDS. White is matted away with the background and a
+        # bubble floating clear of the body is deleted by keep_largest_figure - both were
+        # rendered, and both came back as a person and no bubble at all.
+        ck("purple speech bubble" in lit and "emojis" in lit,
+           f"{typed!r} lost the bubble: {lit!r}")
+        ck("white" not in lit, f"a white bubble is cut away with the background: {lit!r}")
+        # the PERSON has to be the head noun: "chat-bubble viewer" draws a bubble and nobody
+        ck(any(lit.startswith(p + " holding ") for p in srv._CHAT_ENEMY_PEOPLE),
+           f"person is not the head noun: {lit!r}")
+        ck(len(lit.split()) <= 12, f"subject too long to be repeated eight times: {lit!r}")
+# word boundaries, so somebody who typed an actual robot still gets one
+for typed in ("chatbot", "chatbots", "gummy bear", "stick of computer RAM", "", None):
+    ck(srv._enemy_literal(typed) is None, f"{typed!r} should not be overridden")
+# it really is rolled per dungeon rather than fixed
+ck(len({srv._enemy_literal("chat") for _ in range(60)}) > 1, "the person never varies")
+
+# the override is applied AFTER the reply is parsed (so _theme_enemy_subject cannot trim the
+# bubble off it - "young woman | with a speech bubble..." is a two-word head with a long tail,
+# exactly the shape that trimmer cuts), and it also survives the reply failing entirely
+brief_src = inspect.getsource(srv.generate_theme_brief)
+ck('brief["enemy"] = literal' in brief_src, "the literal must overwrite the designed enemy")
+ck(brief_src.count('return {"enemy": literal} if literal else None') == 2,
+   "a failed reply must still carry the hand-tuned enemy - the raw typed word is the bug")
 
 # ---- progress plan ------------------------------------------------------------
 for nm, plan in (("v6", srv._plan_v6(8)), ("v5", srv._plan_v5(8))):
