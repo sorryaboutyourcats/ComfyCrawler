@@ -6913,6 +6913,17 @@
 
       const thumbFrame = document.createElement('div');
       thumbFrame.className = 'win95-inset w-12 h-12 shrink-0 bg-black flex items-center justify-center overflow-hidden';
+      // Hover the thumbnail to see exactly what the player typed into the creation wizard
+      // for this dungeon. Native title tooltip - same treatment as the buttons below.
+      const promptBits = [];
+      if (entry.wall_style) promptBits.push('Dungeon: ' + entry.wall_style);
+      if (entry.player_style) promptBits.push('Player: ' + entry.player_style);
+      if (entry.weapon_style) promptBits.push('Weapon: ' + entry.weapon_style);
+      if (entry.enemy_style) promptBits.push('Enemy: ' + entry.enemy_style);
+      if (promptBits.length) {
+        thumbFrame.title = promptBits.join('\n');
+        thumbFrame.classList.add('cursor-help');
+      }
       if (entry.thumb) {
         const img = document.createElement('img');
         img.src = entry.thumb;

@@ -592,39 +592,38 @@
         <div class="p-3 flex flex-col gap-4">
           <div class="win95-box p-3 bg-slate-100 flex flex-col gap-2">
             <label class="text-xs font-bold text-slate-800">
-              Difficulty / Maze Size:
+              Difficulty:
             </label>
 
             <div id="difficultyRow" class="flex gap-1.5">
               <button type="button" data-difficulty="easy" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
                 <span class="text-xs">Easy</span>
-                <span class="text-[10px] font-bold text-slate-600">33 Grids</span>
               </button>
               <button type="button" data-difficulty="medium" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
                 <span class="text-xs">Medium</span>
-                <span class="text-[10px] font-bold text-slate-600">66 Grids</span>
               </button>
               <button type="button" data-difficulty="hard" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
                 <span class="text-xs">Hard</span>
-                <span class="text-[10px] font-bold text-slate-600">111 Grids</span>
               </button>
             </div>
 
-            <div id="gridDesc" class="text-[11px] text-blue-900 font-bold mt-0.5">
+            <!-- Hidden for now - may be shown again later. -->
+            <div id="gridDesc" class="text-[11px] text-blue-900 font-bold mt-0.5" hidden>
               Medium 3DMaze Labyrinth: 66 corridors with branching paths, lanterns and a distant Exit.
             </div>
           </div>
 
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800">
-              Graphics Quality:
+              Graphics:
             </label>
             <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-              <option value="normal" selected>High Quality (full resolution)</option>
-              <option value="optimized">Optimized (middle tier &ndash; faster)</option>
-              <option value="reduced">Reduced (half resolution &ndash; fastest)</option>
+              <option value="normal" selected>High</option>
+              <option value="optimized">Medium</option>
+              <option value="reduced">Low</option>
             </select>
-            <div class="text-[10px] text-slate-500 font-bold"><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
+            <!-- Hidden for now - may be shown again later. -->
+            <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
           </div>
 
           <div id="soundModeRow" class="flex flex-col gap-1.5">
@@ -636,20 +635,23 @@
               <option value="sound_only">Generated sound (no music)</option>
               <option value="skip">Skip sound generation</option>
             </select>
-            <div class="text-[10px] text-slate-500 font-bold">Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+            <!-- Hidden for now - may be shown again later. -->
+            <div class="text-[10px] text-slate-500 font-bold" hidden>Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
           </div>
 
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800" for="screensaverDelay">
-              Screen Saver Wait (Starfield):
+              Screensaver Wait:
             </label>
             <input id="screensaverDelay" class="win95-slider" type="range" min="0" max="7" step="1" value="2"
                    aria-describedby="screensaverDelayText" />
             <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
               <span>Off</span><span>30s</span><span>1m</span><span>2m</span><span>5m</span><span>10m</span><span>30m</span><span>1h</span>
             </div>
-            <div class="text-[11px] text-blue-900 font-bold" id="screensaverDelayText">Starts after 1 minute of idling.</div>
-            <div class="text-[10px] text-slate-500 font-bold">The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
+            <!-- Hidden for now - may be shown again later. -->
+            <div class="text-[11px] text-blue-900 font-bold" id="screensaverDelayText" hidden>Starts after 1 minute of idling.</div>
+            <!-- Hidden for now - may be shown again later. -->
+            <div class="text-[10px] text-slate-500 font-bold" hidden>The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
           </div>
 
           <div class="flex justify-end mt-2">
