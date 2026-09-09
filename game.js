@@ -1160,6 +1160,15 @@
       'Volcanic Depths': { player: 'ash-scarred fire dwarf in obsidian mail', weapon: 'molten iron greataxe',         enemy: 'lumbering magma golem' },
       'Sunken Ruins':    { player: 'coral-armored deep diver',                weapon: 'barnacled bronze trident',     enemy: 'tentacled kraken spawn' },
       "Pharaoh's Tomb":  { player: 'bandaged tomb raider in linen wraps',     weapon: 'golden khopesh sword',         enemy: 'shambling scarab-covered mummy' },
+      'internet':        { player: 'cat',                     weapon: 'memes',            enemy: 'chat' },
+      'trippy':          { player: 'hippy cat',               weapon: 'lava lamp',        enemy: 'tanks' },
+      'classroom':       { player: 'nun',                     weapon: 'ruler',            enemy: 'devil' },
+      'mangos':          { player: 'watermelon',              weapon: 'cat',              enemy: 'blueberries' },
+      'birds':           { player: 'fluffy white cat',        weapon: 'banana',           enemy: 'cat toy' },
+      'corporate office':{ player: 'dog',                     weapon: 'office supply',    enemy: 'office furniture' },
+      'manhattan':       { player: 'rat',                     weapon: 'pizza',            enemy: 'bagel' },
+      'ugly things covered in gold': { player: 'lady with glasses', weapon: 'paper',      enemy: 'trump' },
+      'motherboard':     { player: 'fluffy anime cat',        weapon: 'halberd',          enemy: 'anime bug' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -7173,6 +7182,12 @@
 
     // Every string on a row came out of a language model, so all of it goes in through
     // textContent - the list is built node by node rather than as an HTML string.
+    // The order the set designer's slots are shown in on the history hover - matches
+    // THEME_SURFACE_SLOTS + THEME_SUBJECT_SLOTS in server.py. A bucketed theme only carries
+    // the last two.
+    const THEME_BRIEF_ORDER = ['wall', 'floor', 'ceiling', 'lantern', 'door', 'switch',
+                               'weapon', 'enemy'];
+
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
       row.className = 'win95-box p-1.5 flex items-center gap-2';
@@ -7186,6 +7201,16 @@
       if (entry.player_style) promptBits.push('Player: ' + entry.player_style);
       if (entry.weapon_style) promptBits.push('Weapon: ' + entry.weapon_style);
       if (entry.enemy_style) promptBits.push('Enemy: ' + entry.enemy_style);
+      // When the typed words were abstract ("internet", "memes"), the server's set designer
+      // resolved them into the concrete materials and objects that actually got drawn. Show
+      // those under the typed words, so a surprising-looking dungeon explains itself. Absent
+      // on dungeons saved before this existed, and on themes that matched a built-in style.
+      if (entry.theme_brief) {
+        const designed = THEME_BRIEF_ORDER
+          .filter(k => entry.theme_brief[k])
+          .map(k => '  ' + k + ': ' + entry.theme_brief[k]);
+        if (designed.length) promptBits.push('', 'Designed into:', ...designed);
+      }
       if (promptBits.length) {
         thumbFrame.title = promptBits.join('\n');
         thumbFrame.classList.add('cursor-help');

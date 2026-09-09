@@ -594,6 +594,69 @@ class ProgressTracker:
 PROGRESS = ProgressTracker()
 
 
+# A designed surface can be technically perfect and still unusable. "internet" resolves to
+# matte black server racks - which is CORRECT, server racks are black - and the render measured
+# mean luma 5-11 out of 255. The raycaster then multiplies that by distance shading
+# (1/(1+dist*0.38)), so the corridor arrives on screen as an unlit void: the same "the walls
+# were blank" complaint, reached by the opposite route.
+#
+# Prompt wording cannot fix this and was tried first. A brief rule asking for mid-tone surfaces
+# lit by lantern light only got "faint blue LED glow along seams" appended to the same black
+# panels, because the model is not wrong about what the thing looks like. So the fix belongs
+# here, on the pixels, and ONLY on the generic path - the ten hand-tuned buckets are already
+# mid-tone by construction and are never touched.
+#
+# A GAMMA curve rather than a brightness offset: it opens up the shadows where all the detail
+# is hiding while leaving the highlights (the LEDs) alone, so the surface keeps its contrast
+# instead of turning into grey fog. Measured on the real black-server-rack wall: mean 10.8 ->
+# 54.2 at gamma 0.42, at which point the mesh vents, panel seams and blue LEDs are all plainly
+# readable. Below about gamma 0.35 (mean ~67) the curve starts amplifying the model's own
+# compression noise in the darkest region, which is why the gamma is floored.
+SURFACE_MIN_LUMA = 34.0      # below this a tiling surface reads as an unlit void in game
+SURFACE_TARGET_LUMA = 55.0   # what a lifted surface is brought up to
+SURFACE_MIN_GAMMA = 0.38     # any harder and dark-region compression noise comes up with it
+
+
+def _mean_luma(img):
+    px = img.convert("RGB").getdata()
+    n = len(px)
+    return sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in px) / max(1, n)
+
+
+def _lift_dark_surface(path, label):
+    """Gamma-lift a tiling surface that came back too dark to see. No-op for anything already
+    bright enough, so it costs one pass over the image on a healthy texture."""
+    try:
+        img = Image.open(path)
+        mode = img.mode
+        mean = _mean_luma(img)
+        if mean >= SURFACE_MIN_LUMA:
+            return
+        # Solve for the gamma that lands on SURFACE_TARGET_LUMA. Bisection rather than a
+        # closed form because mean luma after a gamma curve depends on the whole histogram.
+        lo, hi = SURFACE_MIN_GAMMA, 1.0
+        best = None
+        for _ in range(12):
+            g = (lo + hi) / 2
+            lut = [min(255, round(255 * ((i / 255.0) ** g))) for i in range(256)]
+            out = img.convert("RGB").point(lut * 3)
+            got = _mean_luma(out)
+            best = (g, out, got)
+            if got < SURFACE_TARGET_LUMA:
+                hi = g
+            else:
+                lo = g
+        g, out, got = best
+        if mode == "RGBA":
+            out.putalpha(img.getchannel("A"))
+        out.save(path, format="PNG")
+        print(f"[surface] {label} came back at mean luma {mean:.1f} - lifted to {got:.1f} "
+              f"(gamma {g:.2f}) so it is visible in a lantern-lit corridor")
+    except Exception as e:
+        # A too-dark texture is a bad look; a crashed bundle is worse.
+        print(f"[surface] could not lift {label}: {e}")
+
+
 def make_seamless_4way(img_path, blend_pixels=12):
     """Clean narrow-rim blend for seamless dungeon tiling."""
     try:
@@ -1768,16 +1831,70 @@ _LANTERN_TAIL = ("Exactly one object, centered, front view, isolated on a plain 
                  "background, sharp focus, no room, no scenery, no people, no text.")
 
 
-def get_surface_prompts(wall_style):
-    ui = wall_style.lower()
+# The ten hand-tuned theme buckets, in priority order. get_surface_prompts and
+# get_gate_prompts BOTH dispatch on this one function so their keyword chains cannot drift
+# apart - a style whose wall got the taco treatment but whose door fell through to the generic
+# branch is exactly how a door ends up looking unrelated to the corridor it is set in, which
+# get_gate_prompts' docstring already calls out.
+#
+# Returns None when nothing matched. That is also the signal the caller needs: no bucket means
+# the generic branch is about to interpolate the typed word raw, which is what needs an LLM
+# set-designer pass (see generate_theme_brief).
+#
+# Match semantics are preserved EXACTLY as they were when this chain lived twice: buckets 5 and
+# 6 use word-boundary matching, the other eight use bare substring. The substring ones do
+# over-match ('cat' fires on "cathedral", '95' on any string containing 95, 'rock' on
+# "rockstar") - real, but tightening them changes which theme existing inputs resolve to, so it
+# is deliberately left alone here.
+_STYLE_BUCKETS = [
+    ("scifi",  ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship', 'future']),
+    ("win95",  ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']),
+    ("forest", ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']),
+    ("taco",   ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']),
+    ("cyber",  ['cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']),
+    ("stone",  ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']),
+    ("candy",  ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']),
+    ("cat",    ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']),
+]
 
-    if any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship', 'future']):
+# These two sit between 'taco' and 'cyber' in the original chain and match on word boundaries
+# rather than substrings, so they are kept separate rather than folded into the table above.
+_STYLE_LADIES = ['ladies', 'lady', 'women', 'woman', 'girls', 'girl']
+_STYLE_PEOPLE = ['people', 'person', 'crowd', 'characters', 'men', 'man', 'guys']
+
+
+def _style_bucket(wall_style):
+    """Which hand-tuned theme bucket `wall_style` resolves to, or None for the generic path."""
+    ui = (wall_style or "").lower()
+    for name, keys in _STYLE_BUCKETS[:4]:          # scifi, win95, forest, taco
+        if any(k in ui for k in keys):
+            return name
+    if any(match_word(w, ui) for w in _STYLE_LADIES):
+        return "ladies"
+    if any(match_word(w, ui) for w in _STYLE_PEOPLE):
+        return "people"
+    for name, keys in _STYLE_BUCKETS[4:]:          # cyber, stone, candy, cat
+        if any(k in ui for k in keys):
+            return name
+    return None
+
+
+def get_surface_prompts(wall_style, brief=None):
+    """(wall_p, ceil_p, floor_p, lantern_p) for the dungeon's four environment surfaces.
+
+    `brief` is a generate_theme_brief() dict (or None). It is consulted ONLY on the generic
+    branch - a matched bucket's prompts are hand-tuned literals and ignore it entirely, so a
+    theme that renders well today cannot regress."""
+    ui = wall_style.lower()
+    bucket = _style_bucket(wall_style)
+
+    if bucket == "scifi":
         wall_p = "A flat 2D game texture map of a dark sci-fi spaceship hull wall with glowing cyan neon panel lines, flat orthographic front view, zero perspective, purely flat material."
         ceil_p = "A flat 2D game texture map of a dark sci-fi spaceship ceiling with glowing blue and white light panels, directly overhead 90 degree view."
         floor_p = "A flat 2D game texture map of dark metal spaceship deck floor grating with glowing cyan lights, directly 90 degree bird's-eye top-down view, flat terrain texture."
         lantern_p = f"A dark angular metal wall plate with a brilliant glowing cyan energy core set into its centre, blazing cyan light pouring out of the core, sci-fi hardware. {_LANTERN_TAIL}"
 
-    elif any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
+    elif bucket == "win95":
         wall_p = "Authentic Windows 95 3D maze screensaver wall texture, bold chunky crimson red bricks with thick stark white mortar lines, flat straight-on orthographic view, seamless repeating 2D pattern, retro 90s low-poly CGI, bright uniform lighting, zero shadows, no borders."
         ceil_p = "Authentic Windows 95 acoustic drop ceiling tile texture, bright white and speckled grey mineral fiber surface with clean metal grid seams, flat straight-on view, seamless repeating 2D pattern, retro 90s computer graphics."
         floor_p = "Authentic Windows 95 parquet wood floor texture, seamless repeating golden honey oak wood tiles with subtle woodgrain, directly 90 degree top-down view, uniform flat lighting, zero shadows, zero perspective, perfectly repeating 2D floor pattern."
@@ -1785,75 +1902,90 @@ def get_surface_prompts(wall_style):
         # game.js) - that joke doesn't survive being re-prompted through an image model.
         lantern_p = None
 
-    elif any(k in ui for k in ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']):
+    elif bucket == "forest":
         wall_p = "A flat 2D game texture map of rough mossy tree bark and vertical redwood trunk surface, close-up flat orthographic front view, retro 90s video game wall texture, zero horizon, zero sky, zero perspective, pure flat vertical material."
         ceil_p = "A flat 2D game texture map of dense fine-grained green leafy foliage and pine canopy, directly 90 degree overhead view looking straight up, seamless tileable canopy, zero trunks."
         floor_p = "A flat 2D game texture map of dense fine-grained mossy ground cover, uniform rich dark earth covered evenly with seamless small green moss patches and tiny pine needles, fine-grained isotropic texture, directly 90 degree bird's-eye top-down view, uniform repeating ground surface, zero large focal objects, zero trees, zero sky, zero horizon, zero perspective, flat albedo terrain map."
         lantern_p = f"A bundle of wooden sticks bound with twine and wrapped in green moss and vines, a bright orange flame burning fiercely at the top, warm firelight. {_LANTERN_TAIL}"
 
-    elif any(k in ui for k in ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']):
+    elif bucket == "taco":
         wall_p = "A flat 2D wallpaper texture of crispy golden corn taco shells filled with seasoned meat, diced tomatoes, lettuce, and shredded cheese, colorful repeating 90s video game graphic pattern, flat 2D orthographic view, no room, no borders."
         ceil_p = "A flat 2D acoustic drop ceiling texture with warm golden corn tortilla grid panels, directly overhead 90 degree top-down view."
         floor_p = "A flat 2D game texture map of toasted warm corn meal and golden crushed tortilla chip crumbs ground terrain, directly 90 degree bird's-eye top-down view, uniform flat ground material, zero large objects, pure flat terrain."
         lantern_p = f"One crispy golden corn taco shell standing upright and empty, brilliant warm golden light blazing out from inside the shell, the shell edges lit translucent glowing orange, radiant light spilling from its opening. Just the single taco shell, no filling, no meat, no toppings. {_LANTERN_TAIL}"
 
-    elif match_word('ladies', ui) or match_word('lady', ui) or match_word('women', ui) or match_word('woman', ui) or match_word('girls', ui) or match_word('girl', ui):
+    elif bucket == "ladies":
         wall_p = "A flat 2D pop-art wallpaper texture filled with dense repeating colorful comic book character portraits and faces of women, colorful 90s video game graphic collage, flat 2D repeating pattern, bright saturated colors, no text, no magazines, no room, no borders, clean repeating wallpaper."
         ceil_p = "A flat 2D drop ceiling tile texture with purple and gold geometric grid lines, directly overhead 90 degree top-down view, clean repeating square tiles."
         floor_p = "A flat 2D game texture map of magenta and purple checkered velvet carpet floor tiles with gold diamond geometric pattern, directly 90 degree bird's-eye top-down view, clean flat floor material, zero people on floor, zero standing figures, zero horizon, pure flat floor texture."
         lantern_p = f"An ornate art deco wall sconce of purple enamel and polished gold, a bright flame burning above it, warm light glowing across the gold. {_LANTERN_TAIL}"
 
-    elif match_word('people', ui) or match_word('person', ui) or match_word('crowd', ui) or match_word('characters', ui) or match_word('men', ui) or match_word('man', ui) or match_word('guys', ui):
+    elif bucket == "people":
         wall_p = "Retro 90s video game wallpaper texture filled with a dense crowd of colorful illustrated comic book character portraits and faces, vibrant pop-art character collage, flat 2D repeating pattern, bright saturated colors, no text, no room, no borders."
         ceil_p = "Retro 90s gaming acoustic drop ceiling tile texture with blue and white grid panels, flat overhead view."
         floor_p = "Retro 90s video game floor texture, rich navy blue and cobalt checkered carpet floor tiles with gold seams, directly 90 degree top-down view, clean flat floor material, zero people on floor."
         lantern_p = f"A wall sconce of navy blue metal with gold trim, a bright flame burning above it, warm light glowing across the metal. {_LANTERN_TAIL}"
 
-    elif any(k in ui for k in ['cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
+    elif bucket == "cyber":
         wall_p = "A flat 2D texture map of dark metal cyber panels with glowing cyan and electric purple neon circuit conduits, flat orthographic front view, zero perspective."
         ceil_p = "A flat 2D texture map of dark steel ceiling plates with illuminated cyan neon grates, directly overhead 90 degree view."
         floor_p = "A flat 2D texture map of dark hexagonal metal floor tiles with pulsing cyan neon seams, directly 90 degree bird's-eye top-down view, zero horizon, zero perspective, pure flat floor material."
         lantern_p = f"A curved glass neon tube blazing electric cyan and magenta, mounted on a small dark metal bracket, vivid neon glow. {_LANTERN_TAIL}"
 
-    elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
+    elif bucket == "stone":
         wall_p = "A flat 2D texture map of weathered grey dungeon castle stone blocks with green moss in mortar cracks, flat orthographic front view, zero perspective."
         ceil_p = "A flat 2D texture map of ancient dark stone ceiling slabs with green moss patches, directly overhead 90 degree view."
         floor_p = "A flat 2D texture map of weathered grey cobblestone flagstones with dirt seams, directly 90 degree bird's-eye top-down view, zero walls, zero sky, zero horizon, pure flat ground texture."
         lantern_p = f"A wrought iron bracket clutching a jagged amber crystal shard that blazes with warm golden light, magical radiance pouring from the crystal. {_LANTERN_TAIL}"
 
-    elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']):
+    elif bucket == "candy":
         wall_p = "A flat 2D wallpaper texture of red and white peppermint candy cane stripes and gingerbread cookie pattern with white icing, bold saturated colors, flat straight-on view, zero perspective."
         ceil_p = "A flat 2D texture of pastel pink cotton candy and marshmallow clouds with rainbow sprinkles, directly overhead 90 degree view."
         floor_p = "A flat 2D texture map of dark chocolate cookie crumb ground tiles with caramel glaze seams, directly 90 degree bird's-eye top-down view, zero horizon, pure flat ground material."
         lantern_p = f"One red and white striped candy cane, brilliant warm light blazing out from inside it, the sugar lit translucent and glowing, radiant candy. {_LANTERN_TAIL}"
 
-    elif any(k in ui for k in ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']):
+    elif bucket == "cat":
         wall_p = f"Retro 90s video game wallpaper texture filled with a dense crowd of colorful illustrated cute {wall_style} faces, vibrant colorful pop-art pattern, flat 2D repeating wallpaper, no text, no room, no borders."
         ceil_p = f"Retro 90s acoustic ceiling tiles with subtle cream and white paw print motifs, directly overhead 90 degree view."
         floor_p = f"Retro 90s warm honey oak wood parquet floor tiles with subtle cute paw prints, directly 90 degree bird's-eye top-down view, uniform flat lighting, zero 3D figures on floor."
         lantern_p = f"A cute rounded cat paw print emblem blazing with warm golden light, the whole paw shape lit up and radiantly glowing. {_LANTERN_TAIL}"
 
     else:
+        # THE ABSTRACT-THEME PATH. Everything below interpolates the typed words, so when those
+        # words name no material - "internet", "trippy", "memes" - the surrounding framing
+        # clauses are the only concrete thing in the prompt and FLUX schnell draws them on
+        # their own: flat, featureless, blank walls. That is the exact bug this branch's
+        # `brief` fixes. generate_theme_brief turns the typed theme into real material
+        # descriptions first; `_b(slot, default)` picks the designed line when there is one and
+        # otherwise falls back to the raw-word wording this branch has always used, so every
+        # failure path lands on the old behaviour.
+        def _b(slot, default):
+            got = (brief or {}).get(slot)
+            return got if got else default
+
         # No era clamp on the generic path: the named presets above are deliberately retro because
         # the player asked for "Windows 95", but an arbitrary typed style should render however
         # that style actually looks. The flat orthographic framing stays - that is a tiling
         # requirement for a wall texture, not an art direction.
-        wall_p = f"A flat 2D vertical wall surface texture of {wall_style}, close-up flat orthographic front view, seamless tileable wall material, zero horizon, zero sky, zero landscape, pure flat vertical wall material."
+        wall_p = f"A flat 2D vertical wall surface texture of {_b('wall', wall_style)}, close-up flat orthographic front view, seamless tileable wall material, zero horizon, zero sky, zero landscape, pure flat vertical wall material."
         # "sky canopy" used to be an option here, which is why arbitrary indoor styles kept coming
         # back as outdoor scenes. An arbitrary style is a PLACE, and the ceiling of a place is a
         # built surface - name the material, and forbid the single hanging light fixture the model
         # otherwise centres in frame (a chandelier is a focal object, and one texture now covers one
         # whole map cell, so a focal object repeats visibly in every square).
-        ceil_p = f"A flat 2D seamless tileable ceiling material texture, the ceiling surface of {wall_style}, uniform repeating overhead material such as panelling, plaster, beams or tiles, evenly spread across the whole frame, camera pointing straight up at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero chandelier, zero hanging lamp, zero light fixture, zero single focal object, zero empty blank areas, edge to edge material."
+        ceil_p = f"A flat 2D seamless tileable ceiling material texture, the ceiling surface of {_b('ceiling', wall_style)}, uniform repeating overhead material such as panelling, plaster, beams or tiles, evenly spread across the whole frame, camera pointing straight up at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero chandelier, zero hanging lamp, zero light fixture, zero single focal object, zero empty blank areas, edge to edge material."
         # "ground terrain" was doing the same damage on the floor: it reads as outdoors, so an
         # interior style came back as dirt and undergrowth. Ask for a FLOOR - a built, walked-on
         # surface - and let the style decide whether that is boards, flagstone or carpet.
-        floor_p = f"A flat 2D seamless tileable floor material texture, the floor surface of {wall_style}, uniform repeating walked-on material such as floorboards, flagstones, tiles or carpet, fine even grain across the whole frame, camera pointing straight down at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero grass, zero soil, zero outdoor landscape, zero furniture, zero people, zero large focal objects, edge to edge material."
+        floor_p = f"A flat 2D seamless tileable floor material texture, the floor surface of {_b('floor', wall_style)}, uniform repeating walked-on material such as floorboards, flagstones, tiles or carpet, fine even grain across the whole frame, camera pointing straight down at 90 degrees, orthographic, zero perspective, zero vanishing point, zero walls, zero sky, zero horizon, zero grass, zero soil, zero outdoor landscape, zero furniture, zero people, zero large focal objects, edge to edge material."
         # No keyword bucket to fall back on, so this has to work for anything typed in. The
         # theme is the SUBJECT and light is only something it emits - naming any fixture
         # ("lamp", "lantern", "light source") hands the model a shape prior strong enough to
         # override the theme entirely, which is how this path used to return plain light bulbs.
-        lantern_p = (f"A single object made of {wall_style}, blazing with brilliant warm golden "
+        # A designed LANTERN line is already a concrete object, so it becomes the subject
+        # directly; without one, fall back to "an object made of {wall_style}" as before.
+        lantern_subject = _b("lantern", f"A single object made of {wall_style}")
+        lantern_p = (f"{lantern_subject}, blazing with brilliant warm golden "
                     f"light from within, lit up and radiantly glowing, the light spilling out "
                     f"across its surface. {_LANTERN_TAIL}")
 
@@ -1867,9 +1999,12 @@ _GATE_TAIL = ("Exactly one object, centered, front view, isolated on a plain fla
               "background, no scene, no floor, no walls, no room, no shadow, no text.")
 
 
-def get_gate_prompts(wall_style):
+def get_gate_prompts(wall_style, brief=None):
     """(door_p, switch_p) themed to the dungeon style. Kept separate from get_surface_prompts
     so that function's 4-tuple signature and call sites stay untouched.
+
+    `brief` is a generate_theme_brief() dict (or None), consulted ONLY on the generic branch -
+    same contract as get_surface_prompts.
 
     FLUX schnell at cfg 1.0 - the negative is inert, so these are POSITIVE-ONLY. Name the
     object literally, force flat orthographic framing, isolate on white (see _LANTERN_TAIL
@@ -1889,8 +2024,11 @@ def get_gate_prompts(wall_style):
     style resolves to the same theme on both sides) - every style get_surface_prompts special-
     cases gets a matching door/switch here now; previously only four of its ten buckets did; a
     style whose wall got the taco or forest treatment but fell through to the generic gate
-    branch is exactly how a door ends up looking unrelated to the corridor it's set in."""
+    branch is exactly how a door ends up looking unrelated to the corridor it's set in. Both
+    functions now dispatch on the shared _style_bucket(), so that drift is no longer possible
+    at all - this branch order just has to mirror get_surface_prompts', which it does."""
     ui = wall_style.lower()
+    bucket = _style_bucket(wall_style)
 
     # Every branch below follows three rules:
     #   1. The archway/frame is described with the SAME material words as get_surface_prompts'
@@ -1912,8 +2050,9 @@ def get_gate_prompts(wall_style):
     # frame edge to edge" alone wasn't reliable enough at cfg 1.0 to prevent that.
     NO_MARGINS = "the door and its archway completely fill the frame edge to edge with zero empty background and zero black margins"
 
-    if any(k in ui for k in ['sci-fi', 'sci fi', 'spaceship', 'space station', 'alien ship',
-                             'future', 'cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']):
+    # The one deliberate difference from get_surface_prompts' chain: sci-fi and cyber share a
+    # single door/switch treatment there, where they have separate wall treatments.
+    if bucket in ("scifi", "cyber"):
         door_p = (f"A sealed dark sci-fi blast door - a heavy round airlock hatch with a glowing "
                   f"cyan viewport ring and warning stripes - set into a surrounding wall of the "
                   f"same dark riveted brushed-metal panels with glowing cyan seams as the "
@@ -1926,7 +2065,7 @@ def get_gate_prompts(wall_style):
                          "switch, sci-fi hardware, unpowered and unlit, the handle in its "
                          "resting position. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']):
+    elif bucket == "win95":
         door_p = (f"Authentic Windows 95 3D maze screensaver style, a heavy closed door set into "
                   f"an archway built from the same bold chunky crimson red bricks and thick stark "
                   f"white mortar lines as the corridor wall, the door itself a dark iron-bound "
@@ -1937,7 +2076,7 @@ def get_gate_prompts(wall_style):
                          "bolted to a red brick wall, a big red handle resting in the down "
                          "position, Windows 95 low-poly CGI look, bright even lighting. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']):
+    elif bucket == "forest":
         door_p = (f"A rustic door built from thick bound branches and woven vines, set into a "
                   f"surrounding archway of the same rough mossy tree bark and redwood trunk "
                   f"surface as the corridor wall, flat straight-on orthographic front view, "
@@ -1948,7 +2087,7 @@ def get_gate_prompts(wall_style):
                          "strip of green vine, mounted on a flat slab of bark, the branch "
                          "resting down. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']):
+    elif bucket == "taco":
         door_p = (f"A closed door that is one giant folded cheese quesadilla, grill-marked and "
                   f"steaming, set into a surrounding archway of the same crispy golden corn "
                   f"taco shells filled with seasoned meat, tomatoes, lettuce and cheese as the "
@@ -1960,7 +2099,7 @@ def get_gate_prompts(wall_style):
                          "chip nacho piled with melted cheese, resting down on a small plate. "
                          + _GATE_TAIL)
 
-    elif match_word('ladies', ui) or match_word('lady', ui) or match_word('women', ui) or match_word('woman', ui) or match_word('girls', ui) or match_word('girl', ui):
+    elif bucket == "ladies":
         door_p = (f"A closed double door of purple enamel and polished gold with a bold art "
                   f"deco sunburst pattern, set into a surrounding frame styled with the same "
                   f"colorful pop-art collage pattern as the corridor wall, flat straight-on "
@@ -1972,7 +2111,7 @@ def get_gate_prompts(wall_style):
                          "mounted on a purple enamel plate, art deco style, the fan folded "
                          "down. " + _GATE_TAIL)
 
-    elif match_word('people', ui) or match_word('person', ui) or match_word('crowd', ui) or match_word('characters', ui) or match_word('men', ui) or match_word('man', ui) or match_word('guys', ui):
+    elif bucket == "people":
         door_p = (f"A heavy closed double door of navy blue metal with polished gold trim and "
                   f"rivets, set into a surrounding frame styled with the same colorful pop-art "
                   f"character collage pattern as the corridor wall, flat straight-on "
@@ -1981,7 +2120,7 @@ def get_gate_prompts(wall_style):
         switch_p = ("A small polished gold lever switch on a navy blue enamel plate, "
                          "bright saturated colors, the handle resting down. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']):
+    elif bucket == "stone":
         door_p = (f"A massive closed dungeon door of weathered oak planks bound with rusted iron "
                   f"bands and studs, a heavy iron ring handle, set into a surrounding archway of "
                   f"the same grey mossy dungeon stone blocks as the corridor wall, flat "
@@ -1990,7 +2129,7 @@ def get_gate_prompts(wall_style):
         switch_p = ("A wrought iron wall lever on a rusted metal plate bolted to grey stone, "
                          "the handle resting down. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']):
+    elif bucket == "candy":
         door_p = (f"A closed door set into a surrounding archway of the same red and white "
                   f"peppermint candy cane stripes and gingerbread cookie pattern with white "
                   f"icing as the corridor wall, the door itself a gingerbread cookie house door "
@@ -2004,7 +2143,7 @@ def get_gate_prompts(wall_style):
                          "lollipop handle on a white iced gingerbread cookie plate, bright "
                          "bakery colors, the handle resting down. " + _GATE_TAIL)
 
-    elif any(k in ui for k in ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']):
+    elif bucket == "cat":
         door_p = (f"A chunky wooden doghouse-style door with a rounded arched pet-door flap, "
                   f"set into a surrounding frame styled with the same colorful cute cartoon "
                   f"{wall_style} pattern as the corridor wall, flat straight-on orthographic "
@@ -2015,13 +2154,26 @@ def get_gate_prompts(wall_style):
                          "bone, mounted on a small plate, bright saturated colors, resting "
                          "down. " + _GATE_TAIL)
 
+    elif brief and brief.get("door") and brief.get("switch"):
+        # A designed gate. Unlike the raw-word branch below, both lines are already concrete
+        # objects, so they become the SUBJECT and only the framing is bolted on. The set
+        # designer is told to make the door belong to the same world as the wall material and
+        # to make the switch a different object family from the lantern, which is what the
+        # hand-tuned buckets do by hand (see rules 1-3 in the docstring above).
+        door_p = (f"{brief['door']}, fully closed, flat straight-on orthographic front view, "
+                  f"{NO_MARGINS}, zero perspective, zero horizon, zero sky, no room around it, "
+                  f"no text.")
+        switch_p = (f"{brief['switch']}, mounted on a small plate as a lever switch handle, "
+                    f"the handle resting in its neutral position. " + _GATE_TAIL)
+
     else:
-        # No preset bucket for this style, so the archway is DESCRIBED as {wall_style} (matching
-        # how get_surface_prompts' generic wall_p uses it) while the leaf falls back to a plain
-        # iron-bound wood door - a concrete, universally sensible "different but related" object
-        # instead of the literal "made of {wall_style}" this used to say, which asked for the
-        # door to be built from whatever noun the player typed (a candy-cane door, a taco door)
-        # rather than a door that merely belongs in a room styled that way.
+        # No preset bucket for this style AND no usable brief, so the archway is DESCRIBED as
+        # {wall_style} (matching how get_surface_prompts' generic wall_p uses it) while the leaf
+        # falls back to a plain iron-bound wood door - a concrete, universally sensible
+        # "different but related" object instead of the literal "made of {wall_style}" this used
+        # to say, which asked for the door to be built from whatever noun the player typed (a
+        # candy-cane door, a taco door) rather than a door that merely belongs in a room styled
+        # that way. This is the pre-set-designer behaviour, kept intact as the failure path.
         door_p = (f"A closed door set into a surrounding archway or frame styled as {wall_style}, "
                   f"matching the corridor wall, the door itself a heavy iron-bound wood door "
                   f"slab with a round iron ring handle, sturdy and firmly shut, flat "
@@ -2718,6 +2870,282 @@ def generate_enemy_species(enemy_style):
         return None
 
 
+# ============================================================================
+# THE SET DESIGNER - turning abstract typed words into drawable material.
+# ============================================================================
+#
+# The enemy path has had an abstraction translator since generate_enemy_species: an abstract
+# noun becomes a concrete physical LOOK sentence before krea2 ever sees it. Nothing else did,
+# and that asymmetry is a real, reproducible bug. Clicking the shipped "internet" preset
+# (wall "internet", weapon "memes", enemy "chat") returned blank walls and a default-looking
+# corridor, because get_surface_prompts' generic branch interpolates the typed word raw:
+#
+#     "A flat 2D vertical wall surface texture of internet, close-up flat orthographic front
+#      view, seamless tileable wall material, zero horizon, zero sky, zero landscape, pure
+#      flat vertical wall material."
+#
+# On FLUX schnell at 4 steps / cfg 1.0 the framing clauses are the only concrete thing in that
+# string, so the model draws exactly them: flat, featureless material. Same for the weapon,
+# which became "holding a memes in the right hand".
+#
+# So: one LLM pass, up front, that turns whatever was typed into concrete materials and
+# objects. Built on exactly the generate_enemy_species plumbing - same TextGenerate node, same
+# hand-built chat template, same never-raises contract, same negation stripping.
+
+THEME_BRIEF_MAX_TOKENS = 520      # eight one-line answers; species proves 8 labels at 320
+THEME_BRIEF_TEMPERATURE = 0.8     # a little tighter than the bestiary - this is art direction
+
+# The surface slots are only asked for when no keyword bucket matched. Every extra required
+# label is another line the reply can come back missing (the lesson _vlm_wants_rotors paid
+# for), so a bucketed theme asks for two labels instead of eight.
+THEME_SURFACE_SLOTS = ["wall", "floor", "ceiling", "lantern", "door", "switch"]
+THEME_SUBJECT_SLOTS = ["weapon", "enemy"]
+
+# Slots that get interpolated INTO the middle of a sentence rather than used as its subject:
+# "a flat 2D vertical wall surface texture of {wall}", "holding a {weapon} in the right hand",
+# "a dungeon full of: {enemy}". The model answers in full sentences ("A coiled blue ethernet
+# cable whip..."), which lands as "holding a A coiled blue ethernet cable whip" - so the
+# leading article and capital come off. lantern / door / switch are the other way round: each
+# one IS the subject of its prompt, so their article and capital are exactly right.
+_THEME_INLINE_SLOTS = {"wall", "floor", "ceiling", "weapon", "enemy"}
+_THEME_ARTICLE = re.compile(r"^(?:an?|the)\s+", re.I)
+
+
+# ENEMY is the one slot that must stay a SHORT SUBJECT rather than a description, because it
+# is not drawn from directly - it becomes the {enemy} that _ENEMY_SPECIES_USER repeats eight
+# times and that krea2_species_prompt re-anchors each foe on. Measured replies run 9-11 words
+# and bolt a full look onto the noun ("armored tank with chrome plating and glowing red eye
+# sockets"), which is a problem twice over: the species designer's whole job is to invent that
+# look per variant, and "armored" is exactly the costume noun _SPECIES_HIJACK strips out of an
+# object's LOOK lines - except that the subject noun is re-anchored in code, so it would walk
+# straight back in unfiltered and turn the foe into the generic mecha that regex exists to
+# prevent. Cutting at the first attributive joiner leaves "armored tank" -> "tank"-shaped
+# subjects the size of the presets that already work ("rogue security drone", "gummy bear").
+#
+# " of " is deliberately NOT a joiner: "stick of computer RAM" must survive intact, since the
+# whole point of that preset's wording is that bare "ram" renders a male sheep.
+_THEME_ENEMY_JOINER = re.compile(
+    r"\s+(?:with|wearing|holding|carrying|covered\s+in|made\s+of|featuring|sporting|that|"
+    r"which)\s+", re.I)
+
+
+def _theme_enemy_subject(value):
+    """Reduce a designed ENEMY line to the short subject the species designer wants."""
+    head = value.split(",")[0].strip()
+    head = _THEME_ENEMY_JOINER.split(head, 1)[0].strip()
+    # A ONE-WORD head is the good case, not a degenerate one - "devil", "bagel", "taco" are
+    # exactly the shape of the presets that already work, so only a cut down to nothing falls
+    # back to the full line.
+    return head if head else value
+
+
+def _theme_inline(value):
+    """Make a designed line safe to drop into the middle of an existing sentence."""
+    out = _THEME_ARTICLE.sub("", value).strip()
+    # Lowercase the opening capital, but only when the rest of that word is lowercase - so
+    # "Dense black server blades" relaxes while "RJ45", "LED" and "Windows" keep their case.
+    head = out.split(" ", 1)[0]
+    if head[1:].islower() or len(head) == 1:
+        out = out[:1].lower() + out[1:]
+    return out
+
+THEME_BRIEF_SYSTEM = (
+    "You are the set designer for a 1990s first-person dungeon crawler. You are given the "
+    "words a player typed and you turn each one into a concrete physical thing an artist can "
+    "paint: real materials, real objects, real colours. "
+    "You never explain yourself and you never break format."
+)
+
+# Rules 2, 3 and 7 are the ones that fix the reported bug; the rest are transcribed from
+# failures already recorded elsewhere in this file. Rule 7 is not style advice - these prompts
+# run on FLUX schnell and krea2 at cfg 1.0 with an inert negative, so a line describing what
+# something ISN'T is a request to draw it (see _LANTERN_TAIL's comment for the incandescent
+# bulb that got drawn every single time).
+_THEME_BRIEF_SURFACES = """- WALL: the material the corridor walls are made of.
+- FLOOR: the material underfoot.
+- CEILING: the material overhead.
+- LANTERN: ONE object from this world that could glow and light the corridor.
+- DOOR: ONE closed door from this world, and the archway around it.
+- SWITCH: ONE small hand-sized object from this world, used as a lever handle.
+"""
+
+_THEME_BRIEF_USER = """A player typed these words to describe a dungeon they want to explore:
+
+THEME: {wall}
+WEAPON: {weapon}
+ENEMY: {enemy}
+
+Some of those words may be abstract ideas rather than things - "internet", "memes", "chat",
+"trippy". Your job is to decide what those ideas LOOK LIKE as a real physical place and real
+physical objects, so an artist can paint them. Everything you write must belong to the same
+one world, so a player walking through it sees a single coherent place.
+
+Describe:
+{slots}
+Rules. Every line is fed straight to an image generator, so:
+
+1. Write only physical description: material, surface, build, parts, and COLOURS. Always name
+   the colours. A line with no colour in it is the main way this job goes wrong.
+2. WALL, FLOOR and CEILING are a MATERIAL, never a place and never a scene. "A server room" is
+   WRONG. "Racked black server blades with blue status LEDs and bundled grey cables" is right.
+   Name the stuff the surface is made of, as if describing a close-up swatch of it.
+3. WALL, FLOOR and CEILING must be an EVEN, REPEATING surface with no single big object in it.
+   One copy of that texture covers one square of the map, so anything that reads as a single
+   focal point appears again in every square of the corridor.
+4. LANTERN, DOOR and SWITCH are exactly ONE object each, and the three must be three DIFFERENT
+   objects, not the same one three times.
+5. WEAPON is ONE object a person could hold and swing in one hand. Give it a handle or a grip.
+   It must read correctly after the word "a", because that is how it gets used.
+6. ENEMY is the NAME of ONE creature or object that could stand in a corridor and fight.
+   This one is different from all the others: give the thing itself and a word or two of
+   colour or material, and STOP. At most five words. Do not describe its parts, its pose or
+   what it is doing - something else designs all of that from the name you give.
+7. Describe ONLY what is in the picture. NEVER write what something is not, or lacks, or
+   should not look like. Every single word you write will be drawn.
+8. The WALL, FLOOR and CEILING are lit by a lantern in a dark corridor, and the game darkens
+   them further with distance. Give them mid-tone or pale colouring, catching the light, with
+   their detail plainly visible. A near-black surface arrives on screen as an empty void, which
+   is the same as having drawn nothing. If the theme is a black thing, say what is bright on
+   it: the pale dust on it, the light it reflects, the glow coming off its markings.
+9. If what the player typed is ALREADY a specific physical thing, keep it. Repeat it back,
+   adding at most a few words of material and colour. Never swap it for something else.
+10. One line each, under 25 words. No story, no mood, no explanation.
+
+Reply using EXACTLY these labels, each on its own line, in this order. No preamble, no
+markdown, no commentary, no asterisks:
+
+{labels}"""
+
+
+def _theme_brief_prompt(wall_style, weapon_style, enemy_style, want_surfaces):
+    """Same hand-built chat template as _story_prompt and _enemy_species_prompt - see there for
+    why the <|im_start|> opener and the empty <think> block are both mandatory."""
+    slots = THEME_SURFACE_SLOTS + THEME_SUBJECT_SLOTS if want_surfaces else THEME_SUBJECT_SLOTS
+    body = _THEME_BRIEF_SURFACES if want_surfaces else ""
+    body += ("- WEAPON: the weapon the player swings.\n"
+             "- ENEMY: the thing the player fights.\n")
+    labels = "\n".join(f"{s.upper()}: <one line>" for s in slots)
+    user = _THEME_BRIEF_USER.format(
+        wall=(wall_style or "").strip() or "a forgotten place",
+        weapon=(weapon_style or "").strip() or "a sword",
+        enemy=(enemy_style or "").strip() or "something that shambles",
+        slots=body, labels=labels)
+    return (
+        "<|im_start|>system\n" + THEME_BRIEF_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n" + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
+    )
+
+
+def parse_theme_brief(text, slots):
+    """Pull the labelled lines out of the reply. Returns {slot: line} for whatever came back
+    usable, which may be empty.
+
+    PER-SLOT, not all-or-nothing. parse_enemy_species throws the whole reply away if any of
+    its six foe labels is missing, because half a designed foe family is incoherent - one foe
+    designed and two derived would silently mix two art directions. These slots are
+    independent: a good WALL with a missing SWITCH is simply a good wall and the old switch,
+    which is strictly better than today. So each slot stands or falls on its own, and anything
+    dropped falls back to the raw-word wording that shipped before this existed.
+
+    A line that survives negation-stripping as a fragment is treated as missing - the caller's
+    fallback is a working prompt, so a doubtful line is never worth taking."""
+    want = {s.upper(): s for s in slots}
+    out = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip().strip(_STORY_STRIP)
+        if ":" not in line:
+            continue
+        label, _, value = line.partition(":")
+        key = want.get(label.strip().upper())
+        if not key or key in out:
+            continue
+        value = value.strip().strip(_STORY_STRIP)
+        # krea2 and FLUX schnell both run at cfg 1.0 here, so a clause saying what something
+        # ISN'T is a request to draw it. Same treatment the species LOOK lines get.
+        value = _strip_negations(value)
+        if len(value.split()) < 3:
+            continue
+        if key == "enemy":
+            value = _theme_enemy_subject(value)
+        if key in _THEME_INLINE_SLOTS:
+            value = _theme_inline(value)
+        out[key] = value[:240]
+    return out
+
+
+def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=True):
+    """Turn the typed words into concrete drawable material. Never raises: on any failure
+    returns None and every caller falls back to interpolating the typed words raw, which is
+    exactly what shipped before this stage existed.
+
+    `want_surfaces` is False when _style_bucket() matched a hand-tuned theme, because those
+    buckets' surface prompts are literals that ignore the brief anyway - so the reply only has
+    to carry WEAPON and ENEMY, and a two-label reply is far harder to come back malformed.
+
+    ONE RETRY ON A FRESH SEED, and it is not optional. Measured over 6 live samples across two
+    themes, roughly one reply in six is degenerate in a very specific way: the model echoes
+    THEME_BRIEF_SYSTEM back word for word and answers nothing at all (both observed failures
+    returned a byte-identical 278-character string, on two unrelated themes). It is a sampling
+    outcome rather than a prompt fault - the same theme and the same prompt succeed on the
+    seeds either side of it - so re-rolling the seed is the entire fix, and it costs nothing on
+    the runs that work first time. Same shape as the _portrait_frame_diff retry."""
+    slots = THEME_SURFACE_SLOTS + THEME_SUBJECT_SLOTS if want_surfaces else THEME_SUBJECT_SLOTS
+
+    def _attempt():
+        payload = {
+            # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+            "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                       "class_type": "CLIPLoader"},
+            "theme_gen": {
+                "inputs": {
+                    "clip": ["k_clip", 0],
+                    "prompt": _theme_brief_prompt(wall_style, weapon_style, enemy_style,
+                                                  want_surfaces),
+                    "max_length": THEME_BRIEF_MAX_TOKENS,
+                    "sampling_mode": "on",
+                    "sampling_mode.temperature": THEME_BRIEF_TEMPERATURE,
+                    "sampling_mode.top_k": 64,
+                    "sampling_mode.top_p": 0.95,
+                    "sampling_mode.min_p": 0.05,
+                    "sampling_mode.repetition_penalty": 1.05,
+                    "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                    "thinking": False,
+                    "use_default_template": False,
+                },
+                "class_type": "TextGenerate",
+            },
+            "theme_out": {"inputs": {"source": ["theme_gen", 0]}, "class_type": "PreviewAny"},
+        }
+        raw = _submit_and_collect_text(payload, "theme_out", job_key="theme_brief")
+        return raw, parse_theme_brief(raw, slots)
+
+    try:
+        t0 = time.time()
+        raw, brief = _attempt()
+        # Re-roll when the reply lost MOST of its labels, not only when it lost all of them - a
+        # badly truncated reply is the same coin flip and just as cheap to redo. A merely
+        # partial reply is KEPT: parse_theme_brief already falls back per slot, so a good WALL
+        # next to a missing SWITCH is still strictly better than the raw typed word.
+        if len(brief) * 2 < len(slots):
+            print(f"[theme] reply carried {len(brief)}/{len(slots)} labels, "
+                  f"re-rolling the seed once - {raw[:160]!r}")
+            raw, brief = _attempt()
+        if not brief:
+            print(f"[theme] reply still carried none of the {len(slots)} labels - "
+                  f"using the typed words as they are - {raw[:200]!r}")
+            return None
+        for s in slots:
+            got = brief.get(s)
+            print(f"[theme] {s:8s} {got if got else '(missing - using the typed words)'}")
+        print(f"[theme] set designed in {time.time()-t0:.1f}s")
+        return brief
+    except Exception as e:
+        print(f"[theme Error] {e} - using the typed words as they are")
+        PROGRESS.finish_job("theme_brief")
+        return None
+
 def _a_or_an(noun):
     return ("an " if noun[:1].lower() in "aeiou" else "a ") + noun
 
@@ -3064,12 +3492,15 @@ def _save_tight(img_path, thresh=20):
         print(f"[Tight Crop Error] {os.path.basename(img_path)}: {e}")
 
 
-def generate_flux_surfaces_only(wall_style, gfx=None):
+def generate_flux_surfaces_only(wall_style, gfx=None, brief=None):
     """Just the wall / ceiling / floor thirds of generate_flux_all_assets. v5 keeps FLUX
     schnell for the tiling environment textures and generates everything else with krea2.
 
     `gfx` is a GFX_QUALITY_PROFILES entry - `texture` sizes the tiling surfaces and `object`
-    the switch/lantern cutouts (512/384 normal & optimized, 256/192 reduced)."""
+    the switch/lantern cutouts (512/384 normal & optimized, 256/192 reduced).
+
+    `brief` is a generate_theme_brief() dict (or None); it only reaches the generic branch of
+    the two prompt builders, so a bucketed theme renders exactly as it always has."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     PROGRESS.begin_job("surfaces")
     tile_px = gfx["texture"]     # wall / ceiling / floor / door
@@ -3080,8 +3511,8 @@ def generate_flux_surfaces_only(wall_style, gfx=None):
                 "l": f"trio_l_{int(time.time()*1000)}",
                 "d": f"trio_d_{int(time.time()*1000)}",
                 "s": f"trio_s_{int(time.time()*1000)}"}
-    wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style)
-    door_p, switch_p = get_gate_prompts(wall_style)
+    wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style, brief)
+    door_p, switch_p = get_gate_prompts(wall_style, brief)
 
     def _surface(tag, prompt_text):
         return {
@@ -3170,6 +3601,15 @@ def generate_flux_surfaces_only(wall_style, gfx=None):
         make_seamless_4way(w_path, blend_pixels=12)
         make_seamless_4way(c_path, blend_pixels=12)
         make_seamless_4way(f_path, blend_pixels=12)
+        # Only the DESIGNED path can hand back an unreadably dark surface, so the lift is
+        # gated on these three textures actually having been designed. The test is the "wall"
+        # slot, not the brief itself: a bucketed theme still gets a truthy brief (it carries
+        # weapon + enemy), and gating on that would have let this repaint hand-tuned bucket
+        # art - the sci-fi bucket's "dark spaceship hull" is deliberately dark and must stay
+        # that way. See _lift_dark_surface for the measurements.
+        if (brief or {}).get("wall"):
+            for pth, lbl in ((w_path, "wall"), (c_path, "ceiling"), (f_path, "floor")):
+                _lift_dark_surface(pth, lbl)
 
         # Door: a single full-cell surface - NOT tiled, so no make_seamless_4way.
         d_path = _p("d_save")
@@ -3280,6 +3720,7 @@ def _plan_v6(steps, sound_mode="music_and_sound"):
     st = int(steps)
     plan = [
         # key,             label,                                                    weight, units
+        ("theme_brief",    "Designing the set with Qwen3-VL...",                          6, THEME_BRIEF_MAX_TOKENS),
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
@@ -3308,6 +3749,7 @@ def _plan_v6(steps, sound_mode="music_and_sound"):
 def _plan_v5(steps):
     st = int(steps)
     return [
+        ("theme_brief",    "Designing the set with Qwen3-VL...",                          6, THEME_BRIEF_MAX_TOKENS),
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
@@ -5055,17 +5497,23 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
 
 
 def generate_krea2_character_bundle(player_style, weapon_style, enemy_style,
-                                    steps=KREA2_STEPS_DEFAULT, gfx=None):
+                                    steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None):
     """v5: one krea2-turbo prompt - player, weapon, shield, enemy - then a separate
     krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {player, weapon, shield, enemy, portrait,
     portraits}; portraits is a 4-list (or None) and portrait is portraits[0].
     `gfx` is a GFX_QUALITY_PROFILES entry - `player` sizes the player/weapon/shield,
-    `enemy` the enemy sprites, `portrait` the HUD busts."""
+    `enemy` the enemy sprites, `portrait` the HUD busts.
+    `brief` is a generate_theme_brief() dict (or None) - see generate_krea2_posed_bundle."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     sq = _round16(gfx["player"])
     esq = _round16(gfx["enemy"])
     ww = _round16(gfx["player"] * 0.5)                    # narrow canvas for the upright weapon
+
+    # See generate_krea2_posed_bundle for why this rebinds rather than being passed through to
+    # the species call alone.
+    weapon_style = (brief or {}).get("weapon") or weapon_style
+    enemy_style = (brief or {}).get("enemy") or enemy_style
 
     species = generate_enemy_species(enemy_style)
 
@@ -5126,11 +5574,17 @@ V6_HURT_FRAME_INDEX = 6
 V6_WALK_FRAME_INDICES = [7, 8]
 
 
-def krea2_frame_prompts(player_style, weapon_style):
+def krea2_frame_prompts(player_style, weapon_style, brief=None):
     """The seven v6 pose prompts. Identical scaffold - same character, same gear, same
-    strict back view - so only the action clause varies frame to frame."""
+    strict back view - so only the action clause varies frame to frame.
+
+    `w` is interpolated nine times as "holding a {w}", so an abstract typed weapon renders the
+    whole character wrong: "memes" became "holding a memes in the right hand". A
+    generate_theme_brief() weapon line is a concrete one-handed object written to read
+    correctly after that article, and is preferred whenever there is one."""
     p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
-    w = weapon_style.strip() if (weapon_style and weapon_style.strip()) else "sword"
+    w = (brief or {}).get("weapon") or (
+        weapon_style.strip() if (weapon_style and weapon_style.strip()) else "sword")
     base = (
         f"A full-body video game character sprite of a {p}, seen strictly from directly behind in a "
         f"third-person back view, facing away from the camera into the scene, holding a {w} in the "
@@ -5175,21 +5629,30 @@ def krea2_frame_prompts(player_style, weapon_style):
 
 
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
-                                steps=KREA2_STEPS_DEFAULT, gfx=None):
+                                steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames and an enemy, then a
     separate krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {"frames": [7 paths], "enemy": path|None,
     "portrait": path|None, "portraits": [4]|None}. `gfx` is a GFX_QUALITY_PROFILES entry -
-    `player` sizes the 7 pose frames, `enemy` the foe sprites, `portrait` the HUD busts."""
+    `player` sizes the 7 pose frames, `enemy` the foe sprites, `portrait` the HUD busts.
+
+    `brief` is a generate_theme_brief() dict (or None) supplying a concrete weapon object and
+    a concrete enemy subject when the typed words were abstract."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     sq = _round16(gfx["player"])            # the 7 player pose frames
     esq = _round16(gfx["enemy"])            # every frame of all three foes
     frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
 
+    # The designed subject replaces the typed word for EVERY enemy path, not just the species
+    # designer: krea2_species_prompt re-anchors the noun in code and the Kontext fallback
+    # rebuilds from krea2_enemy_prompt, so handing only one of them the concrete version would
+    # put "chat" back into the picture the moment the species call failed.
+    enemy_style = (brief or {}).get("enemy") or enemy_style
+
     species = generate_enemy_species(enemy_style)
 
     payload = _krea2_loaders()
-    frame_prompts = krea2_frame_prompts(player_style, weapon_style)
+    frame_prompts = krea2_frame_prompts(player_style, weapon_style, brief)
     for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
     added, seeds = _krea2_add_enemy_variants(payload, enemy_style, esq, steps, "v6", species=species)
@@ -5245,16 +5708,23 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
 
     try:
+        # THE SET DESIGNER RUNS FIRST - everything downstream wants its output. When the typed
+        # theme matches one of the hand-tuned keyword buckets those surface prompts are
+        # literals that ignore the brief, so only the weapon and enemy are asked for; a
+        # two-label reply is far harder to come back malformed than an eight-label one.
+        brief = generate_theme_brief(wall_style, weapon_style, enemy_style,
+                                     want_surfaces=(_style_bucket(wall_style) is None))
+
         gen_progress["current_step"] = 1
         story = generate_intro_story(wall_style, player_style, weapon_style, enemy_style,
                                      player_image)
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style, gfx)
+        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style, gfx, brief)
 
         gen_progress["current_step"] = 3
-        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, steps, gfx)
+        assets = generate_krea2_character_bundle(player_style, weapon_style, enemy_style, steps, gfx, brief)
 
         PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
@@ -5271,6 +5741,11 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "mode": "v5_krea",
             "story": story,
             "wall_style": wall_style,
+            # What the set designer resolved the typed words into, or None if it was
+            # skipped or failed. Kept so a bad render can be diagnosed from the saved
+            # session alone - the raw typed words are on the meta, but they are not
+            # what actually got drawn.
+            "theme_brief": brief,
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
@@ -5341,18 +5816,26 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
 
     try:
-        # The story goes first and is published on its own, minutes ahead of the bundle,
-        # so the frontend can start the crawl while everything else is still rendering.
+        # THE SET DESIGNER RUNS FIRST - everything downstream wants its output. When the typed
+        # theme matches one of the hand-tuned keyword buckets those surface prompts are
+        # literals that ignore the brief, so only the weapon and enemy are asked for; a
+        # two-label reply is far harder to come back malformed than an eight-label one.
+        brief = generate_theme_brief(wall_style, weapon_style, enemy_style,
+                                     want_surfaces=(_style_bucket(wall_style) is None))
+
+        # The story is published on its own, minutes ahead of the bundle, so the frontend can
+        # start the crawl while everything else is still rendering. It keeps the player's OWN
+        # words: it is prose generation, where an abstract theme is no handicap.
         gen_progress["current_step"] = 1
         story = generate_intro_story(wall_style, player_style, weapon_style, enemy_style,
                                      player_image)
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style, gfx)
+        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style, gfx, brief)
 
         gen_progress["current_step"] = 3
-        bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, steps, gfx)
+        bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, steps, gfx, brief)
 
         # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
         # card rather than competing with them. Both calls are skippable via sound_mode.
@@ -5379,6 +5862,11 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # (normal / optimized / reduced). Read back by save_dungeon_session.
             "graphics_quality": gfx_name,
             "wall_style": wall_style,
+            # What the set designer resolved the typed words into, or None if it was
+            # skipped or failed. Kept so a bad render can be diagnosed from the saved
+            # session alone - the raw typed words are on the meta, but they are not
+            # what actually got drawn.
+            "theme_brief": brief,
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
@@ -5508,6 +5996,11 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             "player_style": (player_style or "").strip(),
             "weapon_style": (weapon_style or "").strip(),
             "enemy_style": (enemy_style or "").strip(),
+            # The concrete material/object descriptions the set designer resolved the typed
+            # words into (generate_theme_brief), or None when a hand-tuned keyword bucket
+            # covered the theme and no design pass was needed. Sessions saved before this
+            # existed have neither key.
+            "theme_brief": bundle.get("theme_brief"),
             "location": story.get("location", ""),
             "hero": story.get("hero", ""),
             "foe": story.get("foe", ""),
