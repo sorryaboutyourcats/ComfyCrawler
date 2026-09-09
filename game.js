@@ -1493,7 +1493,20 @@
     //                still has a visible wind-up in a space with no room to wind up in.
     //   EASE       - per-frame approach, so a wall sliding into view grows the foe rather than
     //                snapping it (the raycast distance behind this jumps at corners).
+    //   SCALE_DAMP - how much of the growth true perspective asks for the foe actually takes.
+    //                Full perspective is technically right and looks wrong: feet at the seam of
+    //                a wall you are pressed against means roughly half the staged distance, so
+    //                perspective asks for nearly double, and a walker at double reads as a
+    //                different, bigger monster rather than the same one standing closer. Playing
+    //                it at a third was still too much of both. A tenth is the setting that keeps
+    //                the foe recognisably its own size while its feet move down to the seam -
+    //                the drop down the canvas does the work of selling the step forward, and
+    //                drawing it SMALLER than the new feet line implies is what keeps it reading
+    //                as standing off rather than in the hero's face. The BOSS is exempt and
+    //                takes the full factor: it is already clamped by HEAD_ROOM long before this
+    //                would bite, and looming is its whole character.
     const NEAR_WALL_CLEARANCE = 6;
+    const NEAR_WALL_SCALE_DAMP = 0.12;
     const NEAR_WALL_GROUND_MAX = 208;
     const NEAR_WALL_SCALE_MAX = 1.8;
     const NEAR_WALL_HEAD_ROOM = 6;
@@ -3826,6 +3839,8 @@
       // against the depth-0 staging so this is purely the near-wall part - the caller still
       // multiplies by DEPTH_SHRINK's own factor.
       let scale = (groundY - horizon) / (GROUND_Y - horizon);
+      // Damped for everything but the boss - see NEAR_WALL_SCALE_DAMP.
+      if (e.variant !== 'boss') scale = 1 + (scale - 1) * NEAR_WALL_SCALE_DAMP;
       // ...but never past the cap, and never taller than the canvas above its own feet: a boss
       // is two thirds of the view before any of this, and a flyer's bottom edge is its hover
       // height up from the ground it just moved.
@@ -6935,6 +6950,9 @@
       if (entry.created_text) metaBits.push(entry.created_text);
       const size = historySizeText(entry.size);
       if (size) metaBits.push(size);
+      // Which "Graphics Quality" tier the assets were baked at (high quality / optimized /
+      // reduced). Absent on dungeons saved before this was recorded.
+      if (entry.quality_text) metaBits.push(entry.quality_text);
       if (entry.has_music) metaBits.push('♪ music');
       meta.textContent = metaBits.join('  ·  ');
       col.appendChild(meta);

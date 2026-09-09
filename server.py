@@ -72,6 +72,15 @@ GFX_QUALITY_PROFILES = {
 }
 GFX_QUALITY_DEFAULT = "normal"
 
+# Player-facing name for each dropdown key - what the History window prints next to a
+# saved dungeon so you can see which tier its assets were baked at. "normal" is the
+# full-resolution tier, shown as "high quality".
+GFX_QUALITY_LABELS = {
+    "normal":    "high quality",
+    "optimized": "optimized",
+    "reduced":   "reduced",
+}
+
 
 def _gfx_profile(quality):
     """Resolve a Graphics Quality name to its resolution profile, falling back to normal."""
@@ -552,13 +561,18 @@ class ProgressTracker:
                     val = float(st.get("value") or 0.0)
                 except (TypeError, ValueError):
                     continue
-                if mx <= 0:
+                # Count ONLY multi-step nodes (samplers, the text generator). Every job's
+                # `units` denominator is declared purely in sampler steps, so counting the
+                # max=1 utility nodes too (per-branch CLIP encode, mask, VAE decode - ~6 of
+                # them for each of the 17 krea2 branches) piled 100+ phantom units onto the
+                # 136 real ones and saturated the fraction at 1.0 after ~4 frames, freezing
+                # the bar at 54% for the rest of the "frames" phase.
+                if mx <= 1:
                     continue
                 done_units += min(val, mx)
-                # Only multi-step nodes (samplers, the text generator) make a useful detail
-                # line. Loaders and text encoders report max=1 and would otherwise flicker
-                # the line to "k vae" / "clip" / "neg" between every real step.
-                if st.get("state") == "running" and val < mx and mx > 1:
+                # The same set of nodes is what makes a useful detail line - a loader or text
+                # encoder flickering past would just churn it to "k vae" / "clip" / "neg".
+                if st.get("state") == "running" and val < mx:
                     running = (node_id, val, mx)
             with self._lock:
                 cur = self._current
@@ -3476,6 +3490,14 @@ def _ascii_ify(text):
     return text.encode("ascii", "ignore").decode("ascii")
 
 
+# Words a name should never end on after truncation - articles, prepositions and
+# conjunctions that only make sense with whatever came next (which the word cap ate).
+_STORY_TRAILING_STOPWORDS = frozenset((
+    "the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "with",
+    "from", "by", "as", "into", "that", "this", "these", "those", "'s",
+))
+
+
 def _story_name(raw, fallback, max_words=4):
     name = _ascii_ify(raw or "").strip().strip(_STORY_STRIP)
     name = re.sub(r"^<|>$", "", name).strip()
@@ -3484,7 +3506,13 @@ def _story_name(raw, fallback, max_words=4):
         return fallback
     words = name.split(" ")
     if len(words) > max_words:
-        name = " ".join(words[:max_words])
+        words = words[:max_words]
+    # Slicing at a fixed word count can land mid-phrase and leave the name ending on a
+    # connective - "The Core Of The" instead of "The Core Of The Overclocker". Drop any
+    # trailing connectives so a truncated name still reads as a finished phrase.
+    while len(words) > 1 and words[-1].lower() in _STORY_TRAILING_STOPWORDS:
+        words.pop()
+    name = " ".join(words)
     return name or fallback
 
 
@@ -3636,7 +3664,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
     }
     out = dict(fallbacks)
 
-    max_words = {"location": 4, "hero": 3, "foe": 3, "boss": 3, "saved": 6}
+    max_words = {"location": 6, "hero": 3, "foe": 3, "boss": 3, "saved": 6}
     last_label_end = 0
     found = 0
     for key in _STORY_LABELS:
@@ -5286,7 +5314,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       steps=KREA2_STEPS_DEFAULT, player_image=None,
-                      sound_mode="music_and_sound", gfx=None):
+                      sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model.
@@ -5294,7 +5322,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     sound_mode is one of "music_and_sound" (default), "sound_only" (sfx but no music, the
     original always-on behavior) or "skip" (no audio generation at all, fastest).
     gfx is a GFX_QUALITY_PROFILES entry (normal / optimized / reduced) giving the target
-    px for each asset class - textures, player frames, enemy sprites, HUD portraits."""
+    px for each asset class - textures, player frames, enemy sprites, HUD portraits.
+    gfx_name is the plain dropdown key that gfx was resolved from, kept on the bundle so
+    the History window can show which quality tier the assets were rendered at."""
     global gen_progress
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     gen_progress["is_generating"] = True
@@ -5345,6 +5375,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["completed_bundle"] = {
             "mode": "v6_krea",
             "story": story,
+            # The "Graphics Quality" dropdown key these assets were rendered at
+            # (normal / optimized / reduced). Read back by save_dungeon_session.
+            "graphics_quality": gfx_name,
             "wall_style": wall_style,
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
@@ -5466,6 +5499,11 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             # (which Windows does not support).
             "created_text": time.strftime("%b %d, %Y %I:%M %p").replace(" 0", " "),
             "mode": bundle.get("mode", "v6_krea"),
+            # Which "Graphics Quality" tier these assets were rendered at. `quality` is the
+            # raw dropdown key; `quality_text` is what the History window shows. Older
+            # sessions saved before this was recorded have neither.
+            "quality": bundle.get("graphics_quality", ""),
+            "quality_text": GFX_QUALITY_LABELS.get(bundle.get("graphics_quality", ""), ""),
             "wall_style": wall_style or "",
             "player_style": (player_style or "").strip(),
             "weapon_style": (weapon_style or "").strip(),
@@ -5720,7 +5758,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     t = threading.Thread(target=run_batch_v6_krea,
                                          args=(wall_style, player_style, weapon_style, enemy_style),
                                          kwargs={"player_image": player_image, "sound_mode": sound_mode,
-                                                 "gfx": gfx},
+                                                 "gfx": gfx, "gfx_name": graphics_quality},
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,
