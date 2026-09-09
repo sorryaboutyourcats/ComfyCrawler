@@ -6665,6 +6665,20 @@
     window.addEventListener('keydown', (e) => {
       if (screenGame.classList.contains('hidden')) return;
 
+      // The victory box is up and its only control is "Back to Main Menu": Enter (or Space)
+      // takes it, the same as clicking the button, so a keyboard player never has to reach
+      // for the mouse to leave a won run.
+      if (victoryModal && !victoryModal.classList.contains('hidden')) {
+        if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') {
+          e.preventDefault();
+          // Stop the same keypress reaching the setup-screen listener below, which would
+          // otherwise see the now-visible setup screen and fire CREATE.
+          e.stopImmediatePropagation();
+          openSetupScreen();
+        }
+        return;
+      }
+
       // The level-up box owns the keyboard while it is up: 1/2/3 take a path outright, the
       // arrows move the cursor and Space/Enter confirms it. Nothing falls through to the
       // dungeon, and there is no key that dismisses the box without choosing.
