@@ -6946,11 +6946,16 @@
       clear: 'btnClearEnemyImage'
     });
 
-    function imageToTexture(img) {
+    function imageToTexture(img, flipX = false) {
       const cv = document.createElement('canvas');
       cv.width = cv.height = TEX_SIZE;
       const c = cv.getContext('2d');
       c.imageSmoothingEnabled = false;
+      // flipX mirrors the source before it becomes a texture. The wall raycaster flips texX on
+      // two of the four faces so tiling art stays consistent, and the net effect on AI wall art
+      // (which usually carries baked-in text) was that the text read backwards on approach.
+      // Pre-mirroring the wall slab cancels that out - same trick buildDoorTexture uses.
+      if (flipX) { c.translate(TEX_SIZE, 0); c.scale(-1, 1); }
       c.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
       return c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
@@ -6993,7 +6998,7 @@
 
       if (wallUri) {
         const imgW = new Image();
-        imgW.onload = () => { wallTexture = imageToTexture(imgW); checkDone(); };
+        imgW.onload = () => { wallTexture = imageToTexture(imgW, true); checkDone(); };
         imgW.src = wallUri;
       }
       if (ceilUri) {

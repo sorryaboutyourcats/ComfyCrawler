@@ -4666,9 +4666,12 @@ FOE: <a 1-3 word proper name for ONE single common enemy - not a group or plural
 BOSS: <a 1-3 word proper name for their champion - also one individual, same rule: no
   trailing "s" unless the word needs it>
 SAVED: <2-6 words naming who or what is safe once the BOSS falls - the same stake paragraph
-  two makes concrete. PLURAL, and written to follow the word "The" and take a plural verb:
-  "miners of Ashfen", "children of the upper halls", "villages along the ridge". Never one
-  person, never an abstraction like "hope" or "the future">
+  two makes concrete. PLURAL, and written to follow the word "The" and take a plural verb.
+  Build it out of THIS dungeon: the people, creatures or places that live in or around
+  {wall}, named with the proper names you invented above. Follow a shape like "<the people>
+  of <the LOCATION you named>" or "<the places> along <a landmark of this world>" - do not
+  copy those shapes literally, and never invent an unrelated town, village or region to put
+  them in. Never one person, never an abstraction like "hope" or "the future">
 CRAWL:
 <paragraph one - the scene and danger>
 
@@ -4772,6 +4775,32 @@ _BOSS_TITLE_PREFIXES = [
 _GENERIC_BOSS_PHRASE_RE = re.compile(r"\bthe\s+boss\b", re.IGNORECASE)
 _GENERIC_BOSS_WORD_RE = re.compile(r"\bboss\b", re.IGNORECASE)
 
+# Role words the model reaches for when it forgets to invent a name at all. "The Boss" is not
+# a name, and taking one at face value is what put "Hollow The Boss" on the health bar.
+_GENERIC_NAME_WORDS = frozenset((
+    "boss", "champion", "enemy", "foe", "villain", "monster", "creature", "beast",
+    "hero", "player", "dungeon", "location", "name", "thing", "one",
+))
+
+
+def _is_generic_name(name):
+    """True when a name label came back as the role word instead of an invented name - "The
+    Boss", "Enemy", "the champion". Only fires when nothing but articles and role words is
+    left, so "Boss Byte" and "The Hollow Champion" both survive as real names."""
+    words = [w for w in re.findall(r"[a-zA-Z]+", (name or "").lower())
+             if w not in ("the", "a", "an", "of")]
+    return bool(words) and all(w in _GENERIC_NAME_WORDS for w in words)
+
+
+def _boss_title(name):
+    """Pick the combat title, skipping any prefix that is already a word inside the name. A
+    random "Hollow" landing on an invented "The Hollow" reads as the same word twice rather
+    than a title plus a name, and it was half of "Hollow Hollow The Hollow The Boss"."""
+    words = set(re.findall(r"[a-zA-Z]+", (name or "").lower()))
+    return random.choice([p for p in _BOSS_TITLE_PREFIXES if p.lower() not in words]
+                         or _BOSS_TITLE_PREFIXES)
+
+
 
 def _ascii_ify(text):
     """The UI is a Win95 pastiche - smart quotes and em-dashes look wrong in it, and
@@ -4833,10 +4862,10 @@ def _singular_creature_name(name):
 # crawl's second paragraph, it marks where the label block ends so the CRAWL body can be
 # found without the marker, and the normalised phrase ships in the story bundle.
 _STAKE_FALLBACKS = [
-    "ones who never came back up",
-    "villages that stopped sending word",
-    "people who live over this place",
-    "names carved beside the door",
+    "cats of Mow Meow",
+    "Mow Meow cats of Catalina Island",
+    "sunning cats of Catalina Island",
+    "nine lives of Mow Meow",
 ]
 
 # "All the miners" / "every last homestead" - the leading determiner is stripped so the
@@ -4973,6 +5002,12 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
             out[key] = _story_name(m.group(1), fallbacks[key], max_words[key])
             if key in ("foe", "boss"):
                 out[key] = _singular_creature_name(out[key])
+                # "BOSS: The Boss" is the model answering with the label instead of a name.
+                # Downstream everything treats this as a proper noun - the health bar, the
+                # crawl rewrite, the outro - so it is caught here, at the only point where
+                # the themed fallback is still in reach.
+                if _is_generic_name(out[key]):
+                    out[key] = fallbacks[key]
             last_label_end = max(last_label_end, m.end())
             found += 1
 
@@ -5009,23 +5044,35 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
     enemy_ent = (named or {}).get("enemy")
     if enemy_ent and enemy_ent.get("kind"):
         bare_boss = enemy_ent["name"]
-    boss_re = re.compile(re.escape(model_boss), re.IGNORECASE) if model_boss else None
-    alt_re = (re.compile(re.escape(bare_boss), re.IGNORECASE)
-             if bare_boss and bare_boss != model_boss else None)
-    out["boss"] = f"{random.choice(_BOSS_TITLE_PREFIXES)} {bare_boss}"
+    out["boss"] = f"{_boss_title(bare_boss)} {bare_boss}"
+
+    # ONE alternation, ONE pass, and that is the entire point. Run as four separate re.sub
+    # calls, each pass rescanned the text the previous pass had already rewritten, so a title
+    # containing any word a later pattern looks for grew every time it was substituted. With
+    # the model answering "BOSS: The Boss", the crawl went "The Boss" -> "Hollow The Boss" ->
+    # "Hollow Hollow The Boss" -> "Hollow Hollow The Hollow The Boss". re.sub never rescans
+    # its own replacement, so one combined regex fixes it outright. Longest name first, and
+    # both names ahead of the two generic patterns, so the fullest match wins at any position.
+    #
+    # The trailing "s?" is load-bearing: the label loop already ran the name through
+    # _singular_creature_name, so a model that answered "BOSS: Whiskers" leaves "Whisker"
+    # here while the prose it wrote still says "Whiskers". Without it the mention is missed
+    # entirely; matching bare, without the closing \b, would swap the stem and strand the "s"
+    # as "Dread Billys".
+    boss_alts = dict.fromkeys(
+        sorted((p for p in (model_boss, bare_boss) if p), key=len, reverse=True))
+    boss_mentions_re = re.compile(
+        "|".join([r"\b(?:" + re.escape(a) + r")s?\b" for a in boss_alts]
+                 + [_GENERIC_BOSS_PHRASE_RE.pattern, _GENERIC_BOSS_WORD_RE.pattern]),
+        re.IGNORECASE)
 
     def _use_real_boss_name(t):
         """Swap in the boss's actual title wherever the prose names it - the model's own
-        invented name (boss_re), the entity's real name when a quoted enemy overrode it
-        (alt_re), and, as a safety net for when the model falls back to a generic word instead
-        of the name it invented three lines earlier, "the boss" / "boss" on their own."""
-        if boss_re:
-            t = boss_re.sub(out["boss"], t)
-        if alt_re:
-            t = alt_re.sub(out["boss"], t)
-        t = _GENERIC_BOSS_PHRASE_RE.sub(out["boss"], t)
-        t = _GENERIC_BOSS_WORD_RE.sub(out["boss"], t)
-        return t
+        invented name, the entity's real name when a quoted enemy overrode it, and, as a
+        safety net for when the model falls back to a generic word instead of the name it
+        invented three lines earlier, "the boss" / "boss" on their own. The replacement is
+        returned from a lambda so a name is never reread as a regex backreference."""
+        return boss_mentions_re.sub(lambda m: out["boss"], t)
 
     # HOOK is a single sentence, not a name, so it skips the word-count truncation the
     # other labels get - only pulled out here so it doesn't get swept into the paragraphs.
@@ -6549,7 +6596,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     # times inside _ENEMY_SPECIES_USER that names all three variants Billy, exactly the "forty
     # Billys" outcome a named individual exists to avoid (the name belongs on the boss alone).
     # Falls back to the bare kind noun when stripping empties the line.
-    if enemy_named and enemy_named.get("kind"):
+    # ...but only for a name the identity call could NOT place in the real world. A known
+    # character IS the look: typing "Sonic" asks for a dungeon full of Sonics, and stripping
+    # the name leaves the bestiary designing from the bare kind noun it resolved to ("video
+    # game character"), which is how "Sonic" came back as three unrelated mascots while the
+    # unrecognised "Sanic" - never stripped, because it never resolved - came back right.
+    if enemy_named and enemy_named.get("kind") and not enemy_named.get("known"):
         enemy_style = _strip_proper_name(enemy_style, enemy_named["name"]) or enemy_named["kind"]
 
     species = generate_enemy_species(enemy_style)
