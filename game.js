@@ -1446,6 +1446,15 @@
     const btnCombatBlock = document.getElementById('btnCombatBlock');
     const btnCombatDodgeR = document.getElementById('btnCombatDodgeR');
 
+    // Strike / Block / Strafe: greyed out and inert except during a live fight. The action bar
+    // only hides when toggleBattleMode(false) runs, so it lingers on screen through the death
+    // freeze and the win outro - and a corpse must not be able to swing, nor the player keep
+    // strafing once the fight is decided. toggleBattleMode(true) switches them back on.
+    const combatBtns = [btnCombatAttack, btnCombatBlock, btnCombatDodgeL, btnCombatDodgeR];
+    function setCombatButtonsLive(live) {
+      for (const b of combatBtns) if (b) b.disabled = !live;
+    }
+
     const keysHeld = {
       left: false,
       right: false,
@@ -1930,6 +1939,7 @@
           battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white animate-pulse";
         }
         if (battleActionBar) battleActionBar.classList.remove('hidden');
+        setCombatButtonsLive(true);
         // The D-pad's arrows still called moveForward/rotate mid-fight, walking the player
         // around behind the combat view. Swapping it out for the combat buttons settles that
         // and costs no height, since the two grids are the same size.
@@ -2300,11 +2310,12 @@
       combatState.faceState = 'hurt';
       combatState.faceTimer = 999;
       releaseHeldKeys();                 // a held block must not survive into the modal
+      setCombatButtonsLive(false);       // grey out Strike/Block/Strafe - the fight is lost
       // Swap the pulsing "BATTLE TIME" badge for the verdict. resetCombatForNewDungeon()
       // still runs toggleBattleMode(false) on restart/new-dungeon (inBattle is never cleared
       // here), so this clears itself back to "EXPLORATION TIME" then.
       if (battleModeBadge) {
-        battleModeBadge.textContent = "YOU DIED";
+        battleModeBadge.textContent = "YOU DEAD";
         battleModeBadge.className = "text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-900 text-white";
       }
       if (deadMovesCount) deadMovesCount.textContent = totalMoves;
@@ -2429,6 +2440,7 @@
       combatState.combatEffects.length = 0;
       combatState.dead = false;
       if (defeatModal) defeatModal.classList.add('hidden');
+      setCombatButtonsLive(true);
       pickEnemyVariant();
     }
 
@@ -2978,6 +2990,8 @@
             combatState.attackFrame = 0;
             combatState.hurtFrame = 0;
             combatState.shieldProgress = 0;
+            releaseHeldKeys();
+            setCombatButtonsLive(false);   // grey out Strike/Block/Strafe - the fight is won
           }
           combatState.winTick++;
           const outroLen = combatState.winIsLevelUp
@@ -3237,31 +3251,37 @@
       c.setTransform(S, 0, 0, S, 0, 0);
       c.clearRect(0, 0, 44, 44);
 
-      const isHurt = combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
+      // A dead hero holds the hurt frame until the run restarts. faceState decays back to
+      // 'idle' on a timer (killPlayer sets ~16s of it), which would otherwise blank the wound
+      // out from under the death box - and off the frozen portrait behind the screensaver.
+      const isHurt = combatState.dead || combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
       const isAttack = combatState.faceState === 'attack' || combatState.attackFrame > 0;
       const isBlock = combatState.shieldProgress > 0.5;
       // Spent sits BELOW the three action states: whatever the hero is doing this instant wins
-      // the expression, and the drained face is what is left over when they are doing nothing
+      // the expression, and the portrait dim is what is left over when they are doing nothing
       // because there is nothing left to do it with. Cleared while dead and through a win outro,
       // to match the body (drawOverTheShoulderPlayer) - a corpse and a celebrating winner both
-      // drop the panting face.
+      // shed the winded look.
       const spent = (combatState.dead || combatState.winTick > 0) ? 0 : combatState.exhaustion;
       const isSpent = spent > 0.35;
 
       // Pick the expression that matches what the player is doing. Hurt wins over attack, which
-      // wins over block, matching the priority the body sprite uses. An exhausted hero borrows
-      // the hurt face for the same reason the body borrows the hurt pose - it is the only
-      // worse-for-wear expression the sheet has.
+      // wins over block, matching the priority the body sprite uses. An empty stamina bar does
+      // NOT pull the hurt face - being winded is not being wounded - it only shades the portrait
+      // below, leaving the drained body sprite and the amber border to carry the "can't swing" read.
       let face = playerFaceImg;
       if (playerFaceFrames.length > 1) {
-        const idx = (isHurt || isSpent) ? 3 : isAttack ? 1 : isBlock ? 2 : 0;
+        const idx = isHurt ? 3 : isAttack ? 1 : isBlock ? 2 : 0;
         face = playerFaceFrames[idx] || playerFaceFrames[0];
       }
 
       if (face && face.complete && face.naturalWidth > 0) {
-        applyExhaustionWash(c, spent);
         c.drawImage(face, 2, 2, 40, 40);
-        c.filter = 'none';
+        // Winded: a little shade over the portrait, deepening as the bar bottoms out.
+        if (isSpent) {
+          c.fillStyle = 'rgba(2, 6, 23, ' + (spent * 0.28).toFixed(2) + ')';
+          c.fillRect(2, 2, 40, 40);
+        }
 
         // Combat state is shown ONLY through the border colour. Full-portrait tints used to be
         // laid over the face too, but the per-frame krea2 expressions now carry the state
@@ -3283,11 +3303,15 @@
       // Procedural fallback
       c.fillStyle = '#0f172a';
       c.fillRect(0, 0, 44, 44);
-      c.fillStyle = (isHurt || isSpent) ? '#fca5a5' : '#fed7aa';
+      c.fillStyle = isHurt ? '#fca5a5' : '#fed7aa';
       c.fillRect(10, 10, 24, 26);
       c.fillStyle = '#1e3a8a';
       c.fillRect(14, 20, 4, 3);
       c.fillRect(26, 20, 4, 3);
+      if (isSpent) {
+        c.fillStyle = 'rgba(2, 6, 23, ' + (spent * 0.28).toFixed(2) + ')';
+        c.fillRect(0, 0, 44, 44);
+      }
       c.strokeStyle = isHurt ? '#ef4444' : isSpent ? '#a16207' : '#64748b';
       c.lineWidth = 2;
       c.strokeRect(1, 1, 42, 42);
@@ -5837,8 +5861,21 @@
       const target = Math.max(4, Math.min(14, Math.round(passagesList.length * 0.16)));
       const far = (a, bx, by) => Math.abs(a.x - bx) + Math.abs(a.y - by);
       const walkable = new Set(passagesList.map(p => `${p.x},${p.y}`));
-      const push = (x, y, variant) =>
-        enemyMarkers.push({ x, y, variant, alive: true, phase: Math.random() * Math.PI * 2 });
+      const push = (x, y, variant) => {
+        const m = { x, y, variant, alive: true, phase: Math.random() * Math.PI * 2 };
+        enemyMarkers.push(m);
+        return m;
+      };
+
+      // Walking distance from the spawn tile, doors counted as passable (the player will have
+      // opened them by the time they are out this far). Used twice below: to pick which
+      // approach the exit guard stands in, and to order the roamers so the ones the player
+      // meets FIRST can be held back to the two plain foes.
+      const fromStart = _flood(startRoom, (x, y) => MAP[y][x] === 0 || MAP[y][x] === 3);
+      const walkDist = (p) => {
+        const e = fromStart.get(_tileKey(p.x, p.y));
+        return e ? e.dist : Infinity;
+      };
 
       // --- The exit guard. ONE boss, because relocateExit hands us an Exit that is a dead end:
       // a single corridor reaches the stairs, so a single foe standing in it cannot be walked
@@ -5857,11 +5894,6 @@
       // here for the same reason relocateExit floods with them open: the player will have
       // opened them by the time they are this deep.
       if (approaches.length > 1) {
-        const fromStart = _flood(startRoom, (x, y) => MAP[y][x] === 0 || MAP[y][x] === 3);
-        const walkDist = (p) => {
-          const e = fromStart.get(_tileKey(p.x, p.y));
-          return e ? e.dist : Infinity;
-        };
         approaches.sort((a, b) => walkDist(a) - walkDist(b));
       }
 
@@ -5887,9 +5919,10 @@
       );
       _shuffle(candidates);
 
-      // The roaming mix. The lone walker stays the most common thing in a corridor; the lone
-      // flyer and the two packs split the rest, so a dungeon of a dozen markers holds roughly
-      // four walkers, three flyers, three swarms and two wings.
+      // The roaming mix, applied to everything PAST the opening stretch below. The lone walker
+      // stays the most common thing in a corridor; the lone flyer and the two packs split the
+      // rest, so the back half of a dungeon of a dozen markers runs roughly four walkers, three
+      // flyers, three swarms and two wings.
       //
       // This runs the INSTANT "Create" is clicked - generateAuthentic3DMaze() is synchronous
       // and happens well before the ComfyUI bundle (and its walker/flyer art) comes back, so
@@ -5910,11 +5943,54 @@
         for (let i = 0; i < w; i++) roamBag.push(k);
       }
 
+      // Positions first, variants second. Which foe a marker turns out to be depends on how
+      // FAR ALONG it sits, and that ordering only exists once every roamer has a tile.
+      const roamers = [];
       for (const p of candidates) {
         if (enemyMarkers.length >= target) break;
         if (enemyMarkers.some(m => far(p, m.x, m.y) < MARKER_MIN_SPACING)) continue;
-        push(p.x, p.y, roamBag[Math.floor(Math.random() * roamBag.length)]);
+        roamers.push(push(p.x, p.y, null));
       }
+
+      // --- The opening stretch. The first EASE_MIN..EASE_MAX foes on the way out of the spawn
+      // are the two PLAIN variants only - one walker, one flyer - with the packs held back
+      // until after them. Rolling the full bag from the very first marker meant a dungeon could
+      // open on a three-runt swarm (~10 HP/s of incoming damage, no guard to punish and no
+      // retreat) before the player had fought anything at all, which reads as the dungeon being
+      // broken rather than hard. Meeting the lone walker first teaches its punish window, and
+      // the lone flyer teaches the swoop; the swarm and the wing are then variations on two
+      // things already learned.
+      //
+      // "First" is WALKING distance from the spawn tile, not marker order - the placement loop
+      // walks a shuffled candidate list, so its order has nothing to do with the order the
+      // player meets them in. Manhattan distance breaks ties so two markers the same number of
+      // steps out still resolve the nearer-looking one first. The exit guard is not in here:
+      // it was pushed before this and is a boss by definition, and it is at the far end anyway.
+      const EASE_MIN = 3, EASE_MAX = 6;
+      const easeCount = EASE_MIN + Math.floor(Math.random() * (EASE_MAX - EASE_MIN + 1));
+      roamers.sort((a, b) => (walkDist(a) - walkDist(b)) ||
+                             (far(a, startRoom.x, startRoom.y) - far(b, startRoom.x, startRoom.y)));
+
+      // The opening foes are DEALT, not rolled: split easeCount by the same 4:3 walker/flyer
+      // ratio the roaming bag uses, then shuffle. Rolling them independently would let a run of
+      // luck make the whole opening walkers (~19% of the time at easeCount 3), which is exactly
+      // the "you never saw a flyer before the wing" case this is meant to prevent. The very
+      // first one is pinned to the walker regardless - it is the foe every other one is a
+      // variation on, so it is what the opening fight should be.
+      const easeWalkers = Math.ceil(easeCount * 4 / 7);
+      const easeDeal = [];
+      for (let i = 0; i < easeCount; i++) easeDeal.push(i < easeWalkers ? 'walker' : 'flyer');
+      _shuffle(easeDeal);
+      if (easeDeal.length) {
+        const w = easeDeal.indexOf('walker');
+        if (w > 0) { easeDeal[w] = easeDeal[0]; easeDeal[0] = 'walker'; }
+      }
+
+      roamers.forEach((m, i) => {
+        m.variant = (i < easeDeal.length)
+          ? easeDeal[i]
+          : roamBag[Math.floor(Math.random() * roamBag.length)];
+      });
       updateProgressionHUD();
     }
 
@@ -7952,11 +8028,16 @@
       const where = (st.location || currentThemeName || '').trim() || 'the dungeon';
       const boss = (st.boss || enemyBossName || '').trim();
       const won = !!(victoryModal && !victoryModal.classList.contains('hidden'));
+      // A dead run must not still read "STILL WALKS ..." across the bottom of the screen -
+      // the hero is face down in the maze and the marquee should say so throughout.
+      const dead = !!combatState.dead;
       const sep = '   •   ';
       const parts = [];
-      parts.push(won
-        ? hero.toUpperCase() + ' COMPLETES THE DUNGEON'
-        : hero.toUpperCase() + ' STILL WALKS ' + where.toUpperCase());
+      parts.push(dead
+        ? hero.toUpperCase() + ' FELL IN ' + where.toUpperCase()
+        : won
+          ? hero.toUpperCase() + ' COMPLETES THE DUNGEON'
+          : hero.toUpperCase() + ' STILL WALKS ' + where.toUpperCase());
       parts.push('LEVEL ' + progression.level);
       parts.push(Math.max(0, Math.round(combatState.playerHp)) + '/' + combatState.playerMaxHp + ' HP');
       parts.push(totalMoves + (totalMoves === 1 ? ' STEP TAKEN' : ' STEPS TAKEN'));
@@ -7964,9 +8045,11 @@
       if (boss) {
         parts.push(bossDefeated
           ? hero.toUpperCase() + ' HAS DEFEATED ' + boss.toUpperCase()
-          : boss.toUpperCase() + ' WAITS AT THE END');
+          : boss.toUpperCase() + (dead ? ' WILL NEVER BE FOUGHT' : ' WAITS AT THE END'));
       }
-      parts.push(won ? 'THE DUNGEON REMEMBERS YOUR NAME' : 'THE DUNGEON IS HOLDING YOUR PLACE');
+      parts.push(dead
+        ? 'THE DUNGEON KEEPS WHAT IT KILLS'
+        : won ? 'THE DUNGEON REMEMBERS YOUR NAME' : 'THE DUNGEON IS HOLDING YOUR PLACE');
       return parts.join(sep) + sep;
     }
 
@@ -7978,6 +8061,18 @@
       const big = Math.max(20, Math.min(46, Math.round(w / 21)));
       const small = Math.max(10, Math.min(15, Math.round(w / 78)));
       const baseY = Math.round(h * 0.68);
+      if (combatState.dead) {
+        // The player went down and then walked away from the death box - the saver owes
+        // them a verdict, not their hero's name pulsing away as if the run were still on.
+        // Red, and only a slow throb so it reads as a dead sign flickering rather than a
+        // frozen caption; the hero / level / place drop underneath in muted grey.
+        ssLine('YOU DIED', cx, baseY, big, 0.74 + 0.18 * Math.sin(t * 1.7),
+               { rgb: '255,82,82', spacing: 8 });
+        ssLine(hero + '  •  LEVEL ' + progression.level + '  •  ' + where,
+               cx, baseY + small * 2.4, small, 0.58, { rgb: '224,178,178', spacing: 2 });
+        ssMarquee(w, h, ssStoryMarqueeText(), t);
+        return;
+      }
       // The name drifts in brightness, so a player who has stopped moving still sees the
       // screen doing something with their hero rather than a frozen caption.
       ssLine(hero, cx, baseY, big, 0.72 + 0.2 * Math.sin(t * 1.1), { spacing: 3 });

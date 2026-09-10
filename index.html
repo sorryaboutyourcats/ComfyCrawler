@@ -226,6 +226,14 @@
       text-align: center;
       padding: 2px 3px;
     }
+    /* Strike / Block / Strafe once the fight is decided - game.js disables them through the
+       death freeze and the win outro (opacity + filter, since Tailwind's bg utilities on
+       these buttons would win a background fight). */
+    .combat-btn:disabled {
+      opacity: 0.4;
+      filter: grayscale(0.7);
+      cursor: default;
+    }
     /* The highlighted level-up option (arrow keys move it, SPACE takes it). Pressed-in
        Win95 bevel plus a yellow ground, so the selection reads without any extra chrome. */
     .levelup-choice.selected {
