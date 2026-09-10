@@ -47,6 +47,21 @@ for s in CASES:
     if srv.get_gate_prompts(s) != srv.get_gate_prompts(s, brief=FAKE):
         print(f"  GATE brief leaked into bucket {s!r}"); bad += 1
 
+# _theme_bucket (the named-entity-aware dispatcher both get_surface_prompts and
+# get_gate_prompts now actually call) must be byte-identical to _style_bucket alone for every
+# case above - unquoted input must never see any behaviour change from that feature existing.
+for s in CASES:
+    if srv._theme_bucket(s, None) != srv._style_bucket(s):
+        print(f"  THEME_BUCKET DRIFT (unnamed) {s!r}"); bad += 1
+
+# A quoted proper name must ALWAYS bypass the bucket, even for a string that would otherwise
+# collide - see tests/test_named_styles.py for the fuller named-entity coverage; this is just
+# the one-line guarantee that belongs next to the bucket-equality checks above.
+_FAKE_NAMED = {"kind": "city", "name": "X"}
+for s in ("wall street", "rockefeller center", "st patricks cathedral", "route 95"):
+    if srv._theme_bucket(s, _FAKE_NAMED) is not None:
+        print(f"  a named entity failed to bypass the bucket for {s!r}"); bad += 1
+
 # generic path with no brief must be unchanged; with a brief must use every slot
 w,c,f,l = srv.get_surface_prompts("internet")
 assert "of internet," in w and "of internet," in c and "of internet," in f, "generic no-brief changed"

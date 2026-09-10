@@ -281,5 +281,21 @@ for nm, plan in (("v6", srv._plan_v6(8)), ("v5", srv._plan_v5(8))):
     ck(plan[0][0] == "theme_brief", f"{nm}: theme_brief is not the first planned job")
     ck(len({k for k, *_ in plan}) == len(plan), f"{nm}: duplicate job key in plan")
 
+# ---- named entities: prompt-shape side only (full coverage lives in test_named_styles.py) ----
+# _theme_brief_prompt with a named wall must carry the REWRITTEN theme line, never the raw
+# quote characters - no LLM call anywhere in this pipeline is ever handed a literal quote mark.
+named_prompt = srv._theme_brief_prompt(
+    "Manhattan, the real city", "memes", "chat", True,
+    {"kind": "city", "name": "Manhattan", "known": True, "landmarks": "a park, a bridge"})
+theme_line = named_prompt.split("Reply using")[0].split("THEME:")[1].split("\n")[0]
+ck('"' not in theme_line, f"a raw quote character reached the brief prompt's THEME line: {theme_line!r}")
+ck("Manhattan, the real city" in named_prompt, "the rewritten theme line did not reach the prompt")
+
+# the short (bucketed) shape is unreachable when a wall name is present - _theme_bucket always
+# returns None for a named entity, and run_batch_v6_krea's want_surfaces is derived from it.
+v6_src = inspect.getsource(srv.run_batch_v6_krea)
+ck('want_surfaces=(_theme_bucket(wall_style, named["wall"]) is None)' in v6_src,
+   "run_batch_v6_krea no longer derives want_surfaces from the named-aware bucket dispatcher")
+
 print("FAIL" if fails else "all set-designer checks passed")
 sys.exit(1 if fails else 0)

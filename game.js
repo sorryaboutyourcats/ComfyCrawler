@@ -7418,7 +7418,10 @@
 
     btnCreate.addEventListener('click', async () => {
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
-      currentThemeName = wallStyle;
+      // A quoted name ("alley pond park") is a server-side marker, not display text - strip it
+      // here so a fallback title (used only when the story itself has no location) never shows a
+      // stray quote mark.
+      currentThemeName = wallStyle.replace(/["“”]/g, "");
       activeMode = 'v6_krea';   // engine mode picker removed - v6 is the only engine now
       const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
 
@@ -7573,6 +7576,9 @@
     // the last two.
     const THEME_BRIEF_ORDER = ['wall', 'floor', 'ceiling', 'lantern', 'door', 'switch',
                                'weapon', 'enemy'];
+    // Which of the four typed fields a quoted proper name ("alley pond park") can land in -
+    // matches resolve_named_styles' fields dict in server.py.
+    const NAME_FIELD_ORDER = ['wall', 'player', 'weapon', 'enemy'];
 
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
@@ -7596,6 +7602,20 @@
           .filter(k => entry.theme_brief[k])
           .map(k => '  ' + k + ': ' + entry.theme_brief[k]);
         if (designed.length) promptBits.push('', 'Designed into:', ...designed);
+      }
+      // A quoted proper name resolves to a kind of thing (a park, a cat) - show what each
+      // named field turned into, the same spirit as "Designed into:" above but keyed to which
+      // field actually carried a name. Absent on dungeons saved before this existed and on
+      // runs where nothing was quoted.
+      if (entry.named_styles) {
+        const named = NAME_FIELD_ORDER
+          .filter(k => entry.named_styles[k] && entry.named_styles[k].name)
+          .map(k => {
+            const n = entry.named_styles[k];
+            const kind = n.kind ? ' (' + n.kind + (n.known ? ', recognised' : '') + ')' : '';
+            return '  ' + k + ': ' + n.name + kind;
+          });
+        if (named.length) promptBits.push('', 'Named:', ...named);
       }
       if (promptBits.length) {
         thumbFrame.title = promptBits.join('\n');
@@ -7730,7 +7750,9 @@
       closeHistory();
 
       const wallStyle = entry.wall_style || 'Windows 95';
-      currentThemeName = wallStyle;
+      // Same quote-marker strip as the create-dungeon path above - a replayed session's saved
+      // wall_style can carry a quoted name too.
+      currentThemeName = wallStyle.replace(/["“”]/g, "");
       activeMode = entry.mode || 'v6_krea';
       const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
 

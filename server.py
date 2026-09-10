@@ -1879,14 +1879,38 @@ def _style_bucket(wall_style):
     return None
 
 
-def get_surface_prompts(wall_style, brief=None):
+def _theme_bucket(wall_style, wall_named=None):
+    """The bucket BOTH get_surface_prompts and get_gate_prompts dispatch on - see _style_bucket
+    for the keyword table itself. The one extra rule: a quoted proper name ALWAYS takes the
+    generic designed path, never a hand-tuned bucket, because the buckets are bare substring
+    matches and proper names are exactly the strings that trip them - "rockefeller center"
+    hits 'rock', "st patricks cathedral" hits 'cat', "route 95" hits '95'. A matched bucket
+    ignores the brief entirely (see get_surface_prompts/get_gate_prompts), so without this the
+    named place would not just render oddly - it would vanish.
+
+    `wall_named` is the wall field's resolve_named_styles() entity, or None. It is truthy
+    whenever the wall field had ANY quoted span - even one the identity call could not resolve
+    a kind for - because at that point _style_bucket would be matching quote-stripped fallback
+    text that was never meant to describe a theme in the first place; the generic path (which
+    falls back to the raw words when there is no brief) is the right home for it either way.
+    Unquoted input leaves `wall_named` as None, so this is byte-identical to _style_bucket
+    alone for every string typed before this existed."""
+    return None if wall_named else _style_bucket(wall_style)
+
+
+def get_surface_prompts(wall_style, brief=None, wall_named=None):
     """(wall_p, ceil_p, floor_p, lantern_p) for the dungeon's four environment surfaces.
 
     `brief` is a generate_theme_brief() dict (or None). It is consulted ONLY on the generic
     branch - a matched bucket's prompts are hand-tuned literals and ignore it entirely, so a
-    theme that renders well today cannot regress."""
+    theme that renders well today cannot regress.
+
+    `wall_named` is the wall field's resolve_named_styles() entity (or None) - it only affects
+    which bucket _theme_bucket resolves to. The generic branch's own text is unchanged: a named
+    place's landmark framing already lives in the brief (see _theme_brief_surfaces), which this
+    function reads back out through `brief` exactly like any other designed theme."""
     ui = wall_style.lower()
-    bucket = _style_bucket(wall_style)
+    bucket = _theme_bucket(wall_style, wall_named)
 
     if bucket == "scifi":
         wall_p = "A flat 2D game texture map of a dark sci-fi spaceship hull wall with glowing cyan neon panel lines, flat orthographic front view, zero perspective, purely flat material."
@@ -1999,12 +2023,30 @@ _GATE_TAIL = ("Exactly one object, centered, front view, isolated on a plain fla
               "background, no scene, no floor, no walls, no room, no shadow, no text.")
 
 
-def get_gate_prompts(wall_style, brief=None):
+def _door_sign(wall_named):
+    """The trailing clause every generic door prompt ends its sentence on: the plain "no text"
+    that has always been there, or - for a named place - a sign bearing its name instead.
+
+    Mutually exclusive, not additive: at cfg 1.0 the negative is inert, so "no text" is itself
+    POSITIVE conditioning for text (see _theme_rules' rule 7 and _LANTERN_TAIL's comment on the
+    same trap) - it has to come OUT when the sign clause goes in, not sit next to it.
+
+    Names are never painted anywhere else in this file (the brief is explicitly told not to -
+    see _theme_brief_surfaces), so this is the one place a typed name reaches the art at all,
+    and only when it resolved to a real kind of thing worth a sign over a doorway."""
+    if wall_named and wall_named.get("kind") and wall_named.get("name"):
+        return (f'a sign above the doorway reading "{wall_named["name"].upper()}" in short '
+                f'bold white block capitals with a heavy black outline')
+    return "no text"
+
+
+def get_gate_prompts(wall_style, brief=None, wall_named=None):
     """(door_p, switch_p) themed to the dungeon style. Kept separate from get_surface_prompts
     so that function's 4-tuple signature and call sites stay untouched.
 
     `brief` is a generate_theme_brief() dict (or None), consulted ONLY on the generic branch -
-    same contract as get_surface_prompts.
+    same contract as get_surface_prompts. `wall_named` is that same function's named-entity
+    param, passed straight through to _theme_bucket and to _door_sign.
 
     FLUX schnell at cfg 1.0 - the negative is inert, so these are POSITIVE-ONLY. Name the
     object literally, force flat orthographic framing, isolate on white (see _LANTERN_TAIL
@@ -2028,7 +2070,7 @@ def get_gate_prompts(wall_style, brief=None):
     functions now dispatch on the shared _style_bucket(), so that drift is no longer possible
     at all - this branch order just has to mirror get_surface_prompts', which it does."""
     ui = wall_style.lower()
-    bucket = _style_bucket(wall_style)
+    bucket = _theme_bucket(wall_style, wall_named)
 
     # Every branch below follows three rules:
     #   1. The archway/frame is described with the SAME material words as get_surface_prompts'
@@ -2162,7 +2204,7 @@ def get_gate_prompts(wall_style, brief=None):
         # hand-tuned buckets do by hand (see rules 1-3 in the docstring above).
         door_p = (f"{brief['door']}, fully closed, flat straight-on orthographic front view, "
                   f"{NO_MARGINS}, zero perspective, zero horizon, zero sky, no room around it, "
-                  f"no text.")
+                  f"{_door_sign(wall_named)}.")
         switch_p = (f"{brief['switch']}, mounted on a small plate as a lever switch handle, "
                     f"the handle resting in its neutral position. " + _GATE_TAIL)
 
@@ -2178,7 +2220,7 @@ def get_gate_prompts(wall_style, brief=None):
                   f"matching the corridor wall, the door itself a heavy iron-bound wood door "
                   f"slab with a round iron ring handle, sturdy and firmly shut, flat "
                   f"straight-on orthographic front view, {NO_MARGINS}, zero perspective, zero "
-                  f"horizon, zero sky, no room around it, no text.")
+                  f"horizon, zero sky, no room around it, {_door_sign(wall_named)}.")
         # No lantern_p text is available here to react to (the generic lantern prompt is built
         # independently, from the same {wall_style} words, and might resolve to anything) - the
         # best this branch can do is ask for a DIFFERENT kind of object than a light fixture,
@@ -3168,6 +3210,471 @@ def _enemy_look_lead(species, enemy_style):
     return species
 
 
+# ============================================================================
+# NAMED ENTITIES - quoted proper names in a typed field ("alley pond park", "manhattan",
+# "goodcow", "Billy" the cat).
+# ============================================================================
+#
+# Everything above turns a typed word into a DESCRIPTION - an adjective or common noun made
+# drawable. There was no way to say "this is one specific thing that has a name" until now:
+# double quotes mark a span as a proper name, and this section works out what KIND of thing it
+# is so the rest of the pipeline can render the kind and keep the name in the TEXT layer (the
+# crawl, the area title, the boss title) rather than painting it - see _door_sign for the one
+# deliberate exception, and _theme_brief_surfaces for the instruction that keeps the rest of
+# the art clean of it.
+#
+# PARSE BEFORE YOU ASK. The only network calls anywhere in this file go to local ComfyUI - there
+# is no lookup service, so "look it up" can only mean asking Qwen3-VL 4B from its own weights,
+# and a 4B model does not know Alley Pond Park and will not admit it. But most names never need
+# that: the type is sitting in the string. "Billy" the cat states it outright. "alley pond
+# park" and "roosevelt field mall" carry it as their own head noun. Only "goodcow" and
+# "manhattan" - a name with no separating space, and a name genuinely famous enough to be worth
+# asking about - fall through to anything resolved by a model.
+
+# Double quotes only, straight or smart - NEVER the apostrophe. One shipped preset is
+# "Pharaoh's Tomb", and treating every apostrophe as a name marker would misfire on it.
+_NAME_QUOTE_RE = re.compile(r'"([^"]{1,60})"|“([^”]{1,60})”')
+_NAME_MAX_SPANS_PER_FIELD = 4   # a hand-typed field is never going to name five different things
+
+# Place/structure and settlement nouns a typed name's HEAD WORD can resolve to with no LLM
+# call, plus a smaller creature/object set for the same purpose on the enemy/player/weapon
+# fields. "center", "centre", "place", "building", "company" and "group" are DELIBERATELY not
+# here: they are grammatical heads but useless art directions ("a center" draws nothing), so a
+# name ending on one of them is routed to the identity call instead, which actually knows what
+# the thing is.
+_NAME_TYPE_NOUNS = frozenset((
+    "park", "mall", "plaza", "square", "bridge", "station", "terminal", "beach", "island",
+    "pond", "lake", "river", "creek", "stadium", "arena", "school", "college", "library",
+    "museum", "theater", "theatre", "church", "cathedral", "temple", "castle", "tower",
+    "lighthouse", "factory", "warehouse", "hospital", "prison", "hall", "mansion", "inn",
+    "hotel", "motel", "bank", "store", "shop", "market", "deli", "diner", "cafe", "bakery",
+    "pharmacy", "arcade", "zoo", "aquarium", "cemetery", "monument", "fountain", "gate",
+    "subway", "airport", "harbor", "harbour", "pier", "dock", "farm", "ranch", "vineyard",
+    "orchard", "garden", "forest", "canyon", "valley", "mountain", "volcano", "desert",
+    "glacier", "reef", "cave", "tunnel", "dam", "mill", "chapel", "shrine", "palace",
+    "fortress", "tavern", "pub", "bar", "gym", "rink", "pool", "track", "course", "trail",
+    "city", "town", "village", "borough", "county", "state", "country", "nation",
+    "neighborhood", "neighbourhood", "district", "province", "kingdom", "empire",
+    "cat", "dog", "cow", "pig", "horse", "goat", "sheep", "bird", "fish", "bear", "wolf",
+    "fox", "rat", "mouse", "bat", "duck", "goose", "owl", "bee", "ant", "spider", "snake",
+    "turtle", "frog", "toad", "lion", "tiger", "elephant", "monkey", "rabbit", "deer", "elk",
+    "moose", "camel", "llama", "donkey", "mule", "chicken", "rooster", "hen", "ram", "ewe",
+    "robot", "truck", "car", "train", "boat", "ship", "plane", "sword", "hammer", "axe",
+    "spear", "shield", "staff", "wand", "doll", "toy", "statue", "mascot",
+))
+
+# Two-word heads worth matching as a unit before the single-word pass above runs - "gas" alone
+# means nothing, and "high school" wants both words read together even though "school" alone
+# is already in the table.
+_NAME_TYPE_PHRASES = frozenset((
+    "gas station", "fire station", "police station", "train station", "bus station",
+    "shopping mall", "high school", "middle school", "elementary school", "coffee shop",
+    "book store", "grocery store", "department store", "bowling alley", "amusement park",
+    "theme park", "water park", "national park", "state park", "city hall", "town hall",
+    "movie theater", "movie theatre", "parking lot", "golf course",
+    "country club", "night club", "strip mall", "outlet mall", "food court",
+))
+
+# Deliberately SHORT and hand-picked, not the full table above - the compound-suffix tier below
+# is a last resort with no context to check itself against, and a 3-letter animal suffix
+# collides with ordinary English often enough to be a real risk rather than a theoretical one:
+# "ram" is "prog-RAM", "diag-RAM", "tele-RAM"; "bat" is "com-BAT", "acro-BAT"; "hen" is
+# "kitc-HEN". All three read as plausible NAMES and clear a 4-letter prefix, so they are left
+# out entirely rather than trusted to the prefix-length guard below.
+_NAME_COMPOUND_NOUNS = (
+    "cow", "dog", "cat", "pig", "fox", "owl", "hawk", "wolf", "bear", "lion",
+    "mule", "goat", "deer", "duck", "swan", "toad", "frog", "mouse", "horse",
+    "sheep", "snake", "robot", "demon", "ghost", "witch", "dragon",
+)
+_NAME_SUFFIX_MIN_PREFIX = 4   # "good|cow" clears it; a 3-letter prefix is coincidence too often
+
+
+def _name_trailer_type(tail):
+    """Read the words right after a closing quote - '"Billy" the cat', '"Billy", a cat',
+    '"Billy" the enormous cat'. Up to 3 words after the article, the LAST one is the type.
+
+    Trusted WITHOUT the noun table, unlike every other tier: the player stated the type
+    outright, so '"Billy" the xenomorph' resolves too, which a table-driven tier never could.
+    Highest priority for exactly that reason - it is the one tier that cannot be wrong about
+    what the player meant."""
+    m = re.match(r'^[\s,\(]*(?:the|an?)\s+((?:[a-zA-Z][a-zA-Z\-]*\s*){1,3})', tail or "", re.I)
+    if not m:
+        return None, None
+    words = m.group(1).split()
+    if not words:
+        return None, None
+    return _singular_creature_name(words[-1]).lower(), "trailer"
+
+
+def _name_head_type(phrase):
+    """Last two words against the phrase table, then the last word against the noun table -
+    'alley pond park' -> park, 'roosevelt field mall' -> mall, both with no LLM call."""
+    words = re.findall(r"[a-zA-Z]+(?:-[a-zA-Z]+)?", (phrase or "").lower())
+    if not words:
+        return None, None
+    if len(words) >= 2:
+        two = " ".join(words[-2:])
+        if two in _NAME_TYPE_PHRASES:
+            return two, "head"
+    last = _singular_creature_name(words[-1])
+    if last in _NAME_TYPE_NOUNS:
+        return last, "head"
+    return None, None
+
+
+def _name_compound_type(token):
+    """Single-token names only - 'goodcow' -> cow. Longest suffix wins; the prefix must clear
+    _NAME_SUFFIX_MIN_PREFIX or an ordinary English word reads as somebody's pet (see that
+    table's own comment for the 'combat'/'program' collisions this guards against).
+
+    MUST run after the identity call, never before - see resolve_named_styles. Suffix-matching
+    a compound first would misname "moscow" a cow before world knowledge gets a chance to say
+    city, which is exactly the '"cat" fires on "cathedral"' failure this whole feature exists
+    to avoid, one level up."""
+    token = (token or "").lower()
+    if not token.isalpha():
+        return None, None
+    best = None
+    for noun in _NAME_COMPOUND_NOUNS:
+        if token.endswith(noun) and len(token) - len(noun) >= _NAME_SUFFIX_MIN_PREFIX:
+            if best is None or len(noun) > len(best):
+                best = noun
+    return (best, "compound") if best else (None, None)
+
+
+def _norm_type(s):
+    """Head word of a TYPE answer, lowercased and de-pluralized, so 'shopping mall' groups
+    with 'mall' and 'boroughs' groups with 'borough' when two sampled replies are compared."""
+    words = re.findall(r"[a-zA-Z]+", (s or "").lower())
+    return _singular_creature_name(words[-1]) if words else None
+
+
+def _named_style_text(ent):
+    """The phrase that replaces one quoted span in the text handed to the LLM prompts.
+
+    Known place -> its real-world framing, so the set designer can put what it's actually
+    known for on the lantern/door/switch. Typed but unresolved-as-a-specific-instance -> a
+    plain 'a TYPE called NAME' phrase; the rules already say a specific physical thing is kept
+    as typed, so this just spells out what kind of thing it is. No kind resolved AT ALL -> the
+    exact text between the quotes, unmodified - today's raw-word behaviour, verbatim."""
+    kind = ent.get("kind")
+    if not kind:
+        return ent["raw"]
+    if ent.get("known"):
+        return f"{ent['name']}, the real {kind}"
+    return f"{_a_or_an(kind)} called {ent['name']}"
+
+
+def _apply_named_splices(text, entities):
+    """Replace every entity's quoted span (span, incl. the quote marks) with _named_style_text's
+    rewrite. Applied back-to-front so an earlier span's offsets stay valid after a later one is
+    replaced. [] entities (the common, unquoted case) returns `text` completely untouched."""
+    out = text or ""
+    for ent in sorted(entities, key=lambda e: e["span"][0], reverse=True):
+        s, e = ent["span"]
+        out = out[:s] + _named_style_text(ent) + out[e:]
+    return out
+
+
+def _apply_named_splices_clean(text, entities):
+    """Same shape as _apply_named_splices, but only strips the quote marks - no 'called' /
+    'the real' rewrite. Used for the sfx/music prompts, which want the plain typed words, not
+    a designed sentence fragment, and never see raw quote characters either way."""
+    out = text or ""
+    for ent in sorted(entities, key=lambda e: e["span"][0], reverse=True):
+        s, e = ent["span"]
+        out = out[:s] + ent["raw"] + out[e:]
+    return out
+
+
+def parse_named_styles(text):
+    """Every quoted span in one typed field, as entity dicts:
+
+        {"raw": "alley pond park", "name": "Alley Pond Park", "kind": "park",
+         "source": "trailer"|"head"|"llm"|"compound"|None,
+         "known": False, "landmarks": None, "span": (12, 29)}
+
+    `kind` starts out set only when the trailer or head-noun tier could place it for free;
+    resolve_named_styles fills in whatever is left via the identity call and the compound
+    tier. [] when there are no quotes at all - the common case, and the one that has to leave
+    everything downstream byte-identical to today."""
+    text = text or ""
+    out = []
+    for m in list(_NAME_QUOTE_RE.finditer(text))[:_NAME_MAX_SPANS_PER_FIELD]:
+        raw = (m.group(1) or m.group(2) or "").strip()
+        if not raw:
+            continue
+        name = " ".join((w[:1].upper() + w[1:] if w else w) for w in raw.split())
+        kind, source = _name_trailer_type(text[m.end():])
+        if not kind:
+            kind, source = _name_head_type(raw)
+        out.append({"raw": raw, "name": name, "kind": kind, "source": source,
+                    "known": False, "landmarks": None, "span": m.span()})
+    return out
+
+
+def _strip_proper_name(text, name):
+    """Remove a known proper name (and a leftover 'called'/'named'/leading 'the') from a
+    designed ENEMY line before it reaches the species designer - see
+    generate_krea2_posed_bundle. A designed line for a named enemy reads "Billy the sleek black
+    alley cat" (the set designer was handed "a cat called Billy" and kept the name, which the
+    rules explicitly tell it to do for a specific physical thing) - repeated eight times inside
+    _ENEMY_SPECIES_USER that would design three foes all named Billy, the outcome a named
+    individual exists specifically to avoid (the name belongs on the BOSS alone).
+
+    Falls back to the caller's own kind noun when stripping empties the line - a species
+    designer needs something to anchor on, and "the cat" beats an empty sentence."""
+    if not text or not name:
+        return text
+    out = re.sub(re.escape(name), "", text, flags=re.IGNORECASE)
+    out = re.sub(r"\b(?:called|named)\b", "", out, flags=re.IGNORECASE)
+    out = re.sub(r"^\s*the\b", "", out, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", out).strip(" ,.-")
+
+
+# ---------------------------------------------------------------------------
+# The identity call - world knowledge for a name the free tiers above could not place.
+# ---------------------------------------------------------------------------
+NAME_ID_MAX_TOKENS = 400      # a handful of 3-line answers; generous for the common 1-2 names
+NAME_ID_TEMPERATURE = 0.7     # obeying a reply format, not inventing - same reasoning as
+                               # THEME_BRIEF_TEMPERATURE, not ENEMY_SPECIES_TEMPERATURE's 0.9
+NAME_ID_SAMPLES = 2           # sampled twice and compared - see _vote_identity
+NAME_ID_MAX_ITEMS = 8         # four fields x up to two names each is the realistic ceiling
+
+NAME_ID_SYSTEM = (
+    "You are a reference librarian for a 1990s dungeon crawler. You are given proper names "
+    "and you say what KIND of thing each one is, in one common noun. You answer only about "
+    "names you genuinely recognise. You never explain yourself and you never break format."
+)
+
+
+_NAME_ID_RULES = (
+    "Rules:\n"
+    "1. TYPE is ONE common noun for the kind of thing it is - \"mall\", \"park\", \"city\",\n"
+    "   \"diner\", \"cat\". Never the name again, never an adjective.\n"
+    "2. Write KNOWN: YES only if you recognise this particular one. If you are only\n"
+    "   guessing from the words, write KNOWN: NO and still give your best TYPE.\n"
+    "3. SEEN is two or three concrete things a visitor physically sees there, under twelve\n"
+    "   words. Write NONE unless KNOWN is YES.\n\n"
+    "Reply using EXACTLY these labels, each on its own line, in this order. No preamble, "
+    "no markdown, no commentary, no asterisks:\n\n"
+)
+
+
+def _name_identity_prompt(items):
+    """Same hand-built chat template as _theme_brief_prompt and _story_prompt - see either for
+    why the <|im_start|> opener and the empty <think> block are both mandatory.
+
+    A SINGLE item is asked for with BARE labels (TYPE/KNOWN/SEEN, no numbering) rather than
+    the NAME1_ scheme used for a real list - measured live, a 4B model reliably drops a
+    "NAME1_" prefix that has nothing to disambiguate ("rockefeller center" came back plain
+    "TYPE: building" every time), which parse_name_identity was failing on ENTIRELY - not a
+    partial loss, a silent total miss on the single-name case that is the overwhelming
+    majority of real usage. The numbered form stays for an actual list, where the prefix is
+    load-bearing and the model does use it."""
+    if len(items) == 1:
+        user = (f"A player typed this name: {items[0]}\n\n"
+               "Say what kind of thing it is.\n\n" + _NAME_ID_RULES +
+               "TYPE: <one common noun>\nKNOWN: <YES or NO>\nSEEN: <one line, or NONE>")
+    else:
+        numbered = "\n".join(f"{i + 1}. {it}" for i, it in enumerate(items))
+        labels = "\n".join(
+            f"NAME{i + 1}_TYPE: <one common noun>\n"
+            f"NAME{i + 1}_KNOWN: <YES or NO>\n"
+            f"NAME{i + 1}_SEEN: <one line, or NONE>"
+            for i in range(len(items))
+        )
+        user = ("A player typed these names. Say what kind of thing each one is.\n\n"
+               f"{numbered}\n\n" + _NAME_ID_RULES + labels)
+    return (
+        "<|im_start|>system\n" + NAME_ID_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n" + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
+    )
+
+
+_NAME_ID_LABEL_RE = re.compile(r"^NAME(\d+)_(TYPE|KNOWN|SEEN)\s*:\s*(.*)$", re.IGNORECASE)
+_NAME_ID_BARE_LABEL_RE = re.compile(r"^(TYPE|KNOWN|SEEN)\s*:\s*(.*)$", re.IGNORECASE)
+
+
+def parse_name_identity(text, count):
+    """{0-based index: {"type","known","seen"}} for whatever labels came back usable -
+    per-item tolerant, the same contract as parse_theme_brief: one item missing a label is
+    just that item answered a little less completely, not a reason to throw the reply away.
+
+    Accepts the bare TYPE:/KNOWN:/SEEN: form ONLY when count == 1 - matching the single-item
+    prompt shape above, and never risking misattributing a stray bare line to item 0 in an
+    actual multi-item reply, where the numbered form is what was asked for and expected."""
+    out = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip().strip(_STORY_STRIP)
+        m = _NAME_ID_LABEL_RE.match(line)
+        if m:
+            idx = int(m.group(1)) - 1
+            field, value = m.group(2).upper(), m.group(3).strip().strip(_STORY_STRIP)
+        elif count == 1:
+            m2 = _NAME_ID_BARE_LABEL_RE.match(line)
+            if not m2:
+                continue
+            idx, field, value = 0, m2.group(1).upper(), m2.group(2).strip().strip(_STORY_STRIP)
+        else:
+            continue
+        if idx < 0 or idx >= count:
+            continue
+        item = out.setdefault(idx, {"type": None, "known": False, "seen": None})
+        if field == "TYPE":
+            value = _strip_negations(value)
+            words = value.split()
+            if 1 <= len(words) <= 3:
+                item["type"] = value.lower()
+        elif field == "KNOWN":
+            item["known"] = value.upper().startswith("Y")
+        elif field == "SEEN":
+            if value and value.upper() != "NONE":
+                item["seen"] = _strip_negations(value)[:120]
+    return out
+
+
+def _identify_attempt(items):
+    payload = {
+        # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+        "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                   "class_type": "CLIPLoader"},
+        "name_gen": {
+            "inputs": {
+                "clip": ["k_clip", 0],
+                "prompt": _name_identity_prompt(items),
+                "max_length": NAME_ID_MAX_TOKENS,
+                "sampling_mode": "on",
+                "sampling_mode.temperature": NAME_ID_TEMPERATURE,
+                "sampling_mode.top_k": 64,
+                "sampling_mode.top_p": 0.95,
+                "sampling_mode.min_p": 0.05,
+                "sampling_mode.repetition_penalty": 1.05,
+                "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                "thinking": False,
+                "use_default_template": False,
+            },
+            "class_type": "TextGenerate",
+        },
+        "name_out": {"inputs": {"source": ["name_gen", 0]}, "class_type": "PreviewAny"},
+    }
+    raw = _submit_and_collect_text(payload, "name_out", job_key="name_id")
+    return parse_name_identity(raw, len(items))
+
+
+def _vote_identity(items, samples):
+    """Best-of-N type consensus, not self-report: a 4B model answers KNOWN: YES for names it
+    has never heard of, so KNOWN alone is worthless - agreement ACROSS independently sampled
+    replies is what abstention is actually measured on. A three-way split (one vote each for
+    three different types) is not agreement, it is three different guesses, and abstains
+    (kind stays None) rather than picking one arbitrarily."""
+    out = []
+    for idx in range(len(items)):
+        votes = [s[idx] for s in samples if s.get(idx) and s[idx].get("type")]
+        groups = {}
+        for v in votes:
+            nt = _norm_type(v["type"])
+            if nt:
+                groups.setdefault(nt, []).append(v)
+        if not groups:
+            out.append({"type": None, "known": False, "seen": None})
+            continue
+        kind, winners = max(groups.items(), key=lambda kv: len(kv[1]))
+        if len(groups) > 1 and len(winners) * 2 <= len(votes):
+            out.append({"type": None, "known": False, "seen": None})
+            continue
+        known = sum(1 for v in winners if v.get("known")) * 2 > len(winners)
+        seen = next((v.get("seen") for v in winners if v.get("known") and v.get("seen")), None)
+        out.append({"type": kind, "known": known, "seen": seen if known else None})
+    return out
+
+
+def identify_names(items):
+    """World knowledge for names the free parsing tiers could not place. Batched - every
+    still-unresolved name across all four typed fields goes in ONE call, so four quoted names
+    cost two LLM calls, not eight. Never raises: any failure returns every item unresolved,
+    which the caller already treats as 'render it as typed, unstyled'.
+
+    Sampled twice and compared (see _vote_identity); a disagreement earns a third sample rather
+    than accepting a coin flip on the one field this whole feature is judged on - two-must-agree
+    would abstain the instant the model says "city" then "borough" for Manhattan, which is the
+    one example this is most obliged to get right."""
+    items = items[:NAME_ID_MAX_ITEMS]
+    if not items:
+        return []
+    PROGRESS.add_job("name_id", "Identifying named places with Qwen3-VL...", 4, NAME_ID_MAX_TOKENS)
+    try:
+        t0 = time.time()
+        samples = [_identify_attempt(items) for _ in range(NAME_ID_SAMPLES)]
+        disagree = any(
+            len({_norm_type(s[i]["type"]) for s in samples if s.get(i) and s[i].get("type")}) > 1
+            for i in range(len(items))
+        )
+        if disagree:
+            samples.append(_identify_attempt(items))
+        result = _vote_identity(items, samples)
+        for it, r in zip(items, result):
+            print(f"[names] identify {it!r} -> {r['type'] or '(unresolved)'}"
+                  f"{' known' if r['known'] else ''}")
+        print(f"[names] {len(items)} name(s) identified in {time.time()-t0:.1f}s")
+        return result
+    except Exception as e:
+        print(f"[names Error] {e} - names render as typed, unstyled")
+        PROGRESS.finish_job("name_id")
+        return [{"type": None, "known": False, "seen": None} for _ in items]
+
+
+def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style):
+    """Parse every quoted proper name across the four typed fields and resolve what kind of
+    thing each one is. Never raises - a resolution failure just leaves that field's entity
+    without a kind, which _named_style_text already treats as 'no name resolved', i.e. today's
+    plain pass-through behaviour.
+
+    Returns {"wall": entity|None, "player": entity|None, "weapon": entity|None,
+    "enemy": entity|None, "text": {field: rewritten str}, "clean": {field: quotes-stripped
+    str}}. The FIRST entity in a field is what every single-value consumer uses (the bucket
+    bypass, the landmark slot, the boss name) - a second name in the same field still gets
+    spliced into `text`/`clean` correctly, it just isn't what titles the boss."""
+    fields = {"wall": wall_style, "player": player_style,
+              "weapon": weapon_style, "enemy": enemy_style}
+    parsed = {k: parse_named_styles(v) for k, v in fields.items()}
+
+    pending = [(k, i) for k, ents in parsed.items() for i, e in enumerate(ents) if not e["kind"]]
+    if pending:
+        try:
+            results = identify_names([parsed[k][i]["raw"] for k, i in pending])
+        except Exception as e:
+            print(f"[names] identity lookup failed ({e}) - names render as typed, unstyled")
+            results = []
+        for (k, i), r in zip(pending, results):
+            ent = parsed[k][i]
+            if r.get("type"):
+                ent["kind"], ent["source"] = r["type"], "llm"
+                ent["known"] = bool(r.get("known"))
+                ent["landmarks"] = r.get("seen") if ent["known"] else None
+            else:
+                # Last resort, and only now - see _name_compound_type on why running this
+                # before the identity call would misname "moscow" a cow.
+                kind, source = _name_compound_type(ent["raw"])
+                if kind:
+                    ent["kind"], ent["source"] = kind, source
+
+    text, clean = {}, {}
+    for k, v in fields.items():
+        text[k] = _apply_named_splices(v or "", parsed[k])
+        clean[k] = _apply_named_splices_clean(v or "", parsed[k])
+
+    out = {k: (parsed[k][0] if parsed[k] else None) for k in fields}
+    out["text"], out["clean"] = text, clean
+    for k in fields:
+        if out[k]:
+            print(f"[names] {k}: \"{out[k]['raw']}\" -> {out[k].get('kind') or '(unresolved)'}"
+                  f"{' (known)' if out[k].get('known') else ''} [{out[k].get('source')}]")
+    return out
+
+
 THEME_BRIEF_SYSTEM = (
     "You are the set designer for a 1990s first-person dungeon crawler. You are given the "
     "words a player typed and you turn each one into a concrete physical thing an artist can "
@@ -3189,6 +3696,33 @@ _THEME_BRIEF_SURFACES = """- WALL: the material the corridor walls are made of.
   like "doorway", "portal" or "opening" describes a hole and gets you an empty arch.
 - SWITCH: ONE small hand-sized object from this world, used as a lever handle.
 """
+
+
+def _theme_brief_surfaces(wall_named=None):
+    """The slot-description block above, plain for an ordinary typed theme, or with one
+    appended sentence for a named place. Appended as a SENTENCE describing what the LANTERN,
+    DOOR and SWITCH slots should draw FROM, not as a new rule in _theme_rules - that block's
+    own comment records what a 6.6KB rules block already cost this model in reliability, and a
+    named place is rare enough that it does not earn a permanent tax on every other run.
+
+    Landmarks are deliberately steered at the three single-object slots and away from
+    WALL/FLOOR/CEILING: those three have to tile (_THEME_RULES_SURFACE rules 1-2), because one
+    texture covers one map square and a landmark would repeat down the whole corridor - the
+    Statue of Liberty is not a wall material. The "never write its name" line answers the meme
+    rule below, which otherwise actively teaches this model to caption things it draws."""
+    body = _THEME_BRIEF_SURFACES
+    if wall_named and wall_named.get("kind"):
+        name, kind = wall_named["name"], wall_named["kind"]
+        body += f"\n{name} is "
+        if wall_named.get("known") and wall_named.get("landmarks"):
+            body += (f"a real {kind}, known for {wall_named['landmarks']}. Put the things it "
+                     f"is actually known for on the LANTERN, the DOOR and the SWITCH - the "
+                     f"WALL, FLOOR and CEILING stay plain repeating {kind} material, never a "
+                     f"single landmark object. ")
+        else:
+            body += f"a {kind}. "
+        body += "Never write its name into the picture - the name is spoken, not painted.\n"
+    return body
 
 # The rules, split by which request shape needs them and numbered at build time.
 #
@@ -3303,11 +3837,16 @@ markdown, no commentary, no asterisks:
 {labels}"""
 
 
-def _theme_brief_prompt(wall_style, weapon_style, enemy_style, want_surfaces):
+def _theme_brief_prompt(wall_style, weapon_style, enemy_style, want_surfaces, wall_named=None):
     """Same hand-built chat template as _story_prompt and _enemy_species_prompt - see there for
-    why the <|im_start|> opener and the empty <think> block are both mandatory."""
+    why the <|im_start|> opener and the empty <think> block are both mandatory.
+
+    `wall_style`/`weapon_style`/`enemy_style` are expected to already be the REWRITTEN text
+    (resolve_named_styles' "text" field) when a name was typed - see _named_style_text. This
+    function does no name resolution of its own; `wall_named` only decides whether the slot
+    block gets the landmark/no-paint sentence from _theme_brief_surfaces."""
     slots = THEME_SURFACE_SLOTS + THEME_SUBJECT_SLOTS if want_surfaces else THEME_SUBJECT_SLOTS
-    body = _THEME_BRIEF_SURFACES if want_surfaces else ""
+    body = _theme_brief_surfaces(wall_named) if want_surfaces else ""
     body += ("- WEAPON: the weapon the player swings.\n"
              "- ENEMY: the thing the player fights.\n")
     labels = "\n".join(f"{s.upper()}: <one line>" for s in slots)
@@ -3361,10 +3900,16 @@ def parse_theme_brief(text, slots):
     return out
 
 
-def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=True):
+def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=True,
+                         wall_named=None, enemy_named=None):
     """Turn the typed words into concrete drawable material. Never raises: on any failure
     returns None and every caller falls back to interpolating the typed words raw, which is
     exactly what shipped before this stage existed.
+
+    `wall_named`/`enemy_named` are resolve_named_styles() entities (or None). `wall_named` only
+    reaches _theme_brief_prompt's landmark sentence. `enemy_named` guards _enemy_literal below -
+    a quoted "chat" the cat must not be hijacked into the hand-tuned Twitch-viewer subject just
+    because the word "chat" still appears in its own rewritten name.
 
     `want_surfaces` is False when _style_bucket() matched a hand-tuned theme, because those
     buckets' surface prompts are literals that ignore the brief anyway - so the reply only has
@@ -3386,7 +3931,7 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # the robot bug by another route. ENEMY is still ASKED for: the reply shape is what all
     # the reliability numbers here were measured on, and dropping a label off the short shape
     # to save a line the designer answers well enough is not worth re-measuring.
-    literal = _enemy_literal(enemy_style)
+    literal = None if (enemy_named and enemy_named.get("kind")) else _enemy_literal(enemy_style)
 
     def _attempt():
         payload = {
@@ -3397,7 +3942,7 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
                 "inputs": {
                     "clip": ["k_clip", 0],
                     "prompt": _theme_brief_prompt(wall_style, weapon_style, enemy_style,
-                                                  want_surfaces),
+                                                  want_surfaces, wall_named),
                     "max_length": THEME_BRIEF_MAX_TOKENS,
                     "sampling_mode": "on",
                     "sampling_mode.temperature": THEME_BRIEF_TEMPERATURE,
@@ -3794,7 +4339,7 @@ def _save_tight(img_path, thresh=20):
         print(f"[Tight Crop Error] {os.path.basename(img_path)}: {e}")
 
 
-def generate_flux_surfaces_only(wall_style, gfx=None, brief=None):
+def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=None):
     """Just the wall / ceiling / floor thirds of generate_flux_all_assets. v5 keeps FLUX
     schnell for the tiling environment textures and generates everything else with krea2.
 
@@ -3802,7 +4347,8 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None):
     the switch/lantern cutouts (512/384 normal & optimized, 256/192 reduced).
 
     `brief` is a generate_theme_brief() dict (or None); it only reaches the generic branch of
-    the two prompt builders, so a bucketed theme renders exactly as it always has."""
+    the two prompt builders, so a bucketed theme renders exactly as it always has. `wall_named`
+    is passed straight through to both - see get_surface_prompts/get_gate_prompts."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     PROGRESS.begin_job("surfaces")
     tile_px = gfx["texture"]     # wall / ceiling / floor / door
@@ -3813,8 +4359,8 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None):
                 "l": f"trio_l_{int(time.time()*1000)}",
                 "d": f"trio_d_{int(time.time()*1000)}",
                 "s": f"trio_s_{int(time.time()*1000)}"}
-    wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style, brief)
-    door_p, switch_p = get_gate_prompts(wall_style, brief)
+    wall_p, ceil_p, floor_p, lantern_p = get_surface_prompts(wall_style, brief, wall_named)
+    door_p, switch_p = get_gate_prompts(wall_style, brief, wall_named)
 
     def _surface(tag, prompt_text):
         return {
@@ -4395,12 +4941,19 @@ def _story_title(text, fallback):
     return " ".join(w[:1].upper() + w[1:] for w in text.split())[:48]
 
 
-def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
+def parse_story_block(text, wall_style="", player_style="", enemy_style="", named=None):
     """Pull the four names and the crawl paragraphs out of the model's reply. Never raises.
 
     The 4B emits the LOCATION/HERO/FOE/BOSS lines reliably but drops the bare "CRAWL:"
     marker perhaps half the time, so the prose is taken as everything after the last label
-    line rather than requiring the marker to be there."""
+    line rather than requiring the marker to be there.
+
+    `named` is a resolve_named_styles() dict (or None). A quoted wall/player/enemy field
+    overrides LOCATION/HERO/BOSS below regardless of what the model invented - a named
+    individual, not a description, so the name it was actually given is the one that has to
+    show up, and this is the one path that reaches every place it needs to: the HUD, the
+    health bar and the screensaver marquee all read dungeonStory.boss (game.js), not the
+    species name."""
     text = _ascii_ify(text or "")
     fallbacks = {
         "location": _story_title(wall_style, "The Dungeon"),
@@ -4423,6 +4976,18 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
             last_label_end = max(last_label_end, m.end())
             found += 1
 
+    # A quoted wall/player field names the location/hero outright - the model's own invented
+    # name (or its title-cased fallback) loses to it unconditionally. Nothing here needs a
+    # prose rewrite the way BOSS does below: LOCATION and HERO are used to BUILD sentences
+    # (_lead(location), _hero_opener(hero, ...)) rather than searched-and-replaced inside ones
+    # the model already wrote.
+    wall_ent = (named or {}).get("wall")
+    if wall_ent and wall_ent.get("kind"):
+        out["location"] = wall_ent["name"]
+    player_ent = (named or {}).get("player")
+    if player_ent and player_ent.get("kind"):
+        out["hero"] = player_ent["name"]
+
     # SAVED is a noun phrase, not a proper name - it goes through the label loop for the
     # CRAWL-marker bookkeeping above, then loses its determiner here.
     out["saved"] = _story_stake(out["saved"], fallbacks["saved"])
@@ -4431,17 +4996,33 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style=""):
     # fights under. Combat prepends a title (ENEMY_VARIANTS.boss in game.js), so bake the same
     # title in here and rewrite every mention in the prose to match, rather than let the crawl
     # say "The Overclocked" while the health bar reads "DREAD THE OVERCLOCKED".
-    bare_boss = out["boss"]
-    boss_re = re.compile(re.escape(bare_boss), re.IGNORECASE) if bare_boss else None
+    #
+    # A quoted enemy field overrides the CHAMPION'S NAME the same unconditional way LOCATION
+    # and HERO just did above - the whole point of "Billy" the cat is that the boss is Billy,
+    # not whatever the model invented instead. Unlike LOCATION/HERO this one DOES need a prose
+    # rewrite: the model was hardly discouraged from using the name it was handed ("a cat
+    # called Billy" in its own input), so if it already wrote "Billy" a few times, both the
+    # model's own invented name AND the entity's real name are swapped for the final title -
+    # whichever one the prose actually used, the reader always gets the same title back.
+    model_boss = out["boss"]
+    bare_boss = model_boss
+    enemy_ent = (named or {}).get("enemy")
+    if enemy_ent and enemy_ent.get("kind"):
+        bare_boss = enemy_ent["name"]
+    boss_re = re.compile(re.escape(model_boss), re.IGNORECASE) if model_boss else None
+    alt_re = (re.compile(re.escape(bare_boss), re.IGNORECASE)
+             if bare_boss and bare_boss != model_boss else None)
     out["boss"] = f"{random.choice(_BOSS_TITLE_PREFIXES)} {bare_boss}"
 
     def _use_real_boss_name(t):
-        """Swap in the boss's actual title wherever the prose names it - both the bare
-        invented name (bare_boss) and, as a safety net for when the model falls back to a
-        generic word instead of the name it invented three lines earlier, "the boss" / "boss"
-        on their own."""
+        """Swap in the boss's actual title wherever the prose names it - the model's own
+        invented name (boss_re), the entity's real name when a quoted enemy overrode it
+        (alt_re), and, as a safety net for when the model falls back to a generic word instead
+        of the name it invented three lines earlier, "the boss" / "boss" on their own."""
         if boss_re:
             t = boss_re.sub(out["boss"], t)
+        if alt_re:
+            t = alt_re.sub(out["boss"], t)
         t = _GENERIC_BOSS_PHRASE_RE.sub(out["boss"], t)
         t = _GENERIC_BOSS_WORD_RE.sub(out["boss"], t)
         return t
@@ -4659,10 +5240,14 @@ def synthesize_narration(texts):
         return None, []
 
 
-def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, player_image=None):
+def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, player_image=None,
+                         named=None):
     """Name the location / hero / foe / boss and write the opening crawl. Never raises - a
     story failure must not cost the player their assets, so it degrades to names derived
-    from what they typed."""
+    from what they typed.
+
+    `named` is a resolve_named_styles() dict (or None), forwarded to parse_story_block so a
+    quoted wall/player/enemy field names the location/hero/boss outright - see there."""
     image_name = None
     if player_image:
         try:
@@ -4710,13 +5295,13 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
     try:
         t0 = time.time()
         raw = _submit_and_collect_text(payload, "story_out", job_key="story")
-        story = parse_story_block(raw, wall_style, player_style, enemy_style)
+        story = parse_story_block(raw, wall_style, player_style, enemy_style, named=named)
         print(f"[story] '{story['location']}' - {story['hero']} vs {story['foe']} / "
               f"{story['boss']}, {len(story['crawl'])} paragraphs, {time.time()-t0:.1f}s")
     except Exception as e:
         print(f"[story Error] {e} - falling back to names from the player's own words")
         PROGRESS.finish_job("story")
-        story = parse_story_block("", wall_style, player_style, enemy_style)
+        story = parse_story_block("", wall_style, player_style, enemy_style, named=named)
 
     # Narrate whichever text the player is actually about to see - including the fallback
     # crawl, which deserves a voice just as much as a model-written one. Order matches the
@@ -5934,7 +6519,8 @@ def krea2_frame_prompts(player_style, weapon_style, brief=None):
 
 
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
-                                steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None):
+                                steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None,
+                                enemy_named=None):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames and an enemy, then a
     separate krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {"frames": [7 paths], "enemy": path|None,
@@ -5942,7 +6528,11 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     `player` sizes the 7 pose frames, `enemy` the foe sprites, `portrait` the HUD busts.
 
     `brief` is a generate_theme_brief() dict (or None) supplying a concrete weapon object and
-    a concrete enemy subject when the typed words were abstract."""
+    a concrete enemy subject when the typed words were abstract. `enemy_named` is the enemy
+    field's resolve_named_styles() entity (or None) - a quoted individual titles the BOSS
+    variant specifically (see parse_story_block for the path that actually reaches the
+    screen) and its name is stripped out of the bestiary's own subject below, so three foes
+    don't all end up named after the one boss."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     sq = _round16(gfx["player"])            # the 7 player pose frames
     esq = _round16(gfx["enemy"])            # every frame of all three foes
@@ -5954,7 +6544,20 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     # put "chat" back into the picture the moment the species call failed.
     enemy_style = (brief or {}).get("enemy") or enemy_style
 
+    # A quoted name must not leak into the bestiary as the shared subject - the designed line
+    # for "a cat called Billy" reads "Billy the sleek black alley cat", and repeated eight
+    # times inside _ENEMY_SPECIES_USER that names all three variants Billy, exactly the "forty
+    # Billys" outcome a named individual exists to avoid (the name belongs on the boss alone).
+    # Falls back to the bare kind noun when stripping empties the line.
+    if enemy_named and enemy_named.get("kind"):
+        enemy_style = _strip_proper_name(enemy_style, enemy_named["name"]) or enemy_named["kind"]
+
     species = generate_enemy_species(enemy_style)
+    # Keep the species-level fallback name in step with the title parse_story_block actually
+    # uses (game.js reads the story's boss title FIRST and only falls back to this one), so the
+    # two can never disagree if the story call itself happened to fail.
+    if species and enemy_named and enemy_named.get("kind"):
+        species["boss"]["name"] = enemy_named["name"]
 
     payload = _krea2_loaders()
     frame_prompts = krea2_frame_prompts(player_style, weapon_style, brief)
@@ -6121,33 +6724,54 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             return f"data:image/png;base64,{base64.b64encode(tf.read()).decode('utf-8')}"
 
     try:
+        # NAMED ENTITIES RESOLVE FIRST - a quoted proper name ("alley pond park", "Billy" the
+        # cat) changes what the set designer is asked for (want_surfaces below) and what every
+        # LLM call downstream is fed, so nothing else can run ahead of it. See
+        # resolve_named_styles; on any failure `named` degrades to all-None and every one of
+        # its fields below is just the raw typed word again - today's behaviour.
+        named = resolve_named_styles(wall_style, player_style, weapon_style, enemy_style)
+
         # THE SET DESIGNER RUNS FIRST - everything downstream wants its output. When the typed
         # theme matches one of the hand-tuned keyword buckets those surface prompts are
         # literals that ignore the brief, so only the weapon and enemy are asked for; a
-        # two-label reply is far harder to come back malformed than an eight-label one.
-        brief = generate_theme_brief(wall_style, weapon_style, enemy_style,
-                                     want_surfaces=(_style_bucket(wall_style) is None))
+        # two-label reply is far harder to come back malformed than an eight-label one. A
+        # quoted wall name always takes this path too - see _theme_bucket.
+        brief = generate_theme_brief(named["text"]["wall"], named["text"]["weapon"],
+                                     named["text"]["enemy"],
+                                     want_surfaces=(_theme_bucket(wall_style, named["wall"]) is None),
+                                     wall_named=named["wall"], enemy_named=named["enemy"])
 
         # The story is published on its own, minutes ahead of the bundle, so the frontend can
         # start the crawl while everything else is still rendering. It keeps the player's OWN
-        # words: it is prose generation, where an abstract theme is no handicap.
+        # words as much as possible - prose generation, where an abstract theme is no handicap
+        # - but takes the same named-entity rewrite as everything else, so a literal quote mark
+        # never reaches this call either, and a quoted field names the location/hero/boss
+        # outright (see parse_story_block).
         gen_progress["current_step"] = 1
-        story = generate_intro_story(wall_style, player_style, weapon_style, enemy_style,
-                                     player_image)
+        story = generate_intro_story(named["text"]["wall"], named["text"]["player"],
+                                     named["text"]["weapon"], named["text"]["enemy"],
+                                     player_image, named=named)
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
-        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(wall_style, gfx, brief)
+        w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(
+            named["text"]["wall"], gfx, brief, wall_named=named["wall"])
 
         gen_progress["current_step"] = 3
-        bundle = generate_krea2_posed_bundle(player_style, weapon_style, enemy_style, steps, gfx, brief)
+        bundle = generate_krea2_posed_bundle(named["text"]["player"], named["text"]["weapon"],
+                                             named["text"]["enemy"], steps, gfx, brief,
+                                             enemy_named=named["enemy"])
 
         # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
-        # card rather than competing with them. Both calls are skippable via sound_mode.
+        # card rather than competing with them. Both calls are skippable via sound_mode. Audio
+        # prompts get the CLEAN split (quotes stripped only, no "called"/"the real" rewrite
+        # clause) - sfx_prompts/music_prompts just interpolate the raw words into a sentence,
+        # and a designed rewrite fragment reads as noise there rather than as a name.
         gen_progress["current_step"] = 4
-        sfx = (generate_sfx_pack(wall_style, player_style, weapon_style, enemy_style)
+        sfx = (generate_sfx_pack(named["clean"]["wall"], named["clean"]["player"],
+                                 named["clean"]["weapon"], named["clean"]["enemy"])
                if sound_mode != "skip" else None)
-        music = generate_music_pack(wall_style) if sound_mode == "music_and_sound" else None
+        music = generate_music_pack(named["clean"]["wall"]) if sound_mode == "music_and_sound" else None
 
         PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
@@ -6172,6 +6796,10 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # session alone - the raw typed words are on the meta, but they are not
             # what actually got drawn.
             "theme_brief": brief,
+            # What each quoted proper name (resolve_named_styles) resolved to - None-valued
+            # entries and all, so a saved session can be diagnosed the same way theme_brief
+            # already is. None when nothing in any field was quoted.
+            "named_styles": named,
             "wall_texture": _b64(w_path),
             "ceiling_texture": _b64(c_path),
             "floor_texture": _b64(f_path),
@@ -6306,6 +6934,9 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             # covered the theme and no design pass was needed. Sessions saved before this
             # existed have neither key.
             "theme_brief": bundle.get("theme_brief"),
+            # What each quoted proper name resolved to, or None. Sessions saved before this
+            # existed have neither key, same convention as theme_brief above.
+            "named_styles": bundle.get("named_styles"),
             "location": story.get("location", ""),
             "hero": story.get("hero", ""),
             "foe": story.get("foe", ""),
