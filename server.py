@@ -5187,8 +5187,17 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
     wall_ent = (named or {}).get("wall")
     if wall_ent and wall_ent.get("kind"):
         out["location"] = wall_ent["name"]
+    #
+    # HERO is the one of the three that does NOT wait on a resolved kind. Quoting is the
+    # player saying "this is my name", and the identity call is a coin flip on whether it
+    # recognises one - the very same '"Elon Musk" meme' field came back `person (known)` on
+    # one run and `(unresolved)` on the next, and on the unresolved run the model's own
+    # "Elon Musk Meme" took the HERO line, so the crawl, the status label and the death and
+    # victory lines all addressed the player by their entire typed phrase. What KIND of
+    # thing the name is only ever matters to the art prompts; what to CALL the player does
+    # not need it, so the quoted span wins here whether or not anything was recognised.
     player_ent = (named or {}).get("player")
-    if player_ent and player_ent.get("kind"):
+    if player_ent:
         out["hero"] = player_ent["name"]
 
     # SAVED is a noun phrase, not a proper name - it goes through the label loop for the

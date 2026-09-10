@@ -1203,7 +1203,7 @@
       '"manhattan"':     { player: 'rat',                     weapon: 'pizza',            enemy: 'everything bagel with cheese' },
       'hell':            { player: 'lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
       'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villain lady' },
-      'pet store':       { player: 'Yorkshire Terrier',       weapon: 'flaming whip',     enemy: 'funny dog with tongue sticking out' },
+      'pet store':       { player: 'Yorkshire Terrier',       weapon: 'whip',             enemy: 'bright stuffed animal' },
       'Sega arcade':     { player: '"Goodcow" the cow',       weapon: 'Dreamcast controller', enemy: '"Sonic"' },
       'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'old person' },
       'corn maze':       { player: 'pickup truck robot',      weapon: 'pitchfork',        enemy: 'zombie animal' },
