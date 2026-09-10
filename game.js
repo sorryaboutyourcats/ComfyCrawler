@@ -753,6 +753,19 @@
     // stopScreenMusic() in between cancels it, which is what keeps a track requested at the
     // death box from starting after the player has already restarted out of it.
     let screenMusicWanted = null;
+    // A start that has been scheduled a beat out (the victory / death stings play first). Held
+    // so stopScreenMusic() can cancel it if the player leaves the box before it fires -
+    // otherwise the loop begins playing on top of the menu music it should never have reached.
+    let screenMusicDelayTimer = null;
+
+    // playScreenMusic(name) after `ms`, unless stopScreenMusic() cancels it first.
+    function deferScreenMusic(name, ms) {
+      if (screenMusicDelayTimer) clearTimeout(screenMusicDelayTimer);
+      screenMusicDelayTimer = setTimeout(() => {
+        screenMusicDelayTimer = null;
+        playScreenMusic(name);
+      }, ms);
+    }
 
     function loadScreenMusic(name) {
       if (screenMusicBufs[name] || screenMusicLoading[name]) return;
@@ -812,6 +825,7 @@
     }
 
     function stopScreenMusic(fadeSec) {
+      if (screenMusicDelayTimer) { clearTimeout(screenMusicDelayTimer); screenMusicDelayTimer = null; }
       screenMusicWanted = null;
       _fadeOutScreenMusicNode(fadeSec === undefined ? SCREEN_MUSIC_FADE_OUT : fadeSec);
     }
@@ -1190,6 +1204,12 @@
       'hell':            { player: 'lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
       'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villain lady' },
       'pet store':       { player: 'Yorkshire Terrier',       weapon: 'flaming whip',     enemy: 'funny dog with tongue sticking out' },
+      'Sega arcade':     { player: '"Goodcow" the cow',       weapon: 'Dreamcast controller', enemy: '"Sonic"' },
+      'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'crazy customer' },
+      'corn maze':       { player: 'pickup truck robot',      weapon: 'pitchfork',        enemy: 'zombie animal' },
+      'pizza toppings':  { player: 'cat chef',                weapon: 'pepperoni',        enemy: 'pasta' },
+      '"central park"':  { player: 'jogger',                  weapon: 'whip',             enemy: 'cardboard box' },
+      'mushrooms':       { player: 'Mario',                   weapon: 'plunger',          enemy: 'Bowser' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -2365,8 +2385,10 @@
         if (defeatModal) defeatModal.classList.remove('hidden');
         deadChoiceIndex = 0;   // keyboard cursor starts on "Restart Dungeon"
         syncDeadChoice();
-        playScreenMusic('death');
       }, 700);
+      // Cancellable the same way the victory loop is: a fast restart/quit calls
+      // stopScreenMusic() before this fires, and the death loop must not start after it.
+      deferScreenMusic('death', 700);
     }
 
     // Death-screen "Restart Dungeon": roll the whole run back to the instant the player entered
@@ -6813,7 +6835,10 @@
         // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
         // and the victory loop scores the box until the player heads back to the menu.
         fadeOutDungeonMusic(0.6);
-        setTimeout(() => playScreenMusic('victory'), 700);
+        // Cancellable: hitting Enter straight through the win box calls stopScreenMusic()
+        // (via returnToMenuMusic) before this fires, and the victory loop must not then
+        // start up over the menu music the player has already gone back to.
+        deferScreenMusic('victory', 700);
       }
     }
 
