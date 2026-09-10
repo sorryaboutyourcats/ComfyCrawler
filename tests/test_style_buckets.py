@@ -24,7 +24,7 @@ def original_bucket(wall_style):
 CASES = ["Windows 95 3D maze","Deep Forest","Cyber Neon","Mossy Stone","Candy Cane","Tacos",
          "Haunted Manor","Volcanic Depths","Sunken Ruins","Pharaoh's Tomb","internet","trippy",
          "classroom","mangos","birds","corporate office","manhattan",
-         "ugly things covered in gold","motherboard",
+         "ugly things covered in gold","motherboard","cut up fruit","hell","pet store",
          "deep forest","cyber neon","supermarket","windows 95 3d maze","candy cane",
          "cathedral","catacombs","rockstar","biotech","1995","a lady in a garden","the man",
          "", "  ", "SPACESHIP", "Sweet Cave"]

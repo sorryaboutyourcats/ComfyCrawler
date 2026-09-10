@@ -29,8 +29,9 @@
     // meanings instead of a number nobody knows how to read. 111 is the new ceiling
     // (generateAuthentic3DMaze used to clamp at 100).
     // `grids` is now the CARVED corridor count, not the finished tile count - the loop passes in
-    // braidMaze() turn walls into floor on top of it. Measured over 500 mazes each, the three
-    // settings below finish at about 36 / 74 / 123 walkable tiles. The HUD's "x/y Tiles" badge
+    // braidMaze() turn walls into floor on top of it, and so does the stairs' hallway (see
+    // MAZE.exitHallCells). Measured over 1500 mazes each, the three settings below finish at
+    // about 40 / 77 / 124 walkable tiles, of which ~5 are hallway. The HUD's "x/y Tiles" badge
     // reads passagesList, so it always shows the real number.
     // `enemyHpMul` scales every foe's maxHp in initEnemy (walker, flyer, boss and both pack
     // types alike), so the harder mazes also hit back harder. Easy leaves the tuned base
@@ -67,7 +68,13 @@
       // Extra wall knock-outs between two already-connected cells, as a fraction of cell count.
       // Dead-end braiding only ties off the tips; these cut across the middle of long corridors,
       // which is what gives a route a choice partway along it instead of only at its end.
-      extraLoops: 0.18
+      extraLoops: 0.18,
+      // Cells of private hallway carved out past the maze to hold the stairs - see
+      // relocateExit. This is NOT part of the size budget: `grids` counts carved corridors and
+      // these cells are ones the carve stopped short of, so a difficulty still buys the same
+      // maze and the approach is added on top of it. Each cell is two tiles, so 3 puts the
+      // stairs at the end of a six-tile run with the boss standing in it.
+      exitHallCells: 3
     };
     let selectedDifficulty = 'medium';
     const wallPromptInput = document.getElementById('wallPromptInput');
@@ -1164,14 +1171,18 @@
       'Sunken Ruins':    { player: 'coral-armored deep diver',                weapon: 'barnacled bronze trident',     enemy: 'tentacled kraken spawn' },
       "Pharaoh's Tomb":  { player: 'bandaged tomb raider in linen wraps',     weapon: 'golden khopesh sword',         enemy: 'shambling scarab-covered mummy' },
       'internet':        { player: 'cat',                     weapon: 'memes',            enemy: 'chat' },
-      'trippy':          { player: 'hippy cat',               weapon: 'lava lamp',        enemy: 'tanks' },
+      'trippy':          { player: 'pink and green cat',      weapon: 'skateboard',       enemy: 'business cat' },
       'classroom':       { player: 'nun',                     weapon: 'ruler',            enemy: 'devil' },
-      'mangos':          { player: 'watermelon',              weapon: 'cat',              enemy: 'blueberries' },
-      'birds':           { player: 'fluffy white cat',        weapon: 'banana',           enemy: 'cat toy' },
+      'cut up fruit':    { player: 'watermelon',              weapon: 'fat cat',          enemy: 'blueberries with guns' },
+      'birds':           { player: 'fluffy white cat',        weapon: 'long banana',      enemy: 'dinosaurs' },
       'corporate office':{ player: 'dog',                     weapon: 'office supply',    enemy: 'office furniture' },
-      'manhattan':       { player: 'rat',                     weapon: 'pizza',            enemy: 'bagel' },
-      'ugly things covered in gold': { player: 'lady with glasses', weapon: 'paper',      enemy: 'trump' },
-      'motherboard':     { player: 'fluffy anime cat',        weapon: 'halberd',          enemy: 'anime bug' },
+      // The quotes are deliberate: they push the wall theme down the named-entity path so it
+      // renders the real city, not a "manhattan"-shaped bucket. The data-val is &quot;-encoded
+      // in index.html and the browser hands us the quoted string, so the key must include them.
+      '"manhattan"':     { player: 'rat',                     weapon: 'pizza',            enemy: 'everything bagel with cheese' },
+      'hell':            { player: 'lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
+      'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villain lady' },
+      'pet store':       { player: 'Yorkshire Terrier',       weapon: 'flaming whip',     enemy: 'funny dog with tongue sticking out' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -1554,6 +1565,11 @@
     //   widthFrac  - hard cap on drawn width as a fraction of the 320px width. Sprites now
     //                fill their generated canvas, so a winged flyer arrives far wider than
     //                it is tall and would otherwise span the whole screen.
+    //   bodyR      - half-width of the silhouette in arena px, added to SWING_REACH to decide
+    //                whether a player swing connects (see SWING_REACH below). Authored to
+    //                match how wide the variant reads on screen rather than measured off the
+    //                generated art, which varies too much frame to frame to gate a hit on: a
+    //                runt is a small target, a dread is a broad one.
     //   cadence    - frames between attacks   telegraph - wind-up lead frames
     // sfxRate pitches every sound this variant causes (hit_enemy, block, death_enemy) - the
     // same three sprites and stats read as one species at three sizes, so the ear does the
@@ -1582,10 +1598,21 @@
     //    punishWindow: for that many frames after the walker commits to its own attack it
     //    cannot guard, and one hit landed in that gap connects (and spends the gap - see the
     //    player-strike resolution, where a clean hit clears punishTimer).
+    //
+    // SWING_REACH: how far to either side of the hero their swing can find a foe. It is the
+    // mirror of landEnemyStrike's 44px (what a foe's swing reaches the other way), except the
+    // hero is swinging AT a body with width, so the player-strike resolution tests
+    // |playerX - e.x| <= SWING_REACH + that variant's bodyR. Before this the strike had NO
+    // horizontal test at all - it took the nearest foe that wasn't airborne or withdrawn and
+    // landed from any distance down the arena, so a flanking swarmer, a foe the player was
+    // strafing out from under, or a swoop aimed a frame behind the player all connected for
+    // free. Set so a walker toe-to-toe still lands at ~44 (18 + its bodyR of 26): the face-off
+    // is unchanged, the range gimmes are gone.
+    const SWING_REACH = 18;
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, fly: false, canBlock: true,  reactiveBlock: true, punishWindow: 70, blockHold: 60,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
-      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, blockStm: 20, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, fly: true,  canBlock: false, blockOdds: 0,        blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
-      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, blockStm: 50, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, fly: false, canBlock: true,  blockOdds: 0.030,   blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
+      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, bodyR: 26, fly: false, canBlock: true,  reactiveBlock: true, punishWindow: 70, blockHold: 60,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
+      flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, blockStm: 20, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, bodyR: 30, fly: true,  canBlock: false, blockOdds: 0,        blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
+      boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, blockStm: 50, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, bodyR: 46, fly: false, canBlock: true,  blockOdds: 0.030,   blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
 
       // --- PACK FOES. Neither one costs a generation: `recolorOf` names the variant whose
       // sprites they borrow and hue/sat is the filter laid over every frame of them (see
@@ -1612,8 +1639,8 @@
       //            Unlike the flyer, which can only be hit during its own swoop, this one
       //            hands the player a window every lap. After CIRCLER_LAPS circles it breaks
       //            off and dives like a flyer.
-      swarmer: { tag: 'RUNT ',      maxHp: 38, dmg: 6, blockStm: 15,  cadence: 70, telegraph: 16, heightFrac: 0.308, widthFrac: 0.364, fly: false, canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 0,  sfxRate: 1.30, timid: false, spd: 1.15, recolorOf: 'walker', hue: 205, sat: 1.25, group: 3 },
-      circler: { tag: 'FLEDGLING ', maxHp: 48, dmg: 12, blockStm: 10, cadence: 95, telegraph: 20, heightFrac: 0.280, widthFrac: 0.462, fly: true,  canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 52, sfxRate: 1.55, timid: false, recolorOf: 'flyer', hue: 125, sat: 1.30, group: 2, orbitRX: 52, orbitLift: 26, orbitSpeed: 0.055 },
+      swarmer: { tag: 'RUNT ',      maxHp: 38, dmg: 6, blockStm: 15,  cadence: 70, telegraph: 16, heightFrac: 0.308, widthFrac: 0.364, bodyR: 16, fly: false, canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 0,  sfxRate: 1.30, timid: false, spd: 1.15, recolorOf: 'walker', hue: 205, sat: 1.25, group: 3 },
+      circler: { tag: 'FLEDGLING ', maxHp: 48, dmg: 12, blockStm: 10, cadence: 95, telegraph: 20, heightFrac: 0.280, widthFrac: 0.462, bodyR: 22, fly: true,  canBlock: false, blockOdds: 0, blockHold: 0, slow: false, hover: 52, sfxRate: 1.55, timid: false, recolorOf: 'flyer', hue: 125, sat: 1.30, group: 2, orbitRX: 52, orbitLift: 26, orbitSpeed: 0.055 },
     };
     const ENEMY_VARIANT_KEYS = ['walker', 'flyer', 'boss'];
     // Full circles a circler flies before it commits to a swoop.
@@ -3066,11 +3093,13 @@
         combatState.attackFrame++;
         if (combatState.attackFrame === 7) {
           // Who the swing lands on. Against a lone foe that is the only answer; against a pack
-          // it is the NEAREST one the blade can actually reach, so a swarmer that has closed on
-          // the player is cut before one still crossing the floor, and a circler is only a
-          // target while the bottom of its lap has it under the 34px reach line.
+          // it is the NEAREST one the blade can actually reach - and "reach" is three tests,
+          // not one: not airborne over the 34px line, not withdrawn past REACH_DEPTH, and
+          // lined up within SWING_REACH + the variant's bodyR horizontally. A swarmer that has
+          // flanked wide, or a foe the player is strafing out from under, is now a clean miss.
           const living = combatState.enemies.filter(k => k.hp > 0);
           let e = null;
+          let anyInFront = false;   // a foe low and near enough to cut, if only the aim were on it
           for (const k of living) {
             const kcfg = ENEMY_VARIANTS[k.variant] || ENEMY_VARIANTS.walker;
             if (kcfg.fly && k.altitude > 34) continue;
@@ -3078,13 +3107,19 @@
             // way. A charging boss spends every phase but the run-in behind this line, so the
             // whole wind-up is something the player can only answer with their feet.
             if ((k.depth || 0) > REACH_DEPTH) continue;
+            // Horizontal alignment. Past here is a foe the blade could touch if the player
+            // stood in the right place, so whiffing on this is a positioning mistake (step
+            // across and try again) rather than a wait - the "MISSED!" below says so.
+            if (Math.abs(combatState.playerX - k.x) > SWING_REACH + (kcfg.bodyR || 22)) { anyInFront = true; continue; }
             if (!e || Math.abs(combatState.playerX - k.x) < Math.abs(combatState.playerX - e.x)) e = k;
           }
           if (living.length && !e) {
-            // Everything left is in the air. The weapon whooshing through air, not a sound the
-            // enemy makes - no cfg.sfxRate pitch, unlike hit_enemy/block/death_enemy below.
+            // The weapon whooshing through air, not a sound the enemy makes - no cfg.sfxRate
+            // pitch, unlike hit_enemy/block/death_enemy below. "MISSED!" when there was a foe
+            // on the ground in front to line up on; "OUT OF REACH!" when everything left is
+            // airborne or withdrawn and the answer is to wait, not to shuffle sideways.
             playSfx('miss_enemy');
-            showFloatingCombatText("OUT OF REACH!", 160, 90, "#93c5fd");
+            showFloatingCombatText(anyInFront ? "MISSED!" : "OUT OF REACH!", 160, 90, "#93c5fd");
           } else if (e) {
             const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
             if (e.blockTimer > 0) {
@@ -4274,10 +4309,10 @@
     // distance steps as the hero turns past a corner, and an un-eased foe would jump size with
     // it. It also means a foe already pulled in relaxes back out over a few frames when the
     // hero steps away from the wall.
-    function nearWallStaging(e, cfg, ex, width, height, depthScale, depth) {
+    function nearWallStaging(e, cfg, sampleX, width, height, depthScale, depth) {
       const horizon = height / 2;
       const base = GROUND_Y - depth * DEPTH_LIFT;
-      const wallDist = wallDistAt(ex, width);
+      const wallDist = wallDistAt(sampleX, width);
       // Same projection the floor/ceiling caster uses, so this lands ON the drawn seam rather
       // than near it: a surface at distance d meets the floor at horizon + (WALL_HEIGHT/2)*h/d.
       const wallFloorY = isFinite(wallDist)
@@ -4298,15 +4333,25 @@
       // The front line, eased. DEPTH then rides on top of it - but the room to withdraw into is
       // exactly the room the wall left, so a boss backing off for its charge stops with its feet
       // just short of the seam instead of climbing the wall again. Against a tight wall that
-      // makes the withdrawal a short move rather than no move: it still shrinks and rises, which
-      // is what has to read, and standing hard against the masonry is where it would really be.
+      // makes the withdrawal a short move rather than no move: it still shrinks, and rises as
+      // far as there is anything to rise into, and standing hard against the masonry is where
+      // it would really be.
       const f = GROUND_Y + e.nearPush;
-      const back = Math.max(wallFloorY - NEAR_WALL_BACK_ROOM, f - DEPTH_LIFT);
+      // ...and never PAST the front line. With the hero backed into a corner the seam is below
+      // the staged feet, wallFloorY - BACK_ROOM comes out under f, and the withdrawal inverts:
+      // the boss walks DOWN the canvas and looms larger the further back it is meant to be
+      // going. A corner has no room to withdraw into and the honest answer is that it barely
+      // moves, so this pins the far end at the front line and lets DEPTH_SHRINK sell the rest.
+      const back = Math.min(f, Math.max(wallFloorY - NEAR_WALL_BACK_ROOM, f - DEPTH_LIFT));
       const groundY = f - depth * (f - back);
       // Feet twice as far below the horizon means half the distance, so twice the size. Measured
-      // against the depth-0 staging so this is purely the near-wall part - the caller still
-      // multiplies by DEPTH_SHRINK's own factor.
-      let scale = (groundY - horizon) / (GROUND_Y - horizon);
+      // off the FRONT line rather than the drawn feet, so this is purely the near-wall part -
+      // the caller still multiplies by DEPTH_SHRINK's own factor. Measuring it off `groundY`
+      // counted the withdrawal twice: the depth lift had already pulled the feet towards the
+      // horizon, so the ratio shrank the boss again on top of the shrink it had just been
+      // given, and a charge staged against a wall wound up at under half the size the same
+      // charge reaches in open floor - small and far off rather than backed up and looming.
+      let scale = (f - horizon) / (GROUND_Y - horizon);
       // Damped for everything but the boss - see NEAR_WALL_SCALE_DAMP.
       if (e.variant !== 'boss') scale = 1 + (scale - 1) * NEAR_WALL_SCALE_DAMP;
       // ...but never past the cap, and never taller than the canvas above its own feet: a boss
@@ -4334,7 +4379,18 @@
       // widening a pack by the same factor it grows them by would push the outermost of three
       // runts (x reaches +/-92) clean off a 320px canvas at exactly the moment they are meant
       // to be in the hero's face.
-      const near = nearWallStaging(e, cfg, ex, width, height, depthScale, depth);
+      // Which column the pull-in samples the wall at. Its own, for anything holding ground -
+      // but NOT during the withdrawn phases of the boss's charge. The weave crosses the arena
+      // at BOSS_WEAVE_SPEED, and a per-column sample means the staging chases whatever geometry
+      // happens to slide under it: sweep off a near wall and past a doorway and the pull-in
+      // drops out mid-sweep, so the boss shrinks and its feet jump up the canvas as if it had
+      // bolted across the room, then snaps back on the return leg. It pumps twice a lap. So
+      // these phases sample straight ahead instead - the column the duel is staged on, and the
+      // one the weave is centred on - which still tracks the hero walking into a wall while the
+      // boss's own sweep no longer touches it. The rush is left on its real column: it is
+      // coming back to the front line and the arrival should be staged where it lands.
+      const sampleX = (e.special && e.special !== 'none' && e.special !== 'rush') ? width / 2 : ex;
+      const near = nearWallStaging(e, cfg, sampleX, width, height, depthScale, depth);
       const dScale = depthScale * near.scale;
       const groundY = near.groundY;
       // Near-wall flyer lift (see NEAR_WALL_FLY_LIFT) - folded into altitude everywhere the foe's
@@ -5491,6 +5547,53 @@
       return regionOf;
     }
 
+    // A cell the carve never reached is still solid wall at its (odd,odd) centre, and so is
+    // every connector around it. Those are the cells the stairs' hallway is grown through, and
+    // growing it there is precisely what keeps it off the difficulty budget: `grids` counts
+    // CARVED corridors, and by definition none of these were carved. Returns the steps out of
+    // `cell` that land on one, each carrying the connector wall that comes out with it.
+    function _virginHallSteps(cell) {
+      const out = [];
+      for (const d of _ORTHO) {
+        const wx = cell.x + d.dx, wy = cell.y + d.dy;
+        const nx = cell.x + d.dx * 2, ny = cell.y + d.dy * 2;
+        if (nx < 1 || nx >= MAP_WIDTH - 1 || ny < 1 || ny >= MAP_HEIGHT - 1) continue;
+        if (MAP[ny][nx] !== 1 || MAP[wy][wx] !== 1) continue;
+        out.push({ x: nx, y: ny, wx, wy, dx: d.dx, dy: d.dy });
+      }
+      return out;
+    }
+
+    // The longest chain of never-carved cells leading away from `cell`, capped at `limit`.
+    // Depth-first with backtracking rather than a greedy walk, because the first cell that
+    // looks free is often a one-cell pocket with solid rock behind it, and settling for that
+    // would leave the stairs on a stub instead of a hallway.
+    //
+    // Carrying on in the SAME direction is tried first, so a run that can be straight is
+    // straight - a hallway the player can see the stairs down from its far end is the whole
+    // reason for building one, and a switchbacking chain of the same length hides them until
+    // the last corner. The remaining turns are shuffled, so two dungeons that happen to pick
+    // the same dead end do not get the same hallway.
+    function _growExitHall(cell, limit, dir, taken) {
+      if (limit <= 0) return [];
+      const opts = _shuffle(_virginHallSteps(cell)
+        .filter((o) => !taken.has(_tileKey(o.x, o.y))));
+      if (dir) {
+        const turn = (o) => (o.dx === dir.dx && o.dy === dir.dy) ? 0 : 1;
+        opts.sort((a, b) => turn(a) - turn(b));
+      }
+      let best = [];
+      for (const o of opts) {
+        const k = _tileKey(o.x, o.y);
+        taken.add(k);
+        const run = [o].concat(_growExitHall(o, limit - 1, o, taken));
+        taken.delete(k);
+        if (run.length > best.length) best = run;
+        if (best.length >= limit) break;        // full length - nothing left to improve on
+      }
+      return best;
+    }
+
     // The Exit is meant to be the hardest tile in the maze to get to, and up to here it is
     // whichever cell the carve reached last by tree depth. Braiding invalidates that: a
     // shortcut between two corridors can cut a big chunk off the walk without touching the
@@ -5505,40 +5608,163 @@
     // The Exit must be a DEAD END - stairs at the end of a hallway, walls on the other three
     // sides. That is a hard requirement, not a tie-break: one way in is what lets ONE boss
     // stand between the player and the stairs. An Exit on a corner or a junction has two ways
-    // in, and guarding both would take two bosses (see placeEnemyMarkers). Distance only
-    // chooses between dead ends. Nothing carves after this point - braidMaze has already run,
-    // the gate pass only stamps floor into walls and the lantern pass only touches MAP===1 -
-    // so a dead end picked here is still a dead end on the map the player walks.
+    // in, and guarding both would take two bosses (see placeEnemyMarkers).
+    //
+    // Being a dead end was never enough on its own, though. Measured over 400 mazes per
+    // difficulty, nearly a third put the stairs one step from a fork - so the "hallway" they
+    // sat at the end of was a single tile, the player rounded a corner and was already standing
+    // on the Exit, and there was nowhere to put the last fight. So the chosen dead end is no
+    // longer the Exit: it is where the Exit's hallway STARTS. MAZE.exitHallCells cells of
+    // corridor are carved out past it through cells the maze never used, and the stairs move to
+    // the far end of that. What the player gets is a long straight run they can see the
+    // stairwell down, with room in it for the boss to stand three tiles back (see
+    // placeEnemyMarkers) and corridor on both sides of the fight.
+    //
+    // The hallway is free: every cell of it was solid wall the carve stopped short of, so the
+    // maze proper still has every corridor `grids` paid for.
+    //
+    // Nothing else carves after this point - braidMaze has already run, the gate pass only
+    // stamps floor into walls and the lantern pass only touches MAP===1 - so the hallway carved
+    // here is still a hallway on the map the player walks.
     function relocateExit(plan, regionOf) {
       const lastId = plan ? plan.regionSeeds.length - 1 : 0;
       // Doors are not stamped yet, so this floods the maze as it will be with every gate open -
       // i.e. the real walking distance once the player has earned their way through.
       const dist = _flood(startRoom, (x, y) => MAP[y][x] === 0);
-      // Planned door tiles are also still plain floor here. A dead end whose one way in is
-      // about to become a door has nowhere for the boss to stand - the guard needs a walkable
-      // approach - so those are passed over too.
-      const gateKeys = new Set((plan ? plan.gates : []).map((g) => _tileKey(g.tile.x, g.tile.y)));
-      let best = null, bestDist = -1;           // furthest dead end - what we actually want
-      let anyCell = null, anyDist = -1;         // furthest cell of any shape, last resort only
-      dist.forEach((e, key) => {
-        if (e.x % 2 !== 1 || e.y % 2 !== 1) return;         // cells only, never a connector
-        if (plan && regionOf.get(key) !== lastId) return;
-        const floorNb = [];
-        for (const d of _ORTHO) {
-          const nx = e.x + d.dx, ny = e.y + d.dy;
-          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) {
-            floorNb.push({ x: nx, y: ny });
+
+      // How much corridor would sit behind the stairs if the hallway were grown off `end`: the
+      // carved cells and their connectors first, then - when the anchor was a dead end, since
+      // carving through it turns it into an ordinary corridor tile - however much further the
+      // maze itself runs on before it forks. This is the number placeEnemyMarkers counts the
+      // boss's tiles off, so it stops wherever that walk would: at a fork, at a door (a door is
+      // not floor, and the guard will not be stood on one), or at the spawn. Capped, because
+      // past a certain length more corridor stops buying anything.
+      const HALL_REACH_CAP = 8;
+      const reachOf = (end, runLen, gateKeys) => {
+        let reach = runLen * 2;                            // each cell brings its connector
+        if (!end.from) return reach;                       // junction anchor - it stops there
+        let prev = { x: end.x, y: end.y }, cur = end.from;
+        while (reach < HALL_REACH_CAP) {
+          if (gateKeys.has(_tileKey(cur.x, cur.y))) break;
+          if (cur.x === startRoom.x && cur.y === startRoom.y) break;
+          reach++;
+          const onward = [];
+          for (const d of _ORTHO) {
+            const nx = cur.x + d.dx, ny = cur.y + d.dy;
+            if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+            if (MAP[ny][nx] !== 0) continue;
+            if (nx === prev.x && ny === prev.y) continue;
+            onward.push({ x: nx, y: ny });
           }
+          if (onward.length !== 1) break;                  // a fork - the hallway ends here
+          prev = cur;
+          cur = onward[0];
         }
-        if (e.dist > anyDist) { anyDist = e.dist; anyCell = { x: e.x, y: e.y }; }
-        if (floorNb.length !== 1) return;                   // corner or junction - two ways in
-        if (gateKeys.has(_tileKey(floorNb[0].x, floorNb[0].y))) return;
-        if (e.dist > bestDist) { bestDist = e.dist; best = { x: e.x, y: e.y }; }
-      });
-      // A last gate region with no dead end in it at all is possible (heavy braiding on a small
-      // maze can open every one of them). The Exit then falls back to the furthest cell it can
-      // find, and the single guard covers the way the player arrives - see placeEnemyMarkers.
-      exitRoom = best || anyCell || exitRoom;
+        return reach;
+      };
+
+      // Anchors are gathered by GATE TIER. Tier t means "keep the first t doors and let the
+      // Exit sit anywhere behind them", so tier lastId is the region past every planned door -
+      // what we want, and what we almost always get.
+      //
+      // The tiers below it are the escape hatch, and two things spring it. Either the last
+      // region comes out LANDLOCKED - every cell of it walled in by corridors belonging to
+      // earlier regions, with no unused rock anywhere along its edge to tunnel into (those
+      // mazes are not short of spare cells; measured, they have as many as any other, the
+      // spares are just on the far side of the maze from the region allowed to hold the Exit) -
+      // or the last DOOR itself caps the hallway, sitting so close behind the best anchor that
+      // the corridor runs into it before the boss has its tiles.
+      //
+      // Either way the thing to give up is that last door, not the hallway. The Exit moves back
+      // a tier and the doors past it are dropped from the plan before placeGatesAndSwitches
+      // ever stamps them, so they never become locks on rooms nobody has any reason to enter.
+      // Every door that survives is still a cut tile on the way to the Exit, still mandatory,
+      // and still opened in order. Measured over 3000 dungeons a side, this fires on 0.8% of
+      // Easy, 2.4% of Medium and 7.5% of Hard, and gives up one door when it does - Hard's mean
+      // door count goes 2.94 -> 2.86.
+      //
+      // Dropping a tier only ever ADDS anchors - tier t accepts every cell tier t+1 did, plus
+      // the region in front of it - so the search stops at the highest tier that clears
+      // BOSS_TILES_FROM_EXIT and never trades away a door it did not need to.
+      let best = null, bestRun = [], bestScore = -1, bestTier = lastId;
+      for (let tier = lastId; tier >= 0; tier--) {
+        // Only the doors this tier keeps count as doors. The ones past it are about to be
+        // dropped, so a dead end sitting behind one is a perfectly good anchor again.
+        const gateKeys = new Set((plan ? plan.gates.slice(0, tier) : [])
+          .map((g) => _tileKey(g.tile.x, g.tile.y)));
+
+        // Every cell of the allowed regions is a possible anchor, not only the dead ends. A
+        // dead end is much the better one - the hallway inherits the corridor already running
+        // up to it, so it finishes longer than the part we carve - and that is what `from`
+        // records, the one way in that corridor arrives by. Junction anchors are what rescue a
+        // region with no usable dead end left in it, and they are barely a compromise: the
+        // stairs still end at the dead end of a corridor, because the corridor is one we carve.
+        //
+        // A dead end whose one way in is about to become a door has nowhere for the boss to
+        // stand - the guard needs a walkable approach - so it drops back to being an ordinary
+        // junction anchor rather than being thrown out; growing a hallway off it is exactly
+        // what gives the boss its tiles back.
+        const ends = [];
+        dist.forEach((e, key) => {
+          if (e.x % 2 !== 1 || e.y % 2 !== 1) return;       // cells only, never a connector
+          // An unlabelled cell is one the region flood never reached, which puts it behind
+          // some door in a pocket of its own - never a place to hang the Exit.
+          const rid = regionOf.get(key);
+          if (plan && (rid === undefined || rid < tier)) return;
+          if (e.x === startRoom.x && e.y === startRoom.y) return;
+          const floorNb = [];
+          for (const d of _ORTHO) {
+            const nx = e.x + d.dx, ny = e.y + d.dy;
+            if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) {
+              floorNb.push({ x: nx, y: ny });
+            }
+          }
+          const deadEnd = floorNb.length === 1 &&
+                          !gateKeys.has(_tileKey(floorNb[0].x, floorNb[0].y));
+          ends.push({ x: e.x, y: e.y, dist: e.dist, from: deadEnd ? floorNb[0] : null });
+        });
+
+        // Reach first, carved hallway second, distance third.
+        //
+        // Reach is the guarantee - it is what says the stairs are down a hallway at all and
+        // that the boss has its tiles to stand in - so nothing outranks it. It is capped
+        // though, so once an anchor has that and then some, extra corridor stops competing and
+        // the tie goes to whichever anchor carves the most of its own hallway: a carved run is
+        // straight where a maze corridor of the same length wanders, and a straight one is a
+        // hallway the player can see the stairs down instead of finding them round a corner.
+        // Distance breaks what is left, which is the property the Exit had to begin with - and
+        // it rarely gives up much, because the deepest dead ends sit against the edge of the
+        // carve, which is exactly where the cells nobody used are.
+        let reach = -1;
+        best = null; bestRun = []; bestScore = -1; bestTier = tier;
+        for (const end of ends) {
+          const away = end.from ? { dx: end.x - end.from.x, dy: end.y - end.from.y } : null;
+          const run = _growExitHall(end, MAZE.exitHallCells, away,
+                                    new Set([_tileKey(end.x, end.y)]));
+          const r = reachOf(end, run.length, gateKeys);
+          const score = r * 1e6 + run.length * 1e3 + end.dist;
+          if (score > bestScore) { bestScore = score; best = end; bestRun = run; reach = r; }
+        }
+        if (reach >= BOSS_TILES_FROM_EXIT) break;
+      }
+
+      // Give up the doors the chosen tier left behind. braidMaze has already run and treated
+      // them as cut tiles, which only means it carved FEWER loops than it could have - dropping
+      // a gate never invalidates a carve it refused to make. placeGatesAndSwitches has not run
+      // at all yet, so these were never stamped and never got a switch.
+      if (plan && bestTier < plan.gates.length) plan.gates.length = bestTier;
+
+      exitRoom = best ? { x: best.x, y: best.y } : exitRoom;
+      // Carve the hallway and walk the stairs out to the end of it. Every cell in the run was
+      // solid wall a moment ago and only the connectors along the run come out with them, so
+      // what this leaves is a corridor with exactly one opening - the way in - whose far end is
+      // a dead end by construction. That is the guarantee placeEnemyMarkers leans on, now held
+      // by the carve rather than by whatever shape the maze happened to end in.
+      for (const step of bestRun) {
+        MAP[step.wy][step.wx] = 0;
+        MAP[step.y][step.x] = 0;
+        exitRoom = { x: step.x, y: step.y };
+      }
     }
 
     // Phase 3: stamp the planned doors and, for each, find one wall switch the player can
@@ -5684,7 +5910,10 @@
       // Since total tiles = cells + (cells - 1) = 2 * cells - 1
       const targetCells = Math.max(2, Math.ceil((numGrids + 1) / 2));
 
-      // Create a bounding box large enough to let the DFS wander organically
+      // A bounding box large enough to let the DFS wander organically. It comes out about 1.4x
+      // the cells the carve will actually use, and the leftovers are not slack: they are the
+      // rock relocateExit tunnels the stairs' hallway through, which is why that hallway costs
+      // nothing off `grids`.
       const cellCols = Math.max(3, Math.ceil(Math.sqrt(targetCells * 1.5)));
       const cellRows = Math.max(3, Math.ceil(targetCells / cellCols) + 1);
 
@@ -5766,17 +5995,27 @@
       startRoom = { x: startC * 2 + 1, y: startR * 2 + 1 };
       exitRoom = { x: furthestCell.c * 2 + 1, y: furthestCell.r * 2 + 1 };
 
-      // Gating and loop-carving are interleaved, and the order is load-bearing:
+      // Gating, loop-carving and the stairs' hallway are interleaved, and the order is
+      // load-bearing:
       //   planGates()  picks the door tiles while the maze is still a tree and the start->exit
       //                route is therefore unique - which is what "evenly spaced along it" means.
       //   braidMaze()  adds the loops that make the maze multicursal, refusing any carve that
       //                would join two different gate regions, so every planned door stays a
       //                mandatory cut tile rather than something you can walk around.
-      //   placeGates.. stamps the doors and hunts down switch hosts on the FINISHED map, so a
-      //                lever is scored against the route the player will really take.
-      // All three run BEFORE the lantern pass (which only touches MAP===1, so it skips our
+      //   relocateEx.. re-picks the Exit on the braided map and carves it the hallway it sits
+      //                at the end of. It is the last thing to touch corridor layout, and the
+      //                only one allowed to: braiding is already done, so a hallway carved here
+      //                cannot have a shortcut opened into it afterwards. It can also hand back
+      //                a door - see the gate tiers in there - which is safe precisely because
+      //                braidMaze has already run and refusing carves it might have made is not
+      //                something dropping a gate can undo.
+      //   placeGates.. stamps the doors that survived and hunts down switch hosts on the
+      //                FINISHED map, so a lever is scored against the route the player really
+      //                takes - hallway included.
+      // All four run BEFORE the lantern pass (which only touches MAP===1, so it skips our
       // door/switch tiles) and BEFORE passagesList is built (so a closed door is correctly
-      // excluded from the walkable-tile count, and the loop tiles are correctly included).
+      // excluded from the walkable-tile count, and the loop and hallway tiles are correctly
+      // included).
       const gatePlan = planGates();
       const gateRegions = braidMaze(cellRows, cellCols, gatePlan);
       relocateExit(gatePlan, gateRegions);
@@ -5845,14 +6084,24 @@
     //     spawn - the player gets a corridor's worth of dungeon before the first ambush.
     //   - markers keep 2 tiles between them, so a cleared stretch stays cleared and a corridor
     //     never turns into a gauntlet of three back-to-back fights.
-    //   - the BOSS does not roam, and there is only ever ONE of it. The Exit is a dead end at
-    //     the end of a hallway (see relocateExit), so a single guard placed one tile back down
-    //     that hallway is unavoidable: the last thing between the player and the stairs is
-    //     always the dread foe, met a step short of the stairs rather than on their doorstep.
-    //     Everything that roams is a walker or a flyer.
+    //   - the BOSS does not roam, and there is only ever ONE of it. relocateExit carves the
+    //     stairs their own hallway and leaves them at the dead end of it, so a single guard
+    //     standing in that hallway is unavoidable: the last thing between the player and the
+    //     stairs is always the dread foe. Everything that roams is a walker or a flyer.
+    //   - nothing else is allowed into the stretch of hallway between the boss and the stairs.
+    //     Spacing alone does not cover that - a roamer on the stairs' doorstep is a full three
+    //     tiles from a boss standing three back, so it passes the spacing check while making a
+    //     liar of the rule above - so those tiles are struck off the candidate list outright.
     // Density is ~1 foe per 6 tiles, floored at 4 so even the smallest maze is worth fighting
     // through, capped at 14 so a huge one doesn't become a slog. The guard counts towards it.
     const MARKER_MIN_SPACING = 2;
+    // How far back down the exit hallway the boss stands, in tiles. A cell is two tiles wide
+    // (cell, connector, cell), so 3 lands the guard on the connector between the two cells
+    // nearest the stairs - deep enough into the corridor that the player fights it with hallway
+    // both in front and behind, rather than backing into the stairwell mid-swing, and far
+    // enough that beating it still leaves the walk down to the stairs to make. MAZE.exitHallCells
+    // is what guarantees there are three unbranching tiles back there to count off.
+    const BOSS_TILES_FROM_EXIT = 3;
     function placeEnemyMarkers() {
       enemyMarkers = [];
       activeMarker = null;
@@ -5888,33 +6137,50 @@
         .filter(q => walkable.has(`${q.x},${q.y}`));
       const isStart = p => p.x === startRoom.x && p.y === startRoom.y;
       const approaches = nbrs(exitRoom).filter(p => !isStart(p));
-      // Normally there is exactly one of these. Where relocateExit had to fall back to a cell
-      // with several ways in, the one guard takes the approach the player reaches FIRST - the
-      // way in they will actually walk - rather than a random one. Doors count as passable
-      // here for the same reason relocateExit floods with them open: the player will have
-      // opened them by the time they are this deep.
+      // There is exactly one of these: the stairs sit at the dead end of the hallway
+      // relocateExit carved them, so there is one way in by construction. The branch below is
+      // belt and braces for the degenerate map where that carve found nowhere to go at all -
+      // the one guard then takes the approach the player reaches FIRST, the way in they will
+      // actually walk, rather than a random one. Doors count as passable here for the same
+      // reason relocateExit floods with them open: the player will have opened them by the
+      // time they are this deep.
       if (approaches.length > 1) {
         approaches.sort((a, b) => walkDist(a) - walkDist(b));
       }
 
-      // The guard stands one tile FURTHER BACK than the tile touching the stairs, so the fight
-      // ends a step short of the exit instead of on its doorstep - the player has to walk the
-      // last stretch themselves rather than falling into the stairs out of the boss's reach.
-      // That step back is only safe where the tile behind the approach is still the only way
-      // in: a fork back there would let the player round the boss to the exit, so on a fork
-      // (or a pocket with nothing behind it at all) it holds the doorstep as before.
+      // The guard stands BOSS_TILES_FROM_EXIT tiles back down the hallway rather than on the
+      // stairs' doorstep, so the fight happens in the corridor with the stairwell in sight at
+      // the end of it, and beating the boss still leaves the last stretch to walk instead of
+      // dropping the player into the stairs out of its reach.
+      //
+      // Walked one tile at a time, and it stops early at the first fork. Every step back is
+      // only unavoidable while it is still the ONLY way through: past a junction the player
+      // could round the boss and reach the stairs by the other branch. relocateExit sizes the
+      // hallway off this same constant, so the walk runs the full three - measured, on every
+      // one of 4200 dungeons across the three difficulties - and the early exit is what keeps
+      // the guard unavoidable rather than merely deep if it ever does not.
+      const exitHallTiles = new Set([_tileKey(exitRoom.x, exitRoom.y)]);
       if (approaches.length) {
-        const a = approaches[0];
-        const back = nbrs(a).filter(q =>
-          !(q.x === exitRoom.x && q.y === exitRoom.y) && !isStart(q));
-        const spot = back.length === 1 ? back[0] : a;
+        let cur = approaches[0], spot = cur;
+        exitHallTiles.add(_tileKey(cur.x, cur.y));
+        for (let step = 2; step <= BOSS_TILES_FROM_EXIT; step++) {
+          const onward = nbrs(cur).filter(q =>
+            !exitHallTiles.has(_tileKey(q.x, q.y)) && !isStart(q));
+          if (onward.length !== 1) break;      // fork, or nothing behind it - hold here
+          cur = onward[0];
+          exitHallTiles.add(_tileKey(cur.x, cur.y));
+          spot = cur;
+        }
         push(spot.x, spot.y, 'boss');
       }
 
-      // --- The roaming foes fill the rest of the maze around them.
+      // --- The roaming foes fill the rest of the maze around them. exitHallTiles is every tile
+      // from the stairs back to and including the boss's, and none of it is up for grabs: a
+      // roamer in there would be the last thing standing between the player and the stairs
+      // instead of the boss, which is the one thing the exit hallway exists to prevent.
       const candidates = passagesList.filter(p =>
         !(p.x === startRoom.x && p.y === startRoom.y) &&
-        !(p.x === exitRoom.x && p.y === exitRoom.y) &&
+        !exitHallTiles.has(_tileKey(p.x, p.y)) &&
         far(p, startRoom.x, startRoom.y) > 2
       );
       _shuffle(candidates);
@@ -7574,6 +7840,38 @@
       historyList.appendChild(msg);
     }
 
+    // A row's info line lists more than usually fits - wall style, date, size, quality
+    // tier, music - so a long one (the "windows 95 3d maze" kind) clips to an ellipsis and
+    // hides its tail. If the text genuinely overflows its column, rewrap it as a marquee
+    // that scrolls the whole line past on a loop. Called once per line after the list is
+    // in the DOM, so scrollWidth/clientWidth are real.
+    //
+    // Deliberately NOT gated on prefers-reduced-motion. Nothing else here is - the intro
+    // crawl aside, the confetti, the starfield and the screensaver's own story marquee all
+    // run regardless - and Windows ships plenty of machines with "Show animations" off, so
+    // the gate only ever meant a line clipped with no way to read the rest of it.
+    function marqueeIfOverflowing(el) {
+      if (!el || !el.clientWidth) return;
+      if (el.scrollWidth - el.clientWidth <= 1) return;   // fits - leave the plain line
+      const text = el.textContent;
+      el.classList.remove('truncate');
+      el.classList.add('hist-marquee');
+      el.textContent = '';
+      const track = document.createElement('div');
+      track.className = 'hist-marquee__track';
+      const a = document.createElement('span');
+      a.textContent = text;
+      const b = document.createElement('span');
+      b.textContent = text;
+      b.setAttribute('aria-hidden', 'true');   // screen readers read the line once
+      track.append(a, b);
+      el.appendChild(track);
+      // One copy (its text plus the 2.75rem trailing gap the CSS adds) passes per loop.
+      // Pace by that width so a short line and a long one crawl at the same ~55 px/s.
+      const copyW = a.getBoundingClientRect().width;
+      el.style.setProperty('--mq-dur', Math.max(5, copyW / 55).toFixed(1) + 's');
+    }
+
     // Every string on a row came out of a language model, so all of it goes in through
     // textContent - the list is built node by node rather than as an HTML string.
     // The order the set designer's slots are shown in on the history hover - matches
@@ -7587,7 +7885,7 @@
 
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
-      row.className = 'win95-box p-1.5 flex items-center gap-2';
+      row.className = 'hist-row win95-box p-1.5 flex items-center gap-2';
 
       const thumbFrame = document.createElement('div');
       thumbFrame.className = 'win95-inset w-12 h-12 shrink-0 bg-black flex items-center justify-center overflow-hidden';
@@ -7657,7 +7955,7 @@
       col.appendChild(cast);
 
       const meta = document.createElement('div');
-      meta.className = 'text-[10px] text-slate-600 font-bold truncate';
+      meta.className = 'hist-meta text-[10px] text-slate-600 font-bold truncate';
       const metaBits = [];
       if (entry.wall_style) metaBits.push(entry.wall_style);
       if (entry.created_text) metaBits.push(entry.created_text);
@@ -7705,6 +8003,11 @@
       }
       historyList.innerHTML = '';
       historyEntries.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
+      // The rows are in the DOM now but layout has not necessarily flushed - wait one
+      // frame, then turn any info line that overran its column into a scrolling marquee.
+      requestAnimationFrame(() => {
+        historyList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
+      });
       if (historyFootNote) {
         const total = historyEntries.reduce((sum, e) => sum + (e.size || 0), 0);
         const size = historySizeText(total);

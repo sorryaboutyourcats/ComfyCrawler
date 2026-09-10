@@ -400,6 +400,34 @@
       pointer-events: none;
       z-index: 1;
     }
+
+    /* History rows: an info line with more on it than fits its column (wall style · date ·
+       size · quality · music) scrolls sideways on a loop - the Windows marquee screensaver
+       the "windows 95 3d maze" dungeons are named after - rather than clipping to an
+       ellipsis. game.js measures each line once the list is built and only rewraps the
+       ones that actually overflow: the text goes into a track carrying two copies of
+       itself, and --mq-dur (scaled to the text width so every marquee crawls at one
+       speed) drives the loop. A line that fits keeps its plain .truncate. Hovering the
+       row halts the scroll so the line can be read where it sits. */
+    .hist-marquee { overflow: hidden; }
+    .hist-marquee__track {
+      display: inline-flex;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+      will-change: transform;
+      animation: histMarquee var(--mq-dur, 12s) linear infinite;
+    }
+    /* Each copy carries its own trailing gap, so the wrap-around spacing is even. The
+       -50% travel below is exactly one copy's width, which lands copy two where copy one
+       began - a seamless loop with no jump. */
+    .hist-marquee__track > span { flex: 0 0 auto; padding-right: 2.75rem; }
+    .hist-row:hover .hist-marquee__track { animation-play-state: paused; }
+    @keyframes histMarquee {
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
+    }
+    /* No prefers-reduced-motion rule on purpose - see marqueeIfOverflowing in game.js.
+       Hovering the row is the way to stop one of these. */
   </style>
 </head>
 <body>
@@ -598,8 +626,8 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="classroom">
             <span>🏫 Classroom</span>
           </button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="mangos">
-            <span>🥭 Mangos</span>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="cut up fruit">
+            <span>🍉 Fruit</span>
           </button>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="birds">
             <span>🐦 Birds</span>
@@ -607,14 +635,17 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="corporate office">
             <span>🏢 Corporate Office</span>
           </button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="manhattan">
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="&quot;manhattan&quot;">
             <span>🗽 Manhattan</span>
           </button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="ugly things covered in gold">
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="hell">
             <span>🥇 Golden Ugly</span>
           </button>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="motherboard">
             <span>🖥️ Motherboard</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="pet store">
+            <span>🐶 Dog</span>
           </button>
         </div>
       </div>
