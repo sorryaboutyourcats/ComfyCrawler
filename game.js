@@ -1208,8 +1208,13 @@
       'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'old person' },
       'corn maze':       { player: 'pickup truck robot',      weapon: 'pitchfork',        enemy: 'zombie animal' },
       'pizza toppings':  { player: 'cat chef',                weapon: 'pepperoni',        enemy: 'pasta' },
-      '"central park"':  { player: 'jogger',                  weapon: 'whip',             enemy: 'cardboard box' },
+      '"central park"':  { player: 'jogger',                  weapon: 'ipod',             enemy: 'cardboard box' },
       'mushrooms':       { player: 'Mario',                   weapon: 'plunger',          enemy: 'Bowser' },
+      // Quotes on the person for the same reason as "Donald Trump" under hell: they push the
+      // player and enemy down the named-entity path so it draws the real man, not an
+      // "elon"-shaped bucket. Weapon stays a bare word - the theme brief resolves "ketamine"
+      // into a drawable object (a vial / syringe) the way it does "memes".
+      'outer space':     { player: '"Elon Musk"',             weapon: 'ketamine',         enemy: '"Elon Musk"' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -6252,31 +6257,44 @@
         roamers.push(push(p.x, p.y, null));
       }
 
-      // --- The opening stretch. The first EASE_MIN..EASE_MAX foes on the way out of the spawn
-      // are the two PLAIN variants only - one walker, one flyer - with the packs held back
-      // until after them. Rolling the full bag from the very first marker meant a dungeon could
-      // open on a three-runt swarm (~10 HP/s of incoming damage, no guard to punish and no
-      // retreat) before the player had fought anything at all, which reads as the dungeon being
-      // broken rather than hard. Meeting the lone walker first teaches its punish window, and
-      // the lone flyer teaches the swoop; the swarm and the wing are then variations on two
-      // things already learned.
+      // --- The opening stretch. Every foe the player can reach from the spawn WITHOUT passing
+      // a locked door is one of the two PLAIN variants only - one walker, one flyer - with the
+      // packs (swarm, wing) held back until past the first door. Rolling the full bag from the
+      // very first marker meant a dungeon could open on a three-runt swarm (~10 HP/s of incoming
+      // damage, no guard to punish and no retreat) before the player had fought anything at
+      // all, which reads as the dungeon being broken rather than hard. Meeting the lone walker
+      // first teaches its punish window, and the lone flyer teaches the swoop; the swarm and
+      // the wing are then variations on two things already learned.
       //
-      // "First" is WALKING distance from the spawn tile, not marker order - the placement loop
-      // walks a shuffled candidate list, so its order has nothing to do with the order the
-      // player meets them in. Manhattan distance breaks ties so two markers the same number of
-      // steps out still resolve the nearer-looking one first. The exit guard is not in here:
-      // it was pushed before this and is a boss by definition, and it is at the far end anyway.
-      const EASE_MIN = 3, EASE_MAX = 6;
-      const easeCount = EASE_MIN + Math.floor(Math.random() * (EASE_MAX - EASE_MIN + 1));
+      // This used to hold back a fixed 3-6 foes by walking distance, but on a small maze that
+      // count could cover every marker in the dungeon, so a whole run would show nothing but
+      // the two plain foes. Tying it to the first door instead: the packs always turn up once
+      // there IS a door behind the player, and no sooner. A maze too small for planGates to
+      // gate at all (doorList empty) has no "first door", so it eases only the very first foe -
+      // those tiny runs still get pack variety.
+      //
+      // Doors are MAP tile 3 here (placeGatesAndSwitches has already stamped them). preDoorReach
+      // is every floor tile reachable from the spawn over MAP===0 only - region 0, the pocket
+      // in front of the first gate.
+      const preDoorReach = _flood(startRoom, (x, y) => MAP[y][x] === 0);
+      const hasDoors = doorList.length > 0;
+
+      // Distance order, so the walker/flyer deal below lands the walker on the nearest foe and
+      // so the eased set resolves as a clean prefix of the roamer list. Manhattan distance
+      // breaks ties. The exit guard is not in here: it was pushed before this and is a boss by
+      // definition, at the far end anyway.
       roamers.sort((a, b) => (walkDist(a) - walkDist(b)) ||
                              (far(a, startRoom.x, startRoom.y) - far(b, startRoom.x, startRoom.y)));
 
-      // The opening foes are DEALT, not rolled: split easeCount by the same 4:3 walker/flyer
-      // ratio the roaming bag uses, then shuffle. Rolling them independently would let a run of
-      // luck make the whole opening walkers (~19% of the time at easeCount 3), which is exactly
-      // the "you never saw a flyer before the wing" case this is meant to prevent. The very
-      // first one is pinned to the walker regardless - it is the foe every other one is a
-      // variation on, so it is what the opening fight should be.
+      const easeSet = new Set(roamers.filter((m, i) =>
+        i === 0 || (hasDoors && preDoorReach.has(_tileKey(m.x, m.y)))));
+
+      // The opening foes are DEALT, not rolled: split the eased count by the same 4:3
+      // walker/flyer ratio the roaming bag uses, then shuffle. Rolling them independently would
+      // let a run of luck make the whole opening walkers, which is exactly the "you never saw a
+      // flyer before the wing" case this is meant to prevent. The very first one is pinned to
+      // the walker regardless - it is the foe every other one is a variation on.
+      const easeCount = easeSet.size;
       const easeWalkers = Math.ceil(easeCount * 4 / 7);
       const easeDeal = [];
       for (let i = 0; i < easeCount; i++) easeDeal.push(i < easeWalkers ? 'walker' : 'flyer');
@@ -6286,9 +6304,10 @@
         if (w > 0) { easeDeal[w] = easeDeal[0]; easeDeal[0] = 'walker'; }
       }
 
-      roamers.forEach((m, i) => {
-        m.variant = (i < easeDeal.length)
-          ? easeDeal[i]
+      let dealt = 0;
+      roamers.forEach((m) => {
+        m.variant = easeSet.has(m)
+          ? easeDeal[dealt++]
           : roamBag[Math.floor(Math.random() * roamBag.length)];
       });
       updateProgressionHUD();
