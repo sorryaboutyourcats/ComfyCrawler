@@ -3,7 +3,7 @@ ComfyCrawler - Server & Engine
 A retro Windows 95 style 3D dungeon escape game powered by ComfyUI, FLUX.1 [schnell], and MiniMax H3.
 """
 
-from PIL import Image
+from PIL import Image, ImageStat
 import numpy as np
 import sys
 import re
@@ -616,11 +616,35 @@ SURFACE_MIN_LUMA = 34.0      # below this a tiling surface reads as an unlit voi
 SURFACE_TARGET_LUMA = 55.0   # what a lifted surface is brought up to
 SURFACE_MIN_GAMMA = 0.38     # any harder and dark-region compression noise comes up with it
 
+# THE SAME COMPLAINT BY A THIRD ROUTE: a wall with no CONTRAST at all. "supermarket" resolved
+# to "glossy white plastic with faint barcode patterns and faded price tags in black ink" -
+# true of a real supermarket wall, and unusable: the render measured mean luma 242 with 98.7%
+# of its pixels above 235, which is a blank sheet of paper. The gamma lift above cannot help
+# here the way it helps a dark surface, because there is no detail hiding in the shadows to
+# open up - the model drew nothing to begin with.
+#
+# So the measurement to gate on is the STANDARD DEVIATION of luma, not the mean: it catches a
+# blown-out white wall and a flat mid-grey one alike. Measured over every bundle in
+# dungeon_sessions - all eleven hand-tuned bucket walls land at 22.5 or above, while the six
+# dead designed walls (supermarket, two mangos, corporate office, classroom) land at 11.1 or
+# below. 16.0 sits in that gap with margin at both ends.
+#
+# WALL ONLY, deliberately. Low contrast is normal and perfectly fine on the other two - bucket
+# ceilings measure down to 6.2 and bucket floors to 12.5 - because both are seen at a glancing
+# angle and neither fills the view the way the wall ahead of you does.
+SURFACE_MIN_CONTRAST = 16.0
+
 
 def _mean_luma(img):
     px = img.convert("RGB").getdata()
     n = len(px)
     return sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in px) / max(1, n)
+
+
+def _surface_contrast(img):
+    """Luma standard deviation - how much the surface actually varies, which is what "blank"
+    means here. See SURFACE_MIN_CONTRAST for the measured threshold."""
+    return ImageStat.Stat(img.convert("L")).stddev[0]
 
 
 def _lift_dark_surface(path, label):
@@ -655,6 +679,98 @@ def _lift_dark_surface(path, label):
     except Exception as e:
         # A too-dark texture is a bad look; a crashed bundle is worse.
         print(f"[surface] could not lift {label}: {e}")
+
+
+# The rescue prompt for a wall that came back blank - see SURFACE_MIN_CONTRAST above.
+#
+# It is deliberately NOT the designed line retried on a fresh seed, and NOT the raw typed word
+# dropped back into get_surface_prompts' wall frame. Both were measured across three seeds
+# each and both stay blank, because what manufactures the blankness is that frame's own "pure
+# flat vertical wall material" tail meeting a subject with no pattern of its own ("beige
+# laminate", "vinyl in soft yellow"): the tail is then the only concrete thing left in the
+# prompt and the model draws exactly it. Raw "mango" through that frame measured 3.0-8.0.
+#
+# Asking instead for a WALLPAPER OF THE THEME'S PICTURES drops the tail entirely and hands the
+# model something it has to actually draw. On the three themes that had shipped blank walls it
+# measured 41.9-50.9 (mango), 74.1-81.9 (corporate office) and 62.7-65.1 (supermarket) against
+# the 16.0 floor, and the renders are clean seamless tiles rather than noise. This is the same
+# shape the hand-tuned `cat` and `people` buckets have always used, which is exactly why
+# neither of those has ever produced this failure.
+_WALLPAPER_RESCUE = ("A flat 2D wallpaper texture of dense repeating pictures of {}, bold "
+                     "saturated colours, colorful repeating pattern filling the whole frame "
+                     "edge to edge, flat straight-on orthographic view, zero perspective, "
+                     "no room, no borders.")
+
+
+def _reroll_flat_wall(wall_style, tile_px):
+    """Re-render the wall from _WALLPAPER_RESCUE. Returns the new file path, or None if
+    anything goes wrong - the caller already holds a working (if blank) texture, and a blank
+    wall is a bad look where a crashed bundle is a lost run."""
+    try:
+        prefix = f"trio_wr_{int(time.time()*1000)}"
+        payload = {
+            "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+            "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+            "lat": {"inputs": {"width": tile_px, "height": tile_px, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+            "pos": {"inputs": {"text": _WALLPAPER_RESCUE.format(wall_style), "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+            "samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+                                "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                "model": ["1", 0], "positive": ["pos", 0], "negative": ["neg", 0],
+                                "latent_image": ["lat", 0]}, "class_type": "KSampler"},
+            "dec": {"inputs": {"samples": ["samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+            "save": {"inputs": {"filename_prefix": prefix, "images": ["dec", 0]}, "class_type": "SaveImage"},
+        }
+        data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
+        req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
+        start = time.time()
+        while time.time() - start < 60:
+            time.sleep(0.1)
+            _bail_if_cancelled()
+            with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}") as h_resp:
+                hist = json.loads(h_resp.read().decode("utf-8"))
+            out = hist.get(prompt_id, {}).get("outputs", {})
+            if "save" in out:
+                info = out["save"]["images"][0]
+                return os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+    except GenerationCancelled:
+        # An abandoned run must keep unwinding - this is not a re-roll failure.
+        raise
+    except Exception as e:
+        print(f"[surface] wall re-roll failed: {e}")
+    return None
+
+
+def _fix_blank_wall(path, wall_style, tile_px):
+    """Swap in a wallpaper re-roll when the designed wall came back with no contrast at all.
+    Returns the path to use. A no-op on a readable wall, so it costs one pass over the image
+    on a healthy texture."""
+    try:
+        got = _surface_contrast(Image.open(path))
+    except Exception as e:
+        print(f"[surface] could not measure the wall: {e}")
+        return path
+    if got >= SURFACE_MIN_CONTRAST:
+        return path
+    print(f"[surface] wall came back at contrast {got:.1f} - blank below "
+          f"{SURFACE_MIN_CONTRAST:.0f} - re-rolling it as a wallpaper of {wall_style}")
+    alt = _reroll_flat_wall(wall_style, tile_px)
+    if not alt:
+        return path
+    try:
+        alt_got = _surface_contrast(Image.open(alt))
+    except Exception as e:
+        print(f"[surface] could not measure the re-rolled wall: {e}")
+        return path
+    # Keep whichever has more to look at: the rescue prompt is measurably better on every
+    # theme tried, but a theme it happens to fail on must not end up worse than it started.
+    if alt_got <= got:
+        print(f"[surface] re-roll came back at {alt_got:.1f} too - keeping the original")
+        return path
+    print(f"[surface] re-rolled wall at contrast {alt_got:.1f}")
+    return alt
 
 
 def make_seamless_4way(img_path, blend_pixels=12):
@@ -2803,7 +2919,7 @@ _SPECIES_TIDY = [
 ]
 
 
-def _strip_words(look, pattern, why):
+def _strip_words(look, pattern, why, tag="species"):
     """Delete just the matched WORDS, keeping the rest of their clause. Returns the original
     if the result would be too thin to be a description."""
     out = pattern.sub("", look or "")
@@ -2814,7 +2930,7 @@ def _strip_words(look, pattern, why):
         return look
     if out != (look or "").strip():
         dropped = sorted(set(m.group(0) for m in pattern.finditer(look or "")))
-        print(f"[species] removed {why} word(s) {dropped}")
+        print(f"[{tag}] removed {why} word(s) {dropped}")
     return out
 
 
@@ -3023,6 +3139,28 @@ THEME_SUBJECT_SLOTS = ["weapon", "enemy"]
 # leading article and capital come off. lantern / door / switch are the other way round: each
 # one IS the subject of its prompt, so their article and capital are exactly right.
 _THEME_INLINE_SLOTS = {"wall", "floor", "ceiling", "weapon", "enemy"}
+
+# The three slots that become a TILING TEXTURE, as opposed to a single drawn object. Only
+# these get the washout strip below - "a faint glow" on a lantern is a description of a lit
+# object and perfectly renderable; "faint barcode patterns" on a wall is not.
+_THEME_TEXTURE_SLOTS = {"wall", "floor", "ceiling"}
+
+# The washout adjectives, and they are not a matter of taste. FLUX schnell runs these surfaces
+# at 4 steps and cfg 1.0, where it cannot resolve low-contrast detail at all - so a line that
+# says its own detail is "faint" or "faded" leaves the flat ground colour as the only thing in
+# the prompt the model can draw, and the wall arrives as blank paper. That is what shipped a
+# white supermarket: "glossy white plastic with faint barcode patterns and faded price tags in
+# black ink" measured std dev 2.7 / 3.5 / 17.0 across three seeds (blank on all three) and
+# 36.3 / 46.0 / 61.2 on those same three seeds with just these two words deleted.
+#
+# It has to be WORD removal, like _SPECIES_ARMOUR: the detail lives inside the clause the
+# adjective qualifies, so _strip_clauses would delete the barcodes and keep the white plastic -
+# precisely backwards. Note that "white" and "glossy" are NOT on this list; stripping them
+# instead of the adjectives was measured and still went blank on one seed in three, because
+# they describe the ground rather than suppress the pattern.
+_SURFACE_WASHOUT = re.compile(
+    r"\b(?:faint(?:ly)?|faded|fading|barely[- ]visible|barely[- ]there|subtle|subtly|"
+    r"muted|pale|washed[- ]out|soft(?:ly)?|delicate|understated|ghostly|wispy)\b", re.I)
 _THEME_ARTICLE = re.compile(r"^(?:an?|the)\s+", re.I)
 
 
@@ -3687,7 +3825,7 @@ THEME_BRIEF_SYSTEM = (
 # run on FLUX schnell and krea2 at cfg 1.0 with an inert negative, so a line describing what
 # something ISN'T is a request to draw it (see _LANTERN_TAIL's comment for the incandescent
 # bulb that got drawn every single time).
-_THEME_BRIEF_SURFACES = """- WALL: the material the corridor walls are made of.
+_THEME_BRIEF_SURFACES = """- WALL: what covers the corridor walls - what you would see facing one.
 - FLOOR: the material underfoot.
 - CEILING: the material overhead.
 - LANTERN: ONE object from this world that could glow and light the corridor.
@@ -3741,18 +3879,38 @@ def _theme_brief_surfaces(wall_named=None):
 # "internet = server racks" reading: the brief used to demand a MATERIAL, and the only material
 # answer for an idea is the hardware behind it. The existing `cat` and `people` keyword buckets
 # have always been wallpapers, so this only lets the designed path do what they already do.
+#
+# ITS THIRD READING - THE VIEW OF A PLACE - is the same lesson reaching real places, and it is
+# what shipped the white supermarket. Asked for "the material the corridor walls are made of",
+# the model answered "glossy white plastic": correct, and a blank wall. A supermarket is not
+# its paint, it is its aisles, and the run the player liked was the one whose line happened to
+# start "glossy plastic aisles..." (measured contrast 51.0, against 4.1 for the paint answer).
+# Measured on the shape this rule now asks for - "stocked supermarket aisles with bright
+# product packaging and hanging price signage" - 56.3 / 61.6 / 65.1 across three seeds.
+#
+# Rule 3 no longer says "never a room, never a scene": the view down a real place HAS a
+# vanishing point, and forbidding one is what pushed the answer back onto the bare wall. The
+# hazard that rule actually guards against is a single big focal object repeating in every map
+# square, so it now says that and only that.
+#
+# The examples were dropped from rule 2 at the same time, for the reason recorded further down
+# under the enemy rules: a copyable answer gets copied. "cracked red brick with white mortar"
+# opened NINE of the 36 designed walls in dungeon_sessions with the word "cracked".
 _THEME_RULES_SURFACE = [
-    """WALL, FLOOR and CEILING are one surface seen up close - either a material ("cracked red
-   brick with white mortar") or a wallpaper of the theme's own pictures repeated edge to edge
-   ("dense repeating browser windows on navy"). Never a room, never a scene.""",
-    """Those three must tile: an even repeating surface with no single big object, because one
-   copy covers one square of the map and a focal point repeats down the whole corridor.""",
+    """WALL, FLOOR and CEILING each show what this theme LOOKS like: the material itself named
+   by its colours and its markings, or a wallpaper of the theme's own pictures repeated edge
+   to edge, or - when the theme is a real place - the view you get standing inside it, its
+   fittings and its signage included. Never the bare plaster behind all that.""",
+    """Those three fill the frame edge to edge with detail spread evenly and no one big object
+   at the centre, because one copy covers one square of the map and anything singular repeats
+   down the whole corridor.""",
     """LANTERN, DOOR and SWITCH are one object each, three different objects, each obviously
    from THIS theme - a plain iron dungeon door belongs to no theme and is always wrong. The
    door is SHUT: a solid slab you cannot see past. Say what the leaf is made of.""",
     """Those three surfaces are lit by one lantern and the game darkens them further with
-   distance, so keep them mid-tone or pale with the detail visible. Near-black arrives on
-   screen as an empty void. If the theme is a black thing, say what is bright on it.""",
+   distance, so give each one bold markings in strongly contrasting colours, readable from
+   across a room. One even tone arrives on screen as an empty surface - if the theme's own
+   colour is a plain one, say what is boldly printed, stacked or lit across it.""",
 ]
 
 # The ENEMY rule is the one under the most tension: it has to be short (it becomes the {enemy}
@@ -3894,6 +4052,10 @@ def parse_theme_brief(text, slots):
             continue
         if key == "enemy":
             value = _theme_enemy_subject(value)
+        # A tiling surface that describes its own detail as faint is describing a blank wall
+        # at 4 steps - see _SURFACE_WASHOUT.
+        if key in _THEME_TEXTURE_SLOTS:
+            value = _strip_words(value, _SURFACE_WASHOUT, "washout", tag="theme")
         if key in _THEME_INLINE_SLOTS:
             value = _theme_inline(value)
         out[key] = value[:240]
@@ -4446,6 +4608,12 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
             return os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
 
         w_path, c_path, f_path = _p("w_save"), _p("c_save"), _p("f_save")
+        # Blank-wall guard, BEFORE the seam blend so whichever texture survives is the one
+        # that gets tiled. Gated on the designed path exactly like _lift_dark_surface below,
+        # and for the same reason: every hand-tuned bucket wall measures well clear of the
+        # contrast floor (22.5 at worst), so this must never repaint one.
+        if (brief or {}).get("wall"):
+            w_path = _fix_blank_wall(w_path, wall_style, tile_px)
         make_seamless_4way(w_path, blend_pixels=12)
         make_seamless_4way(c_path, blend_pixels=12)
         make_seamless_4way(f_path, blend_pixels=12)

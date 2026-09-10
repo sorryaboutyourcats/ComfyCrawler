@@ -184,6 +184,77 @@ ck(out.mode == "RGBA" and out.getchannel("A").getextrema() == (128, 128),
 # a missing file must not raise - a bad texture beats a crashed bundle
 srv._lift_dark_surface(os.path.join(tmpd, "nope.png"), "unit-missing")
 
+# ---- the blank-wall guard: the same failure reached by the third route -------------
+# "supermarket" resolved to "glossy white plastic with faint barcode patterns" and rendered a
+# blank sheet - mean luma 242, so the dark lift above never fires. The measurement that catches
+# it is CONTRAST, and it is gated on the designed wall slot for the same reason the lift is.
+ck('_fix_blank_wall(w_path, wall_style, tile_px)' in gate_src,
+   "the blank-wall guard is no longer wired into the surface pipeline")
+ck(gate_src.index('_fix_blank_wall') < gate_src.index('make_seamless_4way(w_path'),
+   "the guard must run BEFORE the seam blend, or the blank texture is the one that gets tiled")
+# the threshold has to sit in the gap measured over dungeon_sessions: every hand-tuned bucket
+# wall came in at 22.5 or above, every dead designed wall at 11.1 or below.
+ck(11.1 < srv.SURFACE_MIN_CONTRAST < 22.5,
+   f"SURFACE_MIN_CONTRAST {srv.SURFACE_MIN_CONTRAST} left the measured gap")
+flat = Image.new("RGB", (64, 64), (243, 243, 243))
+ck(srv._surface_contrast(flat) < srv.SURFACE_MIN_CONTRAST, "a blank sheet read as textured")
+checks = Image.new("RGB", (64, 64))
+checks.putdata([(255, 255, 255) if (x // 8 + y // 8) % 2 else (20, 20, 20)
+                for y in range(64) for x in range(64)])
+ck(srv._surface_contrast(checks) > srv.SURFACE_MIN_CONTRAST, "a checkerboard read as blank")
+# a readable wall must be returned untouched, without reaching ComfyUI at all
+ok_wall = os.path.join(tmpd, "ok.png"); checks.save(ok_wall)
+ck(srv._fix_blank_wall(ok_wall, "supermarket", 512) == ok_wall,
+   "a readable wall was needlessly re-rolled")
+# an unreadable file must not raise, and must hand its path straight back
+ck(srv._fix_blank_wall(os.path.join(tmpd, "nope.png"), "supermarket", 512).endswith("nope.png"),
+   "a missing wall should fall through, not raise")
+# the rescue prompt must not carry the frame that manufactures the blankness in the first place
+ck("flat vertical wall material" not in srv._WALLPAPER_RESCUE,
+   "the rescue prompt kept the 'pure flat wall material' tail it exists to escape")
+ck("{}" in srv._WALLPAPER_RESCUE, "the rescue prompt lost its theme slot")
+
+# ---- washout adjectives are stripped from the three TILING slots ------------------
+# FLUX schnell at 4 steps cannot resolve detail a line calls "faint" - it draws the ground
+# colour and nothing else. Measured on the line that shipped a white supermarket: std dev
+# 2.7/3.5/17.0 across three seeds, and 36.3/46.0/61.2 on those same seeds without these words.
+import re
+washed = srv.parse_theme_brief(
+    "WALL: glossy white plastic with faint barcode patterns and faded price tags\n"
+    "CEILING: fluorescent tubes casting a pale yellow glow over shelf silhouettes\n"
+    "FLOOR: linoleum tiles with subtle grocery aisle lines\n"
+    "LANTERN: A faintly flickering pale LED bulb on a chrome cart handle\n", ALL)
+for slot in ("wall", "ceiling", "floor"):
+    ck(not re.search(r"\b(faint|faintly|faded|pale|subtle)\b", washed[slot], re.I),
+       f"{slot} kept a washout word: {washed[slot]!r}")
+# the DETAIL the adjective qualified has to survive - stripping the clause instead would
+# delete the barcodes and keep the white plastic, which is precisely backwards
+ck("barcode patterns" in washed["wall"] and "price tags" in washed["wall"],
+   f"the wall's detail went with its adjective: {washed['wall']!r}")
+ck("yellow glow" in washed["ceiling"] and "grocery aisle lines" in washed["floor"],
+   "ceiling/floor detail was lost with the adjective")
+# LANTERN, DOOR and SWITCH are single drawn objects, not tiling surfaces: a faintly flickering
+# pale bulb is a perfectly renderable description of a lit thing and must be left alone
+ck("faintly" in washed["lantern"] and "pale" in washed["lantern"],
+   f"a single-object slot was stripped: {washed['lantern']!r}")
+# and a line that is nothing BUT washout words falls back rather than becoming a fragment
+ck(srv._strip_words("pale faded muted", srv._SURFACE_WASHOUT, "washout") == "pale faded muted",
+   "the strip gutted a line instead of keeping the original")
+
+# ---- the surface rules must not steer the walls blank themselves -------------------
+# Rule 4 used to say "keep them mid-tone or PALE", warning only about the dark end, and rule 2
+# used to forbid a scene outright - which is what pushed a real place back onto its bare paint.
+surf_rules = "\n".join(srv._THEME_RULES_SURFACE)
+ck("pale" not in surf_rules.lower(), "the surface rules still tell the model to go pale")
+ck("never a scene" not in surf_rules.lower() and "never a room" not in surf_rules.lower(),
+   "the scene ban is back - the view down a real place has a vanishing point")
+ck("standing inside it" in surf_rules, "the place reading is missing from rule 2")
+ck("no one big object" in surf_rules,
+   "rule 3 lost the focal-object ban, which is the hazard it actually guards against")
+# a copyable answer gets copied: "cracked red brick with white mortar" opened NINE of the 36
+# designed walls in dungeon_sessions with the word "cracked".
+ck("cracked red brick" not in surf_rules, "the copyable wall example is back")
+
 # ---- armour is stripped from EVERY subject, by WORD not by clause ----------------
 # A person is a weak enough prior that "armoured" replaces them outright: "A squat, armored
 # chat-bubble twitch viewer" rendered a mech with no person and no bubble in it.

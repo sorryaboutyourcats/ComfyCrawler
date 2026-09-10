@@ -1205,7 +1205,7 @@
       'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villain lady' },
       'pet store':       { player: 'Yorkshire Terrier',       weapon: 'flaming whip',     enemy: 'funny dog with tongue sticking out' },
       'Sega arcade':     { player: '"Goodcow" the cow',       weapon: 'Dreamcast controller', enemy: '"Sonic"' },
-      'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'crazy customer' },
+      'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'old person' },
       'corn maze':       { player: 'pickup truck robot',      weapon: 'pitchfork',        enemy: 'zombie animal' },
       'pizza toppings':  { player: 'cat chef',                weapon: 'pepperoni',        enemy: 'pasta' },
       '"central park"':  { player: 'jogger',                  weapon: 'whip',             enemy: 'cardboard box' },
@@ -1217,10 +1217,15 @@
         const val = btn.getAttribute('data-val');
         wallPromptInput.value = val.toLowerCase();
         const idea = PRESET_IDEAS[val];
-        if (!idea) return;
-        if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
-        if (weaponPromptInput && !weaponPromptInput.disabled) weaponPromptInput.value = idea.weapon;
-        if (enemyPromptInput && !enemyPromptInput.disabled) enemyPromptInput.value = idea.enemy;
+        if (idea) {
+          if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
+          if (weaponPromptInput && !weaponPromptInput.disabled) weaponPromptInput.value = idea.weapon;
+          if (enemyPromptInput && !enemyPromptInput.disabled) enemyPromptInput.value = idea.enemy;
+        }
+        // Don't leave the focus ring stranded on a preset deep in the grid. Landing it on
+        // the first field lets the player read down the filled-in mad-lib from the top, and
+        // Enter from a field still fires CREATE - so "pick an idea, press Enter" still goes.
+        wallPromptInput.focus({ preventScroll: true });
       });
     });
 
@@ -7653,9 +7658,100 @@
       if (modalHistory && !modalHistory.classList.contains('hidden')) return;
       if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
       if (e.target && e.target.tagName === 'TEXTAREA') return;
+      // Now that the arrow keys can park the focus ring on any button here, Enter belongs to
+      // whatever is focused: a Quick idea, Options and History activate themselves (CREATE
+      // does too, natively). The CREATE shortcut is only for Enter from a mad-lib field or
+      // from nowhere in particular.
+      if (e.target && e.target.tagName === 'BUTTON') return;
       if (btnCreate.disabled) return;
       e.preventDefault();
       btnCreate.click();
+    });
+
+    // The arrow keys walk the focus ring around the setup screen, so the whole menu - the
+    // four mad-lib fields, their Attach buttons, the entire wrapped grid of Quick ideas and
+    // the Options / History / CREATE row - is reachable without a mouse or thirty presses of
+    // Tab. Movement is geometric, not DOM order: ArrowDown from a Quick idea lands on the one
+    // drawn roughly below it, skipping the rest of its row. In a mad-lib field ArrowUp/Down
+    // always step out (a one-line field has nowhere for them to go), while ArrowLeft/Right
+    // keep moving the caret and only step to the neighbour once it sits at the field's edge -
+    // so the Attach button just right of the field is still one arrow away.
+    function setupMenuFocusables() {
+      return Array.from(screenSetup.querySelectorAll('input, button')).filter((el) => {
+        if (el.disabled || el.type === 'file') return false;
+        return el.getClientRects().length > 0;   // on screen: not .hidden, not a collapsed badge
+      });
+    }
+
+    // Pick the best control to move to. The mad-lib fields aren't left-edge aligned (each is
+    // centred in its own row behind a label of its own width), so a plain "nearest in that
+    // direction" jumps diagonally - wall straight to weapon, past player. Instead: a candidate
+    // that overlaps the current control on the cross axis (same row for L/R, same column band
+    // for U/D) always beats one that doesn't; within that, the smallest gap along the pressed
+    // axis wins, then the smallest cross-axis offset. L/R never take a non-overlapping
+    // candidate at all, so a row end just stops rather than lurching to another row.
+    function moveSetupFocus(dir) {
+      const list = setupMenuFocusables();
+      if (!list.length) return;
+      const active = document.activeElement;
+      if (list.indexOf(active) === -1) { list[0].focus(); return; }
+
+      const a = active.getBoundingClientRect();
+      const horiz = dir === 'left' || dir === 'right';
+      const aMidX = (a.left + a.right) / 2;
+      const aMidY = (a.top + a.bottom) / 2;
+
+      let best = null;
+      let bestKey = null;
+      for (const el of list) {
+        if (el === active) continue;
+        const r = el.getBoundingClientRect();
+        const midX = (r.left + r.right) / 2;
+        const midY = (r.top + r.bottom) / 2;
+
+        const forward = dir === 'up'   ? aMidY - midY
+                      : dir === 'down' ? midY - aMidY
+                      : dir === 'left' ? aMidX - midX
+                      :                  midX - aMidX;
+        if (forward < 1) continue;   // must actually be that way
+
+        const overlap = horiz
+          ? (r.bottom > a.top + 1 && r.top < a.bottom - 1)
+          : (r.right > a.left + 1 && r.left < a.right - 1);
+        if (horiz && !overlap) continue;   // L/R stay on the current row
+
+        const cross = horiz ? Math.abs(midY - aMidY) : Math.abs(midX - aMidX);
+        const key = [overlap ? 0 : 1, Math.round(forward), Math.round(cross)];
+        if (!bestKey || key[0] < bestKey[0]
+            || (key[0] === bestKey[0] && key[1] < bestKey[1])
+            || (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] < bestKey[2])) {
+          best = el;
+          bestKey = key;
+        }
+      }
+      if (best) best.focus({ preventScroll: true });
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.code];
+      if (!dir) return;
+      if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;   // word-jump / select stay native
+      if (screenSetup.classList.contains('hidden')) return;
+      if (modalSettings && !modalSettings.classList.contains('hidden')) return;
+      if (modalHistory && !modalHistory.classList.contains('hidden')) return;
+      if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
+
+      const el = document.activeElement;
+      if (el && el.tagName === 'INPUT' && el.type === 'text' && (dir === 'left' || dir === 'right')) {
+        const collapsed = el.selectionStart === el.selectionEnd;
+        const atEdge = dir === 'left'
+          ? collapsed && el.selectionStart === 0
+          : collapsed && el.selectionStart === el.value.length;
+        if (!atEdge) return;   // move the caret inside the field first
+      }
+
+      e.preventDefault();
+      moveSetupFocus(dir);
     });
 
     // A refresh mid-generation used to be silently destructive in both directions: the page

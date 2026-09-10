@@ -74,6 +74,14 @@
       box-shadow: inset 1px 1px #0a0a0a;
       background: #dcdcdc;
     }
+    /* Keyboard focus on the main menu. The mad-lib fields already flag focus by turning
+       their underline blue; the buttons showed nothing, so moving around the setup screen
+       with the arrow keys (or Tab) was invisible on them. A navy dotted rectangle is the
+       period-correct cue. :focus-visible keeps it off plain mouse clicks. */
+    #screenSetup button:focus-visible {
+      outline: 2px dotted #000080;
+      outline-offset: 1px;
+    }
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
       color: white;
