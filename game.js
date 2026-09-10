@@ -1128,7 +1128,11 @@
       if (!screenGame.classList.contains('hidden')) {
         if (confirm("Would you like to create a new dungeon?")) openSetupScreen();
       } else {
-        openSetupScreen();
+        // Off the game screen the window's ✕ "closes" it the only way a browser tab can:
+        // the Win98 starfield takes the whole screen, exactly as it does after an idle
+        // timeout. showScreensaverManually also holds the dismiss-on-input off for a full
+        // second, so the mouse coming off the button doesn't blow it straight back away.
+        showScreensaverManually();
       }
     });
 
@@ -8166,6 +8170,25 @@
     if (btnHistoryConfirmCancel) btnHistoryConfirmCancel.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmDelete) btnHistoryConfirmDelete.addEventListener('click', confirmDeleteHistory);
 
+    // ESC backs out of the Options and History windows, the same as clicking their ✕. The
+    // History delete-confirm sits on top of the list, so a first ESC closes just that and
+    // leaves History open; a second ESC then closes History. While the screen saver is up its
+    // own capture-phase key handler runs first and swallows the ESC to dismiss itself, so
+    // this never fires over it.
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' && e.code !== 'Escape') return;
+      if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) {
+        e.preventDefault();
+        closeDeleteConfirm();
+      } else if (modalSettings && !modalSettings.classList.contains('hidden')) {
+        e.preventDefault();
+        modalSettings.classList.add('hidden');
+      } else if (modalHistory && !modalHistory.classList.contains('hidden')) {
+        e.preventDefault();
+        closeHistory();
+      }
+    });
+
     // ==========================================
     // SCREEN SAVER - Windows 98 "Starfield Simulation"
     // ==========================================
@@ -8201,10 +8224,17 @@
     let screensaverDelayMs = SCREENSAVER_STOPS[SCREENSAVER_DEFAULT_STOP].secs * 1000;
 
     let screensaverActive = false;
-    let screensaverShownAt = 0;
     let screensaverLastActivity = Date.now();
     let screensaverRaf = null;
     let screensaverT0 = 0;
+    // Input that lands before this timestamp neither dismisses the saver nor is swallowed.
+    // Normally ~350ms from when it appears - long enough to eat the synthetic pointer move
+    // some browsers fire on that same tick. A manual open from the title-bar ✕ stretches it
+    // to a full second, so lifting the mouse off the button doesn't instantly close it.
+    let screensaverGraceUntil = 0;
+    // A manual open (the ✕ button) stays up even with the idle timeout set to Off. It still
+    // yields to narration, a live battle or a playing video, the same as an idle open does.
+    let screensaverForced = false;
 
     // ---- Stars -------------------------------------------------------------
     // Model space is a unit frustum: x and y in [-1, 1], z falling from 1 (the far plane,
@@ -8462,7 +8492,7 @@
     function showScreensaver() {
       if (screensaverActive || !screensaverEl || !starCtx) return;
       screensaverActive = true;
-      screensaverShownAt = Date.now();
+      screensaverGraceUntil = Date.now() + 350;
       sizeStarfield();
       // A fresh field every time, so it always opens on the same sparse warp.
       for (let i = 0; i < stars.length; i++) seedStar(stars[i], false);
@@ -8471,9 +8501,22 @@
       screensaverRaf = requestAnimationFrame(screensaverFrame);
     }
 
+    // The title-bar ✕ routes here (off the game screen): "closing" the window just hands the
+    // whole screen to the starfield. Unlike an idle open it ignores a zero (Off) timeout, but
+    // it still defers to anything that means the machine is in use, and it widens the input
+    // grace to a second so the mouse leaving the ✕ doesn't dismiss it on the same gesture.
+    function showScreensaverManually() {
+      screensaverForced = true;
+      if (screensaverBlocked()) { screensaverForced = false; return; }
+      showScreensaver();
+      if (!screensaverActive) { screensaverForced = false; return; }
+      screensaverGraceUntil = Date.now() + 1000;
+    }
+
     function hideScreensaver() {
       if (!screensaverActive) return;
       screensaverActive = false;
+      screensaverForced = false;
       if (screensaverRaf) { cancelAnimationFrame(screensaverRaf); screensaverRaf = null; }
       if (screensaverEl) screensaverEl.classList.add('hidden');
       screensaverLastActivity = Date.now();
@@ -8495,7 +8538,8 @@
     // Anything here means the machine is not actually unattended, so the countdown is held
     // at zero rather than merely paused - the full wait has to elapse after it clears.
     function screensaverBlocked() {
-      if (screensaverDelayMs <= 0) return true;
+      // A manual open from the ✕ overrides only the Off setting - every check below still applies.
+      if (screensaverDelayMs <= 0 && !screensaverForced) return true;
       if (narrationActive() || ssAudioPlaying(narrateAudio) || ssAudioPlaying(outroAudio)) return true;
       // The intro crawl's own scroll duration, independent of narration - covers a story
       // that shipped with no audio at all, or whose autoplay got blocked before a click
@@ -8511,9 +8555,10 @@
     function noteScreensaverActivity(e) {
       screensaverLastActivity = Date.now();
       if (!screensaverActive) return;
-      // The overlay appears on the same tick some browsers deliver a synthetic move for, so
-      // ignore the first fraction of a second or it would dismiss itself instantly.
-      if (Date.now() - screensaverShownAt < 350) return;
+      // Input inside the grace window is ignored, not consumed: it covers the synthetic move
+      // some browsers fire on the tick the overlay appears (~350ms), and the second-long hold
+      // after a manual open from the ✕ button so the mouse leaving it doesn't dismiss it.
+      if (Date.now() < screensaverGraceUntil) return;
       hideScreensaver();
       // The input that woke the machine is spent waking it: it must not also type a
       // character into the prompt behind the overlay or take a step in the dungeon.
