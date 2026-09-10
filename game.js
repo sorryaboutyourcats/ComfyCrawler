@@ -1129,7 +1129,7 @@
 
     btnClose.addEventListener('click', () => {
       if (!screenGame.classList.contains('hidden')) {
-        if (confirm("Would you like to create a new dungeon?")) openSetupScreen();
+        if (confirm("Back to Main Menu?")) openSetupScreen();
       } else {
         // Off the game screen the window's ✕ "closes" it the only way a browser tab can:
         // the Win98 starfield takes the whole screen, exactly as it does after an idle
@@ -1978,7 +1978,7 @@
         // around behind the combat view. Swapping it out for the combat buttons settles that
         // and costs no height, since the two grids are the same size.
         if (dpadGrid) dpadGrid.classList.add('hidden');
-        if (controlsHeader) controlsHeader.textContent = "COMBAT: A/D Strafe, Z Strike, X Block";
+        if (controlsHeader) controlsHeader.innerHTML = "COMBAT:<br>A/D to move<br>W to strike<br>S to block";
 
         combatState.playerX = 0;
         combatState.vx = 0;
@@ -2009,7 +2009,7 @@
         }
         if (battleActionBar) battleActionBar.classList.add('hidden');
         if (dpadGrid) dpadGrid.classList.remove('hidden');
-        if (controlsHeader) controlsHeader.textContent = "CONTROLS (Space: Use):";
+        if (controlsHeader) controlsHeader.textContent = "CONTROLS:";
         combatState.introFrame = 0;
         setBattleMusicRate(1, 0.8);   // fight over - any boss pitch-shift slides back to normal
         // Hiding the action bar mid-press means the Block button never receives its pointerup or
@@ -7109,6 +7109,16 @@
           e.preventDefault();
           combatAttack();
         }
+        return;
+      }
+
+      // ESC in free exploration does exactly what the title-bar ✕ does here: the
+      // "Back to Main Menu?" prompt. In battle the block just above has already returned,
+      // and every open box (victory / defeat / level-up) returned earlier still, so ESC
+      // only reaches this line while the player is walking the dungeon.
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        btnClose.click();
         return;
       }
 

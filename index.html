@@ -220,8 +220,8 @@
       font-weight: bold;
     }
     .combat-btn {
-      height: 44px;
-      font-size: 11px;
+      height: 62px;
+      font-size: 24px;
       line-height: 1.1;
       text-align: center;
       padding: 2px 3px;
@@ -443,7 +443,7 @@
       </div>
       <div id="titleButtons" class="flex gap-1 text-xs">
         <button id="btnMaximize" class="win95-btn px-2 py-0.5 text-black hover:bg-slate-300" title="Toggle Fullscreen">□</button>
-        <button id="btnClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" title="New Dungeon / Close">✕</button>
+        <button id="btnClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" title="Back to Main Menu / Screen Saver">✕</button>
       </div>
     </div>
 
@@ -1012,16 +1012,16 @@
 
           <!-- D-Pad Navigation Controls -->
           <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
-            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS (Space: Use):</div>
+            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS:</div>
 
             <div id="dpadGrid" class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>
               <button id="btnUp" class="win95-btn dpad-btn" title="Move Forward (W / Up)">▲</button>
               <div></div>
 
-              <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">◀</button>
+              <button id="btnLeft" class="win95-btn dpad-btn" title="Rotate Left 90° (A / Left)">↺</button>
               <button id="btnDown" class="win95-btn dpad-btn" title="Move Backward (S / Down)">▼</button>
-              <button id="btnRight" class="win95-btn dpad-btn" title="Rotate Right 90° (D / Right)">▶</button>
+              <button id="btnRight" class="win95-btn dpad-btn" title="Rotate Right 90° (D / Right)">↻</button>
 
               <div></div>
               <button id="btnAction" class="win95-btn dpad-btn !text-[10px]" title="Use switch / door (Space)">USE</button>
@@ -1033,16 +1033,16 @@
                  it. Same 2-row footprint as the D-pad it replaces. -->
             <div id="battleActionBar" class="hidden grid grid-cols-2 gap-1.5 w-full my-auto text-[10px] font-bold">
               <button id="btnCombatAttack" class="win95-btn combat-btn bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-900 font-black" title="Attack / Slash (Z / Up / W)">
-                ⚔️ Strike (Z)
+                ⚔️
               </button>
               <button id="btnCombatBlock" class="win95-btn combat-btn bg-blue-100 hover:bg-blue-200 active:bg-blue-300 text-blue-900 font-black" title="Shield Guard (Hold X / S)">
-                🛡️ Block (X)
+                🛡️
               </button>
               <button id="btnCombatDodgeL" class="win95-btn combat-btn bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Left (Hold A / Left)">
-                ⬅️ Strafe (A)
+                ⬅️
               </button>
               <button id="btnCombatDodgeR" class="win95-btn combat-btn bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Right (Hold D / Right)">
-                Strafe (D) ➡️
+                ➡️
               </button>
             </div>
           </div>
