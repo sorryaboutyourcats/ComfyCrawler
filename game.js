@@ -1115,6 +1115,9 @@
     function openSetupScreen() {
       screenGame.classList.add('hidden');
       stopOutroNarration();
+      // Any leftover "still reading the intro crawl" hold is meaningless back on the menu -
+      // clear it so it can't keep the screen saver (idle or ✕-forced) suppressed here.
+      crawlReadingUntil = 0;
       stopConfetti();
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
@@ -7328,6 +7331,11 @@
       updateProgressionHUD();
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
+      // ...and drop the crawl-reading hold with it. startCrawl() sets crawlReadingUntil up to
+      // a few minutes out; without this it keeps screensaverBlocked() true long after the
+      // player has left the loading screen, so the idle saver - and the ✕ that forces it -
+      // do nothing back on the menu until that stale timer finally elapses.
+      crawlReadingUntil = 0;
       // The loading loop plays right up to this click - fade it out under the start sting.
       stopScreenMusic();
       // Fetch the win and death loops now, while the player still has a whole dungeon between
