@@ -592,9 +592,14 @@
           </button>
         </div>
 
-        <!-- Quick Presets - game.js reshuffles these on every visit to the menu, Windows 95 pinned first. -->
+        <!-- Quick Presets - game.js reshuffles these on every visit to the menu (Windows 95 pinned
+             first) and trims them to the two rows that fit. 🎲 rerolls the lot, Windows 95 included.
+             The label and 🎲 are not .preset-btn, so the shuffle leaves them where they are. -->
         <div id="quickIdeasRow" class="flex gap-2 mt-1 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
           <span class="text-xs text-slate-600 font-bold">Quick ideas:</span>
+          <button id="btnShuffleIdeas" type="button" class="win95-btn text-xs px-1.5 py-1 flex items-center" title="Shuffle the quick ideas - a fresh handful every click">
+            <span>🎲</span>
+          </button>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Windows 95 3D maze">
             <span>💾 Windows 95</span>
           </button>

@@ -1242,12 +1242,18 @@
     // suggestions instead of a fixed list, with a different idea catching the eye each visit.
     // Windows 95 stays pinned first: it is the signature look and the default every bare
     // "3D maze" run falls back to.
-    function shuffleQuickIdeas() {
+    //
+    // `reroll` is the 🎲 button rather than a visit to the menu, and it is the one case that
+    // shuffles Windows 95 in with everything else - the pin exists so the signature look is
+    // always THERE on arrival, not so it can never be traded away when the player is explicitly
+    // asking for a different handful.
+    function shuffleQuickIdeas(reroll) {
       const row = document.getElementById('quickIdeasRow');
       if (!row) return;
       const btns = Array.from(row.querySelectorAll('.preset-btn'));
-      const pinned = btns.filter(b => b.getAttribute('data-val') === 'Windows 95 3D maze');
-      const rest = btns.filter(b => b.getAttribute('data-val') !== 'Windows 95 3D maze');
+      const isWin95 = b => b.getAttribute('data-val') === 'Windows 95 3D maze';
+      const pinned = reroll ? [] : btns.filter(isWin95);
+      const rest = reroll ? btns.slice() : btns.filter(b => !isWin95(b));
       for (let i = rest.length - 1; i > 0; i--) {   // Fisher-Yates over the un-pinned ideas
         const j = Math.floor(Math.random() * (i + 1));
         [rest[i], rest[j]] = [rest[j], rest[i]];
@@ -1255,8 +1261,49 @@
       // appendChild moves the existing node rather than cloning it, so every button keeps the
       // click handler bound just above; re-appending in order is all it takes to reorder the
       // flex-wrap grid. Arrow-key nav is geometric (see moveSetupFocus) so it follows along.
+      // The "Quick ideas:" label and the 🎲 button are not .preset-btn, so they are never
+      // re-appended and stay at the head of the row.
       [...pinned, ...rest].forEach(b => row.appendChild(b));
+      trimQuickIdeasToTwoRows(row);
     }
+
+    // Show only the ideas that fit in two rows and hide the rest. The whole list is 26 deep and
+    // wrapping all of it walked the CREATE button off the bottom of the window; two rows is
+    // enough to read as a grab-bag while leaving the mad-lib fields the space.
+    //
+    // Which buttons those are can only be known AFTER flex-wrap has placed them - the labels are
+    // all different widths and the row is as wide as the window - so this measures rather than
+    // counts. Every top is read before anything is hidden: hiding pulls the later buttons up, so
+    // measuring and mutating in the same pass would read positions that no longer exist.
+    // Everything is unhidden first, so a reshuffle is measured against the full list rather than
+    // against whatever the last one happened to leave showing.
+    function trimQuickIdeasToTwoRows(row) {
+      const btns = Array.from(row.querySelectorAll('.preset-btn'));
+      btns.forEach(b => b.classList.remove('hidden'));
+      const tops = btns.map(b => b.offsetTop);
+      const rows = [...new Set(tops)].sort((a, b) => a - b);
+      // One row, two rows, or the menu is off screen entirely (every offsetTop reads 0, so this
+      // collapses to a single row and nothing is touched) - either way there is nothing to trim.
+      if (rows.length <= 2) return;
+      btns.forEach((b, i) => { if (tops[i] > rows[1]) b.classList.add('hidden'); });
+    }
+
+    const btnShuffleIdeas = document.getElementById('btnShuffleIdeas');
+    if (btnShuffleIdeas) {
+      btnShuffleIdeas.addEventListener('click', () => shuffleQuickIdeas(true));
+    }
+
+    // The trim is measured against the window's width, so a resize invalidates it - re-run it
+    // (keeping the current order; this is not a reshuffle) once the dragging settles.
+    let quickIdeasResizeTimer = 0;
+    window.addEventListener('resize', () => {
+      clearTimeout(quickIdeasResizeTimer);
+      quickIdeasResizeTimer = setTimeout(() => {
+        const row = document.getElementById('quickIdeasRow');
+        if (row) trimQuickIdeasToTwoRows(row);
+      }, 150);
+    });
+
     shuffleQuickIdeas();
 
     // ==========================================
@@ -4474,10 +4521,15 @@
       // the spot, celebrating. Negative = higher on the canvas; abs(sin) so it only ever leaves
       // the ground and lands, never sinks through it.
       const victoryHop = combatState.dead ? -Math.abs(Math.sin(Date.now() / 130)) * 24 : 0;
-      let ey = (groundY - 70) - (e.altitude || 0) - altLift + Math.sin(Date.now() / 200) * 4 + victoryHop;
       // Same plate clearance the sprite path applies below, for the procedural fallback body:
-      // its horn tips are the highest thing it draws, about 65px above ey.
-      if (ey - 65 < HP_PLATE_CLEAR) ey = Math.min(groundY - 70, HP_PLATE_CLEAR + 65);
+      // its horn tips are the highest thing it draws, about 65px above ey. Clamped on the
+      // resting height with the bob's swing reserved above it and the bob added back after,
+      // for the same reason - see the sprite path.
+      const eyBob = Math.sin(Date.now() / 200) * 4;
+      let ey = (groundY - 70) - (e.altitude || 0) - altLift + victoryHop;
+      const eyCeiling = HP_PLATE_CLEAR + 65 + 4;
+      if (ey < eyCeiling) ey = Math.min(groundY - 70, eyCeiling);
+      ey += eyBob;
 
       // No telegraph circle - the attack frame shows the wind-up, and the "ENEMY WIND-UP!"
       // floating text still calls it.
@@ -4516,17 +4568,25 @@
           // the combat view. heightFrac is per-variant: boss looms, flyer is smaller & airborne.
           const targetH = Math.round(height * cfg.heightFrac * dScale);
           const maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
-          const bob = cfg.fly ? Math.sin(Date.now() / 110) * 4 : Math.sin(Date.now() / 220) * 3;
-          let bottomY = groundY - (e.altitude || 0) - altLift + bob + victoryHop;
+          const bobAmp = cfg.fly ? 4 : 3;
+          const bob = Math.sin(Date.now() / (cfg.fly ? 110 : 220)) * bobAmp;
           // Hover, but not behind the name plate. A flyer's whole point is being up out of
           // reach, and at full hover that put its head under the plate - so the foe the player
           // is meant to be reading was a pair of legs. Pushed back DOWN rather than shrunk (it
           // has to stay the same creature it was a frame ago) and never past its own floor
           // line, so a swoop still reaches the ground and a foe too tall to fit - the boss is
           // two thirds of the view - simply stays where it was rather than being lifted.
-          if (bottomY - targetH < HP_PLATE_CLEAR) {
-            bottomY = Math.min(groundY, HP_PLATE_CLEAR + targetH);
-          }
+          //
+          // The clamp is applied to the RESTING height with the bob's own swing reserved above
+          // it, and the bob then goes back on top. Clamping the already-bobbed value pinned
+          // bottomY to a constant, which killed the hover outright: a flyer held under the
+          // plate hung there dead still. This way it floats about its held height exactly as
+          // it floats about its free one, and the reserved swing keeps the upstroke clear of
+          // the plate.
+          let bottomY = groundY - (e.altitude || 0) - altLift + victoryHop;
+          const ceiling = HP_PLATE_CLEAR + targetH + bobAmp;
+          if (bottomY < ceiling) bottomY = Math.min(groundY, ceiling);
+          bottomY += bob;
 
           c.save();
           // Ground shadow - fades and shrinks as a flyer climbs, and travels up the canvas with
