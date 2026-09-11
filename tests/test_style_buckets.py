@@ -8,6 +8,11 @@ mw = srv.match_word
 
 def original_bucket(wall_style):
     ui = wall_style.lower()
+    if any(k in ui for k in ['lsd dream emulator','lsd dream','dream emulator','lsd:de','lsddem']): return "lsddream"
+    if any(k in ui for k in ['acid']): return "acid"
+    if any(k in ui for k in ['glitch','glitched','datamosh','databend','databent']): return "glitch"
+    if any(k in ui for k in ['mario','mushroom','mushrooms']): return "mario"
+    if any(k in ui for k in ['lsd']): return "lsd"
     if any(k in ui for k in ['sci-fi','sci fi','spaceship','space station','alien ship','future']): return "scifi"
     if any(k in ui for k in ['win95','windows 95','windows','win 95','brick','95','retro brick']): return "win95"
     if any(k in ui for k in ['forest','nature','jungle','woods','woodland','trees','tree','garden','swamp']): return "forest"
@@ -27,7 +32,11 @@ CASES = ["Windows 95 3D maze","Deep Forest","Cyber Neon","Mossy Stone","Candy Ca
          "ugly things covered in gold","motherboard","cut up fruit","hell","pet store",
          "deep forest","cyber neon","supermarket","windows 95 3d maze","candy cane",
          "cathedral","catacombs","rockstar","biotech","1995","a lady in a garden","the man",
-         "", "  ", "SPACESHIP", "Sweet Cave"]
+         "", "  ", "SPACESHIP", "Sweet Cave",
+         # the 2026-09-10 named-aesthetic buckets, and the collisions they must survive
+         "LSD dream emulator","LSD Dream Emulator","lsd","LSD","acid","Acid Bath","glitch",
+         "glitched photos","mario mushrooms","Super Mario","mushrooms","datamosh",
+         "a psychedelic lsd dream emulator level"]
 
 FAKE = {"wall":"XX-WALL","floor":"XX-FLOOR","ceiling":"XX-CEIL","lantern":"XX-LANT",
         "door":"XX-DOOR","switch":"XX-SWITCH","weapon":"XX-W","enemy":"XX-E"}

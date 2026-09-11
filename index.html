@@ -592,8 +592,8 @@
           </button>
         </div>
 
-        <!-- Quick Presets -->
-        <div class="flex gap-2 mt-1 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
+        <!-- Quick Presets - game.js reshuffles these on every visit to the menu, Windows 95 pinned first. -->
+        <div id="quickIdeasRow" class="flex gap-2 mt-1 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
           <span class="text-xs text-slate-600 font-bold">Quick ideas:</span>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Windows 95 3D maze">
             <span>💾 Windows 95</span>
@@ -952,7 +952,6 @@
                     <span class="text-[9px] font-bold text-slate-700" id="levelUpSurvivalText">+20 max health</span>
                   </button>
                 </div>
-                <div class="text-[9px] font-bold text-slate-700">1 / 2 / 3 &nbsp;·&nbsp; ↑↓ then SPACE</div>
               </div>
             </div>
 

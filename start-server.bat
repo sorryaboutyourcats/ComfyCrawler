@@ -10,7 +10,10 @@ echo Starting ComfyCrawler server on http://127.0.0.1:5555  (logs -^> server.log
 echo Close this window or press Ctrl+C to stop the server.
 echo.
 
-python server.py
+REM Pinned to 3.10: a bare "python" picks up whatever is first on PATH (miniconda
+REM 3.12 when launched from Explorer), which has numpy/PIL but NOT imageio-ffmpeg or
+REM piper-tts - so every sfx and music clip and the narration silently drop out.
+py -3.10 server.py
 
 echo.
 echo Server process ended (exit code %ERRORLEVEL%). See server.log for details.

@@ -1138,6 +1138,7 @@
       screenSetup.classList.remove('hidden');
       if (titleButtons) titleButtons.classList.remove('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+      shuffleQuickIdeas();     // fresh Quick idea order on every return to the menu
       returnToMenuMusic();     // win, lose, or quit - the dungeon's music stops, menu fades in
     }
 
@@ -1209,12 +1210,14 @@
       'corn maze':       { player: 'pickup truck robot',      weapon: 'pitchfork',        enemy: 'zombie animal' },
       'pizza toppings':  { player: 'cat chef',                weapon: 'pepperoni',        enemy: 'pasta' },
       '"central park"':  { player: 'jogger',                  weapon: 'ipod',             enemy: 'cardboard box' },
-      'mushrooms':       { player: 'Mario',                   weapon: 'plunger',          enemy: 'Bowser' },
+      // Quotes push each name down the named-entity path (same as "Sonic" / "Donald Trump"
+      // above) so they draw the real characters. Yoshi as the weapon = you ride him.
+      'mushrooms':       { player: '"Mario"',                 weapon: '"Yoshi"',          enemy: '"Bowser"' },
       // Quotes on the person for the same reason as "Donald Trump" under hell: they push the
-      // player and enemy down the named-entity path so it draws the real man, not an
-      // "elon"-shaped bucket. Weapon stays a bare word - the theme brief resolves "ketamine"
-      // into a drawable object (a vial / syringe) the way it does "memes".
-      'outer space':     { player: '"Elon Musk"',             weapon: 'ketamine',         enemy: '"Elon Musk"' },
+      // enemy down the named-entity path so it draws the real man, not an "elon"-shaped bucket.
+      // "wearing ..." is an attributive joiner _theme_enemy_subject may trim back to just the
+      // name - the jacket is a bonus, not load-bearing.
+      'outer space':     { player: 'Doge',                    weapon: 'drugs',            enemy: '"Elon Musk" wearing a ketamine jacket' },
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -1233,6 +1236,28 @@
         wallPromptInput.focus({ preventScroll: true });
       });
     });
+
+    // Reshuffle the Quick idea grid every time the player lands on the menu - first load and
+    // every trip back through openSetupScreen() - so it reads as a rotating grab-bag of
+    // suggestions instead of a fixed list, with a different idea catching the eye each visit.
+    // Windows 95 stays pinned first: it is the signature look and the default every bare
+    // "3D maze" run falls back to.
+    function shuffleQuickIdeas() {
+      const row = document.getElementById('quickIdeasRow');
+      if (!row) return;
+      const btns = Array.from(row.querySelectorAll('.preset-btn'));
+      const pinned = btns.filter(b => b.getAttribute('data-val') === 'Windows 95 3D maze');
+      const rest = btns.filter(b => b.getAttribute('data-val') !== 'Windows 95 3D maze');
+      for (let i = rest.length - 1; i > 0; i--) {   // Fisher-Yates over the un-pinned ideas
+        const j = Math.floor(Math.random() * (i + 1));
+        [rest[i], rest[j]] = [rest[j], rest[i]];
+      }
+      // appendChild moves the existing node rather than cloning it, so every button keeps the
+      // click handler bound just above; re-appending in order is all it takes to reorder the
+      // flex-wrap grid. Arrow-key nav is geometric (see moveSetupFocus) so it follows along.
+      [...pinned, ...rest].forEach(b => row.appendChild(b));
+    }
+    shuffleQuickIdeas();
 
     // ==========================================
     // VALBRACE REAL-TIME COMBAT ENGINE (v5)
@@ -1731,6 +1756,15 @@
     // Where a grounded foe's feet sit on the 240px combat view. Module scope rather than a
     // local of drawEnemyBody because nearWallStaging measures against it too.
     const GROUND_Y = 165;
+
+    // The enemy name plate's box, and the first y below it a foe is allowed to occupy. Module
+    // scope because two unrelated things have to agree on it: drawEnemyHpBar draws the plate
+    // here, and drawEnemyBody keeps foes out from behind it. A flyer at full hover put its head
+    // exactly where the plate is and the player was left fighting a pair of legs, so anything
+    // that would be drawn under the plate is pushed back down to CLEAR instead.
+    const HP_PLATE_TOP = 8;
+    const HP_PLATE_H = 18;
+    const HP_PLATE_CLEAR = HP_PLATE_TOP + HP_PLATE_H + 5;
 
     // NEAR-WALL PULL-IN. The duel is staged at a fixed spot on the canvas - see GROUND_Y in
     // drawEnemyBody - which quietly assumes there is open floor about a cell and a half ahead.
@@ -4440,7 +4474,10 @@
       // the spot, celebrating. Negative = higher on the canvas; abs(sin) so it only ever leaves
       // the ground and lands, never sinks through it.
       const victoryHop = combatState.dead ? -Math.abs(Math.sin(Date.now() / 130)) * 24 : 0;
-      const ey = (groundY - 70) - (e.altitude || 0) - altLift + Math.sin(Date.now() / 200) * 4 + victoryHop;
+      let ey = (groundY - 70) - (e.altitude || 0) - altLift + Math.sin(Date.now() / 200) * 4 + victoryHop;
+      // Same plate clearance the sprite path applies below, for the procedural fallback body:
+      // its horn tips are the highest thing it draws, about 65px above ey.
+      if (ey - 65 < HP_PLATE_CLEAR) ey = Math.min(groundY - 70, HP_PLATE_CLEAR + 65);
 
       // No telegraph circle - the attack frame shows the wind-up, and the "ENEMY WIND-UP!"
       // floating text still calls it.
@@ -4480,7 +4517,16 @@
           const targetH = Math.round(height * cfg.heightFrac * dScale);
           const maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
           const bob = cfg.fly ? Math.sin(Date.now() / 110) * 4 : Math.sin(Date.now() / 220) * 3;
-          const bottomY = groundY - (e.altitude || 0) - altLift + bob + victoryHop;
+          let bottomY = groundY - (e.altitude || 0) - altLift + bob + victoryHop;
+          // Hover, but not behind the name plate. A flyer's whole point is being up out of
+          // reach, and at full hover that put its head under the plate - so the foe the player
+          // is meant to be reading was a pair of legs. Pushed back DOWN rather than shrunk (it
+          // has to stay the same creature it was a frame ago) and never past its own floor
+          // line, so a swoop still reaches the ground and a foe too tall to fit - the boss is
+          // two thirds of the view - simply stays where it was rather than being lifted.
+          if (bottomY - targetH < HP_PLATE_CLEAR) {
+            bottomY = Math.min(groundY, HP_PLATE_CLEAR + targetH);
+          }
 
           c.save();
           // Ground shadow - fades and shrinks as a flyer climbs, and travels up the canvas with
@@ -4501,9 +4547,9 @@
           // carries its own thin bar to show which one is actually being worn down. A lone foe
           // has the plate and doesn't need one.
           if (combatState.enemies.length > 1 && e.hp > 0) {
-            // Floored below the name plate (which owns y 8..26): a circler at the top of its
-            // arc sits high enough that its bar would otherwise land on top of it.
-            drawEnemyPipBar(c, ex, Math.max(32, bottomY - targetH - 10), e);
+            // Floored below the name plate: a circler at the top of its arc sits high enough
+            // that its bar would otherwise land on top of it.
+            drawEnemyPipBar(c, ex, Math.max(HP_PLATE_CLEAR, bottomY - targetH - 10), e);
           }
 
           // The guard arc and the boss aura that used to be stroked over the sprite here are
@@ -4585,11 +4631,14 @@
 
     // Pulled out of drawCombatEnemy so the AI-sprite path can draw it too - that path returns
     // early to skip the procedural body, which silently took the name plate with it.
+    // Sized to fit the label rather than a fixed width: a long generated name (or a pack's
+    // "x3 [hp/maxhp]" suffix) used to run past the edges of a fixed-width bar, so the plate is
+    // measured off the actual text and only ever grows to fit it, never the other way round.
     function drawEnemyHpBar(c, width, e) {
       // A pack shares one plate: the bar is the whole pack's remaining HP and the count is how
       // many of them are still standing, so it empties over the fight the way a single foe's
       // does. Which one you are currently cutting into is read off the little bar over its own
-      // head - see drawEnemyPipBar. The plate is widened to fit the extra "x3".
+      // head - see drawEnemyPipBar.
       const pack = combatState.enemies;
       const isPack = pack.length > 1;
       const hp = isPack ? pack.reduce((s, k) => s + Math.max(0, k.hp), 0) : e.hp;
@@ -4597,21 +4646,24 @@
       const label = isPack
         ? `${e.name || 'NIGHTSTALKER'} x${pack.filter(k => k.hp > 0).length} [${hp}/${maxHp}]`
         : `${e.name || 'NIGHTSTALKER'} [${e.hp}/${e.maxHp}]`;
-      const w = isPack ? 196 : 150;
+
+      c.font = 'bold 11px sans-serif';
+      const w = Math.max(132, Math.ceil(c.measureText(label).width) + 18);
+      const h = HP_PLATE_H;
+      const top = HP_PLATE_TOP;
 
       c.fillStyle = 'rgba(15, 23, 42, 0.9)';
-      c.fillRect(width / 2 - w / 2, 8, w, 18);
+      c.fillRect(width / 2 - w / 2, top, w, h);
       c.strokeStyle = '#94a3b8'; c.lineWidth = 1.5;
-      c.strokeRect(width / 2 - w / 2, 8, w, 18);
+      c.strokeRect(width / 2 - w / 2, top, w, h);
 
       const hpW = Math.max(0, (hp / maxHp) * (w - 4));
       c.fillStyle = '#dc2626';
-      c.fillRect(width / 2 - w / 2 + 2, 10, hpW, 14);
+      c.fillRect(width / 2 - w / 2 + 2, top + 2, hpW, h - 4);
 
       c.fillStyle = '#f8fafc';
-      c.font = 'bold 10px sans-serif';
       c.textAlign = 'center';
-      c.fillText(label, width / 2, 21);
+      c.fillText(label, width / 2, top + h - 5);
     }
 
     // The thin HP bar a pack member wears over its own head. Deliberately tiny and unlabelled -
@@ -4798,7 +4850,16 @@
         lg.height = Math.max(1, Math.ceil(dh));
         const lc = lg.getContext('2d');
         lc.imageSmoothingEnabled = true;
+        // Mirror the fixture, same reason buildDoorTexture pre-flips its slab: the raycaster
+        // flips texX on two of the four wall faces, and the base wall this composites onto is
+        // already pre-mirrored (imageToTexture(imgW, true)) to cancel that. Drawn straight, the
+        // fixture ends up the opposite hand from the wall it hangs on and mirrored across half
+        // the maze's lanterns. Flipping it here inside its own box keeps dx/dy and the centred
+        // glow gradients untouched.
+        lc.translate(lg.width, 0);
+        lc.scale(-1, 1);
         lc.drawImage(aiLanternImg, 0, 0, lg.width, lg.height);
+        lc.setTransform(1, 0, 0, 1, 0, 0);
         const inner = lc.createRadialGradient(lg.width / 2, lg.height / 2, 1,
                                               lg.width / 2, lg.height / 2,
                                               Math.max(lg.width, lg.height) * 0.7);
@@ -4813,7 +4874,11 @@
         c.drawImage(lg, dx, dy);
         c.imageSmoothingEnabled = false;
       } else if (isWin95) {
-        // Windows 95 Logo Lantern
+        // Windows 95 Logo Lantern. Flipped for the same reason as the AI fixture above - the
+        // raycaster mirrors texX on two of the four faces and the base wall is pre-mirrored to
+        // match, so the logo's red/green/blue/yellow quadrants have to be pre-mirrored too or
+        // they land on the wrong side across half the maze.
+        c.translate(TEX_SIZE, 0); c.scale(-1, 1);
         c.fillStyle = '#18181b'; c.fillRect(122, 112, 12, 30);
         c.strokeStyle = '#000000'; c.lineWidth = 4;
         c.beginPath(); c.moveTo(128, 115); c.lineTo(128, 70); c.stroke();
@@ -4828,9 +4893,11 @@
 
         c.strokeStyle = '#09090b'; c.lineWidth = 3;
         c.strokeRect(112, 72, 32, 32);
+        c.setTransform(1, 0, 0, 1, 0, 0);
       } else {
         // Fallback when no AI lantern art came back (generation failure, older bundle, etc).
-        // Classic Dungeon Glowing Crystal Sconce
+        // Classic Dungeon Glowing Crystal Sconce. Drawn symmetric about x=128, so it needs no
+        // flip - the mirror the AI and Win95 fixtures correct for is a no-op here.
         // Iron Bracket
         c.fillStyle = '#18181b';
         c.fillRect(120, 102, 16, 24);
@@ -8511,6 +8578,37 @@
       starCtx.shadowBlur = 0;
     }
 
+    // Clip a readout to the width the corner has, with an ellipsis: a long status message
+    // must not run off the left edge of the screen. Measured with the same font AND letter
+    // spacing it will be drawn at, or the fit is off by a pixel per character.
+    function ssFit(text, px, spacing, maxW) {
+      starCtx.font = ssFont(px, true);
+      try { starCtx.letterSpacing = (spacing || 0) + 'px'; } catch (e) { /* older browsers */ }
+      let out = text;
+      if (starCtx.measureText(out).width > maxW) {
+        while (out.length > 1 && starCtx.measureText(out + '...').width > maxW) out = out.slice(0, -1);
+        out += '...';
+      }
+      try { starCtx.letterSpacing = '0px'; } catch (e) {}
+      return out;
+    }
+
+    // Width of a readout as it will actually be drawn - font and letter spacing both set,
+    // for the same reason ssFit measures that way.
+    function ssTextWidth(text, px, spacing) {
+      starCtx.font = ssFont(px, true);
+      try { starCtx.letterSpacing = (spacing || 0) + 'px'; } catch (e) { /* older browsers */ }
+      const wpx = starCtx.measureText(text).width;
+      try { starCtx.letterSpacing = '0px'; } catch (e) {}
+      return wpx;
+    }
+
+    // The live generation percent, read straight off the progress window's own readout so
+    // the saver and the window behind it can never disagree.
+    function ssGenerationPercent() {
+      return parseInt((progPercentText && progPercentText.textContent) || '0', 10) || 0;
+    }
+
     // ---- What each screen puts on the star field ---------------------------
     function ssGenerationOverlay(w, h, t) {
       const done = !!(pendingBundle && btnEnterDungeon && !btnEnterDungeon.disabled);
@@ -8532,12 +8630,36 @@
         return;
       }
 
-      // Deliberately minimal: no title, no status line, no bar - just the number, tucked in
-      // the corner so it reads as a readout on the stars rather than a loading screen.
-      const pct = parseInt((progPercentText && progPercentText.textContent) || '0', 10) || 0;
+      // No title, no bar - a corner readout on the stars rather than a loading screen. The
+      // percent holds the bottom-right corner; the same three details the progress window is
+      // showing (what the server is working on, the live sub-job, how long it has been
+      // running) stack up from the bottom LEFT in the same face and size, so the two corners
+      // read as one status bar across the foot of the star field.
+      const pct = ssGenerationPercent();
       const pctSize = Math.max(16, Math.min(30, Math.round(w / 34)));
       const margin = Math.round(pctSize * 1.2);
-      ssLine(pct + '%', w - margin, h - margin, pctSize, 0.8, { align: 'right', spacing: 1 });
+      const lineH = Math.round(pctSize * 1.35);
+      const pctLabel = pct + '%';
+      ssLine(pctLabel, w - margin, h - margin, pctSize, 0.8, { align: 'right', spacing: 1 });
+
+      const details = [];
+      const ssStatus = ((progStatusText && progStatusText.textContent) || '').trim();
+      const ssPhase = ((progPhaseText && progPhaseText.textContent) || '').trim();
+      const ssElapsed = ((progTimer && progTimer.textContent) || '').trim();
+      if (ssStatus) details.push(ssStatus.toUpperCase());
+      if (ssPhase) details.push(ssPhase.toUpperCase());
+      if (ssElapsed) details.push(ssElapsed.toUpperCase());
+      // The last line shares the percent's baseline so the foot of the screen reads as one
+      // row, with the rest of the detail stacked above it. Every line is clipped short of
+      // the percent (plus a gap of its own) - that bottom one would otherwise run into it.
+      const detailMaxW = Math.max(120, w - margin * 2
+                                       - ssTextWidth(pctLabel, pctSize, 1) - pctSize * 1.5);
+      let detailY = h - margin;
+      for (let i = details.length - 1; i >= 0; i--) {
+        ssLine(ssFit(details[i], pctSize, 1, detailMaxW), margin, detailY, pctSize, 0.55,
+               { align: 'left', spacing: 1 });
+        detailY -= lineH;
+      }
     }
 
     function ssStoryMarqueeText() {
@@ -8707,6 +8829,11 @@
       // the game being played throughout. Once the player is down it stops counting.
       if (combatState.inBattle && !combatState.dead) return true;
       if (ssVideoPlaying()) return true;
+      // The opening stretch of a generation run: the story crawl is still landing, the first
+      // models are loading and the bar has barely moved. Blanking the screen over that reads
+      // as the run having stalled, so hold the saver off until it is genuinely 10% in - after
+      // which the wait is long and uneventful enough that the starfield is the better view.
+      if (!screenProgress.classList.contains('hidden') && ssGenerationPercent() < 10) return true;
       return false;
     }
 

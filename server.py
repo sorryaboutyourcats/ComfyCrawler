@@ -634,6 +634,29 @@ SURFACE_MIN_GAMMA = 0.38     # any harder and dark-region compression noise come
 # angle and neither fills the view the way the wall ahead of you does.
 SURFACE_MIN_CONTRAST = 16.0
 
+# AND THE SAME COMPLAINT BY A FOURTH ROUTE, this time on the DOOR: a grey door in a colourful
+# corridor. The door is a full map cell, so its edges ARE the corridor wall either side of the
+# opening - and when the model draws a product-shot door instead (one leaf centred on an empty
+# ground), those edges arrive as flat black or flat white and the whole cell reads as a hole
+# punched in the theme. A "pet store" run shipped a plain white six-panel door on black next to
+# neon-pink walls; the archway the prompt asked for never got drawn at all.
+#
+# MEASURE THE BORDER RING, NOT THE WHOLE IMAGE. The failure lives at the edges by definition:
+# whole-image saturation passes a correct-looking wooden door whose surround is blank white
+# (measured 95.1 overall, 36.2 on the ring), and it is the surround that has to match the
+# corridor. The ring is the outer 12% of the frame - wide enough to sit outside the archway on
+# every render in dungeon_sessions, narrow enough not to sample the leaf itself.
+#
+# Measured over all 49 designed doors in dungeon_sessions: every door that reads as wrong lands
+# at ring saturation 15.7 or below (the white pet-store door 2.6, a chrome one 0.4, a matte
+# black Dreamcast 0.2), and the lowest door that reads as right is 23.2. 19.0 sits in that gap.
+#
+# Gated on the WALL actually being colourful, so a deliberately monochrome theme keeps its
+# monochrome door - two archived themes rendered near-greyscale walls (saturation 3.5 and 22.0)
+# and a grey door is the correct answer in both.
+DOOR_MIN_RING_SAT = 19.0     # below this the door's surround is not the corridor's material
+DOOR_WALL_MIN_SAT = 40.0     # ...but only judge it against a wall with colour of its own
+
 
 def _mean_luma(img):
     px = img.convert("RGB").getdata()
@@ -645,6 +668,29 @@ def _surface_contrast(img):
     """Luma standard deviation - how much the surface actually varies, which is what "blank"
     means here. See SURFACE_MIN_CONTRAST for the measured threshold."""
     return ImageStat.Stat(img.convert("L")).stddev[0]
+
+
+def _mean_saturation(img):
+    """Mean HSV saturation - how much colour the surface carries at all."""
+    return ImageStat.Stat(img.convert("HSV").getchannel("S")).mean[0]
+
+
+def _ring_saturation(img, frac=0.12):
+    """Mean saturation of the outer `frac` border of the image - the part of a door cell that
+    is corridor wall rather than door leaf. See DOOR_MIN_RING_SAT for why the ring and not the
+    whole frame."""
+    sat = img.convert("HSV").getchannel("S")
+    w, h = sat.size
+    r = max(1, int(round(w * frac)))
+    px = list(sat.getdata())
+    ring = []
+    for y in range(h):
+        row = px[y * w:(y + 1) * w]
+        if y < r or y >= h - r:
+            ring.extend(row)                      # full top / bottom bands
+        else:
+            ring.extend(row[:r]); ring.extend(row[-r:])   # left / right edges only
+    return sum(ring) / max(1, len(ring))
 
 
 def _lift_dark_surface(path, label):
@@ -770,6 +816,109 @@ def _fix_blank_wall(path, wall_style, tile_px):
         print(f"[surface] re-roll came back at {alt_got:.1f} too - keeping the original")
         return path
     print(f"[surface] re-rolled wall at contrast {alt_got:.1f}")
+    return alt
+
+
+# The rescue prompt for a door whose surround came back blank - see DOOR_MIN_RING_SAT above.
+#
+# Like _WALLPAPER_RESCUE it is deliberately NOT the designed line retried on a fresh seed.
+# Measured across three seeds on six archived failures, the shipped prompt stays wrong on
+# almost every one (ring saturation 0.6-52.7, most of them under 10) because what manufactures
+# the failure is its SHAPE: the designed DOOR line is the whole subject, and every clause after
+# it - "no room around it", "zero horizon" - strips away the surroundings, so the model draws a
+# catalogue photo of one door leaf on an empty ground. Its "zero black margins" clause cannot
+# undo that; at cfg 1.0 naming black margins is a request for them (same trap as _LANTERN_TAIL).
+#
+# So the rescue makes the WALL the subject too, quoting the designed wall line verbatim - which
+# is rule 1 of the hand-tuned buckets, the reason none of them has ever produced this failure.
+# The leaf keeps its designed identity, demoted to an appositive. Same six failures, same three
+# seeds: 86.1-234.7, every single render above the 19.0 floor and above its own control.
+_DOOR_RESCUE = ("A shut door completely filling the picture, the door leaf {door}, set into a "
+                "surrounding wall of {wall} that reaches every edge of the frame, bold "
+                "saturated colours, flat straight-on orthographic front view, zero "
+                "perspective, zero horizon, no floor, no room, {sign}.")
+
+
+def _reroll_grey_door(door_line, wall_line, tile_px, wall_named=None):
+    """Re-render the door from _DOOR_RESCUE. Returns the new file path, or None if anything
+    goes wrong - the caller already holds a working (if off-theme) door, and a door that does
+    not match the corridor is a bad look where a crashed bundle is a lost run."""
+    try:
+        prefix = f"trio_dr_{int(time.time()*1000)}"
+        prompt = _DOOR_RESCUE.format(door=_theme_inline(door_line),
+                                     wall=_theme_inline(wall_line),
+                                     sign=_door_sign(wall_named))
+        payload = {
+            "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+            "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+            "lat": {"inputs": {"width": tile_px, "height": tile_px, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+            "pos": {"inputs": {"text": prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+            "samp": {"inputs": {"seed": random.randint(1, 1000000000), "steps": 4, "cfg": 1.0,
+                                "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                                "model": ["1", 0], "positive": ["pos", 0], "negative": ["neg", 0],
+                                "latent_image": ["lat", 0]}, "class_type": "KSampler"},
+            "dec": {"inputs": {"samples": ["samp", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+            "save": {"inputs": {"filename_prefix": prefix, "images": ["dec", 0]}, "class_type": "SaveImage"},
+        }
+        data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
+        req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
+        start = time.time()
+        while time.time() - start < 60:
+            time.sleep(0.1)
+            _bail_if_cancelled()
+            with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}") as h_resp:
+                hist = json.loads(h_resp.read().decode("utf-8"))
+            out = hist.get(prompt_id, {}).get("outputs", {})
+            if "save" in out:
+                info = out["save"]["images"][0]
+                return os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+    except GenerationCancelled:
+        # An abandoned run must keep unwinding - this is not a re-roll failure.
+        raise
+    except Exception as e:
+        print(f"[surface] door re-roll failed: {e}")
+    return None
+
+
+def _fix_offtheme_door(d_path, w_path, door_line, wall_line, tile_px, wall_named=None):
+    """Swap in a wall-anchored re-roll when the designed door came back sitting on a blank
+    surround instead of on the corridor. Returns the path to use. A no-op on a door that
+    already carries the theme, so it costs two passes over an image on a healthy run."""
+    try:
+        ring = _ring_saturation(Image.open(d_path))
+        wall_sat = _mean_saturation(Image.open(w_path))
+    except Exception as e:
+        print(f"[surface] could not measure the door: {e}")
+        return d_path
+    if ring >= DOOR_MIN_RING_SAT:
+        return d_path
+    if wall_sat < DOOR_WALL_MIN_SAT:
+        # The corridor has no colour of its own, so neither should the door - see
+        # DOOR_WALL_MIN_SAT.
+        print(f"[surface] door ring saturation {ring:.1f} matches a near-greyscale wall "
+              f"({wall_sat:.1f}) - leaving it alone")
+        return d_path
+    print(f"[surface] door came back at ring saturation {ring:.1f} - blank surround below "
+          f"{DOOR_MIN_RING_SAT:.0f} next to a wall at {wall_sat:.1f} - re-rolling it set into "
+          f"the corridor wall")
+    alt = _reroll_grey_door(door_line, wall_line, tile_px, wall_named)
+    if not alt:
+        return d_path
+    try:
+        alt_ring = _ring_saturation(Image.open(alt))
+    except Exception as e:
+        print(f"[surface] could not measure the re-rolled door: {e}")
+        return d_path
+    # Keep whichever surround carries more of the theme: the rescue prompt is measurably
+    # better on every failure tried, but one it happens to miss must not end up worse than it
+    # started.
+    if alt_ring <= ring:
+        print(f"[surface] door re-roll came back at {alt_ring:.1f} too - keeping the original")
+        return d_path
+    print(f"[surface] re-rolled door at ring saturation {alt_ring:.1f}")
     return alt
 
 
@@ -1947,11 +2096,12 @@ _LANTERN_TAIL = ("Exactly one object, centered, front view, isolated on a plain 
                  "background, sharp focus, no room, no scenery, no people, no text.")
 
 
-# The ten hand-tuned theme buckets, in priority order. get_surface_prompts and
-# get_gate_prompts BOTH dispatch on this one function so their keyword chains cannot drift
-# apart - a style whose wall got the taco treatment but whose door fell through to the generic
-# branch is exactly how a door ends up looking unrelated to the corridor it is set in, which
-# get_gate_prompts' docstring already calls out.
+# The hand-tuned theme buckets, in priority order (this table plus _STYLE_BUCKETS_NAMED and
+# the two word-boundary lists below). get_surface_prompts and get_gate_prompts BOTH dispatch
+# on this one function so their keyword chains cannot drift apart - a style whose wall got the
+# taco treatment but whose door fell through to the generic branch is exactly how a door ends
+# up looking unrelated to the corridor it is set in, which get_gate_prompts' docstring already
+# calls out.
 #
 # Returns None when nothing matched. That is also the signal the caller needs: no bucket means
 # the generic branch is about to interpolate the typed word raw, which is what needs an LLM
@@ -1978,10 +2128,35 @@ _STYLE_BUCKETS = [
 _STYLE_LADIES = ['ladies', 'lady', 'women', 'woman', 'girls', 'girl']
 _STYLE_PEOPLE = ['people', 'person', 'crowd', 'characters', 'men', 'man', 'guys']
 
+# Pop-culture / aesthetic words the set-designer LLM keeps drawing as something plausible but
+# wrong - measured 2026-09-10 on rendered surfaces: "acid" came back as toxic-waste concrete,
+# "mario mushrooms" as a cluster of real forest fungus, "glitch" as a near-blank purple wall,
+# "LSD" as heavy-metal skull art plus a generic dungeon, "LSD dream emulator" as a generic
+# psychedelic screensaver with none of the game's Japanese-PS1 character. Same escape hatch as
+# the buckets above: when a typed word has a picture everyone already agrees on and the model
+# keeps missing it, answer it in code. Checked BEFORE the substring tables so the exact phrase
+# wins - "lsd dream emulator" must reach its own treatment, not the bare "lsd" one - and every
+# key here is specific enough not to collide with the fuzzy tables below.
+_STYLE_BUCKETS_NAMED = [
+    ("lsddream", ['lsd dream emulator', 'lsd dream', 'dream emulator', 'lsd:de', 'lsddem']),
+    ("acid",     ['acid']),
+    ("glitch",   ['glitch', 'glitched', 'datamosh', 'databend', 'databent']),
+    # 'mushroom' too: the shipped "mushrooms" preset pairs the theme with player=Mario,
+    # enemy=Bowser (game.js PRESET_IDEAS / index.html), so a bare "mushrooms" here means the
+    # Super Mushroom power-up, not forest fungus. Checked ahead of the 'forest' bucket, so
+    # "mushroom forest" lands here - an acceptable over-match, same class as 'cat' firing on
+    # "cathedral".
+    ("mario",    ['mario', 'mushroom', 'mushrooms']),
+    ("lsd",      ['lsd']),        # after lsddream, so the game keeps its own look
+]
+
 
 def _style_bucket(wall_style):
     """Which hand-tuned theme bucket `wall_style` resolves to, or None for the generic path."""
     ui = (wall_style or "").lower()
+    for name, keys in _STYLE_BUCKETS_NAMED:        # lsddream, acid, glitch, mario, lsd
+        if any(k in ui for k in keys):
+            return name
     for name, keys in _STYLE_BUCKETS[:4]:          # scifi, win95, forest, taco
         if any(k in ui for k in keys):
             return name
@@ -2090,6 +2265,100 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
         floor_p = f"Retro 90s warm honey oak wood parquet floor tiles with subtle cute paw prints, directly 90 degree bird's-eye top-down view, uniform flat lighting, zero 3D figures on floor."
         lantern_p = f"A cute rounded cat paw print emblem blazing with warm golden light, the whole paw shape lit up and radiantly glowing. {_LANTERN_TAIL}"
 
+    elif bucket == "lsddream":
+        # "LSD dream emulator" - the 1998 PS1 game. Its look is a collage of clashing tiled
+        # photo-textures (Japanese woodblock faces, eyes, kanji, torii, tatami) on blocky
+        # low-poly geometry with garish shifting colour. The player asked for game textures
+        # too; there is no way to pull them off the disc, so the aesthetic is described instead.
+        wall_p = ("A flat 2D repeating wall texture in the style of the PlayStation 1 game LSD Dream Emulator: "
+                  "a tight grid of clashing low-resolution square tiles - Japanese woodblock-print faces, wide "
+                  "staring eyes, red torii gates, black kanji characters, floral kimono fabric and woven tatami - "
+                  "jammed edge to edge in violently clashing magenta, orange, turquoise and acid green, blocky and "
+                  "slightly warped like an early 32-bit console texture, flat orthographic front view, seamless "
+                  "repeating 2D pattern, zero perspective, zero horizon.")
+        ceil_p = ("A flat 2D repeating ceiling texture in PlayStation 1 LSD Dream Emulator style: a banded dithered "
+                  "gradient dream-sky of purple, pink and orange scattered with flat cartoon clouds, a pale round "
+                  "moon and floating disembodied eyes, low-resolution and pixelated, camera pointing straight up at "
+                  "90 degrees, seamless repeating 2D pattern, zero perspective.")
+        floor_p = ("A flat 2D repeating floor texture in PlayStation 1 LSD Dream Emulator style: warped woven tatami "
+                   "matting and Japanese woodblock patterns broken up by squares of coloured static, single staring "
+                   "eyes and black kanji, clashing pink, green and blue, low-resolution 32-bit console texture, "
+                   "camera pointing straight down at 90 degrees, seamless repeating 2D pattern, zero large objects.")
+        lantern_p = (f"A round red Japanese paper chochin lantern painted with one big staring eye and black kanji, "
+                     f"its paper shell glowing from within with shifting rainbow light, blocky low-poly PlayStation 1 "
+                     f"style. {_LANTERN_TAIL}")
+
+    elif bucket == "lsd":
+        # "LSD" alone = trippy surreal. Swirl / spiral / paisley / mandala family (the drip
+        # family belongs to "acid" below), bold blacklight-poster colour.
+        wall_p = ("A flat 2D vertical wall texture of a swirling psychedelic tie-dye mural - liquid spirals and "
+                  "fractal paisley in vivid clashing magenta, orange, lime green, cyan and violet, melting and "
+                  "flowing together, bold high-contrast 1960s blacklight-poster colours, flat orthographic front "
+                  "view, seamless tileable wall material, zero perspective, zero horizon, zero sky.")
+        ceil_p = ("A flat 2D ceiling texture of a kaleidoscopic psychedelic mandala, radiating fractal spirals of "
+                  "magenta, gold, turquoise and purple, bold saturated colour, camera pointing straight up at 90 "
+                  "degrees, seamless repeating 2D pattern, zero perspective.")
+        floor_p = ("A flat 2D floor texture of swirling marbled psychedelic colour, paisley and liquid spirals in "
+                   "saturated magenta, green, blue and orange flowing edge to edge, camera pointing straight down at "
+                   "90 degrees, seamless flat floor material, zero objects, zero horizon.")
+        lantern_p = (f"A glass orb swirling with liquid rainbow colour, glowing brilliantly from within, casting "
+                     f"shifting psychedelic light across its surface. {_LANTERN_TAIL}")
+
+    elif bucket == "acid":
+        # "acid" = trippy surreal COLORDRIP (the player's word). The LLM reads it as the
+        # corrosive chemical - concrete, rust, toxic runoff - every time; this is molten paint
+        # running and pooling instead. Drip / melt / pour family, distinct from "lsd"'s swirls.
+        wall_p = ("A flat 2D vertical wall texture of thick glossy psychedelic paint dripping and running downward "
+                  "in molten rainbow rivulets - magenta, orange, electric green, cyan and violet - marbled and "
+                  "swirled together as they melt, wet and saturated, bold high-contrast acid colours, flat "
+                  "orthographic front view, seamless tileable wall material, zero perspective, zero horizon.")
+        ceil_p = ("A flat 2D ceiling texture of swirled molten rainbow paint pooling and dripping downward, glossy "
+                  "wet magenta, orange, green and violet marbled together, camera pointing straight up at 90 "
+                  "degrees, seamless repeating 2D pattern, zero perspective.")
+        floor_p = ("A flat 2D floor texture of poured psychedelic paint, glossy swirled pools of molten rainbow "
+                   "colour - magenta, cyan, lime and violet - blended edge to edge, camera pointing straight down at "
+                   "90 degrees, seamless flat floor material, zero objects, zero horizon.")
+        lantern_p = (f"A clear glass orb full of swirling molten rainbow liquid, glowing brilliantly from within, "
+                     f"wet colour dripping down its outside surface. {_LANTERN_TAIL}")
+
+    elif bucket == "glitch":
+        # "glitch" = glitched effects / glitched photos. Datamosh, pixel-sort, RGB channel
+        # split, torn scanlines, corrupted JPEG blocks. The generic path drew a near-blank
+        # purple wall (luma std 16.5, barely above the blank-wall floor).
+        wall_p = ("A flat 2D vertical wall texture of a heavily glitched digital photo - horizontal datamosh "
+                  "smearing, torn and repeated scanlines, split red and cyan RGB colour channels, blocky corrupted "
+                  "JPEG squares and pixel-sorted vertical streaks over bands of magenta and green digital noise, "
+                  "flat orthographic front view, seamless tileable wall material, zero perspective, zero horizon.")
+        ceil_p = ("A flat 2D ceiling texture of a corrupted video frame - shifted RGB channels, torn scanlines and "
+                  "blocky compression artefacts in cyan, magenta and green, camera pointing straight up at 90 "
+                  "degrees, seamless repeating 2D pattern, zero perspective.")
+        floor_p = ("A flat 2D floor texture of a databent image - horizontal pixel-sort streaks, displaced blocks "
+                   "and split colour channels in magenta, cyan and lime over dark digital noise, camera pointing "
+                   "straight down at 90 degrees, seamless flat floor material, zero objects.")
+        lantern_p = (f"An old CRT computer monitor switched on and filling with a violently glitched, datamoshed "
+                     f"image, the screen bleeding coloured static and torn scanlines and casting flickering "
+                     f"red-and-cyan light. {_LANTERN_TAIL}")
+
+    elif bucket == "mario":
+        # "mario mushrooms" = the Super Mushroom power-up from Super Mario World / Super Mario
+        # Bros. 3: bright red domed cap, big white circular spots, stubby cream stalk. The
+        # generic path draws real forest fungus. Wallpaper-of-the-icon shape, like the cat bucket.
+        wall_p = ("Retro 16-bit Super Nintendo video game wallpaper texture, a dense repeating grid of bright red "
+                  "domed mushroom power-ups with big white circular spots and stubby cream stalks with simple "
+                  "cartoon eyes, Super Mario World sprite art, bold flat saturated colours, thick black outlines, "
+                  "crisp pixel edges, flat 2D repeating pattern, no text, no room, no borders.")
+        ceil_p = ("Retro 16-bit Super Mario World ceiling texture, a seamless repeating row of hard-edged orange "
+                  "dirt blocks and glowing yellow question-mark blocks with a bolt in each corner, bold flat "
+                  "saturated colours, thick black outlines, camera pointing straight up at 90 degrees, seamless "
+                  "repeating 2D pattern.")
+        floor_p = ("Retro 16-bit Super Mario World ground texture, a seamless repeating band of hard-edged "
+                   "orange-brown earth blocks topped with a bright green grassy crust, bold flat saturated colours, "
+                   "thick black outlines, camera pointing straight down at 90 degrees, seamless repeating 2D "
+                   "pattern, zero objects.")
+        lantern_p = (f"One bright red Super Mario mushroom power-up with big white circular spots and a stubby cream "
+                     f"stalk with two simple cartoon eyes, glowing brilliantly from within with warm golden light, "
+                     f"radiant, bold 16-bit video game sprite art with thick black outlines. {_LANTERN_TAIL}")
+
     else:
         # THE ABSTRACT-THEME PATH. Everything below interpolates the typed words, so when those
         # words name no material - "internet", "trippy", "memes" - the surrounding framing
@@ -2180,7 +2449,7 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
 
     Buckets mirror get_surface_prompts' (same keywords, same relative order, so an ambiguous
     style resolves to the same theme on both sides) - every style get_surface_prompts special-
-    cases gets a matching door/switch here now; previously only four of its ten buckets did; a
+    cases gets a matching door/switch here now; a
     style whose wall got the taco or forest treatment but fell through to the generic gate
     branch is exactly how a door ends up looking unrelated to the corridor it's set in. Both
     functions now dispatch on the shared _style_bucket(), so that drift is no longer possible
@@ -2311,6 +2580,60 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
         switch_p = ("A small wall-mounted lever switch shaped like a cute cartoon dog "
                          "bone, mounted on a small plate, bright saturated colors, resting "
                          "down. " + _GATE_TAIL)
+
+    elif bucket == "lsddream":
+        door_p = (f"A closed sliding Japanese shoji screen door, its paper panels painted with one giant "
+                  f"staring eye and swirling clashing psychedelic colour, set into a surrounding archway of the "
+                  f"same clashing tiled woodblock-face, eye and kanji textures as the corridor wall, blocky "
+                  f"PlayStation 1 low-poly style, flat straight-on orthographic front view, {NO_MARGINS}, zero "
+                  f"perspective, zero horizon.")
+        # Lantern is a red paper chochin lantern - the switch is a daruma doll, a different
+        # Japanese toy, one eye filled in.
+        switch_p = ("A small hand-sized round red daruma doll with one eye painted in, used as a lever handle, "
+                    "mounted on a paper-screen plate marked with black kanji, blocky low-poly PlayStation 1 "
+                    "style, the handle resting down. " + _GATE_TAIL)
+
+    elif bucket == "lsd":
+        door_p = (f"A closed door painted with a bold swirling psychedelic tie-dye spiral in clashing magenta, "
+                  f"orange and lime green, set into a surrounding archway swirled with the same paisley "
+                  f"psychedelic mural as the corridor wall, flat straight-on orthographic front view, "
+                  f"{NO_MARGINS}, bold saturated colours, zero perspective, zero horizon.")
+        # Lantern is a glass orb of liquid colour - the switch is a swirled lollipop.
+        switch_p = ("A small hand-sized lever handle shaped like a swirled rainbow lollipop on a stick, glossy "
+                    "and saturated, mounted on a psychedelic paisley plate, the handle resting down. "
+                    + _GATE_TAIL)
+
+    elif bucket == "acid":
+        door_p = (f"A closed door that is one thick slab of clear casting resin with molten rainbow colour "
+                  f"swirled and frozen mid-drip inside it, glossy and saturated, set into a surrounding archway "
+                  f"marbled with the same molten psychedelic paint as the corridor wall, flat straight-on "
+                  f"orthographic front view, {NO_MARGINS}, wet saturated colours, zero perspective, zero horizon.")
+        # Lantern is a glass orb of liquid rainbow - the switch is a melting popsicle.
+        switch_p = ("A small hand-sized lever handle shaped like a melting rainbow popsicle on a stick, glossy "
+                    "colour running and dripping off it, mounted on a marbled psychedelic plate, the handle "
+                    "resting down. " + _GATE_TAIL)
+
+    elif bucket == "glitch":
+        door_p = (f"A closed door faced with one large cracked flat-screen monitor showing a frozen glitched, "
+                  f"datamoshed image with split red and cyan colour channels and torn scanlines, set into a "
+                  f"surrounding archway of the same corrupted JPEG-block and pixel-sorted noise texture as the "
+                  f"corridor wall, flat straight-on orthographic front view, {NO_MARGINS}, zero perspective, "
+                  f"zero horizon.")
+        # Lantern is a glitching CRT monitor - the switch is a shattered smartphone.
+        switch_p = ("A small hand-sized lever handle shaped like a shattered smartphone with a glitched, "
+                    "colour-split screen, mounted on a plate of corrupted pixel noise, the handle resting "
+                    "down. " + _GATE_TAIL)
+
+    elif bucket == "mario":
+        door_p = (f"A closed door shaped like one giant glowing yellow question-mark block from Super Mario "
+                  f"World, hard-edged with thick black outlines and a bolt in each corner, set into a "
+                  f"surrounding archway of the same repeating red-and-white mushroom power-up wallpaper as the "
+                  f"corridor wall, flat straight-on orthographic front view, {NO_MARGINS}, bold saturated "
+                  f"colours, thick black outlines, zero perspective.")
+        # Lantern is a red mushroom power-up - the switch is a gold coin, a different Mario icon.
+        switch_p = ("A small wall-mounted lever handle shaped like a shiny gold Super Mario coin stamped with a "
+                    "star, on a red brick block plate, bold 16-bit video game art with thick black outlines, "
+                    "the handle resting down. " + _GATE_TAIL)
 
     elif brief and brief.get("door") and brief.get("switch"):
         # A designed gate. Unlike the raw-word branch below, both lines are already concrete
@@ -4619,6 +4942,15 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
         make_seamless_4way(f_path, blend_pixels=12)
         # Door: a single full-cell surface - NOT tiled, so no make_seamless_4way.
         d_path = _p("d_save")
+        # Off-theme-door guard, and BEFORE the dark lift below so the lift lands on whichever
+        # door actually ships. Gated on the designed path exactly like the blank-wall guard
+        # above and for the same reason: a hand-tuned bucket's door is written against its own
+        # bucket's wall by hand (rule 1 in get_gate_prompts) and never fails this way. It also
+        # needs both designed lines to re-roll from at all. Measured against the wall texture
+        # AFTER its own rescue, so the comparison is with the corridor the player will see.
+        if (brief or {}).get("wall") and (brief or {}).get("door"):
+            d_path = _fix_offtheme_door(d_path, w_path, brief["door"], brief["wall"],
+                                        tile_px, wall_named)
 
         # Only the DESIGNED path can hand back an unreadably dark surface, so the lift is
         # gated on these textures actually having been designed. The test is the "wall" slot,
