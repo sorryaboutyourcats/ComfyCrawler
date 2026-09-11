@@ -7394,9 +7394,13 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
         # Keep it, so the History window can replay this dungeon without paying for it
         # again. Never fatal: a save that fails costs the player nothing they can see.
-        save_dungeon_session(gen_progress["completed_bundle"],
+        # The id comes back onto the bundle itself (not just the meta.json already written
+        # to disk) so game.js can name this exact run later - e.g. "erase the current run"
+        # from the in-game quit menu, which is just a history_delete for this id.
+        history_id = save_dungeon_session(gen_progress["completed_bundle"],
                              wall_style, player_style, weapon_style, enemy_style,
                              sound_mode)
+        gen_progress["completed_bundle"]["history_id"] = history_id
 
     except GenerationCancelled as c:
         # Not a failure: the page that asked for this run is gone, and /api/cancel_generation

@@ -123,6 +123,22 @@
     const progHeaderText = document.getElementById('progHeaderText');
     const progHeaderIcon = document.getElementById('progHeaderIcon');
 
+    // The browser tab is the second progress readout. Generating a dungeon takes minutes,
+    // which is long enough that the tab is usually in the background, so the percent goes
+    // into the title where it can be read from the tab strip without switching back - and
+    // when the assets land it shouts instead of counting.
+    const BASE_TAB_TITLE = 'ComfyCrawler by sorryaboutyourcats';
+    function setTabTitlePercent(percent) {
+      const pct = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+      document.title = pct + '% ' + BASE_TAB_TITLE;
+    }
+    function setTabTitleReady() {
+      document.title = 'READY TO PLAY ComfyCrawler!';
+    }
+    function resetTabTitle() {
+      document.title = BASE_TAB_TITLE;
+    }
+
     const viewportCanvas = document.getElementById('viewportCanvas');
     const gameVideo = document.getElementById('gameVideo');
     const statusPos = document.getElementById('statusPos');
@@ -136,6 +152,14 @@
     const btnAction = document.getElementById('btnAction');
     const btnMaximize = document.getElementById('btnMaximize');
     const btnClose = document.getElementById('btnClose');
+
+    // Quit-confirm box: what ESC / the title-bar ✕ opens during an active run instead of
+    // an OS confirm() prompt. See openQuitConfirm/closeQuitConfirm further down.
+    const modalQuitConfirm = document.getElementById('modalQuitConfirm');
+    const btnQuitConfirmClose = document.getElementById('btnQuitConfirmClose');
+    const btnQuitToMenu = document.getElementById('btnQuitToMenu');
+    const btnQuitToHistory = document.getElementById('btnQuitToHistory');
+    const btnQuitEraseRun = document.getElementById('btnQuitEraseRun');
 
     // ==========================================
     // RAYCASTER MAZE & TEXTURE ENGINE
@@ -302,6 +326,11 @@
     let dungeonStory = null;
     // Set once generation finishes; the player enters on their own schedule, not ours.
     let pendingBundle = null;
+    // The History id of the dungeon currently being played, or null - set from either
+    // bundle.history_id (a fresh CREATE) or entry.id (a History replay) the moment the run
+    // starts, cleared back to null on openSetupScreen. Lets "Erase Current Run" in the quit
+    // menu delete this exact saved session without the player having to find it in History.
+    let currentRunHistoryId = null;
     let crawlStarted = false;
     // Date.now() timestamp until which the intro crawl counts as "being read", so the screen
     // saver's idle timer holds off even if the story shipped with no narration audio (or
@@ -1127,11 +1156,13 @@
     });
 
     function openSetupScreen() {
+      resetTabTitle();
       screenGame.classList.add('hidden');
       stopOutroNarration();
       // Any leftover "still reading the intro crawl" hold is meaningless back on the menu -
       // clear it so it can't keep the screen saver (idle or ✕-forced) suppressed here.
       crawlReadingUntil = 0;
+      currentRunHistoryId = null;
       stopConfetti();
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
@@ -1142,9 +1173,61 @@
       returnToMenuMusic();     // win, lose, or quit - the dungeon's music stops, menu fades in
     }
 
+    // Quit-confirm box: opened by ESC or the title-bar ✕ during an active run instead of an
+    // OS confirm() prompt, since leaving mid-dungeon has real choices, not just yes/no.
+    function openQuitConfirm() {
+      if (!modalQuitConfirm) { if (confirm("Back to Main Menu?")) openSetupScreen(); return; }
+      modalQuitConfirm.classList.remove('hidden');
+    }
+
+    function closeQuitConfirm() {
+      if (modalQuitConfirm) modalQuitConfirm.classList.add('hidden');
+    }
+
+    // Deletes the dungeon currently being played from History, then leaves it - there is
+    // nothing left to keep playing once its saved bundle is gone. Best-effort and silent on
+    // failure, the same spirit as save_dungeon_session on the server: the player is leaving
+    // this run either way, so a failed cleanup costs them nothing they can see.
+    async function eraseCurrentRunAndLeave() {
+      closeQuitConfirm();
+      const id = currentRunHistoryId;
+      if (id) {
+        try {
+          const res = await fetch(`${SERVER_URL}/api/history_delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!data.success) throw new Error(data.error || 'The server refused the delete.');
+        } catch (err) {
+          console.error('Erase current run error:', err);
+        }
+      }
+      openSetupScreen();
+    }
+
+    if (btnQuitConfirmClose) btnQuitConfirmClose.addEventListener('click', closeQuitConfirm);
+    if (btnQuitToMenu) btnQuitToMenu.addEventListener('click', () => { closeQuitConfirm(); openSetupScreen(); });
+    // Opens straight into History on top of the setup screen - the same window and rows the
+    // main menu's own History button shows, just reached without leaving twice.
+    if (btnQuitToHistory) btnQuitToHistory.addEventListener('click', () => {
+      closeQuitConfirm();
+      openSetupScreen();
+      openHistory();
+    });
+    if (btnQuitEraseRun) btnQuitEraseRun.addEventListener('click', eraseCurrentRunAndLeave);
+    // Clicking the darkened game visible behind the box backs out the same as its own ✕ -
+    // there is deliberately no separate Cancel button (see the HTML comment on the modal).
+    if (modalQuitConfirm) {
+      modalQuitConfirm.addEventListener('click', (e) => {
+        if (e.target === modalQuitConfirm) closeQuitConfirm();
+      });
+    }
+
     btnClose.addEventListener('click', () => {
       if (!screenGame.classList.contains('hidden')) {
-        if (confirm("Back to Main Menu?")) openSetupScreen();
+        openQuitConfirm();
       } else {
         // Off the game screen the window's ✕ "closes" it the only way a browser tab can:
         // the Win98 starfield takes the whole screen, exactly as it does after an idle
@@ -1218,7 +1301,12 @@
       // "wearing ..." is an attributive joiner _theme_enemy_subject may trim back to just the
       // name - the jacket is a bonus, not load-bearing.
       'outer space':     { player: 'Doge',                    weapon: 'drugs',            enemy: '"Elon Musk" wearing a ketamine jacket' },
-      // Secret 27th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
+      // Quotes on the wall, player, and enemy push all three down the named-entity path (same
+      // reasoning as manhattan/Sonic/Mario/Elon Musk above): the wall renders the real store,
+      // not a generic "apple store"-shaped bucket, and the player/enemy draw the real man and
+      // the real character.
+      '"Apple Store"':   { player: '"Steve Jobs"',            weapon: 'sledgehammer',     enemy: '"Clippy" the giant paperclip creature with two googly eyes' },
+      // Secret 28th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
       'LSD dream emulator': { player: 'Gray Man with hat',    weapon: 'colorful Zweihänder', enemy: 'smiling faces' },
@@ -1273,7 +1361,7 @@
       trimQuickIdeasToTwoRows(row);
     }
 
-    // Show only the ideas that fit in two rows and hide the rest. The whole list is 26 deep and
+    // Show only the ideas that fit in two rows and hide the rest. The whole list is 27 deep and
     // wrapping all of it walked the CREATE button off the bottom of the window; two rows is
     // enough to read as a grab-bag while leaving the mad-lib fields the space.
     //
@@ -7318,6 +7406,16 @@
     window.addEventListener('keydown', (e) => {
       if (screenGame.classList.contains('hidden')) return;
 
+      // The quit-confirm box is up: ESC again backs out of it exactly like clicking its own
+      // ✕ or the darkened game behind it, and nothing else here reaches the dungeon.
+      if (modalQuitConfirm && !modalQuitConfirm.classList.contains('hidden')) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          closeQuitConfirm();
+        }
+        return;
+      }
+
       // The victory box is up and its only control is "Back to Main Menu": Enter (or Space)
       // takes it, the same as clicking the button, so a keyboard player never has to reach
       // for the mouse to leave a won run.
@@ -7391,10 +7489,10 @@
         return;
       }
 
-      // ESC in free exploration does exactly what the title-bar ✕ does here: the
-      // "Back to Main Menu?" prompt. In battle the block just above has already returned,
-      // and every open box (victory / defeat / level-up) returned earlier still, so ESC
-      // only reaches this line while the player is walking the dungeon.
+      // ESC in free exploration does exactly what the title-bar ✕ does here: opens the
+      // quit-confirm box. The guard at the top of this handler catches ESC again once it's
+      // up; in battle the block above has already returned, and every open box (victory /
+      // defeat / level-up) returned earlier still, so this only reaches while walking.
       if (e.code === 'Escape') {
         e.preventDefault();
         btnClose.click();
@@ -7599,6 +7697,8 @@
     // generation happens to finish.
     function enterDungeon(b) {
       if (!b) return;
+      // Playing now, so the tab stops advertising a run that already started.
+      resetTabTitle();
       // New run, new pack colours. Rolled here rather than in restartDungeon, which rolls THIS
       // run back to its first step and so keeps the foes the player has already met looking the
       // way they looked. Has to land before the first render either way: the world markers tint
@@ -7869,6 +7969,7 @@
       btnEnterDungeon.classList.add('bg-yellow-100');
 
       // Nothing is generating any more, so the whole progress readout stops pretending.
+      setTabTitleReady();
       if (progHeaderText) progHeaderText.textContent = 'Generated!';
       if (progHeaderIcon) progHeaderIcon.textContent = '\u2705';
       progStatusText.textContent = 'Done.';
@@ -8105,6 +8206,7 @@
 
       const startTime = Date.now();
       progTimer.textContent = "0.0s";
+      setTabTitlePercent(0);
       const timerInterval = setInterval(() => {
         progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
       }, 100);
@@ -8136,6 +8238,7 @@
           clearInterval(timerInterval);
           generationInFlight = false;
           resetCrawl();
+          resetTabTitle();
           screenProgress.classList.add('hidden');
           screenSetup.classList.remove('hidden');
           if (titleButtons) titleButtons.classList.remove('hidden');
@@ -8152,6 +8255,7 @@
 
             progStatusText.textContent = p.status_message;
             progPercentText.textContent = p.percent + "%";
+            setTabTitlePercent(p.percent);
             // Live sub-job detail ("slash2 - step 5/8"), shown inline between the status
             // message and the percent rather than on its own centered line below.
             if (p.phase) progPhaseText.textContent = p.phase;
@@ -8165,6 +8269,7 @@
               clearInterval(pollInterval);
               clearInterval(timerInterval);
               generationInFlight = false;
+              currentRunHistoryId = p.completed_bundle.history_id || null;
               armEnterDungeon(p.completed_bundle);
             } else if (p.error) {
               clearInterval(pollInterval);
@@ -8172,6 +8277,7 @@
               generationInFlight = false;
               alert("Error: " + p.error);
               resetCrawl();
+              resetTabTitle();
               screenProgress.classList.add('hidden');
               screenSetup.classList.remove('hidden');
               if (titleButtons) titleButtons.classList.remove('hidden');
@@ -8187,6 +8293,7 @@
         generationInFlight = false;
         alert('Server communication error. Make sure server.py is running!');
         resetCrawl();
+        resetTabTitle();
         screenProgress.classList.add('hidden');
         screenSetup.classList.remove('hidden');
         if (titleButtons) titleButtons.classList.remove('hidden');
@@ -8481,6 +8588,7 @@
       progStatusText.textContent = 'Reading ' + historyTitleOf(entry) + ' from history...';
       progPercentText.textContent = '0%';
       paintProgressChunks(0);
+      setTabTitlePercent(0);
 
       try {
         const res = await fetch(
@@ -8495,6 +8603,8 @@
         // mid-sentence exactly as it does on a freshly generated run.
         progPercentText.textContent = '100%';
         paintProgressChunks(100);
+        setTabTitlePercent(100);
+        currentRunHistoryId = entry.id || null;
         armEnterDungeon(bundle);
         if (progHeaderIcon) progHeaderIcon.textContent = '📜';
         if (progHeaderText) progHeaderText.textContent = 'Loaded from History!';
@@ -8503,6 +8613,7 @@
         console.error('History load error:', err);
         alert('Could not load that saved dungeon - it may have been deleted.\n\n' + err.message);
         resetCrawl();
+        resetTabTitle();
         screenProgress.classList.add('hidden');
         screenSetup.classList.remove('hidden');
         if (titleButtons) titleButtons.classList.remove('hidden');

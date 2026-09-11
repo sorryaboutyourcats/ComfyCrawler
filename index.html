@@ -681,7 +681,10 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="outer space">
             <span>🚀 Outer Space</span>
           </button>
-          <!-- Secret 27th idea - ships hidden with preset-btn-secret instead of preset-btn, so
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="&quot;Apple Store&quot;">
+            <span>🍎 Apple Store</span>
+          </button>
+          <!-- Secret 28th idea - ships hidden with preset-btn-secret instead of preset-btn, so
                shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see .preset-btn) never touch
                it. game.js promotes it to a real preset-btn once the 🎲 has been clicked enough
                times. See the shuffle-unlock block in game.js. -->
@@ -872,6 +875,35 @@
           </button>
           <button id="btnHistoryConfirmDelete" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- QUIT CONFIRMATION - ESC or the title-bar ✕ during an active run opens this instead
+         of an OS confirm() prompt, so leaving mid-dungeon is a real choice instead of one
+         bare yes/no. There is no separate Cancel button: ESC again, this box's own ✕, or
+         clicking the darkened game visible behind it all back out to the dungeon the same
+         way. -->
+    <div id="modalQuitConfirm" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>🚪 Leave This Dungeon?</span>
+          <button id="btnQuitConfirmClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-3 flex flex-col gap-1.5">
+          <button id="btnQuitToMenu" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-slate-900 bg-slate-200 hover:bg-slate-300">
+            <span class="text-xs font-black">🏠 Back to Main Menu</span>
+            <span class="text-[10px] font-bold text-slate-700">This run stays saved in History</span>
+          </button>
+          <button id="btnQuitToHistory" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-blue-900 bg-blue-100 hover:bg-blue-200">
+            <span class="text-xs font-black">📜 Load a Different Dungeon</span>
+            <span class="text-[10px] font-bold text-slate-700">Opens History to start another saved run</span>
+          </button>
+          <button id="btnQuitEraseRun" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-red-900 bg-red-100 hover:bg-red-200">
+            <span class="text-xs font-black">🗑️ Erase Current Run</span>
+            <span class="text-[10px] font-bold text-slate-700">Deletes this dungeon from History for good</span>
           </button>
         </div>
       </div>
