@@ -1400,6 +1400,10 @@
     // to look it (see combatState.exhaustion).
     const ATTACK_STM_COST = 30;
     const BLOCK_STM_FLOOR = 2;
+    // Where in the swing the blade actually connects. attackFrame no longer steps by exactly 1
+    // (SPEED picks scale it), so this is tested as a CROSSING - the frame the counter goes from
+    // below it to at-or-past it - rather than an equality that a fractional step would skip.
+    const ATTACK_HIT_FRAME = 7;
     // OVEREXERTION. A swing taken with something in the bar but less than ATTACK_STM_COST is
     // allowed - it is the desperation option, not a refusal - and it is paid for with the whole
     // remainder plus this long with the bar HELD at zero: no regen, no guard, and a strafe cut
@@ -1409,6 +1413,12 @@
     // exhausted hero can still do at all, so it is slowed rather than taken away - at 40% they
     // can still crawl out of a boss's reach, just not out-pace its 0.8px/frame hunt by much.
     const EXHAUSTED_STRAFE_SPEED = 1.5;
+    // A raised guard halves whatever the strafe is worth that frame. Blocking was previously
+    // free movement-wise - hold S, shuffle at full speed, absorb everything - so the shield is
+    // now a real commitment: you give up half your spacing for the frames you hold it. Applied
+    // AFTER the SPEED multiplier, so a fast hero still shuffles faster behind their guard than
+    // a slow one; they just give up the same half of it.
+    const GUARD_STRAFE_FACTOR = 0.5;
 
     // What each foe is worth. Roughly proportional to how long it takes to put down: the boss
     // has 2.4x the walker's HP and hits hardest, the flyer spends most of the fight out of
@@ -1426,7 +1436,17 @@
     // first level, and the curve outruns a single dungeon's supply by about level 5.
     function xpForLevel(level) { return 40 + (level - 1) * 30; }
 
-    const LEVEL_GAINS = { strength: 4, stamina: 20, survival: 20 };
+    const LEVEL_GAINS = { strength: 4, stamina: 20, survival: 20, speed: 8 };
+    // SPEED is banked as a PERCENTAGE and spent as one multiplier on four separate things: the
+    // strafe (guarded or not), how fast a swing plays out, stamina regen, and the exploration
+    // step tween. Each is small on its own - which is why +8% is worth taking against a flat
+    // +20 max health - but they compound: faster regen plus a faster swing is meaningfully more
+    // damage per second, not just a snappier animation.
+    //
+    // Capped, because the enemy AI is tuned against a 3.8px/frame strafe and a 0.8px/frame hunt
+    // has to stay able to close. 1.6x is eight picks - further than a single run gets - so the
+    // ceiling exists for the pathological case rather than as a wall the player feels.
+    const SPEED_MAX_MULT = 1.6;
     // Every level also patches the hero up, whichever path they take. Without it the run is
     // decided by the first two fights - there is no other healing in the dungeon.
     const LEVEL_HEAL_FRAC = 0.4;
@@ -1438,11 +1458,12 @@
       bonusAtk: 0,
       bonusHp: 0,
       bonusStm: 0,
+      bonusSpd: 0,        // percent, not a multiplier - see playerSpeedMult()
       pendingLevels: 0,   // levels banked but not yet spent; the modal reopens per level
       choiceIndex: 0      // which option the keyboard cursor is on
     };
 
-    const LEVEL_CHOICE_KEYS = ['strength', 'stamina', 'survival'];
+    const LEVEL_CHOICE_KEYS = ['strength', 'stamina', 'survival', 'speed'];
     let levelUpOpen = false;
     // How far the dungeon's bed drops under the level-up loop. Ducked rather than silenced, so
     // the run is still audibly going on underneath the choice.
@@ -1456,6 +1477,13 @@
 
     // The bars are derived, never edited in place: max = base + banked bonuses. Anything that
     // changes a bonus (a level-up pick) or clears them (a new dungeon) calls this.
+    // The one number every SPEED-governed measurement multiplies by. A function rather than a
+    // stored field so there is nothing to keep in sync - a pick changes bonusSpd and every
+    // reader picks it up on its next frame.
+    function playerSpeedMult() {
+      return Math.min(SPEED_MAX_MULT, 1 + progression.bonusSpd / 100);
+    }
+
     function applyProgressionStats() {
       combatState.playerMaxHp = BASE_MAX_HP + progression.bonusHp;
       combatState.playerMaxStm = BASE_MAX_STM + progression.bonusStm;
@@ -1482,6 +1510,7 @@
       progression.bonusAtk = 0;
       progression.bonusHp = 0;
       progression.bonusStm = 0;
+      progression.bonusSpd = 0;
       progression.pendingLevels = 0;
       progression.choiceIndex = 0;
       closeLevelUpModal();
@@ -1519,9 +1548,18 @@
       const sTxt = document.getElementById('levelUpStrengthText');
       const tTxt = document.getElementById('levelUpStaminaText');
       const vTxt = document.getElementById('levelUpSurvivalText');
+      const pTxt = document.getElementById('levelUpSpeedText');
       if (sTxt) sTxt.textContent = `+${LEVEL_GAINS.strength} attack damage`;
       if (tTxt) tTxt.textContent = `+${LEVEL_GAINS.stamina} max stamina`;
       if (vTxt) vTxt.textContent = `+${LEVEL_GAINS.survival} max health`;
+      // Shows the CAPPED result, so a hero already at the ceiling is told the truth rather than
+      // sold a ninth +8% that does nothing.
+      if (pTxt) {
+        const now = playerSpeedMult();
+        const next = Math.min(SPEED_MAX_MULT, 1 + (progression.bonusSpd + LEVEL_GAINS.speed) / 100);
+        const gain = Math.round((next - now) * 100);
+        pTxt.textContent = gain > 0 ? `+${gain}% strafe / swing / regen` : 'speed already maxed';
+      }
       levelUpModal.classList.remove('hidden');
       syncLevelUpSelection();
       playSfx('end', { vary: 0, gain: 0.55 });
@@ -1564,6 +1602,7 @@
       if (kind === 'strength') progression.bonusAtk += LEVEL_GAINS.strength;
       else if (kind === 'stamina') progression.bonusStm += LEVEL_GAINS.stamina;
       else if (kind === 'survival') progression.bonusHp += LEVEL_GAINS.survival;
+      else if (kind === 'speed') progression.bonusSpd += LEVEL_GAINS.speed;
       else return;
 
       progression.pendingLevels--;
@@ -1749,8 +1788,10 @@
     //    player's swing, snapping its guard up as the strike travels (see tickEnemyAI). A
     //    caught blow does nothing AND does not break this guard. The ONLY opening is
     //    punishWindow: for that many frames after the walker commits to its own attack it
-    //    cannot guard, and one hit landed in that gap connects (and spends the gap - see the
-    //    player-strike resolution, where a clean hit clears punishTimer).
+    //    cannot guard, and any hit landed in that gap connects. A landed hit does NOT close the
+    //    window early (punishTimer just keeps counting down) - 60 frames (1s at the fixed
+    //    60fps tick) is long enough for two swings back to back if the player's timing is good,
+    //    without leaving so much open time that a third or fourth sneaks in too.
     //
     // SWING_REACH: how far to either side of the hero their swing can find a foe. It is the
     // mirror of landEnemyStrike's 44px (what a foe's swing reaches the other way), except the
@@ -1763,7 +1804,7 @@
     // is unchanged, the range gimmes are gone.
     const SWING_REACH = 18;
     const ENEMY_VARIANTS = {
-      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, bodyR: 26, fly: false, canBlock: true,  reactiveBlock: true, punishWindow: 70, blockHold: 60,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
+      walker: { tag: '',       maxHp: 100, dmg: 16, blockStm: 25, cadence: 115, telegraph: 30, heightFrac: 0.44, widthFrac: 0.52, bodyR: 26, fly: false, canBlock: true,  reactiveBlock: true, punishWindow: 60, blockHold: 60,  slow: false, hover: 0,  sfxRate: 1.00, timid: true },
       flyer:  { tag: 'FLYING ', maxHp: 70,  dmg: 13, blockStm: 20, cadence: 95,  telegraph: 20, heightFrac: 0.40, widthFrac: 0.66, bodyR: 30, fly: true,  canBlock: false, blockOdds: 0,        blockHold: 0,   slow: false, hover: 58, sfxRate: 1.35 },
       boss:   { tag: 'DREAD ',  maxHp: 240, dmg: 30, blockStm: 50, cadence: 160, telegraph: 46, heightFrac: 0.68, widthFrac: 0.78, bodyR: 46, fly: false, canBlock: true,  blockOdds: 0.030,   blockHold: 150, slow: true,  hover: 0,  sfxRate: 0.72, timid: false },
 
@@ -3066,7 +3107,7 @@
           // that foe's generated block frame, and a player strike caught on it does no damage
           // (see the player-strike resolution).
           if (cfg.reactiveBlock) {
-            // The walker doesn't gamble - it reacts. The player's swing lands on attackFrame 7;
+            // The walker doesn't gamble - it reacts. The player's swing lands on ATTACK_HIT_FRAME;
             // catching it as early as frame 2 reads as the foe answering it. It guards through
             // its own wind-up too, so swinging AT the telegraph just gets blocked - the only
             // gap is punishTimer, the beat after its own attack when it can't get the guard up.
@@ -3076,7 +3117,7 @@
               e.blockTimer = 0;
             } else if ((e.state === 'idle' || e.state === 'telegraph') && e.punishTimer <= 0
                 && e.noBlockTimer <= 0
-                && combatState.attackFrame >= 2 && combatState.attackFrame < 7) {
+                && combatState.attackFrame >= 2 && combatState.attackFrame < ATTACK_HIT_FRAME) {
               e.blockTimer = cfg.blockHold || 60;
             }
           } else if (cfg.canBlock && e.state === 'idle' && e.blockTimer <= 0 && e.noBlockTimer <= 0
@@ -3197,7 +3238,14 @@
       if (battleReady() && !combatState.dead) {
         // An empty bar staggers. Movement is the last thing left to a spent hero - the swing
         // and the guard are both gone by this point - so it is slowed, not removed.
-        const strafe = combatState.playerStm > 0 ? 3.8 : EXHAUSTED_STRAFE_SPEED;
+        //
+        // Two modifiers ride on top. SPEED picks scale it; a raised guard halves it. The guard
+        // test is the SAME condition the shield itself comes up on below, so the slowdown and
+        // the protection start and stop on exactly the same frame - a hold that is too cheap to
+        // raise a shield (bar at or under BLOCK_STM_FLOOR) does not cost mobility either.
+        const guarding = keysHeld.block && combatState.playerStm > BLOCK_STM_FLOOR;
+        let strafe = (combatState.playerStm > 0 ? 3.8 : EXHAUSTED_STRAFE_SPEED) * playerSpeedMult();
+        if (guarding) strafe *= GUARD_STRAFE_FACTOR;
         if (keysHeld.left) {
           combatState.vx = -strafe;
           combatState.glanceDir = -1;
@@ -3212,7 +3260,7 @@
         // BLOCK_STM_FLOOR is what makes "the guard does not come up on an empty bar" true, and
         // it is why an overexertion lock leaves the hero defenceless for its full two seconds:
         // the bar is pinned at 0 below, so this test cannot pass until the lock expires.
-        if (keysHeld.block && combatState.playerStm > BLOCK_STM_FLOOR) {
+        if (guarding) {
           combatState.shieldProgress = Math.min(1.0, combatState.shieldProgress + 0.2);
           // Holding guard costs stamina; shuffling around while guarding costs much more.
           const guardMoving = keysHeld.left || keysHeld.right;
@@ -3235,7 +3283,10 @@
         combatState.exhaustLock--;
         combatState.playerStm = 0;
       } else if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
-        combatState.playerStm = Math.min(combatState.playerMaxStm, combatState.playerStm + 0.45);
+        // 0.45/tick is 27/s - a full base bar in under four seconds. SPEED picks scale it, so
+        // the pick buys swings-per-fight as much as it buys footwork.
+        combatState.playerStm = Math.min(combatState.playerMaxStm,
+          combatState.playerStm + 0.45 * playerSpeedMult());
       }
 
       // How wrecked the hero LOOKS. Nothing reads this to decide what they may do - the action
@@ -3254,8 +3305,15 @@
       if (Math.abs(spentTarget - combatState.exhaustion) < 0.004) combatState.exhaustion = spentTarget;
 
       if (combatState.attackFrame > 0) {
-        combatState.attackFrame++;
-        if (combatState.attackFrame === 7) {
+        // SPEED picks play the whole swing out faster - wind-up, the blow at ATTACK_HIT_FRAME
+        // and the recovery that follows it all compress together, so the counter steps by a
+        // fraction rather than by 1. Everything downstream reads attackFrame as a position in
+        // the animation (the sprite picker divides it by maxAttackFrames, the walker's reactive
+        // guard watches for it inside a window), so a fractional step is fine there - only the
+        // hit itself needed the equality test turned into a crossing.
+        const prevAttackFrame = combatState.attackFrame;
+        combatState.attackFrame += playerSpeedMult();
+        if (prevAttackFrame < ATTACK_HIT_FRAME && combatState.attackFrame >= ATTACK_HIT_FRAME) {
           // Who the swing lands on. Against a lone foe that is the only answer; against a pack
           // it is the NEAREST one the blade can actually reach - and "reach" is three tests,
           // not one: not airborne over the 34px line, not withdrawn past REACH_DEPTH, and
@@ -3303,9 +3361,6 @@
               e.hp = Math.max(0, e.hp - dmg);
               e.state = 'hurt';
               e.stateTimer = 12;
-              // A clean hit on the walker spends its opening: clearing punishTimer here makes
-              // the read worth exactly one hit, not a combo while it is staggered out of guard.
-              if (cfg.reactiveBlock) e.punishTimer = 0;
               // Anchored on the foe that was actually hit rather than on the centre line, so in
               // a pack the number appears over the one that took it.
               showFloatingCombatText(`-${dmg} SLASH!`,
@@ -7053,7 +7108,10 @@
       const startY = player.posY;
       const startAngle = player.angle;
       const animStart = performance.now();
-      const DURATION = 160;
+      // The step (and the turn - both come through here) takes 160ms at base. SPEED picks shorten
+      // it, which is what "faster in exploration" means on a grid: the same tile, sooner. Divided
+      // rather than multiplied - this is a duration, not a rate.
+      const DURATION = 160 / playerSpeedMult();
 
       function step(now) {
         const elapsed = now - animStart;
@@ -7294,7 +7352,7 @@
         return;
       }
 
-      // The level-up box owns the keyboard while it is up: 1/2/3 take a path outright, the
+      // The level-up box owns the keyboard while it is up: 1/2/3/4 take a path outright, the
       // arrows move the cursor and Space/Enter confirms it. Nothing falls through to the
       // dungeon, and there is no key that dismisses the box without choosing.
       if (levelUpOpen) {
@@ -7302,6 +7360,7 @@
         if (e.code === 'Digit1' || e.code === 'Numpad1') applyLevelChoice('strength');
         else if (e.code === 'Digit2' || e.code === 'Numpad2') applyLevelChoice('stamina');
         else if (e.code === 'Digit3' || e.code === 'Numpad3') applyLevelChoice('survival');
+        else if (e.code === 'Digit4' || e.code === 'Numpad4') applyLevelChoice('speed');
         else if (['ArrowUp', 'KeyW', 'ArrowLeft', 'KeyA'].includes(e.code)) moveLevelUpSelection(-1);
         else if (['ArrowDown', 'KeyS', 'ArrowRight', 'KeyD'].includes(e.code)) moveLevelUpSelection(1);
         else if (e.code === 'Space' || e.code === 'Enter') {

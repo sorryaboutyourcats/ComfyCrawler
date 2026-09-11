@@ -943,7 +943,7 @@
 
             <!-- Level-up choice. Sits ABOVE the death/victory boxes (z-40) and, while it is
                  open, every input path in game.js short-circuits on inputLocked() - so the
-                 dungeon is genuinely frozen until one of the three is taken. -->
+                 dungeon is genuinely frozen until one of the four is taken. -->
             <div id="levelUpModal" class="absolute inset-0 bg-black/75 z-40 flex items-center justify-center p-3 hidden">
               <div class="win95-box p-3 flex flex-col items-center gap-2 w-full max-w-[300px] shadow-2xl text-center border-4 border-yellow-400">
                 <h3 class="font-black text-sm text-yellow-900">⬆️ LEVEL UP!</h3>
@@ -962,6 +962,10 @@
                   <button data-choice="survival" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-blue-900 bg-blue-100 hover:bg-blue-200">
                     <span class="text-[11px] font-black">3 · SURVIVAL</span>
                     <span class="text-[9px] font-bold text-slate-700" id="levelUpSurvivalText">+20 max health</span>
+                  </button>
+                  <button data-choice="speed" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-purple-900 bg-purple-100 hover:bg-purple-200">
+                    <span class="text-[11px] font-black">4 · SPEED</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpSpeedText">+8% strafe / swing / regen</span>
                   </button>
                 </div>
               </div>
