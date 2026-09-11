@@ -1209,7 +1209,7 @@
       'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'old person' },
       'corn maze':       { player: 'pickup truck robot',      weapon: 'pitchfork',        enemy: 'zombie animal' },
       'pizza toppings':  { player: 'cat chef',                weapon: 'pepperoni',        enemy: 'pasta' },
-      '"central park"':  { player: 'jogger',                  weapon: 'ipod',             enemy: 'cardboard box' },
+      '"central park"':  { player: 'colorful rollerskater woman', weapon: 'tree branch with leaves', enemy: 'cardboard box man' },
       // Quotes push each name down the named-entity path (same as "Sonic" / "Donald Trump"
       // above) so they draw the real characters. Yoshi as the weapon = you ride him.
       'mushrooms':       { player: '"Mario"',                 weapon: '"Yoshi"',          enemy: '"Bowser"' },
@@ -1218,9 +1218,13 @@
       // "wearing ..." is an attributive joiner _theme_enemy_subject may trim back to just the
       // name - the jacket is a bonus, not load-bearing.
       'outer space':     { player: 'Doge',                    weapon: 'drugs',            enemy: '"Elon Musk" wearing a ketamine jacket' },
+      // Secret 27th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
+      // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
+      // the wall renders the game's PS1-collage look untouched, no quotes needed.
+      'LSD dream emulator': { player: 'Gray Man with hat',    weapon: 'colorful Zweihänder', enemy: 'smiling faces' },
     };
 
-    document.querySelectorAll('.preset-btn').forEach(btn => {
+    function bindPresetButton(btn) {
       btn.addEventListener('click', () => {
         const val = btn.getAttribute('data-val');
         wallPromptInput.value = val.toLowerCase();
@@ -1235,7 +1239,9 @@
         // Enter from a field still fires CREATE - so "pick an idea, press Enter" still goes.
         wallPromptInput.focus({ preventScroll: true });
       });
-    });
+    }
+
+    document.querySelectorAll('.preset-btn').forEach(bindPresetButton);
 
     // Reshuffle the Quick idea grid every time the player lands on the menu - first load and
     // every trip back through openSetupScreen() - so it reads as a rotating grab-bag of
@@ -1288,9 +1294,47 @@
       btns.forEach((b, i) => { if (tops[i] > rows[1]) b.classList.add('hidden'); });
     }
 
+    // ---- Secret quick idea: unlocked after enough dice rolls -----------------------
+    // "LSD dream emulator" ships as .preset-btn-secret (index.html), which shuffleQuickIdeas
+    // and trimQuickIdeasToTwoRows above never see - only .preset-btn. Once the player has
+    // clicked 🎲 enough times, it's promoted to a real .preset-btn and joins the rotation for
+    // good. The count is a set-once counter that sticks across reloads, same storage pattern
+    // as SCREENSAVER_STOP_KEY further down.
+    const SHUFFLE_IDEAS_COUNT_KEY = 'comfycrawler.shuffleIdeasCount';
+    const SECRET_IDEA_UNLOCK_AT = 11;
+
+    function loadShuffleIdeasCount() {
+      try {
+        const n = parseInt(localStorage.getItem(SHUFFLE_IDEAS_COUNT_KEY), 10);
+        return Number.isNaN(n) || n < 0 ? 0 : n;
+      } catch (_) { return 0; }
+    }
+
+    function saveShuffleIdeasCount(n) {
+      try { localStorage.setItem(SHUFFLE_IDEAS_COUNT_KEY, String(n)); }
+      catch (_) { /* storage disabled or full - nothing we can do about it */ }
+    }
+
+    let shuffleIdeasCount = loadShuffleIdeasCount();
+
+    function unlockSecretIdeasIfEarned() {
+      if (shuffleIdeasCount < SECRET_IDEA_UNLOCK_AT) return;
+      document.querySelectorAll('.preset-btn-secret').forEach(btn => {
+        btn.classList.remove('preset-btn-secret', 'hidden');
+        btn.classList.add('preset-btn');
+        bindPresetButton(btn);
+      });
+    }
+    unlockSecretIdeasIfEarned();   // already earned in a past session - unlock on arrival too
+
     const btnShuffleIdeas = document.getElementById('btnShuffleIdeas');
     if (btnShuffleIdeas) {
-      btnShuffleIdeas.addEventListener('click', () => shuffleQuickIdeas(true));
+      btnShuffleIdeas.addEventListener('click', () => {
+        shuffleIdeasCount++;
+        saveShuffleIdeasCount(shuffleIdeasCount);
+        unlockSecretIdeasIfEarned();
+        shuffleQuickIdeas(true);
+      });
     }
 
     // The trim is measured against the window's width, so a resize invalidates it - re-run it
