@@ -1615,6 +1615,7 @@
       '"Dark Souls"':    { player: 'Person from "Dark Souls"', weapon: 'weapon from "Dark Souls"', enemy: 'enemy from "Dark Souls"' },
       '"Demon\'s Souls"': { player: '"Patches"',              weapon: '"Rivers of Blood" katana', enemy: 'Barney the dinosaur' },
       'World of Warcraft': { player: 'Night Elf',             weapon: 'sentinel glaive',  enemy: 'Elf on a shelf' },
+      'PlayStation':       { player: '"Solid Snake"',         weapon: 'yellow Stun Baton', enemy: '"Donkey Kong"' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
