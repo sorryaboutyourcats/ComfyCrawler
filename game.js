@@ -111,6 +111,12 @@
     const btnHistoryConfirmClose = document.getElementById('btnHistoryConfirmClose');
     const btnHistoryConfirmCancel = document.getElementById('btnHistoryConfirmCancel');
     const btnHistoryConfirmDelete = document.getElementById('btnHistoryConfirmDelete');
+    // ...and the one a row's Prompts button opens when a run is live behind the window.
+    const modalPromptsConfirm = document.getElementById('modalPromptsConfirm');
+    const promptsConfirmName = document.getElementById('promptsConfirmName');
+    const btnPromptsConfirmClose = document.getElementById('btnPromptsConfirmClose');
+    const btnPromptsConfirmCancel = document.getElementById('btnPromptsConfirmCancel');
+    const btnPromptsConfirmContinue = document.getElementById('btnPromptsConfirmContinue');
 
     const progBarChunks = document.getElementById('progBarChunks');
     const progStatusText = document.getElementById('progStatusText');
@@ -1617,6 +1623,7 @@
       'World of Warcraft': { player: 'Night Elf',             weapon: 'sentinel glaive',  enemy: 'Elf on a shelf' },
       'PlayStation':       { player: '"Solid Snake"',         weapon: 'yellow Stun Baton', enemy: '"Donkey Kong"' },
       'Doom 2':            { player: 'Doom guy',              weapon: 'chainsaw',         enemy: '"Thomas the Tank Engine"' },
+      'GTA Vice City':     { player: '"Carl Johnson"',        weapon: 'golf club',        enemy: '"Teletubby"' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
@@ -2562,6 +2569,28 @@
       // rather than owning one - see packDiveOffset.
       e.formOffset = count > 1 ? (i - (count - 1) / 2) * 30 : 0;
       e.diveOffset = e.formOffset;
+      // Which way the sprite is turned - see updateEnemyFacing. 1 draws the frame as generated,
+      // -1 mirrors it. Every fight opens on the generated pose.
+      e.facing = 1;
+      e.lastX = e.x;
+      e.turnTravel = 0;
+    }
+
+    // How far a foe has to travel against the way it is facing before it turns round. Taken off
+    // the whole tick's movement rather than any one AI branch, because x is driven a dozen ways -
+    // a stalk, an orbit, a sway, a lerp onto a charge line - and separatePack shoves neighbours
+    // too. The threshold is what keeps that last one from flickering the sprite: two swarmers
+    // jostling for the same spot trade sub-pixel nudges in both directions, and any step back
+    // the way it is already facing wipes the count, so only a real move in one direction turns it.
+    const FACING_TURN_PX = 4;
+    function updateEnemyFacing(e) {
+      const dx = e.x - e.lastX;
+      e.lastX = e.x;
+      if (dx === 0) return;
+      const dir = dx < 0 ? -1 : 1;
+      if (dir === e.facing) { e.turnTravel = 0; return; }
+      e.turnTravel += Math.abs(dx);
+      if (e.turnTravel >= FACING_TURN_PX) { e.facing = dir; e.turnTravel = 0; }
     }
 
     // How the entrance plays, in sim ticks. The hero slides up into frame first; the foe
@@ -3851,6 +3880,9 @@
           if (combatState.dead) break;
           if (e.hp > 0) tickEnemyAI(e);
         }
+        // After the whole pack has moved, not inside its own turn: separatePack shoves the
+        // foe's neighbours as well as the foe itself.
+        for (const e of combatState.enemies) if (e.hp > 0) updateEnemyFacing(e);
       }
 
       updateCombatEffects();
@@ -5147,7 +5179,12 @@
           if (e.state === 'hurt') { c.translate((Math.random() * 8 - 4), 0); c.globalAlpha = 0.9; }
           else if (e.blockTimer > 0) { c.globalAlpha = 0.94; }
 
+          // Mirrored about its own centre line when it is walking the other way. Scoped to the
+          // sprite alone - the pip bar below must not come out filling from the right.
+          c.save();
+          if (e.facing < 0) { c.translate(ex * 2, 0); c.scale(-1, 1); }
           drawEnemyContent(c, frame, ex, bottomY, targetH, maxW, sizeRef);
+          c.restore();
           c.globalAlpha = 1;
 
           // In a pack the plate at the top of the screen is the pack's total, so each member
@@ -7786,7 +7823,8 @@
       // dead, and ESC is left to the dedicated History/Settings ESC listener further down
       // the file, which already closes these regardless of which screen is showing.
       if ((modalHistory && !modalHistory.classList.contains('hidden')) ||
-          (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden'))) {
+          (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) ||
+          (modalPromptsConfirm && !modalPromptsConfirm.classList.contains('hidden'))) {
         return;
       }
 
@@ -8473,8 +8511,8 @@
     // Which dialog the arrow keys belong to right now, innermost first: the two confirm
     // boxes sit on top of the window that opened them, so they win while they are up.
     function topmostOpenDialog() {
-      const stack = [modalEraseConfirm, modalHistoryConfirm, modalQuitConfirm,
-                     modalHistory, modalSettings];
+      const stack = [modalEraseConfirm, modalHistoryConfirm, modalPromptsConfirm,
+                     modalQuitConfirm, modalHistory, modalSettings];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -9052,6 +9090,7 @@
     function closeHistory() {
       if (modalHistory) modalHistory.classList.add('hidden');
       closeDeleteConfirm();
+      closePromptsConfirm();
     }
 
     // ---- Starting a saved dungeon -----------------------------------------
@@ -9187,11 +9226,52 @@
         alert('A dungeon is still being generated. Let it finish first.');
         return;
       }
-      closeHistory();
       // History can be open right over a running game (the quit box's "Load a Different
       // Dungeon" opens it without leaving the run first), and there is no menu behind it to
-      // write into. Leave for the menu exactly as that box's "Back to Main Menu" does - the
-      // run stays saved in History either way, so nothing is lost by stepping out to it.
+      // write into - so this has to end that run, and it asks before it does.
+      if (screenSetup.classList.contains('hidden')) {
+        askPromptsLeaveRun(entry);
+        return;
+      }
+      applyHistoryPrompts(entry);
+    }
+
+    // The entry the leave-the-run box is currently asking about, or null.
+    let promptsPendingEntry = null;
+
+    function askPromptsLeaveRun(entry) {
+      if (!modalPromptsConfirm) { applyHistoryPrompts(entry); return; }
+      promptsPendingEntry = entry;
+      if (promptsConfirmName) {
+        // Named by the run being ended, not the row that was clicked - that is what is lost.
+        const where = (dungeonStory && dungeonStory.location) || currentThemeName || '';
+        promptsConfirmName.textContent = where.trim();
+      }
+      modalPromptsConfirm.classList.remove('hidden');
+      // Cancel, never Continue: a stray Enter must not end the run.
+      focusFirstIn(modalPromptsConfirm, btnPromptsConfirmCancel);
+    }
+
+    function closePromptsConfirm() {
+      const wasOpen = modalPromptsConfirm && !modalPromptsConfirm.classList.contains('hidden');
+      promptsPendingEntry = null;
+      if (modalPromptsConfirm) modalPromptsConfirm.classList.add('hidden');
+      // Same hand-back as closeDeleteConfirm: the cursor returns to the list behind the box.
+      if (wasOpen && modalHistory && !modalHistory.classList.contains('hidden')) {
+        focusFirstIn(modalHistory, btnHistoryOk);
+      }
+    }
+
+    function confirmPromptsLeaveRun() {
+      const entry = promptsPendingEntry;
+      closePromptsConfirm();
+      if (entry) applyHistoryPrompts(entry);
+    }
+
+    function applyHistoryPrompts(entry) {
+      closeHistory();
+      // Leave for the menu exactly as the quit box's "Back to Main Menu" does. Only ever
+      // reached mid-run once the player has said yes in the box above.
       if (screenSetup.classList.contains('hidden')) openSetupScreen();
 
       // One undo step for the whole refill, images dropped included - this overwrites four
@@ -9279,6 +9359,15 @@
     if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmCancel) btnHistoryConfirmCancel.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmDelete) btnHistoryConfirmDelete.addEventListener('click', confirmDeleteHistory);
+    if (btnPromptsConfirmClose) btnPromptsConfirmClose.addEventListener('click', closePromptsConfirm);
+    if (btnPromptsConfirmCancel) btnPromptsConfirmCancel.addEventListener('click', closePromptsConfirm);
+    if (btnPromptsConfirmContinue) btnPromptsConfirmContinue.addEventListener('click', confirmPromptsLeaveRun);
+    // Clicking the darkened History list behind the box backs out, like the erase box does.
+    if (modalPromptsConfirm) {
+      modalPromptsConfirm.addEventListener('click', (e) => {
+        if (e.target === modalPromptsConfirm) closePromptsConfirm();
+      });
+    }
 
     // ESC backs out of the Options and History windows, the same as clicking their ✕. The
     // History delete-confirm sits on top of the list, so a first ESC closes just that and
@@ -9295,6 +9384,9 @@
       } else if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) {
         e.preventDefault();
         closeDeleteConfirm();
+      } else if (modalPromptsConfirm && !modalPromptsConfirm.classList.contains('hidden')) {
+        e.preventDefault();
+        closePromptsConfirm();
       } else if (modalSettings && !modalSettings.classList.contains('hidden')) {
         e.preventDefault();
         modalSettings.classList.add('hidden');

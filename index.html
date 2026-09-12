@@ -113,6 +113,7 @@
     #modalSettings button:focus-visible,
     #modalHistory button:focus-visible,
     #modalHistoryConfirm button:focus-visible,
+    #modalPromptsConfirm button:focus-visible,
     #modalQuitConfirm button:focus-visible,
     #modalEraseConfirm button:focus-visible {
       outline: 2px dotted #000080;
@@ -803,6 +804,9 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Doom 2">
             <span>😈 Doom 2</span>
           </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="GTA Vice City">
+            <span>🌴 GTA Vice City</span>
+          </button>
           <!-- Secret 30th and 31st ideas - ship hidden with preset-btn-secret instead of
                preset-btn, so shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see
                .preset-btn) never touch them. game.js promotes each one to a real preset-btn once
@@ -1029,6 +1033,41 @@
           </button>
           <button id="btnHistoryConfirmDelete" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROMPTS CONFIRMATION - a History row's Prompts button, pressed while a dungeon is running
+         behind the window, has to leave that run for the main menu before it can write the four
+         fields. That ends the run, so it asks first. Same z-[60] stacking over History as the
+         delete box above; only ever shown mid-run - out at the menu Prompts just fills. -->
+    <div id="modalPromptsConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>⚠️ End Current Run?</span>
+          <button id="btnPromptsConfirmClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div class="text-3xl leading-none select-none">📋</div>
+          <div class="flex flex-col gap-1 min-w-0">
+            <p class="text-xs font-black text-slate-900">Close out the dungeon you are playing?</p>
+            <p id="promptsConfirmName" class="text-xs font-bold text-blue-900 break-words"></p>
+            <p class="text-[11px] text-slate-700">
+              Using these prompts ends your current run and takes you back to the main menu to
+              edit them. Your progress in this dungeon is lost, but the dungeon itself stays in
+              History to Start again.
+            </p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnPromptsConfirmCancel" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Cancel
+          </button>
+          <button id="btnPromptsConfirmContinue" class="win95-btn px-4 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-black">
+            Continue
           </button>
         </div>
       </div>
