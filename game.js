@@ -1609,6 +1609,11 @@
       // reasoning as Steve Jobs/Donald Trump/Elon Musk above) so it draws the real actor, while
       // the fork and spaghetti monster are generic buckets like the other food-themed ideas.
       'italian restaurant': { player: '"Will Smith"',         weapon: 'huge fork',        enemy: 'spaghetti monster' },
+      // Deliberately unresolved: the quotes sit on the game, not on a character, so each field
+      // is "something from Dark Souls" and the generator picks a different knight, blade and
+      // horror every run instead of always drawing the one character a fixed name would pin it to.
+      '"Dark Souls"':    { player: 'Person from "Dark Souls"', weapon: 'weapon from "Dark Souls"', enemy: 'enemy from "Dark Souls"' },
+      '"Demon\'s Souls"': { player: '"Patches"',              weapon: '"Rivers of Blood" katana', enemy: 'Barney the dinosaur' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
