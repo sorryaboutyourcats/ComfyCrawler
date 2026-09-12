@@ -85,20 +85,21 @@ ck(srv._theme_bucket("mossy stone", None) == srv._style_bucket("mossy stone"),
    "an unnamed field must resolve identically to _style_bucket alone")
 
 # ---- preset safety: no preset may trigger named-entity parsing BY ACCIDENT ---------
-# The Manhattan preset is the one deliberate exception: its data-val is &quot;-encoded so the
-# browser hands the click handler a quoted string and the wall theme renders the real city.
-# Every other preset must stay a plain description.
+# Manhattan, Central Park, Apple Store and Rome are the deliberate exceptions: their data-val is
+# &quot;-encoded so the browser hands the click handler a quoted string and the wall theme
+# renders the real place. Every other preset must stay a plain description.
 html_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "index.html")
 with open(html_path, encoding="utf-8") as f:
     html = f.read()
 import re as _re, html as _htmllib
-NAMED_PRESETS = {'"manhattan"'}
+NAMED_PRESETS = {'"manhattan"', '"central park"', '"Apple Store"', '"Rome"'}
 preset_vals = [_htmllib.unescape(v) for v in _re.findall(r'data-val="([^"]*)"', html)]
 ck(len(preset_vals) >= 15, f"suspiciously few preset buttons found ({len(preset_vals)}) - check the regex")
 for v in preset_vals:
     if v in NAMED_PRESETS:
         ents = srv.parse_named_styles(v)
-        ck(len(ents) == 1 and ents[0]["raw"].lower() == "manhattan",
+        expected = v.strip('"').lower()
+        ck(len(ents) == 1 and ents[0]["raw"].lower() == expected,
            f"intentional named preset {v!r} no longer parses to exactly one name: {ents}")
         continue
     ck('"' not in v, f"preset {v!r} contains a double quote - it would trigger named-entity parsing")

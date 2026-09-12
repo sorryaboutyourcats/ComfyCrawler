@@ -1383,6 +1383,11 @@
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
       'LSD dream emulator': { player: 'Gray Man with hat',    weapon: 'colorful Zweihänder', enemy: 'smiling faces' },
+      // Secret 31st idea, unlocked later than the one above - see data-unlock-at in index.html.
+      // Quotes on the wall and player push both down the named-entity path (same reasoning as
+      // manhattan/Sonic/Elon Musk above): the wall renders the real city and the player draws
+      // the real figure, rather than a generic bucket.
+      '"Rome"': { player: '"Jesus"', weapon: 'cross', enemy: 'balaclava wearing people with tactical law enforcement gear' },
     };
 
     function bindPresetButton(btn) {
@@ -1455,14 +1460,16 @@
       btns.forEach((b, i) => { if (tops[i] > rows[1]) b.classList.add('hidden'); });
     }
 
-    // ---- Secret quick idea: unlocked after enough dice rolls -----------------------
-    // "LSD dream emulator" ships as .preset-btn-secret (index.html), which shuffleQuickIdeas
-    // and trimQuickIdeasToTwoRows above never see - only .preset-btn. Once the player has
-    // clicked 🎲 enough times, it's promoted to a real .preset-btn and joins the rotation for
-    // good. The count is a set-once counter that sticks across reloads, same storage pattern
-    // as SCREENSAVER_STOP_KEY further down.
+    // ---- Secret quick ideas: unlocked one at a time after enough dice rolls --------
+    // Each secret idea ships as .preset-btn-secret with its own data-unlock-at (index.html),
+    // which shuffleQuickIdeas and trimQuickIdeasToTwoRows above never see - only .preset-btn.
+    // Once the player has clicked 🎲 enough times to reach a given button's own threshold, it's
+    // promoted to a real .preset-btn and joins the rotation for good - the others stay hidden
+    // until their own count is reached. The count is a set-once counter that sticks across
+    // reloads, same storage pattern as SCREENSAVER_STOP_KEY further down.
     const SHUFFLE_IDEAS_COUNT_KEY = 'comfycrawler.shuffleIdeasCount';
-    const SECRET_IDEA_UNLOCK_AT = 42;
+    // Fallback only, for a secret button that ships without its own data-unlock-at.
+    const SECRET_IDEA_DEFAULT_UNLOCK_AT = 42;
 
     function loadShuffleIdeasCount() {
       try {
@@ -1479,8 +1486,9 @@
     let shuffleIdeasCount = loadShuffleIdeasCount();
 
     function unlockSecretIdeasIfEarned() {
-      if (shuffleIdeasCount < SECRET_IDEA_UNLOCK_AT) return;
       document.querySelectorAll('.preset-btn-secret').forEach(btn => {
+        const unlockAt = parseInt(btn.getAttribute('data-unlock-at'), 10) || SECRET_IDEA_DEFAULT_UNLOCK_AT;
+        if (shuffleIdeasCount < unlockAt) return;
         btn.classList.remove('preset-btn-secret', 'hidden');
         btn.classList.add('preset-btn');
         bindPresetButton(btn);
@@ -8814,6 +8822,11 @@
       const entry = historyPendingDelete;
       closeDeleteConfirm();
       if (!entry) return;
+      // History can be opened right over a still-running game (the quit-confirm box's "Load a
+      // Different Dungeon" does exactly that without tearing the run down first) - erasing the
+      // very run that's live behind this window can't just re-list and leave the player in it,
+      // since its bundle is gone but the game doesn't know that. Catch it before the request.
+      const erasingLiveRun = !!(entry.id && entry.id === currentRunHistoryId);
       try {
         const res = await fetch(`${SERVER_URL}/api/history_delete`, {
           method: 'POST',
@@ -8825,9 +8838,18 @@
       } catch (err) {
         console.error('History delete error:', err);
         alert('Could not delete that dungeon.\n\n' + err.message);
+        refreshHistory();
+        return;
+      }
+      if (erasingLiveRun) {
+        // The run just erased out from under itself - there is nothing left to play, so send
+        // the player back to the menu the same way "Erase Current Run" does.
+        closeHistory();
+        openSetupScreen();
+        return;
       }
       // Re-listing rather than splicing the row out keeps the window honest about what is
-      // actually left on disk, whether the delete worked or not.
+      // actually left on disk.
       refreshHistory();
     }
 

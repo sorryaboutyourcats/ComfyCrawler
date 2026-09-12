@@ -711,12 +711,15 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="NYC subway station">
             <span>🚇 NYC Subway</span>
           </button>
-          <!-- Secret 30th idea - ships hidden with preset-btn-secret instead of preset-btn, so
-               shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see .preset-btn) never touch
-               it. game.js promotes it to a real preset-btn once the 🎲 has been clicked enough
-               times. See the shuffle-unlock block in game.js. -->
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn-secret hidden flex items-center gap-1.5" data-val="LSD dream emulator">
+          <!-- Secret 30th and 31st ideas - ship hidden with preset-btn-secret instead of
+               preset-btn, so shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see
+               .preset-btn) never touch them. game.js promotes each one to a real preset-btn once
+               the 🎲 has been clicked data-unlock-at times - see the shuffle-unlock block there. -->
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn-secret hidden flex items-center gap-1.5" data-val="LSD dream emulator" data-unlock-at="42">
             <span>👁️ LSD Dream Emulator</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn-secret hidden flex items-center gap-1.5" data-val="&quot;Rome&quot;" data-unlock-at="111">
+            <span>✝️ Rome</span>
           </button>
         </div>
       </div>
