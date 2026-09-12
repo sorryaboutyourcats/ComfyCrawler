@@ -1605,6 +1605,10 @@
       // the real character.
       '"Apple Store"':   { player: '"Steve Jobs"',            weapon: 'sledgehammer',     enemy: '"Clippy" the giant paperclip creature with two googly eyes' },
       'NYC subway station': { player: 'MTA conductor',        weapon: 'huge MetroCard',   enemy: 'NYC subway train' },
+      // Quotes on the player only: "Will Smith" pushes him down the named-entity path (same
+      // reasoning as Steve Jobs/Donald Trump/Elon Musk above) so it draws the real actor, while
+      // the fork and spaghetti monster are generic buckets like the other food-themed ideas.
+      'italian restaurant': { player: '"Will Smith"',         weapon: 'huge fork',        enemy: 'spaghetti monster' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
