@@ -1625,6 +1625,7 @@
       'Doom 2':            { player: 'Doom guy',              weapon: 'chainsaw',         enemy: '"Thomas the Tank Engine"' },
       'GTA Vice City':     { player: '"Carl Johnson"',        weapon: 'golf club',        enemy: '"Teletubby"' },
       'Colorful town of "Mow Meow"': { player: '"Salescat" the colorful cat', weapon: 'ryobi lawnmower', enemy: 'grass' },
+      'Mixer streaming platform': { player: 'The most like omg popular streamer', weapon: 'Elgato Stream Deck', enemy: 'troll doll' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
@@ -2104,6 +2105,9 @@
       playerMaxStm: 100,
       playerX: 0,
       vx: 0,
+      // Which way the hero is turned: 1 draws the rig as generated, -1 mirrors it. Set off the
+      // strafe keys in combatTick, so it holds through the glide to a stop after they let go.
+      playerFacing: 1,
       attackFrame: 0,
       maxAttackFrames: 18,
       hurtFrame: 0,
@@ -2638,6 +2642,7 @@
 
         combatState.playerX = 0;
         combatState.vx = 0;
+        combatState.playerFacing = 1;
         combatState.attackFrame = 0;
         combatState.hurtFrame = 0;
         combatState.shieldProgress = 0;
@@ -3122,6 +3127,7 @@
       combatState.playerHp = combatState.playerMaxHp;
       combatState.playerX = 0;
       combatState.vx = 0;
+      combatState.playerFacing = 1;
       combatState.attackFrame = 0;
       combatState.hurtFrame = 0;
       combatState.faceState = 'idle';   // else a death-frame face lingers ~16s into the next run
@@ -3709,9 +3715,11 @@
         if (keysHeld.left) {
           combatState.vx = -strafe;
           combatState.glanceDir = -1;
+          combatState.playerFacing = -1;
         } else if (keysHeld.right) {
           combatState.vx = strafe;
           combatState.glanceDir = 1;
+          combatState.playerFacing = 1;
         } else {
           combatState.vx *= 0.65;
         }
@@ -4521,6 +4529,10 @@
                  + (joyLeap ? Math.sin(Date.now() / 95) * 0.06 : 0);   // celebratory rock
       c.translate(px, py + spent * 4);
       c.rotate(tilt);
+      // Mirrored for walking left. After the rotate, so the lean into the strafe stays a lean
+      // the way they are going; before everything else, so the sprite frames, the procedural
+      // rig's sword and shield, the sweat and the death keel-over all turn round together.
+      if (combatState.playerFacing < 0) c.scale(-1, 1);
 
       // Death pose: keel the whole rig over 90 degrees so the character reads as face-down on
       // the ground. Applied at the shared save/translate so every render path below (sprite
