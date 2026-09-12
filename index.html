@@ -65,6 +65,30 @@
       border-bottom: 2px solid #ffffff;
       box-shadow: inset 1px 1px #0a0a0a;
     }
+    /* Undo / Redo spend most of their life greyed out, so unlike the other buttons on this
+       menu they need a real disabled look - otherwise "nothing to undo" reads as a dead
+       button. The etched grey label is what Windows 95 used: the text drawn in shadow grey
+       with a white copy one pixel down and right. Scoped to these two so the rest of the app's
+       disabled buttons (ENTER, Erase Current Run) keep the look they already have. */
+    .undo-btn:disabled {
+      color: #808080;
+      text-shadow: 1px 1px 0 #ffffff;
+      cursor: default;
+    }
+    .undo-btn:disabled:active {
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+      box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+    }
+    /* Windows 95 toolbar divider: a grey groove with a white highlight to its right. */
+    .win95-sep {
+      width: 0;
+      align-self: stretch;
+      border-left: 1px solid #808080;
+      border-right: 1px solid #ffffff;
+    }
     /* Selected difficulty button: the same pressed-in bevel :active gives, held down. */
     .win95-btn.is-selected {
       border-top: 2px solid #808080;
@@ -460,6 +484,56 @@
     }
     /* No prefers-reduced-motion rule on purpose - see marqueeIfOverflowing in game.js.
        Hovering the row is the way to stop one of these. */
+
+    /* "Use Prompts" on a History row rewrites the four mad-lib fields behind the window,
+       which would otherwise be a silent change on a screen the player only sees once the
+       window is gone. Each refilled field flashes its underline and ground for a moment on
+       arrival, so the eye lands on what just changed. game.js adds the class and strips it
+       on animationend, so it can fire again on the next click.
+
+       Not gated on prefers-reduced-motion, for the same reason the marquee above is not:
+       this box reports "reduce" on a machine with Windows animations simply switched off,
+       and without the flash the four fields change with nothing at all to show for it. */
+    .prompt-refilled {
+      animation: promptRefill 900ms ease-out;
+    }
+    @keyframes promptRefill {
+      0%   { background-color: rgba(254, 240, 138, 0.95); border-bottom-color: #a16207; }
+      70%  { background-color: rgba(254, 240, 138, 0.55); border-bottom-color: #a16207; }
+      100% { background-color: transparent; border-bottom-color: #000000; }
+    }
+
+    /* The row for the dungeon that is running RIGHT NOW, behind this window. History can be
+       opened mid-run (the quit box's "Load a Different Dungeon" leaves the run standing), so
+       with a dozen saved dungeons in the list the window has to answer "which of these am I
+       already in?" without the player reading every title. A navy bar down the left edge and
+       a pale blue ground - the Win95 selected-item colours, kept light enough that the row's
+       black text stays readable - and game.js scrolls the list to it on open.
+
+       The bar is an inset shadow rather than a fat border so the row does not shift sideways
+       relative to its neighbours; it is listed first so it paints over .win95-box's own
+       highlight shadow, which those two repeated values preserve.
+
+       .hist-row--found is the one-shot pulse that fires once on arrival, so the eye lands on
+       the row the list just scrolled to instead of hunting for what moved. Not gated on
+       prefers-reduced-motion, for the same reason the marquee above is not. */
+    .hist-row--current {
+      background: #d8e6ff;
+      box-shadow: inset 4px 0 #000080, inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+    }
+    .hist-row--found { animation: histFound 1100ms ease-out; }
+    @keyframes histFound {
+      0%   { background-color: #ffe066; }
+      55%  { background-color: #eef4ff; }
+      100% { background-color: #d8e6ff; }
+    }
+    /* The tag on that row, in the title bar's own gradient: the same "this is the active
+       one" signal the bar at the top of every window here gives. */
+    .hist-now-playing {
+      background: linear-gradient(90deg, #000080, #1084d0);
+      color: #ffffff;
+      letter-spacing: 0.04em;
+    }
   </style>
 </head>
 <body>
@@ -724,15 +798,32 @@
         </div>
       </div>
 
-      <!-- Footer Buttons: Options + History on the left, Create on the right -->
-      <div class="flex justify-between items-center mt-1">
-        <div class="flex items-center gap-2">
+      <!-- Footer Buttons: Options + History + Undo/Redo on the left, Create on the right -->
+      <div class="flex justify-between items-center gap-2 mt-1">
+        <div class="flex items-center gap-2 flex-wrap">
           <button id="btnSettings" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Options">
             <span>⚙️ Options</span>
           </button>
 
           <button id="btnHistory" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Replay a dungeon you have already made">
             <span>📜 History</span>
+          </button>
+
+          <span class="win95-sep self-stretch my-0.5" aria-hidden="true"></span>
+
+          <!-- Undo / Redo walk the mad-lib above as ONE document - all four fields plus the
+               three attached images - because that is how the menu edits it: a Quick idea
+               rewrites four fields at once, a History row's Prompts button does the same, and
+               attaching a photo blanks the field under it. A browser's own Ctrl+Z can't cover
+               any of that; it only ever knows the single field the caret is sitting in.
+               Both ship disabled - game.js enables each one the moment there is a step for it
+               to walk to, and keeps the depth in the tooltip. -->
+          <button id="btnUndoPrompt" class="win95-btn undo-btn px-2.5 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Nothing to undo yet" disabled>
+            <span>↶ Undo</span>
+          </button>
+
+          <button id="btnRedoPrompt" class="win95-btn undo-btn px-2.5 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Nothing to redo yet" disabled>
+            <span>↷ Redo</span>
           </button>
         </div>
 

@@ -1330,6 +1330,232 @@
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
 
+    // ==========================================
+    // MAD-LIB UNDO / REDO
+    // ==========================================
+    // The menu edits the four mad-lib fields and the three image slots as ONE document, not as
+    // seven independent controls: a Quick idea rewrites four fields in a click, a History row's
+    // Prompts button does the same, and attaching a photo blanks and locks the field under it.
+    // The browser's own Ctrl+Z cannot cover any of that - it only knows the single <input> the
+    // caret is in - so the click that wiped four filled-in fields had nothing behind it. This
+    // stack does, and it survives leaving for a dungeon and coming back, because nothing on the
+    // way through clears the fields.
+    //
+    // Whole states, not diffs. The document is four short strings and three thumbnails, and the
+    // thumbnails are stored by reference (the same data URL string every snapshot points at),
+    // so a deep stack costs a few hundred small objects - far less than the bookkeeping that
+    // storing edits would need.
+    const SETUP_HISTORY_MAX = 250;
+    // Consecutive keystrokes in one field collapse into a single step while they keep coming;
+    // a pause longer than this starts a new one. Same bargain every text editor makes - undo
+    // should walk back words and phrases, not individual letters, or 250 steps would only
+    // reach back through one sentence.
+    const SETUP_BURST_MS = 600;
+
+    // The wall line takes no image, so it has no slot; the other three are wired by the same
+    // id convention wireImageAttach uses (<key>PromptInput, <key>ImageBadge, ...).
+    const SETUP_TEXT_FIELDS = [
+      ['wall', wallPromptInput], ['player', playerPromptInput],
+      ['weapon', weaponPromptInput], ['enemy', enemyPromptInput],
+    ].filter(([, el]) => el);
+    const SETUP_IMAGE_SLOTS = ['player', 'weapon', 'enemy'];
+
+    const btnUndoPrompt = document.getElementById('btnUndoPrompt');
+    const btnRedoPrompt = document.getElementById('btnRedoPrompt');
+
+    let setupPast = [];          // states behind the one on screen, oldest first
+    let setupFuture = [];        // states undone out of, newest-undone last
+    let setupPresent = null;     // what is on screen right now, as a snapshot
+    let setupBurstKey = null;    // which run of typing the last edit belonged to
+    let setupBurstAt = 0;
+    // Set while undo/redo is writing the fields, and while a multi-field action is being
+    // gathered into one step - both would otherwise be recorded as changes of their own.
+    let setupHistorySuspended = false;
+
+    function snapshotSetup() {
+      const snap = { text: {}, images: {} };
+      SETUP_TEXT_FIELDS.forEach(([key, el]) => { snap.text[key] = el.value; });
+      SETUP_IMAGE_SLOTS.forEach((key) => {
+        const url = attachedImages[key];
+        const nameEl = document.getElementById(key + 'ImageName');
+        snap.images[key] = url ? { url, name: nameEl ? nameEl.textContent : '' } : null;
+      });
+      return snap;
+    }
+
+    // Field by field rather than JSON.stringify: this runs on every keystroke, and stringifying
+    // a snapshot would serialise up to three half-megabyte data URLs to compare four words.
+    // The url strings are shared between snapshots, so those comparisons are pointer-cheap.
+    function sameSetup(a, b) {
+      if (!a || !b) return false;
+      for (const [key] of SETUP_TEXT_FIELDS) if (a.text[key] !== b.text[key]) return false;
+      for (const key of SETUP_IMAGE_SLOTS) {
+        const x = a.images[key], y = b.images[key];
+        if (!x !== !y) return false;
+        if (x && (x.url !== y.url || x.name !== y.name)) return false;
+      }
+      return true;
+    }
+
+    // Put a snapshot back on screen. Image state lives in three places at once - attachedImages,
+    // the badge DOM, and the disabled flag on the field beneath it - so all three are rewritten
+    // from the one record here, exactly as attach and clear write them by hand.
+    function applySetupSnapshot(snap) {
+      SETUP_TEXT_FIELDS.forEach(([key, el]) => { el.value = snap.text[key] || ''; });
+      SETUP_IMAGE_SLOTS.forEach((key) => {
+        const img = snap.images[key];
+        const badge = document.getElementById(key + 'ImageBadge');
+        const thumb = document.getElementById(key + 'ImageThumb');
+        const nameEl = document.getElementById(key + 'ImageName');
+        const fileInput = document.getElementById(key + 'FileInput');
+        const promptInput = document.getElementById(key + 'PromptInput');
+        attachedImages[key] = img ? img.url : null;
+        if (key === 'player') uploadedPlayerImageDataUrl = attachedImages[key];
+        if (thumb) thumb.src = img ? img.url : '';
+        if (nameEl) nameEl.textContent = img ? img.name : '';
+        if (badge) badge.classList.toggle('hidden', !img);
+        // An <input type=file> holds on to the last file picked. Clearing it when the slot ends
+        // up empty means picking that same photo again still fires a change event.
+        if (fileInput && !img) fileInput.value = '';
+        if (promptInput) promptInput.disabled = !!img;
+      });
+    }
+
+    // The yellow wash a refilled field gets, shared with the History window's Prompts button -
+    // one convention for "this field just changed without you typing in it". Restarting it means
+    // stripping the class and forcing the style to settle before adding it back, or a second
+    // undo in a row would land on a field already mid-animation and show nothing.
+    function flashPromptField(input) {
+      if (!input) return;
+      input.classList.remove('prompt-refilled');
+      void input.offsetWidth;
+      input.classList.add('prompt-refilled');
+      input.addEventListener('animationend',
+        () => input.classList.remove('prompt-refilled'), { once: true });
+    }
+
+    function updateUndoRedoButtons() {
+      if (btnUndoPrompt) {
+        const n = setupPast.length;
+        btnUndoPrompt.disabled = !n;
+        btnUndoPrompt.title = n
+          ? 'Undo (Ctrl+Z) - ' + n + ' change' + (n === 1 ? '' : 's') + ' to walk back'
+          : 'Nothing to undo yet';
+      }
+      if (btnRedoPrompt) {
+        const n = setupFuture.length;
+        btnRedoPrompt.disabled = !n;
+        btnRedoPrompt.title = n
+          ? 'Redo (Ctrl+Y) - ' + n + ' change' + (n === 1 ? '' : 's') + ' to put back'
+          : 'Nothing to redo yet';
+      }
+    }
+
+    // `burstKey` names the run of typing this edit belongs to. The same key again within
+    // SETUP_BURST_MS folds into the step already in progress instead of adding another; null
+    // means "this one stands alone", which is what every non-typing edit passes.
+    function recordSetupChange(burstKey) {
+      if (setupHistorySuspended) return;
+      const next = snapshotSetup();
+      if (sameSetup(next, setupPresent)) return;
+      const now = Date.now();
+      const continues = burstKey && burstKey === setupBurstKey && (now - setupBurstAt) < SETUP_BURST_MS;
+      if (!continues && setupPresent) {
+        setupPast.push(setupPresent);
+        // Oldest step falls off the back rather than the stack growing without limit. 250 is
+        // deep enough that nothing a player does at this menu in one sitting reaches the end.
+        if (setupPast.length > SETUP_HISTORY_MAX) setupPast.shift();
+      }
+      setupPresent = next;
+      setupFuture.length = 0;   // editing after an undo abandons what was undone
+      setupBurstKey = burstKey || null;
+      setupBurstAt = now;
+      updateUndoRedoButtons();
+    }
+
+    // Run a multi-field action - a Quick idea, a History refill - as a single undo step
+    // instead of one per field it happens to touch on the way.
+    function asOneSetupStep(fn) {
+      if (setupHistorySuspended) { fn(); return; }   // already inside one; that step owns this
+      setupHistorySuspended = true;
+      try { fn(); } finally { setupHistorySuspended = false; }
+      recordSetupChange(null);
+    }
+
+    function stepSetupHistory(from, to) {
+      if (!from.length) return;
+      const before = setupPresent;
+      to.push(before);
+      setupPresent = from.pop();
+      setupHistorySuspended = true;
+      try { applySetupSnapshot(setupPresent); } finally { setupHistorySuspended = false; }
+      setupBurstKey = null;     // the next keystroke starts a fresh run, never joins the old one
+      updateUndoRedoButtons();
+
+      // Show what moved. Undo is usually pressed from the button at the bottom of the screen,
+      // with the fields it rewrote some way up it, so every field that changed flashes and the
+      // first one takes the caret - landing the player where the text they can now keep editing
+      // actually is. An image-only step changes no text and leaves the focus alone.
+      let firstChanged = null;
+      SETUP_TEXT_FIELDS.forEach(([key, el]) => {
+        if (before && before.text[key] === setupPresent.text[key]) return;
+        flashPromptField(el);
+        if (!firstChanged && !el.disabled) firstChanged = el;
+      });
+      if (firstChanged) {
+        firstChanged.focus({ preventScroll: true });
+        const end = firstChanged.value.length;
+        firstChanged.setSelectionRange(end, end);
+      }
+    }
+
+    function undoSetup() { stepSetupHistory(setupPast, setupFuture); }
+    function redoSetup() { stepSetupHistory(setupFuture, setupPast); }
+
+    SETUP_TEXT_FIELDS.forEach(([key, el]) => {
+      el.addEventListener('input', (e) => {
+        const type = e.inputType || '';
+        const prev = setupPresent ? setupPresent.text[key] : '';
+        // Anything that takes out more than one character in a single event - select-all and
+        // Delete, a cut, a drag-out, a paste over a selection - is the exact accident this
+        // feature exists to rescue, so it becomes a step of its own instead of disappearing
+        // into the run of typing before it. Only plain typing and single backspaces collapse.
+        const bulk = el.value.length < prev.length - 1;
+        const typing = type.startsWith('insertText') || type.startsWith('deleteContent');
+        const burst = (typing && !bulk)
+          ? 'type:' + key + ':' + (type.startsWith('delete') ? 'del' : 'ins')
+          : null;
+        recordSetupChange(burst);
+      });
+      // Leaving a field ends its run of typing: coming back to it later is a new step, however
+      // quickly the player gets there.
+      el.addEventListener('blur', () => { setupBurstKey = null; });
+    });
+
+    if (btnUndoPrompt) btnUndoPrompt.addEventListener('click', undoSetup);
+    if (btnRedoPrompt) btnRedoPrompt.addEventListener('click', redoSetup);
+
+    // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (and the Cmd versions), on the menu only. This deliberately
+    // takes the shortcut away from the browser's per-field undo rather than living alongside it:
+    // the native one would restore text that this stack never hears about, leaving the two
+    // disagreeing about what the document is, and it cannot reach the edits that matter here
+    // anyway - a Quick idea, an attached photo, a field wiped by something the player clicked.
+    window.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = (e.key || '').toLowerCase();
+      const isUndo = key === 'z' && !e.shiftKey;
+      const isRedo = key === 'y' || (key === 'z' && e.shiftKey);
+      if (!isUndo && !isRedo) return;
+      if (screenSetup.classList.contains('hidden')) return;
+      if (topmostOpenDialog()) return;   // the Options/History boxes have their own fields
+      e.preventDefault();
+      (isUndo ? undoSetup : redoSetup)();
+    });
+
+    // The baseline every undo walks back towards: the menu as it loads, before a word is typed.
+    setupPresent = snapshotSetup();
+    updateUndoRedoButtons();
+
     // Each quick idea fills in the whole setup - dungeon look plus the player, weapon and
     // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
     // are locked to an uploaded image are left alone.
@@ -1393,13 +1619,17 @@
     function bindPresetButton(btn) {
       btn.addEventListener('click', () => {
         const val = btn.getAttribute('data-val');
-        wallPromptInput.value = val.toLowerCase();
-        const idea = PRESET_IDEAS[val];
-        if (idea) {
-          if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
-          if (weaponPromptInput && !weaponPromptInput.disabled) weaponPromptInput.value = idea.weapon;
-          if (enemyPromptInput && !enemyPromptInput.disabled) enemyPromptInput.value = idea.enemy;
-        }
+        // All four fields go down as one undo step, so walking a Quick idea back restores
+        // whatever was typed before it in a single Ctrl+Z rather than four.
+        asOneSetupStep(() => {
+          wallPromptInput.value = val.toLowerCase();
+          const idea = PRESET_IDEAS[val];
+          if (idea) {
+            if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
+            if (weaponPromptInput && !weaponPromptInput.disabled) weaponPromptInput.value = idea.weapon;
+            if (enemyPromptInput && !enemyPromptInput.disabled) enemyPromptInput.value = idea.enemy;
+          }
+        });
         // Don't leave the focus ring stranded on a preset deep in the grid. Landing it on
         // the first field lets the player read down the filled-in mad-lib from the top, and
         // Enter from a field still fires CREATE - so "pick an idea, press Enter" still goes.
@@ -7664,6 +7894,11 @@
             if (badge) badge.classList.remove('hidden');
             promptInput.disabled = true;
             promptInput.value = "";
+            // Attaching throws away whatever was typed on this line, so it is an undo step -
+            // and one step, not "field blanked" plus "image added". Recorded here inside the
+            // decode callback rather than at the click, because until now there was nothing
+            // to record: the file is still being read at that point.
+            recordSetupChange(null);
           };
           img.src = event.target.result;
         };
@@ -7681,6 +7916,7 @@
           if (badge) badge.classList.add('hidden');
           promptInput.disabled = false;
           promptInput.focus();
+          recordSetupChange(null);
         });
       }
     }
@@ -8441,6 +8677,10 @@
     let historyEntries = [];
     // The entry the confirm box is currently asking about, or null.
     let historyPendingDelete = null;
+    // Set by openHistory when a run is live behind the window, consumed by the next
+    // renderHistoryList: scroll that run's row into view and flash it. Only on the way in - a
+    // later rebuild (after a delete, say) leaves the list where the player left it.
+    let historyRevealCurrent = false;
 
     function historyTitleOf(entry) {
       return ((entry && (entry.location || entry.wall_style)) || 'Unnamed Dungeon').trim();
@@ -8508,6 +8748,14 @@
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
       row.className = 'hist-row win95-box p-1.5 flex items-center gap-2';
+      // History can be opened over a still-running game (the quit box's "Load a Different
+      // Dungeon"), so one of these rows may be the dungeon the player is standing in. Mark it
+      // here; the CSS gives it the selected-row look and renderHistoryList scrolls to it.
+      const isCurrentRun = !!(entry.id && entry.id === currentRunHistoryId);
+      if (isCurrentRun) {
+        row.classList.add('hist-row--current');
+        row.setAttribute('aria-current', 'true');
+      }
 
       const thumbFrame = document.createElement('div');
       thumbFrame.className = 'win95-inset w-12 h-12 shrink-0 bg-black flex items-center justify-center overflow-hidden';
@@ -8563,10 +8811,23 @@
       const col = document.createElement('div');
       col.className = 'flex flex-col min-w-0 flex-1 gap-0.5';
 
+      // The title shares its line with the "now playing" tag, so both sit in a flex line and
+      // the title keeps min-w-0 - without it a long name shoves the tag off the row instead
+      // of truncating itself.
+      const titleLine = document.createElement('div');
+      titleLine.className = 'flex items-center gap-1.5 min-w-0';
       const title = document.createElement('div');
-      title.className = 'text-xs font-black text-slate-900 truncate';
+      title.className = 'text-xs font-black text-slate-900 truncate min-w-0';
       title.textContent = historyTitleOf(entry);
-      col.appendChild(title);
+      titleLine.appendChild(title);
+      if (isCurrentRun) {
+        const tag = document.createElement('span');
+        tag.className = 'hist-now-playing text-[9px] font-black px-1.5 py-0.5 shrink-0';
+        tag.textContent = 'NOW PLAYING';
+        tag.title = 'This is the dungeon running behind this window';
+        titleLine.appendChild(tag);
+      }
+      col.appendChild(titleLine);
 
       const cast = document.createElement('div');
       cast.className = 'text-[10px] font-bold text-blue-900 truncate';
@@ -8592,11 +8853,28 @@
 
       row.appendChild(col);
 
+      // The other half of a row: take the four things the player typed to make this dungeon
+      // back to the menu instead of replaying it as it was. Sits before Start so the row reads
+      // info -> the two ways to use this dungeon -> delete, keeping the destructive button last.
+      const btnPrompts = document.createElement('button');
+      btnPrompts.type = 'button';
+      btnPrompts.className = 'hist-prompts win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
+      btnPrompts.textContent = '📋 Prompts';
+      // The same typed words the thumbnail's tooltip lists, under a line saying what the
+      // button does with them - this button IS the typed words, so showing them is the label.
+      btnPrompts.title = 'Put what was typed to make this dungeon back on the main menu,'
+        + ' ready to change a word and CREATE again.'
+        + (promptBits.length ? '\n\n' + promptBits.join('\n') : '');
+      btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
+      row.appendChild(btnPrompts);
+
       const btnStart = document.createElement('button');
       btnStart.type = 'button';
-      btnStart.className = 'win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
+      btnStart.className = 'hist-start win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
       btnStart.textContent = '▶ Start';
-      btnStart.title = 'Play this dungeon again - no generation, straight to the loading screen';
+      btnStart.title = isCurrentRun
+        ? 'You are in this dungeon now - Start reloads it from the beginning, on a freshly drawn maze'
+        : 'Play this dungeon again - no generation, straight to the loading screen';
       btnStart.addEventListener('click', () => startHistoryDungeon(entry));
       row.appendChild(btnStart);
 
@@ -8625,12 +8903,33 @@
       }
       historyList.innerHTML = '';
       historyEntries.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
+      // Opened from inside a run, the row for that run is the one the player came to find -
+      // and it can be anywhere in a list of thirty - so bring the list to it and flash it once.
+      const currentRow = historyRevealCurrent
+        ? historyList.querySelector('.hist-row--current') : null;
+      historyRevealCurrent = false;
+      if (currentRow) {
+        // Centred by hand rather than with scrollIntoView: this list is a scroll container
+        // inside a modal, and scrollIntoView walks every scrollable ancestor, dragging the page
+        // behind the window along with it. Measured off the rects, so it does not matter which
+        // positioned ancestor the row's offsetParent happens to be.
+        const rowTop = currentRow.getBoundingClientRect().top
+                     - historyList.getBoundingClientRect().top + historyList.scrollTop;
+        historyList.scrollTop =
+          Math.max(0, rowTop - (historyList.clientHeight - currentRow.offsetHeight) / 2);
+        // One-shot pulse, dropped again when it ends so re-opening History flashes it anew.
+        currentRow.classList.add('hist-row--found');
+        currentRow.addEventListener('animationend',
+          () => currentRow.classList.remove('hist-row--found'), { once: true });
+      }
       // openHistory parked the keyboard cursor on OK while this was still loading; now that
-      // there are rows, move it to the first Start - the button the window is actually for.
-      // Only from OK, so a cursor the player has already moved (or a delete they are in the
-      // middle of confirming) is never yanked out from under them.
+      // there are rows, move it to a Start - the button the window is actually for - taking the
+      // live run's row over the first one whenever there is one to take, so the keyboard lands
+      // where the scroll just did. Only from OK, so a cursor the player has already moved (or a
+      // delete they are in the middle of confirming) is never yanked out from under them.
       if (document.activeElement === btnHistoryOk) {
-        const firstStart = historyList.querySelector('button');
+        const firstStart = (currentRow && currentRow.querySelector('.hist-start'))
+          || historyList.querySelector('.hist-start');
         if (firstStart) firstStart.focus({ preventScroll: true });
       }
       // The rows are in the DOM now but layout has not necessarily flushed - wait one
@@ -8691,6 +8990,9 @@
       modalHistory.classList.remove('hidden');
       setHistoryMessage('Reading saved dungeons...');
       if (historyFootNote) historyFootNote.textContent = '';
+      // Opened mid-run: the list that comes back should arrive scrolled to the dungeon being
+      // played, not at the top. Nothing to reveal when the player is out at the main menu.
+      historyRevealCurrent = !!currentRunHistoryId;
       // The rows are still being fetched, so park the cursor on OK; renderHistoryList moves
       // it up onto the first Start once there is a list to move onto.
       focusFirstIn(modalHistory, btnHistoryOk);
@@ -8790,6 +9092,71 @@
         // Whatever went wrong, the list this row came from is now out of date.
         refreshHistory();
       }
+    }
+
+    // ---- Reusing a saved dungeon's prompts --------------------------------
+    // "Prompts" is the row's other verb: instead of replaying the run exactly as it was,
+    // put the four things the player typed to make it back into the menu's mad-lib, so the
+    // next dungeon can start from that wording with one word changed. Nothing generates and
+    // nothing on disk is touched - this only writes the four inputs.
+    //
+    // The four fields are the TYPED words, not what the run became: the set designer's
+    // resolved materials and the story's hero/foe names are shown on the row and in the
+    // tooltips, but feeding those back in would generate from a different starting point
+    // than the one that produced this dungeon.
+
+    // The ✕ on each mad-lib line's image badge. An attached image blanks and disables its
+    // field, so a slot holding one has to give the image up before saved wording can land
+    // there. Routed through the badge's own button rather than reimplemented, so the
+    // thumbnail, the file input and attachedImages all clear exactly as they do by hand.
+    // The wall line takes no image and so has no entry here.
+    const PROMPT_SLOT_CLEAR_BTN = {
+      player: 'btnClearPlayerImage',
+      weapon: 'btnClearWeaponImage',
+      enemy: 'btnClearEnemyImage'
+    };
+
+    function fillPromptField(input, value, slotKey) {
+      if (!input) return;
+      if (input.disabled && slotKey) {
+        const clearBtn = document.getElementById(PROMPT_SLOT_CLEAR_BTN[slotKey]);
+        if (clearBtn) clearBtn.click();      // drops the image and re-enables the field
+      }
+      if (input.disabled) return;            // nothing freed it - don't report a fill that missed
+      input.value = (value || '').trim();
+      // Shared with undo/redo, which flashes the same fields for the same reason - see
+      // flashPromptField up by the mad-lib history.
+      flashPromptField(input);
+    }
+
+    function useHistoryPrompts(entry) {
+      if (!entry) return;
+      // A live generation is reading the very fields this would overwrite, and owns the
+      // screen the menu would come back on. Same guard, same wording as Start above.
+      if (generationInFlight) {
+        alert('A dungeon is still being generated. Let it finish first.');
+        return;
+      }
+      closeHistory();
+      // History can be open right over a running game (the quit box's "Load a Different
+      // Dungeon" opens it without leaving the run first), and there is no menu behind it to
+      // write into. Leave for the menu exactly as that box's "Back to Main Menu" does - the
+      // run stays saved in History either way, so nothing is lost by stepping out to it.
+      if (screenSetup.classList.contains('hidden')) openSetupScreen();
+
+      // One undo step for the whole refill, images dropped included - this overwrites four
+      // fields at once, so walking it back has to put all four of them back at once too.
+      asOneSetupStep(() => {
+        fillPromptField(wallPromptInput, entry.wall_style, null);
+        fillPromptField(playerPromptInput, entry.player_style, 'player');
+        fillPromptField(weaponPromptInput, entry.weapon_style, 'weapon');
+        fillPromptField(enemyPromptInput, entry.enemy_style, 'enemy');
+      });
+
+      // Same landing as a Quick idea: the top of the filled-in mad-lib, reading down, with
+      // Enter from any field still firing CREATE. Clearing an attached image above focuses
+      // that line's input, so this has to come last to win.
+      if (wallPromptInput) wallPromptInput.focus({ preventScroll: true });
     }
 
     // ---- Deleting a saved dungeon -----------------------------------------
