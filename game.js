@@ -1624,6 +1624,7 @@
       'PlayStation':       { player: '"Solid Snake"',         weapon: 'yellow Stun Baton', enemy: '"Donkey Kong"' },
       'Doom 2':            { player: 'Doom guy',              weapon: 'chainsaw',         enemy: '"Thomas the Tank Engine"' },
       'GTA Vice City':     { player: '"Carl Johnson"',        weapon: 'golf club',        enemy: '"Teletubby"' },
+      'Colorful town of "Mow Meow"': { player: '"Salescat" the colorful cat', weapon: 'ryobi lawnmower', enemy: 'grass' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
