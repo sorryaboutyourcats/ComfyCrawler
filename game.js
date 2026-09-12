@@ -8822,11 +8822,14 @@
       const entry = historyPendingDelete;
       closeDeleteConfirm();
       if (!entry) return;
-      // History can be opened right over a still-running game (the quit-confirm box's "Load a
-      // Different Dungeon" does exactly that without tearing the run down first) - erasing the
-      // very run that's live behind this window can't just re-list and leave the player in it,
-      // since its bundle is gone but the game doesn't know that. Catch it before the request.
+      // History can be opened right over a still-running game - the quit-confirm box's "Load a
+      // Different Dungeon" does exactly that without tearing the run down first - so the row
+      // being erased may be the run that is live behind this window.
       const erasingLiveRun = !!(entry.id && entry.id === currentRunHistoryId);
+      // The list below is rebuilt from the server, which would put it back at the top; hold
+      // the offset so the window the player is reading does not jump under them.
+      const scrollBack = historyList ? historyList.scrollTop : 0;
+      let deleted = true;
       try {
         const res = await fetch(`${SERVER_URL}/api/history_delete`, {
           method: 'POST',
@@ -8837,20 +8840,18 @@
         if (!data.success) throw new Error(data.error || 'The server refused the delete.');
       } catch (err) {
         console.error('History delete error:', err);
+        deleted = false;
         alert('Could not delete that dungeon.\n\n' + err.message);
-        refreshHistory();
-        return;
       }
-      if (erasingLiveRun) {
-        // The run just erased out from under itself - there is nothing left to play, so send
-        // the player back to the menu the same way "Erase Current Run" does.
-        closeHistory();
-        openSetupScreen();
-        return;
-      }
+      // Its bundle is gone from disk, so there is nothing left to keep playing: end the run
+      // behind the window exactly as "Erase Current Run" does - but leave History itself open
+      // and where it stands, since the player came here to pick a different dungeon and the
+      // list they were choosing from is still the answer to that.
+      if (erasingLiveRun && deleted) openSetupScreen();
       // Re-listing rather than splicing the row out keeps the window honest about what is
-      // actually left on disk.
-      refreshHistory();
+      // actually left on disk, whether the delete worked or not.
+      await refreshHistory();
+      if (historyList) historyList.scrollTop = scrollBack;
     }
 
     if (btnHistory) btnHistory.addEventListener('click', openHistory);
