@@ -2305,6 +2305,25 @@
     const HP_PLATE_TOP = 8;
     const HP_PLATE_H = 18;
     const HP_PLATE_CLEAR = HP_PLATE_TOP + HP_PLATE_H + 5;
+    // A BOSS fight gets the plate jammed into the very top of the view with a hairline gap
+    // under it instead of the inset one. Nothing else changes about the plate - this is purely
+    // to hand the boss back the px. It is the only foe big enough to be shrunk by the plate at
+    // all (see the fit clamp in drawEnemyBody), so every px the plate gives up is a px of boss,
+    // and 8 off the top plus 3 off the gap buys it about 8% more height - enough that it looms
+    // again without its face going back under the bar.
+    const HP_PLATE_TOP_BOSS = 0;
+    const HP_PLATE_CLEAR_BOSS = HP_PLATE_TOP_BOSS + HP_PLATE_H + 2;
+
+    // Is the plate currently a boss's? Asked of the whole side rather than one foe: the plate
+    // belongs to the FIGHT (a pack shares one), so the inset it uses has to be the same for
+    // every foe drawn under it or a boss and its own name plate would disagree about where the
+    // clear line is. In practice the boss always fights alone, so this is just "is that a boss".
+    function bossPlate() {
+      return combatState.enemies.some(k => k.variant === 'boss')
+          || !!(combatState.enemy && combatState.enemy.variant === 'boss');
+    }
+    function hpPlateTop()   { return bossPlate() ? HP_PLATE_TOP_BOSS   : HP_PLATE_TOP; }
+    function hpPlateClear() { return bossPlate() ? HP_PLATE_CLEAR_BOSS : HP_PLATE_CLEAR; }
 
     // NEAR-WALL PULL-IN. The duel is staged at a fixed spot on the canvas - see GROUND_Y in
     // drawEnemyBody - which quietly assumes there is open floor about a cell and a half ahead.
@@ -5034,7 +5053,7 @@
       // for the same reason - see the sprite path.
       const eyBob = Math.sin(Date.now() / 200) * 4;
       let ey = (groundY - 70) - (e.altitude || 0) - altLift + victoryHop;
-      const eyCeiling = HP_PLATE_CLEAR + 65 + 4;
+      const eyCeiling = hpPlateClear() + 65 + 4;
       if (ey < eyCeiling) ey = Math.min(groundY - 70, eyCeiling);
       ey += eyBob;
 
@@ -5073,8 +5092,8 @@
         if (frame && frame.complete && frame.naturalWidth > 0) {
           // Size by MEASURED solid content, not the raw frame - a small generation still fills
           // the combat view. heightFrac is per-variant: boss looms, flyer is smaller & airborne.
-          const targetH = Math.round(height * cfg.heightFrac * dScale);
-          const maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
+          let targetH = Math.round(height * cfg.heightFrac * dScale);
+          let maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
           const bobAmp = cfg.fly ? 4 : 3;
           const bob = Math.sin(Date.now() / (cfg.fly ? 110 : 220)) * bobAmp;
           // Hover, but not behind the name plate. A flyer's whole point is being up out of
@@ -5091,8 +5110,26 @@
           // it floats about its free one, and the reserved swing keeps the upstroke clear of
           // the plate.
           let bottomY = groundY - (e.altitude || 0) - altLift + victoryHop;
-          const ceiling = HP_PLATE_CLEAR + targetH + bobAmp;
+          const ceiling = hpPlateClear() + targetH + bobAmp;
           if (bottomY < ceiling) bottomY = Math.min(groundY, ceiling);
+          // ...and if it STILL doesn't fit, shrink it until it does. Pushing down stops at the
+          // floor line, so a foe taller than the canvas above its own feet - the boss, at two
+          // thirds of the view - kept its full height and wore the name plate across its face.
+          // Everything the player reads off a boss is in that face, so the last resort is to
+          // take a little height off rather than a little head: scaled just enough that its
+          // crown comes to rest against the underside of the plate (with the bob's own swing
+          // reserved, so the upstroke touches the plate rather than slipping behind it), and
+          // maxW goes with it so the whole figure shrinks instead of squashing. Only bites when
+          // the plate is genuinely in the way - a foe that already fits is untouched, and the
+          // boss at depth (mid-charge, drawn smaller by dScale) falls back to its own size.
+          // Measured off the RESTING feet line: the victory hop lifts 24px and would otherwise
+          // pulse the foe smaller and back on every bounce.
+          const headRoom = (bottomY - victoryHop) - hpPlateClear() - bobAmp;
+          if (headRoom > 0 && targetH > headRoom) {
+            const fit = headRoom / targetH;
+            targetH = Math.round(targetH * fit);
+            maxW = Math.round(maxW * fit);
+          }
           bottomY += bob;
 
           c.save();
@@ -5116,7 +5153,7 @@
           if (combatState.enemies.length > 1 && e.hp > 0) {
             // Floored below the name plate: a circler at the top of its arc sits high enough
             // that its bar would otherwise land on top of it.
-            drawEnemyPipBar(c, ex, Math.max(HP_PLATE_CLEAR, bottomY - targetH - 10), e);
+            drawEnemyPipBar(c, ex, Math.max(hpPlateClear(), bottomY - targetH - 10), e);
           }
 
           // The guard arc and the boss aura that used to be stroked over the sprite here are
@@ -5217,7 +5254,7 @@
       c.font = 'bold 11px sans-serif';
       const w = Math.max(132, Math.ceil(c.measureText(label).width) + 18);
       const h = HP_PLATE_H;
-      const top = HP_PLATE_TOP;
+      const top = hpPlateTop();
 
       c.fillStyle = 'rgba(15, 23, 42, 0.9)';
       c.fillRect(width / 2 - w / 2, top, w, h);
@@ -8862,9 +8899,20 @@
 
       row.appendChild(col);
 
+      const btnStart = document.createElement('button');
+      btnStart.type = 'button';
+      btnStart.className = 'hist-start win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
+      btnStart.textContent = '▶ Start';
+      btnStart.title = isCurrentRun
+        ? 'You are in this dungeon now - Start reloads it from the beginning, on a freshly drawn maze'
+        : 'Play this dungeon again - no generation, straight to the loading screen';
+      btnStart.addEventListener('click', () => startHistoryDungeon(entry));
+      row.appendChild(btnStart);
+
       // The other half of a row: take the four things the player typed to make this dungeon
-      // back to the menu instead of replaying it as it was. Sits before Start so the row reads
-      // info -> the two ways to use this dungeon -> delete, keeping the destructive button last.
+      // back to the menu instead of replaying it as it was. Sits between Start and the trash can
+      // so the row reads info -> the two ways to use this dungeon -> delete, keeping the
+      // destructive button last.
       const btnPrompts = document.createElement('button');
       btnPrompts.type = 'button';
       btnPrompts.className = 'hist-prompts win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
@@ -8876,16 +8924,6 @@
         + (promptBits.length ? '\n\n' + promptBits.join('\n') : '');
       btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
       row.appendChild(btnPrompts);
-
-      const btnStart = document.createElement('button');
-      btnStart.type = 'button';
-      btnStart.className = 'hist-start win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
-      btnStart.textContent = '▶ Start';
-      btnStart.title = isCurrentRun
-        ? 'You are in this dungeon now - Start reloads it from the beginning, on a freshly drawn maze'
-        : 'Play this dungeon again - no generation, straight to the loading screen';
-      btnStart.addEventListener('click', () => startHistoryDungeon(entry));
-      row.appendChild(btnStart);
 
       const btnTrash = document.createElement('button');
       btnTrash.type = 'button';
