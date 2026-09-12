@@ -1594,7 +1594,7 @@
       // in index.html and the browser hands us the quoted string, so the key must include them.
       '"manhattan"':     { player: 'rat',                     weapon: 'pizza',            enemy: 'everything bagel with cheese' },
       'hell':            { player: 'lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
-      'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villain lady' },
+      'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villainess' },
       'pet store':       { player: 'Yorkshire Terrier',       weapon: 'whip',             enemy: 'bright stuffed animal' },
       'Sega arcade':     { player: '"Goodcow" the cow',       weapon: 'Dreamcast controller', enemy: '"Sonic"' },
       'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'old person' },
