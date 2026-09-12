@@ -82,6 +82,18 @@
       outline: 2px dotted #000080;
       outline-offset: 1px;
     }
+    /* Same cue inside every dialog box, which the arrow keys now walk the same way. Drawn
+       INSIDE the button (negative offset) rather than around it, which is where Windows 95
+       put the focus rectangle, and reads on every ground these buttons use - grey, and the
+       pastel red / blue / yellow ones. */
+    #modalSettings button:focus-visible,
+    #modalHistory button:focus-visible,
+    #modalHistoryConfirm button:focus-visible,
+    #modalQuitConfirm button:focus-visible,
+    #modalEraseConfirm button:focus-visible {
+      outline: 2px dotted #000080;
+      outline-offset: -4px;
+    }
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
       color: white;
@@ -216,6 +228,18 @@
       color: #808080;
       text-shadow: 1px 1px #ffffff;
       cursor: default;
+    }
+    /* "Erase Current Run" greys out when this run was never written to History, so there is
+       nothing on disk to erase. The two lines inside it carry their own Tailwind colours, so
+       the rule has to reach the spans as well as the button. */
+    #btnQuitEraseRun:disabled {
+      background: #c0c0c0;
+      cursor: default;
+    }
+    #btnQuitEraseRun:disabled,
+    #btnQuitEraseRun:disabled span {
+      color: #808080;
+      text-shadow: 1px 1px #ffffff;
     }
     .dpad-btn {
       width: 44px !important;
@@ -684,7 +708,10 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="&quot;Apple Store&quot;">
             <span>🍎 Apple Store</span>
           </button>
-          <!-- Secret 28th idea - ships hidden with preset-btn-secret instead of preset-btn, so
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="NYC subway station">
+            <span>🚇 NYC Subway</span>
+          </button>
+          <!-- Secret 30th idea - ships hidden with preset-btn-secret instead of preset-btn, so
                shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see .preset-btn) never touch
                it. game.js promotes it to a real preset-btn once the 🎲 has been clicked enough
                times. See the shuffle-unlock block in game.js. -->
@@ -838,11 +865,26 @@
         <div id="historyList" class="win95-inset mx-3 my-2 p-2 overflow-y-auto flex flex-col gap-1.5"
              style="background: #ffffff; min-height: 140px; max-height: 52vh;"></div>
 
+        <!-- The two folder buttons hand the player the directories behind this window: the saved
+             runs themselves, and the raw ComfyUI renders every bundle was built out of. The page
+             cannot open a local folder on its own, so both go through POST /api/open_folder, which
+             takes a key and never a path. min-w-0 on the footnote so IT truncates rather than
+             shoving the buttons off the edge. -->
         <div class="px-3 pb-3 flex justify-between items-center gap-2">
-          <span id="historyFootNote" class="text-[10px] text-slate-600 font-bold truncate"></span>
-          <button id="btnHistoryOk" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300 shrink-0">
-            OK
-          </button>
+          <span id="historyFootNote" class="text-[10px] text-slate-600 font-bold truncate min-w-0"></span>
+          <div class="flex items-center gap-2 shrink-0">
+            <button id="btnOpenSessionsFolder" class="win95-btn px-3 py-1.5 text-xs text-black hover:bg-slate-300"
+                    title="Open dungeon_sessions - one folder per saved run">
+              &#128193; Saved Runs
+            </button>
+            <button id="btnOpenAssetsFolder" class="win95-btn px-3 py-1.5 text-xs text-black hover:bg-slate-300"
+                    title="Open the ComfyUI output folder - the raw textures, sprites and audio behind every run">
+              &#128193; Assets
+            </button>
+            <button id="btnHistoryOk" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
+              OK
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -904,6 +946,40 @@
           <button id="btnQuitEraseRun" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-red-900 bg-red-100 hover:bg-red-200">
             <span class="text-xs font-black">🗑️ Erase Current Run</span>
             <span class="text-[10px] font-bold text-slate-700">Deletes this dungeon from History for good</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ERASE CONFIRMATION - "Erase Current Run" never deletes on its own, exactly like the
+         trash can in the History window. Sits above the quit box (z-[60]) rather than
+         replacing it, so backing out of this one lands back on the three choices. -->
+    <div id="modalEraseConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>⚠️ Confirm Erase</span>
+          <button id="btnEraseConfirmClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div class="text-3xl leading-none select-none">🗑️</div>
+          <div class="flex flex-col gap-1 min-w-0">
+            <p class="text-xs font-black text-slate-900">Erase the dungeon you are playing?</p>
+            <p id="eraseConfirmName" class="text-xs font-bold text-blue-900 break-words"></p>
+            <p class="text-[11px] text-slate-700">
+              The run ends and its textures, sprites, sound effects, music and narration are
+              deleted from disk. This cannot be undone &ndash; making it again means generating
+              it again.
+            </p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnEraseConfirmCancel" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Cancel
+          </button>
+          <button id="btnEraseConfirmErase" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
+            Erase
           </button>
         </div>
       </div>

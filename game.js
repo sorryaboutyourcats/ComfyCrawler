@@ -104,6 +104,8 @@
     const historyFootNote = document.getElementById('historyFootNote');
     const btnCloseHistory = document.getElementById('btnCloseHistory');
     const btnHistoryOk = document.getElementById('btnHistoryOk');
+    const btnOpenSessionsFolder = document.getElementById('btnOpenSessionsFolder');
+    const btnOpenAssetsFolder = document.getElementById('btnOpenAssetsFolder');
     const modalHistoryConfirm = document.getElementById('modalHistoryConfirm');
     const historyConfirmName = document.getElementById('historyConfirmName');
     const btnHistoryConfirmClose = document.getElementById('btnHistoryConfirmClose');
@@ -160,6 +162,11 @@
     const btnQuitToMenu = document.getElementById('btnQuitToMenu');
     const btnQuitToHistory = document.getElementById('btnQuitToHistory');
     const btnQuitEraseRun = document.getElementById('btnQuitEraseRun');
+    const modalEraseConfirm = document.getElementById('modalEraseConfirm');
+    const eraseConfirmName = document.getElementById('eraseConfirmName');
+    const btnEraseConfirmClose = document.getElementById('btnEraseConfirmClose');
+    const btnEraseConfirmCancel = document.getElementById('btnEraseConfirmCancel');
+    const btnEraseConfirmErase = document.getElementById('btnEraseConfirmErase');
 
     // ==========================================
     // RAYCASTER MAZE & TEXTURE ENGINE
@@ -1173,15 +1180,56 @@
       returnToMenuMusic();     // win, lose, or quit - the dungeon's music stops, menu fades in
     }
 
+    // Where a dialog's keyboard cursor starts. `preferred` is the button that box wants
+    // under Enter the moment it opens - the safe one, never the destructive one - and the
+    // fallback is its first control that isn't the title bar's ✕, which is first in the DOM
+    // but is never what someone came to press. Defined here because every open* function
+    // below (and the History window further down) calls it.
+    function focusFirstIn(root, preferred) {
+      if (preferred && !preferred.disabled && preferred.getClientRects().length) {
+        preferred.focus({ preventScroll: true });
+        return;
+      }
+      const all = focusablesIn(root);
+      const target = all.find(el => !el.closest('.win95-title')) || all[0];
+      if (target) target.focus({ preventScroll: true });
+    }
+
     // Quit-confirm box: opened by ESC or the title-bar ✕ during an active run instead of an
     // OS confirm() prompt, since leaving mid-dungeon has real choices, not just yes/no.
     function openQuitConfirm() {
       if (!modalQuitConfirm) { if (confirm("Back to Main Menu?")) openSetupScreen(); return; }
+      // Nothing was ever written to disk for this run (a pre-history dungeon, or a save that
+      // failed), so there is nothing to erase - and "Back to Main Menu" already discards it.
+      if (btnQuitEraseRun) {
+        btnQuitEraseRun.disabled = !currentRunHistoryId;
+        btnQuitEraseRun.title = currentRunHistoryId
+          ? '' : 'This run was never saved to History, so there is nothing to erase.';
+      }
       modalQuitConfirm.classList.remove('hidden');
+      focusFirstIn(modalQuitConfirm, btnQuitToMenu);
     }
 
     function closeQuitConfirm() {
       if (modalQuitConfirm) modalQuitConfirm.classList.add('hidden');
+      closeEraseConfirm();
+    }
+
+    // Erase-confirm box: "Erase Current Run" never deletes on its own, the same rule the
+    // History window's trash can follows. Opens on top of the quit box, so backing out of
+    // it lands back on the three choices rather than in the dungeon.
+    function openEraseConfirm() {
+      if (!modalEraseConfirm) return;
+      if (eraseConfirmName) {
+        const where = (dungeonStory && dungeonStory.location) || currentThemeName || '';
+        eraseConfirmName.textContent = where.trim();
+      }
+      modalEraseConfirm.classList.remove('hidden');
+      focusFirstIn(modalEraseConfirm, btnEraseConfirmCancel);
+    }
+
+    function closeEraseConfirm() {
+      if (modalEraseConfirm) modalEraseConfirm.classList.add('hidden');
     }
 
     // Deletes the dungeon currently being played from History, then leaves it - there is
@@ -1209,19 +1257,40 @@
 
     if (btnQuitConfirmClose) btnQuitConfirmClose.addEventListener('click', closeQuitConfirm);
     if (btnQuitToMenu) btnQuitToMenu.addEventListener('click', () => { closeQuitConfirm(); openSetupScreen(); });
-    // Opens straight into History on top of the setup screen - the same window and rows the
-    // main menu's own History button shows, just reached without leaving twice.
+    // Opens History right over the still-running game - deliberately NOT openSetupScreen()
+    // first, which would tear the active run down (stop its music/narration, hide the game
+    // screen) just to browse. That teardown happens in startHistoryDungeon() instead, and
+    // only once a row's Start button is actually clicked; closing History with nothing
+    // picked drops straight back into the same run, untouched.
     if (btnQuitToHistory) btnQuitToHistory.addEventListener('click', () => {
       closeQuitConfirm();
-      openSetupScreen();
       openHistory();
     });
-    if (btnQuitEraseRun) btnQuitEraseRun.addEventListener('click', eraseCurrentRunAndLeave);
+    // Asks first - the erase itself lives behind the confirm box's own Erase button.
+    if (btnQuitEraseRun) btnQuitEraseRun.addEventListener('click', openEraseConfirm);
     // Clicking the darkened game visible behind the box backs out the same as its own ✕ -
     // there is deliberately no separate Cancel button (see the HTML comment on the modal).
     if (modalQuitConfirm) {
       modalQuitConfirm.addEventListener('click', (e) => {
         if (e.target === modalQuitConfirm) closeQuitConfirm();
+      });
+    }
+
+    // Backing out of the erase box returns to the quit box it opened over, so the cursor
+    // goes back where it was rather than dropping the player into the dungeon.
+    function cancelEraseConfirm() {
+      closeEraseConfirm();
+      if (modalQuitConfirm && !modalQuitConfirm.classList.contains('hidden')) {
+        focusFirstIn(modalQuitConfirm, btnQuitEraseRun);
+      }
+    }
+
+    if (btnEraseConfirmClose) btnEraseConfirmClose.addEventListener('click', cancelEraseConfirm);
+    if (btnEraseConfirmCancel) btnEraseConfirmCancel.addEventListener('click', cancelEraseConfirm);
+    if (btnEraseConfirmErase) btnEraseConfirmErase.addEventListener('click', eraseCurrentRunAndLeave);
+    if (modalEraseConfirm) {
+      modalEraseConfirm.addEventListener('click', (e) => {
+        if (e.target === modalEraseConfirm) cancelEraseConfirm();
       });
     }
 
@@ -1254,7 +1323,10 @@
     });
     setDifficulty(selectedDifficulty);
 
-    btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
+    btnSettings.addEventListener('click', () => {
+      modalSettings.classList.remove('hidden');
+      focusFirstIn(modalSettings, btnSaveSettings);
+    });
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
 
@@ -1306,7 +1378,8 @@
       // not a generic "apple store"-shaped bucket, and the player/enemy draw the real man and
       // the real character.
       '"Apple Store"':   { player: '"Steve Jobs"',            weapon: 'sledgehammer',     enemy: '"Clippy" the giant paperclip creature with two googly eyes' },
-      // Secret 28th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
+      'NYC subway station': { player: 'MTA conductor',        weapon: 'huge MetroCard',   enemy: 'NYC subway train' },
+      // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
       'LSD dream emulator': { player: 'Gray Man with hat',    weapon: 'colorful Zweihänder', enemy: 'smiling faces' },
@@ -1354,14 +1427,14 @@
       }
       // appendChild moves the existing node rather than cloning it, so every button keeps the
       // click handler bound just above; re-appending in order is all it takes to reorder the
-      // flex-wrap grid. Arrow-key nav is geometric (see moveSetupFocus) so it follows along.
+      // flex-wrap grid. Arrow-key nav is geometric (see moveFocusIn) so it follows along.
       // The "Quick ideas:" label and the 🎲 button are not .preset-btn, so they are never
       // re-appended and stay at the head of the row.
       [...pinned, ...rest].forEach(b => row.appendChild(b));
       trimQuickIdeasToTwoRows(row);
     }
 
-    // Show only the ideas that fit in two rows and hide the rest. The whole list is 27 deep and
+    // Show only the ideas that fit in two rows and hide the rest. The whole list is 29 deep and
     // wrapping all of it walked the CREATE button off the bottom of the window; two rows is
     // enough to read as a grab-bag while leaving the mad-lib fields the space.
     //
@@ -1389,7 +1462,7 @@
     // good. The count is a set-once counter that sticks across reloads, same storage pattern
     // as SCREENSAVER_STOP_KEY further down.
     const SHUFFLE_IDEAS_COUNT_KEY = 'comfycrawler.shuffleIdeasCount';
-    const SECRET_IDEA_UNLOCK_AT = 11;
+    const SECRET_IDEA_UNLOCK_AT = 42;
 
     function loadShuffleIdeasCount() {
       try {
@@ -7407,12 +7480,26 @@
       if (screenGame.classList.contains('hidden')) return;
 
       // The quit-confirm box is up: ESC again backs out of it exactly like clicking its own
-      // ✕ or the darkened game behind it, and nothing else here reaches the dungeon.
+      // ✕ or the darkened game behind it, and nothing else here reaches the dungeon. While
+      // the erase box is stacked on top, ESC peels off that one first and the quit box stays.
       if (modalQuitConfirm && !modalQuitConfirm.classList.contains('hidden')) {
         if (e.code === 'Escape') {
           e.preventDefault();
-          closeQuitConfirm();
+          if (modalEraseConfirm && !modalEraseConfirm.classList.contains('hidden')) {
+            cancelEraseConfirm();
+          } else {
+            closeQuitConfirm();
+          }
         }
+        return;
+      }
+
+      // "Load a Different Dungeon" opens History over the still-running game rather than
+      // exiting to the menu first, so the same has to hold here: movement/combat keys stop
+      // dead, and ESC is left to the dedicated History/Settings ESC listener further down
+      // the file, which already closes these regardless of which screen is showing.
+      if ((modalHistory && !modalHistory.classList.contains('hidden')) ||
+          (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden'))) {
         return;
       }
 
@@ -8026,8 +8113,11 @@
     // always step out (a one-line field has nowhere for them to go), while ArrowLeft/Right
     // keep moving the caret and only step to the neighbour once it sits at the field's edge -
     // so the Attach button just right of the field is still one arrow away.
-    function setupMenuFocusables() {
-      return Array.from(screenSetup.querySelectorAll('input, button')).filter((el) => {
+    // Every control the arrow keys can land on inside one container. Used for the setup
+    // screen and, with the same geometry below, for each dialog box.
+    function focusablesIn(root) {
+      if (!root) return [];
+      return Array.from(root.querySelectorAll('input, select, button')).filter((el) => {
         if (el.disabled || el.type === 'file') return false;
         return el.getClientRects().length > 0;   // on screen: not .hidden, not a collapsed badge
       });
@@ -8040,8 +8130,8 @@
     // for U/D) always beats one that doesn't; within that, the smallest gap along the pressed
     // axis wins, then the smallest cross-axis offset. L/R never take a non-overlapping
     // candidate at all, so a row end just stops rather than lurching to another row.
-    function moveSetupFocus(dir) {
-      const list = setupMenuFocusables();
+    function moveFocusIn(root, dir) {
+      const list = focusablesIn(root);
       if (!list.length) return;
       const active = document.activeElement;
       if (list.indexOf(active) === -1) { list[0].focus(); return; }
@@ -8079,19 +8169,31 @@
           bestKey = key;
         }
       }
-      if (best) best.focus({ preventScroll: true });
+      if (!best) return;
+      best.focus({ preventScroll: true });
+      // The History list and the Options box both scroll inside themselves, so a cursor that
+      // walked past the edge has to be brought back into view. 'nearest' does nothing when
+      // the control is already fully visible, which is the setup screen's whole case.
+      best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+
+    // Which dialog the arrow keys belong to right now, innermost first: the two confirm
+    // boxes sit on top of the window that opened them, so they win while they are up.
+    function topmostOpenDialog() {
+      const stack = [modalEraseConfirm, modalHistoryConfirm, modalQuitConfirm,
+                     modalHistory, modalSettings];
+      return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
     window.addEventListener('keydown', (e) => {
       const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.code];
       if (!dir) return;
       if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;   // word-jump / select stay native
-      if (screenSetup.classList.contains('hidden')) return;
-      if (modalSettings && !modalSettings.classList.contains('hidden')) return;
-      if (modalHistory && !modalHistory.classList.contains('hidden')) return;
-      if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
 
       const el = document.activeElement;
+      // A dropdown and a slider both own the arrow keys outright - stepping the value IS
+      // what they are for, so focus only leaves them by Tab or a click.
+      if (el && (el.tagName === 'SELECT' || (el.tagName === 'INPUT' && el.type === 'range'))) return;
       if (el && el.tagName === 'INPUT' && el.type === 'text' && (dir === 'left' || dir === 'right')) {
         const collapsed = el.selectionStart === el.selectionEnd;
         const atEdge = dir === 'left'
@@ -8100,8 +8202,21 @@
         if (!atEdge) return;   // move the caret inside the field first
       }
 
+      // A dialog takes the arrows wherever it was opened from - the setup screen, or now
+      // straight over a running dungeon - so every box is walkable without the mouse.
+      const dialog = topmostOpenDialog();
+      if (dialog) {
+        e.preventDefault();
+        // Nothing focused inside the box yet (it was opened by a key, not a click): start
+        // the cursor on the first control rather than swallowing the press.
+        if (!dialog.contains(el)) focusFirstIn(dialog);
+        else moveFocusIn(dialog, dir);
+        return;
+      }
+
+      if (screenSetup.classList.contains('hidden')) return;
       e.preventDefault();
-      moveSetupFocus(dir);
+      moveFocusIn(screenSetup, dir);
     });
 
     // A refresh mid-generation used to be silently destructive in both directions: the page
@@ -8502,6 +8617,14 @@
       }
       historyList.innerHTML = '';
       historyEntries.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
+      // openHistory parked the keyboard cursor on OK while this was still loading; now that
+      // there are rows, move it to the first Start - the button the window is actually for.
+      // Only from OK, so a cursor the player has already moved (or a delete they are in the
+      // middle of confirming) is never yanked out from under them.
+      if (document.activeElement === btnHistoryOk) {
+        const firstStart = historyList.querySelector('button');
+        if (firstStart) firstStart.focus({ preventScroll: true });
+      }
       // The rows are in the DOM now but layout has not necessarily flushed - wait one
       // frame, then turn any info line that overran its column into a scrolling marquee.
       requestAnimationFrame(() => {
@@ -8513,6 +8636,31 @@
         historyFootNote.textContent =
           historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
           + (size ? '  ·  ' + size + ' on disk' : '');
+      }
+    }
+
+    // The two folder buttons in the footer. A browser cannot open a local directory, so the
+    // server runs ShellExecute for us - and it takes a KEY ('sessions' or 'assets'), never a
+    // path, so this can only ever reach the two folders server.py names in OPENABLE_FOLDERS.
+    //
+    // 'sessions' is dungeon_sessions/, one folder per saved run - the same folder the trash can
+    // deletes from. 'assets' is the ComfyUI output folder, where the raw renders land; nothing
+    // reads those back once a bundle is saved, so that is also where an abandoned run's
+    // leftovers sit. Neither button deletes anything: they just open the window.
+    async function openServerFolder(which) {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/open_folder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ which })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          alert(data.error || 'Could not open that folder.');
+        }
+      } catch (err) {
+        console.error('Open folder error:', err);
+        alert('Could not reach the server to open that folder.');
       }
     }
 
@@ -8535,6 +8683,9 @@
       modalHistory.classList.remove('hidden');
       setHistoryMessage('Reading saved dungeons...');
       if (historyFootNote) historyFootNote.textContent = '';
+      // The rows are still being fetched, so park the cursor on OK; renderHistoryList moves
+      // it up onto the first Start once there is a list to move onto.
+      focusFirstIn(modalHistory, btnHistoryOk);
       refreshHistory();
     }
 
@@ -8555,6 +8706,16 @@
         return;
       }
       closeHistory();
+
+      // Reachable straight from an active run now (the quit-confirm box opens History
+      // without leaving it first) - tear down whatever it's replacing the same way
+      // openSetupScreen would. resetCombatForNewDungeon/resetCrawl below cover the rest
+      // (defeat modal, narration, screen music); these two don't.
+      screenGame.classList.add('hidden');
+      if (victoryModal) victoryModal.classList.add('hidden');
+      stopOutroNarration();
+      stopConfetti();
+      crawlReadingUntil = 0;
 
       const wallStyle = entry.wall_style || 'Windows 95';
       // Same quote-marker strip as the create-dungeon path above - a replayed session's saved
@@ -8634,11 +8795,19 @@
           + (entry.created_text ? '  —  ' + entry.created_text : '');
       }
       modalHistoryConfirm.classList.remove('hidden');
+      // Cancel, never Delete: a box that erases on a stray Enter is a box that erases.
+      focusFirstIn(modalHistoryConfirm, btnHistoryConfirmCancel);
     }
 
     function closeDeleteConfirm() {
+      const wasOpen = modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden');
       historyPendingDelete = null;
       if (modalHistoryConfirm) modalHistoryConfirm.classList.add('hidden');
+      // Hiding the box that owns the focused button would drop focus on the document, and
+      // the arrow keys would have nothing to move from - hand it back to the list behind it.
+      if (wasOpen && modalHistory && !modalHistory.classList.contains('hidden')) {
+        focusFirstIn(modalHistory, btnHistoryOk);
+      }
     }
 
     async function confirmDeleteHistory() {
@@ -8665,6 +8834,8 @@
     if (btnHistory) btnHistory.addEventListener('click', openHistory);
     if (btnCloseHistory) btnCloseHistory.addEventListener('click', closeHistory);
     if (btnHistoryOk) btnHistoryOk.addEventListener('click', closeHistory);
+    if (btnOpenSessionsFolder) btnOpenSessionsFolder.addEventListener('click', () => openServerFolder('sessions'));
+    if (btnOpenAssetsFolder) btnOpenAssetsFolder.addEventListener('click', () => openServerFolder('assets'));
     if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmCancel) btnHistoryConfirmCancel.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmDelete) btnHistoryConfirmDelete.addEventListener('click', confirmDeleteHistory);
@@ -8676,7 +8847,12 @@
     // this never fires over it.
     window.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' && e.code !== 'Escape') return;
-      if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) {
+      if (modalEraseConfirm && !modalEraseConfirm.classList.contains('hidden')) {
+        // Only reached if the quit box underneath is somehow gone; normally the in-game
+        // handler has already peeled this one off and stopped there.
+        e.preventDefault();
+        cancelEraseConfirm();
+      } else if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) {
         e.preventDefault();
         closeDeleteConfirm();
       } else if (modalSettings && !modalSettings.classList.contains('hidden')) {

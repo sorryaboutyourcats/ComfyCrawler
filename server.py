@@ -37,6 +37,13 @@ COMFY_OUTPUT_DIR = r"C:\Users\sorryaboutyourcats\AppData\Local\Comfy-Desktop\Com
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSIONS_DIR = os.path.join(PROJECT_DIR, "dungeon_sessions")
 
+# The only folders /api/open_folder will open. A KEY comes in over the wire, never a path, so
+# no request can name a directory that isn't one of these two. "sessions" is what the trash can
+# in the History window deletes from; "assets" is where ComfyUI drops the raw renders that every
+# bundle is built out of - nothing reads them back once a run is saved, so that folder is also
+# where a cancelled run's leftovers pile up.
+OPENABLE_FOLDERS = {"sessions": SESSIONS_DIR, "assets": COMFY_OUTPUT_DIR}
+
 # v5 "krea2 turbo" engine. A single Qwen-arch diffusion model (no ControlNet / no
 # IPAdapter available for it), so v5 generates ONE clean image per asset instead
 # of v4's SDXL-Lightning + IPAdapter + OpenPose rig. Distilled from the workflow
@@ -7429,6 +7436,10 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 #                 so drawing the window never has to open a 40MB bundle.
 # The maze itself is generated in the browser and is deliberately NOT stored: replaying a
 # saved dungeon gives the same cast and art on a fresh layout at the current difficulty.
+# A folder appears here only once a run has FINISHED - save_dungeon_session is the last thing
+# run_batch_v6_krea does, so a cancelled run leaves nothing in this directory to clean up. What
+# it does leave behind is the raw renders in COMFY_OUTPUT_DIR, which is why the History window
+# has a second button onto that folder (see OPENABLE_FOLDERS / /api/open_folder).
 
 _SESSION_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 SESSION_THUMB_PX = 96
@@ -7790,6 +7801,43 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 code = 200 if removed else 404
             except Exception as e:
                 print(f"[history] delete failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/open_folder":
+            # The two folder buttons in the History window. The page cannot open a local folder
+            # itself, so the server does it with ShellExecute. The body names a KEY, and only a
+            # key - the path it maps to comes from OPENABLE_FOLDERS, so nothing a request says
+            # can widen this past those two directories.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                which = data.get("which")
+                folder = OPENABLE_FOLDERS.get(which) if isinstance(which, str) else None
+                if folder is None:
+                    body, code = {"success": False,
+                                  "error": "There is no folder called %r to open." % (which,)}, 400
+                elif not os.path.isdir(folder):
+                    # The assets folder lives outside the project - a ComfyUI reinstall can move
+                    # it out from under us, so say where we looked rather than just failing.
+                    body, code = {"success": False, "path": folder,
+                                  "error": "That folder is not there: %s" % folder}, 404
+                else:
+                    # Fire and forget, both of them: this server takes one request at a time, so
+                    # waiting on Explorer here would stall the progress poll behind it.
+                    try:
+                        os.startfile(folder)
+                    except Exception:
+                        subprocess.Popen(["explorer", os.path.normpath(folder)])
+                    print(f"[folder] opened {folder}")
+                    body, code = {"success": True, "path": folder}, 200
+            except Exception as e:
+                print(f"[folder] open failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
