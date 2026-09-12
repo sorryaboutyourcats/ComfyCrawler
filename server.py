@@ -7524,6 +7524,9 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             "has_narration": bool(story.get("audio")),
             "size": os.path.getsize(bundle_path),
             "thumb": _session_thumb(bundle),
+            # The History star - a favorite cannot be deleted (delete_dungeon_session). Sessions
+            # saved before this existed have no key and read as not starred.
+            "favorite": False,
         }
         with open(os.path.join(folder, "meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=True)
@@ -7565,12 +7568,47 @@ def list_dungeon_sessions():
     return out
 
 
+class SessionLocked(Exception):
+    """A delete aimed at a favorited session. The star in the History window is the lock, and
+    it is enforced here rather than only by greying out the trash can, so no request - a stale
+    page, the quit menu's Erase Current Run - can get round it."""
+
+
+def _read_session_meta(folder):
+    with open(os.path.join(folder, "meta.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def set_dungeon_session_favorite(session_id, favorite):
+    """Star or unstar one saved dungeon. Returns the flag as written, or None if the session
+    is not there. meta.json goes through a temp file and os.replace, because a half-written
+    one would make list_dungeon_sessions drop the row - the very run the player is protecting."""
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return None
+    meta = _read_session_meta(folder)
+    meta["favorite"] = bool(favorite)
+    tmp_path = os.path.join(folder, "meta.json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=True)
+    os.replace(tmp_path, os.path.join(folder, "meta.json"))
+    print(f"[history] {'favorited' if meta['favorite'] else 'unfavorited'} {session_id}")
+    return meta["favorite"]
+
+
 def delete_dungeon_session(session_id):
     """Erase one saved dungeon - bundle, thumbnail, metadata and folder. True if it was
-    there to remove."""
+    there to remove. Raises SessionLocked for a favorite; an unreadable meta.json does not
+    count as one, so a broken folder can still be cleared out."""
     folder = _session_dir(session_id)
     if not folder or not os.path.isdir(folder):
         return False
+    try:
+        locked = bool(_read_session_meta(folder).get("favorite"))
+    except Exception:
+        locked = False
+    if locked:
+        raise SessionLocked("That dungeon is a favorite. Unstar it in History before deleting it.")
     shutil.rmtree(folder)
     print(f"[history] deleted {session_id}")
     return True
@@ -7799,8 +7837,31 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 if not removed:
                     body["error"] = "That saved dungeon is already gone."
                 code = 200 if removed else 404
+            except SessionLocked as e:
+                body, code = {"success": False, "locked": True, "error": str(e)}, 409
             except Exception as e:
                 print(f"[history] delete failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/history_favorite":
+            # The star on a History row. Body is {id, favorite}; the reply carries the flag as
+            # it now stands on disk, which is what the page draws the star from.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                favorite = set_dungeon_session_favorite(data.get("id"), data.get("favorite"))
+                if favorite is None:
+                    body, code = {"success": False, "error": "That saved dungeon is gone."}, 404
+                else:
+                    body, code = {"success": True, "favorite": favorite}, 200
+            except Exception as e:
+                print(f"[history] favorite failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")

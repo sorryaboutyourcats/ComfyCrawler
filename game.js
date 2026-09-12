@@ -1207,10 +1207,14 @@
       if (!modalQuitConfirm) { if (confirm("Back to Main Menu?")) openSetupScreen(); return; }
       // Nothing was ever written to disk for this run (a pre-history dungeon, or a save that
       // failed), so there is nothing to erase - and "Back to Main Menu" already discards it.
+      // A starred run is locked the same way its trash can in History is: without this the
+      // server would refuse the delete and the player would land on the menu thinking it went.
       if (btnQuitEraseRun) {
-        btnQuitEraseRun.disabled = !currentRunHistoryId;
-        btnQuitEraseRun.title = currentRunHistoryId
-          ? '' : 'This run was never saved to History, so there is nothing to erase.';
+        const locked = isFavoriteHistoryId(currentRunHistoryId);
+        btnQuitEraseRun.disabled = !currentRunHistoryId || locked;
+        btnQuitEraseRun.title = !currentRunHistoryId
+          ? 'This run was never saved to History, so there is nothing to erase.'
+          : locked ? 'This run is a favorite. Unstar it in History to erase it.' : '';
       }
       modalQuitConfirm.classList.remove('hidden');
       focusFirstIn(modalQuitConfirm, btnQuitToMenu);
@@ -8979,15 +8983,82 @@
       btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
       row.appendChild(btnPrompts);
 
+      // The star sits right beside the trash can because it is that button's lock: starring a
+      // dungeon greys the can out, and the server refuses to delete it until it is unstarred.
+      // Both are a fixed w-10 rather than padded to their glyph: ☆ is narrower than ⭐ and 🔒
+      // than 🗑️, and a padded width would nudge Start and Prompts sideways on every starred row.
+      const btnStar = document.createElement('button');
+      btnStar.type = 'button';
+      btnStar.className = 'hist-star win95-btn w-10 px-0 py-1.5 text-xs shrink-0 hover:bg-yellow-200';
+      btnStar.addEventListener('click', () => toggleHistoryFavorite(entry, row));
+      row.appendChild(btnStar);
+
       const btnTrash = document.createElement('button');
       btnTrash.type = 'button';
-      btnTrash.className = 'win95-btn px-2.5 py-1.5 text-xs shrink-0 hover:bg-red-200';
-      btnTrash.textContent = '🗑️';
-      btnTrash.title = 'Delete this saved dungeon and its assets';
+      btnTrash.className = 'hist-trash win95-btn w-10 px-0 py-1.5 text-xs shrink-0 hover:bg-red-200';
       btnTrash.addEventListener('click', () => askDeleteHistory(entry));
       row.appendChild(btnTrash);
 
+      paintHistoryFavorite(row, entry);
       return row;
+    }
+
+    // The star and the trash can on one row, drawn from entry.favorite. Kept apart from
+    // buildHistoryRow so a toggle repaints the row it happened on in place: rebuilding the list
+    // would drop the keyboard cursor off the star it is sitting on and restart every marquee.
+    function paintHistoryFavorite(row, entry) {
+      const fav = !!entry.favorite;
+      const star = row.querySelector('.hist-star');
+      if (star) {
+        // Held down while starred - the same pressed-in bevel the selected difficulty keeps.
+        star.classList.toggle('is-selected', fav);
+        star.textContent = fav ? '⭐' : '☆';
+        star.setAttribute('aria-pressed', fav ? 'true' : 'false');
+        star.title = fav
+          ? 'Favorite - locked against deleting. Click to unstar it.'
+          : 'Favorite this dungeon - it cannot be deleted while it is starred';
+      }
+      const trash = row.querySelector('.hist-trash');
+      if (trash) {
+        trash.disabled = fav;
+        trash.textContent = fav ? '🔒' : '🗑️';
+        trash.title = fav
+          ? 'Locked - this dungeon is a favorite. Unstar it to delete it.'
+          : 'Delete this saved dungeon and its assets';
+      }
+    }
+
+    // Anything that can erase a run - this list's trash can, the quit menu's Erase Current
+    // Run - asks here first. The last listing is the page's copy of the flag; the server
+    // checks meta.json again on every delete, so a stale copy can only ever refuse, not erase.
+    function isFavoriteHistoryId(id) {
+      if (!id || !Array.isArray(historyEntries)) return false;
+      const entry = historyEntries.find(e => e.id === id);
+      return !!(entry && entry.favorite);
+    }
+
+    async function toggleHistoryFavorite(entry, row) {
+      if (!entry) return;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/history_favorite`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: entry.id, favorite: !entry.favorite })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || 'The server refused the change.');
+        entry.favorite = !!data.favorite;
+      } catch (err) {
+        console.error('History favorite error:', err);
+        alert('Could not change that favorite.\n\n' + err.message);
+        // Most likely the run was deleted behind this page - re-list rather than guess.
+        const scrollBack = historyList ? historyList.scrollTop : 0;
+        await refreshHistory();
+        if (historyList) historyList.scrollTop = scrollBack;
+        return;
+      }
+      paintHistoryFavorite(row, entry);
+      renderHistoryFootNote();
     }
 
     function renderHistoryList() {
@@ -9038,13 +9109,20 @@
       requestAnimationFrame(() => {
         historyList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
       });
-      if (historyFootNote) {
-        const total = historyEntries.reduce((sum, e) => sum + (e.size || 0), 0);
-        const size = historySizeText(total);
-        historyFootNote.textContent =
-          historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
-          + (size ? '  ·  ' + size + ' on disk' : '');
-      }
+      renderHistoryFootNote();
+    }
+
+    // "12 dungeons · 3 favorites · 410.2 MB on disk". Its own function so a star toggle can
+    // recount without rebuilding the rows above it.
+    function renderHistoryFootNote() {
+      if (!historyFootNote || !Array.isArray(historyEntries)) return;
+      const total = historyEntries.reduce((sum, e) => sum + (e.size || 0), 0);
+      const size = historySizeText(total);
+      const favs = historyEntries.filter(e => e.favorite).length;
+      historyFootNote.textContent =
+        historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
+        + (favs ? '  ·  ' + favs + (favs === 1 ? ' favorite' : ' favorites') : '')
+        + (size ? '  ·  ' + size + ' on disk' : '');
     }
 
     // The two folder buttons in the footer. A browser cannot open a local directory, so the
@@ -9307,6 +9385,7 @@
     // button, because what it erases cannot be got back without generating it all again.
     function askDeleteHistory(entry) {
       if (!entry || !modalHistoryConfirm) return;
+      if (entry.favorite) return;   // the can is disabled on a favorite; this is the backstop
       historyPendingDelete = entry;
       if (historyConfirmName) {
         historyConfirmName.textContent = historyTitleOf(entry)

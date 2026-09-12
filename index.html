@@ -535,6 +535,20 @@
       color: #ffffff;
       letter-spacing: 0.04em;
     }
+    /* A starred row's trash can, locked. The 🔒 is an emoji, which ignores `color`, so the
+       etched-grey disabled label the Undo button uses would not show - fade the whole button
+       instead, and hold its bevel up so a click on it does not look like it went in. */
+    .hist-trash:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .hist-trash:disabled:active {
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+      box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+    }
   </style>
 </head>
 <body>
