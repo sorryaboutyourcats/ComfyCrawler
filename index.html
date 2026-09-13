@@ -113,7 +113,7 @@
     #modalSettings button:focus-visible,
     #modalHistory button:focus-visible,
     #modalHistoryConfirm button:focus-visible,
-    #modalPromptsConfirm button:focus-visible,
+    #modalLeaveRunConfirm button:focus-visible,
     #modalQuitConfirm button:focus-visible,
     #modalEraseConfirm button:focus-visible {
       outline: 2px dotted #000080;
@@ -939,23 +939,39 @@
             <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
           </div>
 
-          <!-- Last Attack Frame: one more frame per foe, swapped in on the tick its blow lands
-               instead of leaving the wind-up's attack frame up for the whole attack. A pair of
-               buttons like the difficulty row rather than a dropdown, so the arrow keys walk
-               across it instead of being swallowed by a <select>. game.js (setLastAttackFrame)
-               keeps the pick pressed in and remembers it across reloads. -->
+          <!-- Last Attack Frame: how a foe's attack frame lines up with the blow it throws, which
+               otherwise lands a beat after the frame goes up. On adds one more frame per foe,
+               swapped in on the tick its blow lands; Quick adds nothing and drops the wind-up, so
+               the attack frame arrives with the blow; Flip keeps Off's wind-up and mirrors the foe
+               the moment the blow lands; Mixed plays Quick for foes on the ground and Flip for
+               foes in the air. A row of buttons like the difficulty row
+               rather than a dropdown, so the arrow keys walk across it instead of being swallowed
+               by a <select>. game.js (setLastAttackFrame) keeps the pick pressed in and remembers
+               it across reloads. -->
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800" id="lastAttackFrameLabel">
               Last Attack Frame:
             </label>
             <div id="lastAttackFrameRow" class="flex gap-1.5" role="group" aria-labelledby="lastAttackFrameLabel">
               <button type="button" data-last-attack-frame="off" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="Foes hold their attack frame for the whole attack. New dungeons are frame version 1.">
+                      title="Foes show their attack frame as they wind up, and the blow lands a moment later. New dungeons are frame version 1.">
                 <span class="text-xs">Off</span>
               </button>
               <button type="button" data-last-attack-frame="on" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
                       title="Foes get one more frame, shown the moment their attack lands. New dungeons are frame version 2 and take a little longer to create.">
                 <span class="text-xs">On</span>
+              </button>
+              <button type="button" data-last-attack-frame="quick" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="No extra frame and no wind-up: the attack frame appears the moment the blow lands. Foes attack just as often. Works on every dungeon; new ones are frame version 1.">
+                <span class="text-xs">Quick</span>
+              </button>
+              <button type="button" data-last-attack-frame="flip" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="No extra frame and the same wind-up as Off, but the foe flips round the moment its blow lands, so the hit reads as a swipe. Works on every dungeon; new ones are frame version 1.">
+                <span class="text-xs">Flip</span>
+              </button>
+              <button type="button" data-last-attack-frame="mixed" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="No extra frame. Foes on the ground (walker, runts, boss) play like Quick, and foes in the air (flyer, fledglings) play like Flip. Works on every dungeon; new ones are frame version 1.">
+                <span class="text-xs">Mixed</span>
               </button>
             </div>
           </div>
@@ -1096,35 +1112,33 @@
       </div>
     </div>
 
-    <!-- PROMPTS CONFIRMATION - a History row's Prompts button, pressed while a dungeon is running
-         behind the window, has to leave that run for the main menu before it can write the four
-         fields. That ends the run, so it asks first. Same z-[60] stacking over History as the
-         delete box above; only ever shown mid-run - out at the menu Prompts just fills. -->
-    <div id="modalPromptsConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+    <!-- LEAVE-RUN CONFIRMATION - History can be open right over a running dungeon (the quit
+         box's "Load a Different Dungeon"), and both of a row's verbs end that run: Start loads a
+         different dungeon over it, Prompts leaves it for the main menu to write the four fields.
+         So either one asks first. The icon, the line saying what happens and the go button's
+         label are filled in per verb by askLeaveRun() in game.js. Same z-[60] stacking over
+         History as the delete box above; only ever shown mid-run - out at the menu both just go. -->
+    <div id="modalLeaveRunConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
       <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
         <div class="win95-title flex items-center justify-between mb-2">
           <span>⚠️ End Current Run?</span>
-          <button id="btnPromptsConfirmClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+          <button id="btnLeaveRunConfirmClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
         </div>
 
         <div class="p-4 flex gap-3 items-start">
-          <div class="text-3xl leading-none select-none">📋</div>
+          <div id="leaveRunConfirmIcon" class="text-3xl leading-none select-none">📋</div>
           <div class="flex flex-col gap-1 min-w-0">
             <p class="text-xs font-black text-slate-900">Close out the dungeon you are playing?</p>
-            <p id="promptsConfirmName" class="text-xs font-bold text-blue-900 break-words"></p>
-            <p class="text-[11px] text-slate-700">
-              Using these prompts ends your current run and takes you back to the main menu to
-              edit them. Your progress in this dungeon is lost, but the dungeon itself stays in
-              History to Start again.
-            </p>
+            <p id="leaveRunConfirmName" class="text-xs font-bold text-blue-900 break-words"></p>
+            <p id="leaveRunConfirmText" class="text-[11px] text-slate-700"></p>
           </div>
         </div>
 
         <div class="px-4 pb-4 flex justify-end gap-2">
-          <button id="btnPromptsConfirmCancel" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+          <button id="btnLeaveRunConfirmCancel" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
             Cancel
           </button>
-          <button id="btnPromptsConfirmContinue" class="win95-btn px-4 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-black">
+          <button id="btnLeaveRunConfirmContinue" class="win95-btn px-4 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-black">
             Continue
           </button>
         </div>

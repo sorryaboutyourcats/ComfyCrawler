@@ -79,12 +79,22 @@
       exitHallCells: 3
     };
     let selectedDifficulty = 'medium';
-    // LAST ATTACK FRAME. A foe's attack frame goes up with its telegraph, well before the blow
-    // lands. On, CREATE asks the server for one more frame per foe - its strike - which
-    // drawEnemyBody swaps in on the tick the blow actually lands, and the run is saved as frame
-    // version 2. The flag gates that swap too, so turning it back off puts every dungeon,
-    // version 2 ones included, back on the attack frame for the whole attack.
-    let lastAttackFrameOn = false;
+    // LAST ATTACK FRAME - 'off' | 'on' | 'quick' | 'flip' | 'mixed'. Off, a foe's attack frame goes
+    // up with its telegraph, well before the blow lands. The ways to close that gap being tried:
+    //   on    - CREATE asks the server for one more frame per foe, its strike, which
+    //           drawEnemyBody swaps in on the tick the blow lands; the run is saved as frame
+    //           version 2. The mode gates the swap too, so leaving 'on' puts every dungeon,
+    //           version 2 ones included, back on the attack frame.
+    //   quick - no extra frame and nothing generated differently. The wind-up is dropped
+    //           instead: the attack frame waits for the blow and arrives with it. See the
+    //           grounded AI's telegraph and drawEnemyBody.
+    //   flip  - no extra frame, and the wind-up plays exactly as Off. On the tick the blow
+    //           lands the foe is drawn mirrored for the rest of that attack, so the hit reads
+    //           as a snap of movement. Purely a draw-time mirror - see drawEnemyBody.
+    //   mixed - quick for every foe on the ground (walker, runts, boss), flip for every foe in
+    //           the air (flyer, fledglings). Nothing reads this directly: each foe's own mode
+    //           comes from attackFrameModeFor.
+    let lastAttackFrameMode = 'off';
     const wallPromptInput = document.getElementById('wallPromptInput');
     const playerPromptInput = document.getElementById('playerPromptInput');
     const playerFileInput = document.getElementById('playerFileInput');
@@ -119,12 +129,14 @@
     const btnHistoryConfirmClose = document.getElementById('btnHistoryConfirmClose');
     const btnHistoryConfirmCancel = document.getElementById('btnHistoryConfirmCancel');
     const btnHistoryConfirmDelete = document.getElementById('btnHistoryConfirmDelete');
-    // ...and the one a row's Prompts button opens when a run is live behind the window.
-    const modalPromptsConfirm = document.getElementById('modalPromptsConfirm');
-    const promptsConfirmName = document.getElementById('promptsConfirmName');
-    const btnPromptsConfirmClose = document.getElementById('btnPromptsConfirmClose');
-    const btnPromptsConfirmCancel = document.getElementById('btnPromptsConfirmCancel');
-    const btnPromptsConfirmContinue = document.getElementById('btnPromptsConfirmContinue');
+    // ...and the one a row's Start or Prompts button opens when a run is live behind the window.
+    const modalLeaveRunConfirm = document.getElementById('modalLeaveRunConfirm');
+    const leaveRunConfirmIcon = document.getElementById('leaveRunConfirmIcon');
+    const leaveRunConfirmName = document.getElementById('leaveRunConfirmName');
+    const leaveRunConfirmText = document.getElementById('leaveRunConfirmText');
+    const btnLeaveRunConfirmClose = document.getElementById('btnLeaveRunConfirmClose');
+    const btnLeaveRunConfirmCancel = document.getElementById('btnLeaveRunConfirmCancel');
+    const btnLeaveRunConfirmContinue = document.getElementById('btnLeaveRunConfirmContinue');
 
     const progBarChunks = document.getElementById('progBarChunks');
     const progStatusText = document.getElementById('progStatusText');
@@ -1277,8 +1289,9 @@
     if (btnQuitToMenu) btnQuitToMenu.addEventListener('click', () => { closeQuitConfirm(); openSetupScreen(); });
     // Opens History right over the still-running game - deliberately NOT openSetupScreen()
     // first, which would tear the active run down (stop its music/narration, hide the game
-    // screen) just to browse. That teardown happens in startHistoryDungeon() instead, and
-    // only once a row's Start button is actually clicked; closing History with nothing
+    // screen) just to browse. That teardown happens in loadHistoryDungeon() instead, and
+    // only once a row's Start button is clicked AND the player has confirmed ending the run
+    // it replaces (askLeaveRun); closing History with nothing
     // picked drops straight back into the same run, untouched.
     if (btnQuitToHistory) btnQuitToHistory.addEventListener('click', () => {
       closeQuitConfirm();
@@ -1326,6 +1339,11 @@
 
     btnPlayAgain.addEventListener('click', openSetupScreen);
 
+    // The pick sticks across reloads: a refresh that dropped a Hard player back to Medium would
+    // hand them a smaller maze on the next CREATE without a word. Anything stored that is no
+    // longer a difficulty (or nothing at all) falls back to Medium inside setDifficulty.
+    const DIFFICULTY_KEY = 'comfycrawler.difficulty';
+
     function setDifficulty(id) {
       if (!DIFFICULTIES[id]) id = 'medium';
       selectedDifficulty = id;
@@ -1337,21 +1355,51 @@
 
     difficultyRow.addEventListener('click', (e) => {
       const btn = e.target.closest('.difficulty-btn');
-      if (btn) setDifficulty(btn.dataset.difficulty);
+      if (!btn) return;
+      setDifficulty(btn.dataset.difficulty);
+      try { localStorage.setItem(DIFFICULTY_KEY, selectedDifficulty); }
+      catch (_) { /* storage disabled or full - the pick just won't stick */ }
     });
-    setDifficulty(selectedDifficulty);
+    try { setDifficulty(localStorage.getItem(DIFFICULTY_KEY)); }
+    catch (_) { setDifficulty(selectedDifficulty); }
 
-    // Last Attack Frame's Off / On pair, drawn like the difficulty row: the pick stays pressed
-    // in. Unlike difficulty it sticks across reloads - it is a way of playing being tried out
-    // rather than a per-dungeon pick, and a refresh that quietly turned it off would cost a
-    // whole generation made without the frame.
+    // Last Attack Frame's Off / On / Quick / Flip / Mixed row, drawn like the difficulty row: the
+    // pick stays pressed in, and like difficulty it sticks across reloads - it is a way of playing
+    // being tried out rather than a per-dungeon pick, and a refresh that quietly reset it would
+    // cost a whole generation made without the frame. The stored value is the mode's own name, so
+    // a pick saved back when the row was only Off / On still loads as what it was.
     const LAST_ATTACK_FRAME_KEY = 'comfycrawler.lastAttackFrame';
+    const LAST_ATTACK_FRAME_MODES = ['off', 'on', 'quick', 'flip', 'mixed'];
 
-    function setLastAttackFrame(on) {
-      lastAttackFrameOn = !!on;
+    // The mode ONE foe plays under - what the AI and drawEnemyBody ask, rather than reading
+    // lastAttackFrameMode themselves. Every mode applies to all foes alike except Mixed, which
+    // splits them by how they move: ground foes (walker, runts, boss) play Quick and air foes
+    // (flyer, fledglings) play Flip. The pack foes follow their `fly` flag like everything else,
+    // so runts go with the walker they are recoloured from and fledglings with the flyer.
+    function attackFrameModeFor(e) {
+      if (lastAttackFrameMode !== 'mixed') return lastAttackFrameMode;
+      const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+      return cfg.fly ? 'flip' : 'quick';
+    }
+
+    // Is a foe that is mid-attack already in its attack pose? `mode` is its attackFrameModeFor.
+    // Off, On and Flip raise the pose with the telegraph; Quick holds it back until the blow lands.
+    // Mixed plays Quick on the ground with ONE exception, the boss's charge: its pose goes up on
+    // the first tick of the run-in (special 'rush', where the attack state starts and the boss
+    // starts coming forward) instead of on arrival. The line-up before it stays in the ordinary
+    // stance, and so does every other boss attack, which still lands with its pose.
+    function attackPoseUp(e, mode) {
+      if (e.state !== 'attack' && e.state !== 'telegraph') return false;
+      if (mode !== 'quick') return true;
+      if (e.state === 'attack' && e.strikeLanded) return true;
+      return lastAttackFrameMode === 'mixed' && e.special === 'rush' && e.state === 'attack';
+    }
+
+    function setLastAttackFrame(mode) {
+      lastAttackFrameMode = LAST_ATTACK_FRAME_MODES.includes(mode) ? mode : 'off';
       if (!lastAttackFrameRow) return;
       lastAttackFrameRow.querySelectorAll('.last-attack-frame-btn').forEach((btn) => {
-        const picked = (btn.dataset.lastAttackFrame === 'on') === lastAttackFrameOn;
+        const picked = btn.dataset.lastAttackFrame === lastAttackFrameMode;
         btn.classList.toggle('is-selected', picked);
         btn.setAttribute('aria-pressed', picked ? 'true' : 'false');
       });
@@ -1361,13 +1409,13 @@
       lastAttackFrameRow.addEventListener('click', (e) => {
         const btn = e.target.closest('.last-attack-frame-btn');
         if (!btn) return;
-        setLastAttackFrame(btn.dataset.lastAttackFrame === 'on');
-        try { localStorage.setItem(LAST_ATTACK_FRAME_KEY, lastAttackFrameOn ? 'on' : 'off'); }
+        setLastAttackFrame(btn.dataset.lastAttackFrame);
+        try { localStorage.setItem(LAST_ATTACK_FRAME_KEY, lastAttackFrameMode); }
         catch (_) { /* storage disabled or full - the pick just won't stick */ }
       });
     }
-    try { setLastAttackFrame(localStorage.getItem(LAST_ATTACK_FRAME_KEY) === 'on'); }
-    catch (_) { setLastAttackFrame(false); }
+    try { setLastAttackFrame(localStorage.getItem(LAST_ATTACK_FRAME_KEY)); }
+    catch (_) { setLastAttackFrame('off'); }
 
     btnSettings.addEventListener('click', () => {
       modalSettings.classList.remove('hidden');
@@ -3277,10 +3325,11 @@
     // on the shield is a property of the move rather than of the creature throwing it - the
     // boss's charge is the only one so far, and it takes the whole bar.
     function landEnemyStrike(e, dmg, dodgeMsg, blockMsg, hitLabel, opts) {
-      // This tick is the blow, whatever it turns out to do to the player. With Last Attack
-      // Frame on, the renderer swaps the foe from its attack frame (the wind-up) to its strike
-      // frame from here to the end of the attack - see drawEnemyBody. Cleared by tickEnemyAI as
-      // soon as the foe leaves the attack state.
+      // This tick is the blow, whatever it turns out to do to the player. Last Attack Frame
+      // reads it in drawEnemyBody: 'on' swaps the foe from its attack frame (the wind-up) to its
+      // strike frame from here to the end of the attack, 'quick' holds the attack frame back
+      // until here, and 'flip' mirrors the foe from here to the end of the attack. Cleared by
+      // tickEnemyAI as soon as the foe leaves the attack state.
       e.strikeLanded = true;
       const tx = 160 + (e.x || 0) * 0.4;
       // 44px is a swing's reach. opts.reach widens it for a move that is not a swing - the
@@ -3646,7 +3695,13 @@
             e.blockTimer = cfg.blockHold || 75;
             showFloatingCombatText("ENEMY GUARDS", 160 + e.x, 78, "#94a3b8");
           }
-          if (e.attackTimer === cfg.telegraph) {
+          // Last Attack Frame's QUICK mode has no wind-up at all: no telegraph state, so no early
+          // attack frame and no callout - the foe keeps its ordinary stance (and keeps stalking)
+          // right up to the tick below where the blow lands, and the attack frame arrives with it.
+          // The clock is left alone, so the blow lands on exactly the tick it would have: Quick
+          // changes when the pose shows, not how often the foe swings. (Mixed plays Quick here -
+          // everything on this path is on the ground; see attackFrameModeFor.)
+          if (e.attackTimer === cfg.telegraph && attackFrameModeFor(e) !== 'quick') {
             e.state = 'telegraph';
             // A pack telegraphs with a bare glyph over its own head: three swarmers winding up
             // every second would otherwise bury the screen in "ENEMY WIND-UP!".
@@ -5173,16 +5228,27 @@
         // original and quietly upgrades itself once the source is ready.
         const frames = enemyFramesFor(e.variant) || enemyFrames;
         let frame, sizeRef = null;
+        // Last Attack Frame as it applies to THIS foe - Mixed resolves to quick or flip by variant.
+        const attackMode = attackFrameModeFor(e);
         if (frames && frames.idle) {
           frame = frames.idle;
           // Attack wins over block: the AI clears blockTimer when it commits to a strike, so
           // these do not overlap in practice, but the strike is the one that must read.
-          // The attack frame goes up with the telegraph, well before the blow lands. With Last
-          // Attack Frame on, the tick it DOES land swaps in the strike frame for the rest of the
-          // attack; a dungeon generated without one (every frame version 1 run) has no strike
-          // frame and simply stays on the attack frame, exactly as it did before.
-          if (e.state === 'attack' && e.strikeLanded && lastAttackFrameOn && frames.strike) frame = frames.strike;
-          else if (e.state === 'attack' || e.state === 'telegraph') frame = frames.attack || frame;
+          // The attack frame goes up with the telegraph, well before the blow lands, and
+          // Last Attack Frame decides what happens to that gap:
+          //   on    - the tick the blow DOES land swaps in the strike frame for the rest of the
+          //           attack. A dungeon generated without one (every frame version 1 run) has no
+          //           strike frame and simply stays on the attack frame, exactly as before.
+          //   quick - the attack frame waits for the blow. The grounded AI no longer telegraphs
+          //           at all, but the flyer's dive and the boss's charge run-in are movement and
+          //           still happen - so they are drawn in the foe's ordinary stance until the
+          //           blow lands on the tick they arrive.
+          //   flip  - picks frames exactly as Off does; its difference is the mirror below.
+          //   mixed - quick on the ground, except that the boss's charge takes its pose as the
+          //           run-in starts; flip in the air. See attackPoseUp.
+          const landed = e.state === 'attack' && e.strikeLanded;
+          if (landed && attackMode === 'on' && frames.strike) frame = frames.strike;
+          else if (attackPoseUp(e, attackMode)) frame = frames.attack || frame;
           else if (e.blockTimer > 0) frame = frames.block || frame;
           // Scale EVERY frame by the idle's content box. Sizing each frame on its own box
           // would shrink the whole foe whenever it lunged, since a thrust-out limb measures
@@ -5192,7 +5258,7 @@
         } else {
           frame = enemySpriteFrames[0];
           if (e.state === 'hurt') frame = enemySpriteFrames[2] || frame;
-          else if (e.state === 'attack' || e.state === 'telegraph') frame = enemySpriteFrames[1] || frame;
+          else if (attackPoseUp(e, attackMode)) frame = enemySpriteFrames[1] || frame;
         }
 
         if (frame && frame.complete && frame.naturalWidth > 0) {
@@ -5252,8 +5318,13 @@
 
           // Mirrored about its own centre line when it is walking the other way. Scoped to the
           // sprite alone - the pip bar below must not come out filling from the right.
+          // Last Attack Frame's FLIP mode turns it the other way for the rest of an attack whose
+          // blow has landed (landEnemyStrike) - relative to whichever way it already faces, so a
+          // foe walking left snaps round to the right - and it turns back as the attack ends.
+          // Draw-time only: e.facing is left alone, so the walk-direction logic never sees it.
+          const flipped = attackMode === 'flip' && e.state === 'attack' && e.strikeLanded;
           c.save();
-          if (e.facing < 0) { c.translate(ex * 2, 0); c.scale(-1, 1); }
+          if ((e.facing < 0) !== flipped) { c.translate(ex * 2, 0); c.scale(-1, 1); }
           drawEnemyContent(c, frame, ex, bottomY, targetH, maxW, sizeRef);
           c.restore();
           c.globalAlpha = 1;
@@ -7895,7 +7966,7 @@
       // the file, which already closes these regardless of which screen is showing.
       if ((modalHistory && !modalHistory.classList.contains('hidden')) ||
           (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) ||
-          (modalPromptsConfirm && !modalPromptsConfirm.classList.contains('hidden'))) {
+          (modalLeaveRunConfirm && !modalLeaveRunConfirm.classList.contains('hidden'))) {
         return;
       }
 
@@ -8582,7 +8653,7 @@
     // Which dialog the arrow keys belong to right now, innermost first: the two confirm
     // boxes sit on top of the window that opened them, so they win while they are up.
     function topmostOpenDialog() {
-      const stack = [modalEraseConfirm, modalHistoryConfirm, modalPromptsConfirm,
+      const stack = [modalEraseConfirm, modalHistoryConfirm, modalLeaveRunConfirm,
                      modalQuitConfirm, modalHistory, modalSettings];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
@@ -8743,8 +8814,9 @@
             mode: activeMode,
             sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound',
             graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal',
-            // One more frame per foe, shown when its blow lands - see lastAttackFrameOn.
-            last_attack_frame: lastAttackFrameOn
+            // One more frame per foe, shown when its blow lands - see lastAttackFrameMode. Quick
+            // needs nothing generated, so only 'on' asks for it.
+            last_attack_frame: lastAttackFrameMode === 'on'
           })
         });
 
@@ -9071,13 +9143,15 @@
       tag.className = 'hist-frame-ver text-[9px] font-black px-1.5 py-0.5 shrink-0'
         + (version === 2 ? ' hist-frame-ver--v2' : '');
       tag.textContent = 'FRAME V' + version;
+      // Said in terms of what the run HAS, not how it plays - that is the Options setting's call
+      // (Quick plays either version without a wind-up), and the note at the bottom covers it.
       if (version === 1) {
-        tag.title = 'Frame version 1 - its foes hold their attack frame for the whole attack,'
-          + ' wind-up and hit alike.';
+        tag.title = 'Frame version 1 - made without Last Attack Frame, so its foes have no strike'
+          + ' frame. It plays with whatever Last Attack Frame is set to, minus that frame.';
         return tag;
       }
-      let tip = 'Frame version 2 - made with Last Attack Frame on: its foes switch to a strike'
-        + ' frame the moment their attack lands.';
+      let tip = 'Frame version 2 - made with Last Attack Frame on: its foes also have a strike'
+        + ' frame, shown the moment their attack lands.';
       // The quality gate can drop a pose frame it could not get framed, so say which foes it
       // took - the others play that moment on their attack frame. Only when the list was
       // recorded at all.
@@ -9089,10 +9163,13 @@
           tip += '\nNo strike frame on the ' + lost.join(' or ') + ' - generation dropped it.';
         }
       }
-      // The Options toggle also decides whether the frame is SHOWN, so a version 2 run replayed
-      // with it off looks like version 1 - worth saying before that reads as a broken run.
-      if (!lastAttackFrameOn) {
-        tip += '\nLast Attack Frame is off in Options, so it plays like version 1 right now.';
+      // The Options setting also decides whether the frame is SHOWN - only 'on' shows it - so a
+      // version 2 run replayed on any other mode looks like version 1. Worth saying before that
+      // reads as a broken run.
+      if (lastAttackFrameMode !== 'on') {
+        const modeName = { off: 'Off', quick: 'Quick', flip: 'Flip', mixed: 'Mixed' }[lastAttackFrameMode] || 'Off';
+        tip += '\nLast Attack Frame is set to ' + modeName
+          + ' in Options, so the strike frame is not shown right now.';
       }
       tag.title = tip;
       return tag;
@@ -9276,26 +9353,100 @@
     function closeHistory() {
       if (modalHistory) modalHistory.classList.add('hidden');
       closeDeleteConfirm();
-      closePromptsConfirm();
+      closeLeaveRunConfirm();
+    }
+
+    // ---- Leaving a live run from History ----------------------------------
+    // History can be open right over a running game (the quit box's "Load a Different
+    // Dungeon" opens it without leaving the run first), and both of a row's verbs end that
+    // run: Start loads another dungeon over it, Prompts leaves it for the menu. So either one
+    // asks in this box before it does. Out at the menu there is no run to lose, and both just go.
+    const LEAVE_RUN_VERBS = {
+      start: {
+        icon: '▶️',
+        go: 'Start',
+        text: (entry) => (entry.id && entry.id === currentRunHistoryId)
+          ? 'Starting this dungeon again ends your current run and reloads it from the beginning,'
+            + ' on a freshly drawn maze. Your progress in this run is lost.'
+          : 'Starting this dungeon ends your current run and loads the new one in its place.'
+            + ' Your progress in this dungeon is lost, but the dungeon itself stays in History'
+            + ' to Start again.',
+        act: (entry) => loadHistoryDungeon(entry)
+      },
+      prompts: {
+        icon: '📋',
+        go: 'Continue',
+        text: () => 'Using these prompts ends your current run and takes you back to the main'
+          + ' menu to edit them. Your progress in this dungeon is lost, but the dungeon itself'
+          + ' stays in History to Start again.',
+        act: (entry) => applyHistoryPrompts(entry)
+      }
+    };
+
+    // The verb and entry the box is currently asking about, or null.
+    let leaveRunPending = null;
+
+    function askLeaveRun(verbKey, entry) {
+      const verb = LEAVE_RUN_VERBS[verbKey];
+      if (!modalLeaveRunConfirm) { verb.act(entry); return; }
+      leaveRunPending = { verb, entry };
+      if (leaveRunConfirmIcon) leaveRunConfirmIcon.textContent = verb.icon;
+      if (leaveRunConfirmName) {
+        // Named by the run being ended, not the row that was clicked - that is what is lost.
+        const where = (dungeonStory && dungeonStory.location) || currentThemeName || '';
+        leaveRunConfirmName.textContent = where.trim();
+      }
+      if (leaveRunConfirmText) leaveRunConfirmText.textContent = verb.text(entry);
+      if (btnLeaveRunConfirmContinue) btnLeaveRunConfirmContinue.textContent = verb.go;
+      modalLeaveRunConfirm.classList.remove('hidden');
+      // Cancel, never the go button: a stray Enter must not end the run.
+      focusFirstIn(modalLeaveRunConfirm, btnLeaveRunConfirmCancel);
+    }
+
+    function closeLeaveRunConfirm() {
+      const wasOpen = modalLeaveRunConfirm && !modalLeaveRunConfirm.classList.contains('hidden');
+      leaveRunPending = null;
+      if (modalLeaveRunConfirm) modalLeaveRunConfirm.classList.add('hidden');
+      // Same hand-back as closeDeleteConfirm: the cursor returns to the list behind the box.
+      if (wasOpen && modalHistory && !modalHistory.classList.contains('hidden')) {
+        focusFirstIn(modalHistory, btnHistoryOk);
+      }
+    }
+
+    function confirmLeaveRun() {
+      const pending = leaveRunPending;
+      closeLeaveRunConfirm();
+      if (pending) pending.verb.act(pending.entry);
     }
 
     // ---- Starting a saved dungeon -----------------------------------------
-    // Deliberately walks the same path btnCreate does, minus the generation: same reset,
-    // same screen swap, same freshly generated maze. The only differences are where the
-    // bundle comes from and that the progress readout is already finished on arrival.
-    async function startHistoryDungeon(entry) {
+    // The row's Start button. Out at the menu it loads straight away; over a live run it asks
+    // first, since loading a dungeon throws away the one being played.
+    function startHistoryDungeon(entry) {
       if (!entry) return;
       // A live generation owns the progress screen; don't let History yank it away.
       if (generationInFlight) {
         alert('A dungeon is still being generated. Let it finish first.');
         return;
       }
+      if (screenSetup.classList.contains('hidden')) {
+        askLeaveRun('start', entry);
+        return;
+      }
+      loadHistoryDungeon(entry);
+    }
+
+    // Deliberately walks the same path btnCreate does, minus the generation: same reset,
+    // same screen swap, same freshly generated maze. The only differences are where the
+    // bundle comes from and that the progress readout is already finished on arrival.
+    async function loadHistoryDungeon(entry) {
       closeHistory();
 
-      // Reachable straight from an active run now (the quit-confirm box opens History
-      // without leaving it first) - tear down whatever it's replacing the same way
-      // openSetupScreen would. resetCombatForNewDungeon/resetCrawl below cover the rest
-      // (defeat modal, narration, screen music); these two don't.
+      // Reachable straight from an active run (the quit-confirm box opens History without
+      // leaving it first, and the player has said yes to ending it by now) - tear down
+      // whatever it's replacing the same way openSetupScreen would.
+      // resetCombatForNewDungeon/resetCrawl below cover the rest (defeat modal, narration,
+      // screen music); these two don't.
       screenGame.classList.add('hidden');
       if (victoryModal) victoryModal.classList.add('hidden');
       stopOutroNarration();
@@ -9412,46 +9563,13 @@
         alert('A dungeon is still being generated. Let it finish first.');
         return;
       }
-      // History can be open right over a running game (the quit box's "Load a Different
-      // Dungeon" opens it without leaving the run first), and there is no menu behind it to
-      // write into - so this has to end that run, and it asks before it does.
+      // Over a running game there is no menu behind History to write into, so this has to
+      // end that run - and it asks before it does.
       if (screenSetup.classList.contains('hidden')) {
-        askPromptsLeaveRun(entry);
+        askLeaveRun('prompts', entry);
         return;
       }
       applyHistoryPrompts(entry);
-    }
-
-    // The entry the leave-the-run box is currently asking about, or null.
-    let promptsPendingEntry = null;
-
-    function askPromptsLeaveRun(entry) {
-      if (!modalPromptsConfirm) { applyHistoryPrompts(entry); return; }
-      promptsPendingEntry = entry;
-      if (promptsConfirmName) {
-        // Named by the run being ended, not the row that was clicked - that is what is lost.
-        const where = (dungeonStory && dungeonStory.location) || currentThemeName || '';
-        promptsConfirmName.textContent = where.trim();
-      }
-      modalPromptsConfirm.classList.remove('hidden');
-      // Cancel, never Continue: a stray Enter must not end the run.
-      focusFirstIn(modalPromptsConfirm, btnPromptsConfirmCancel);
-    }
-
-    function closePromptsConfirm() {
-      const wasOpen = modalPromptsConfirm && !modalPromptsConfirm.classList.contains('hidden');
-      promptsPendingEntry = null;
-      if (modalPromptsConfirm) modalPromptsConfirm.classList.add('hidden');
-      // Same hand-back as closeDeleteConfirm: the cursor returns to the list behind the box.
-      if (wasOpen && modalHistory && !modalHistory.classList.contains('hidden')) {
-        focusFirstIn(modalHistory, btnHistoryOk);
-      }
-    }
-
-    function confirmPromptsLeaveRun() {
-      const entry = promptsPendingEntry;
-      closePromptsConfirm();
-      if (entry) applyHistoryPrompts(entry);
     }
 
     function applyHistoryPrompts(entry) {
@@ -9546,13 +9664,13 @@
     if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmCancel) btnHistoryConfirmCancel.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmDelete) btnHistoryConfirmDelete.addEventListener('click', confirmDeleteHistory);
-    if (btnPromptsConfirmClose) btnPromptsConfirmClose.addEventListener('click', closePromptsConfirm);
-    if (btnPromptsConfirmCancel) btnPromptsConfirmCancel.addEventListener('click', closePromptsConfirm);
-    if (btnPromptsConfirmContinue) btnPromptsConfirmContinue.addEventListener('click', confirmPromptsLeaveRun);
+    if (btnLeaveRunConfirmClose) btnLeaveRunConfirmClose.addEventListener('click', closeLeaveRunConfirm);
+    if (btnLeaveRunConfirmCancel) btnLeaveRunConfirmCancel.addEventListener('click', closeLeaveRunConfirm);
+    if (btnLeaveRunConfirmContinue) btnLeaveRunConfirmContinue.addEventListener('click', confirmLeaveRun);
     // Clicking the darkened History list behind the box backs out, like the erase box does.
-    if (modalPromptsConfirm) {
-      modalPromptsConfirm.addEventListener('click', (e) => {
-        if (e.target === modalPromptsConfirm) closePromptsConfirm();
+    if (modalLeaveRunConfirm) {
+      modalLeaveRunConfirm.addEventListener('click', (e) => {
+        if (e.target === modalLeaveRunConfirm) closeLeaveRunConfirm();
       });
     }
 
@@ -9571,9 +9689,9 @@
       } else if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) {
         e.preventDefault();
         closeDeleteConfirm();
-      } else if (modalPromptsConfirm && !modalPromptsConfirm.classList.contains('hidden')) {
+      } else if (modalLeaveRunConfirm && !modalLeaveRunConfirm.classList.contains('hidden')) {
         e.preventDefault();
-        closePromptsConfirm();
+        closeLeaveRunConfirm();
       } else if (modalSettings && !modalSettings.classList.contains('hidden')) {
         e.preventDefault();
         modalSettings.classList.add('hidden');
