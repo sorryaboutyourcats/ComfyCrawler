@@ -164,7 +164,11 @@ def _init_file_logging():
     sys.excepthook = _log_uncaught
 
 
-_init_file_logging()
+# Only when this file IS the server. The tests import it, and an import that ran this deleted
+# the previous run's server.log.1 and - unable to roll a server.log the live server still holds
+# open on Windows - appended the test output to the running server's log.
+if __name__ == "__main__":
+    _init_file_logging()
 
 gen_progress = {
     "is_generating": False,
@@ -3037,10 +3041,34 @@ ENEMY_VARIANT_FRAMES = {
 }
 ENEMY_FRAME_FALLBACK = ["idle"]          # what a Kontext-derived variant has
 
+# The LAST ATTACK FRAME - the setup screen's "Last Attack Frame" option. A foe's attack frame
+# goes up at the START of its telegraph and the blow only lands at the END of it (30 ticks on
+# the walker, 46 on the boss, the whole 26-tick dive on the flyer), so the pose the player
+# reads as "it hits me" is on screen well before anything does. With the option on, every foe
+# also gets this frame and game.js swaps to it on the tick landEnemyStrike resolves the blow:
+# the attack frame becomes the wind-up and this one is the hit. It is appended to each foe's
+# frames rather than written into ENEMY_VARIANT_FRAMES, so a run made with the option off
+# draws exactly the frames it always has.
+ENEMY_STRIKE_FRAME = "strike"
 
-def _enemy_frame_count():
+# What the History window labels a run by. Frame version 2 was drawn with the strike frame;
+# everything saved before this existed has no frame_version on its meta and reads as 1.
+FRAME_VERSION_BASE = 1
+FRAME_VERSION_STRIKE = 2
+
+
+def _enemy_variant_frames(variant, last_attack_frame=False):
+    """The frames drawn for one LLM-designed foe, with the strike frame on the end when the
+    Last Attack Frame option is on."""
+    frames = list(ENEMY_VARIANT_FRAMES.get(variant, ENEMY_FRAME_FALLBACK))
+    if last_attack_frame:
+        frames.append(ENEMY_STRIKE_FRAME)
+    return frames
+
+
+def _enemy_frame_count(last_attack_frame=False):
     """Total enemy sprites in the shared krea2 job - the progress denominator."""
-    return sum(len(f) for f in ENEMY_VARIANT_FRAMES.values())
+    return sum(len(_enemy_variant_frames(v, last_attack_frame)) for v in ENEMY_VARIANT_FRAMES)
 
 # Pose clauses for krea2_species_prompt. Same positive-only rule as everything else in this
 # file - these describe a posture, never what the foe is not doing.
@@ -3048,6 +3076,30 @@ ENEMY_FRAME_POSES = {
     "idle":   "It faces the viewer, ready to fight",
     "attack": ("It surges forward at the viewer in mid-attack, lunging into the camera with "
                "its whole body committed and its leading edge thrust out toward you"),
+    # The frame shown on the tick the blow LANDS (ENEMY_STRIKE_FRAME), after "attack" has
+    # carried the whole wind-up. It needs something the attack frame does not have, and it
+    # cannot be a limb - a RAM stick has none - so it is the impact itself: an explosion where
+    # the blow connects. Same survival rules as the FIELD guard below: overlapping the body,
+    # so keep_largest_figure keeps it with the foe, and saturated, so the white-background
+    # cut-out does not take it away. Measured on the same 6 foes and seeds (RAM stick +
+    # gargoyle, walker/flyer/boss), in this order:
+    #  * "It lands its blow ... at the instant of impact ... with a bright jagged burst of
+    #    sparks flaring from its leading edge ... the whole of it in view from top to bottom"
+    #    came back as the IDLE frame on 6 of 6, no sparks at all. The seed is shared, so a
+    #    clause too weak to move the picture just hands back the idle.
+    #  * The attack clause with the burst appended kept the lunge, and drew the burst tiny or
+    #    not at all (0-9% of the sprite) - and grew a stray red limb on a RAM stick.
+    #  * THE BURST AS THE SUBJECT IS WHAT GETS DRAWN: 8-33% of the sprite, 6 of 6. So it
+    #    leads, and the attack clause's own lunge follows it to keep the pose leaning the way
+    #    the wind-up did.
+    #  * "Right in front of it, overlapping its BODY" centred the fireball on the foe (it read
+    #    as the foe exploding) and once turned a RAM stick into a red robot holding one.
+    #    "Against its LEADING EDGE" puts it where the blow lands and kept every subject.
+    ENEMY_STRIKE_FRAME: ("A huge bright explosion of orange fire and yellow sparks bursts out "
+                         "against its leading edge where its blow connects, overlapping it, as "
+                         "it surges forward at the viewer in mid-attack, lunging into the camera "
+                         "with its whole body committed and its leading edge thrust out toward "
+                         "you"),
 }
 
 # The block frame gets one clause per GUARD mode instead of a single shared one.
@@ -4603,6 +4655,10 @@ def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=Non
     # whole front - and at the thin margin krea2 satisfied "fill the frame" by cropping in to
     # a bust instead of drawing the foe smaller. One step of margin gives it the room to
     # choose the other way. See the framing rule on ENEMY_BLOCK_POSES.
+    # The strike frame does NOT take that step, though its burst is wide too. Every frame is
+    # drawn at the idle's scale, so a strike drawn smaller in its canvas makes the foe visibly
+    # shrink on the very tick its blow lands - and at the idle's thin margin it came back
+    # unclipped on 6 of 6 test foes anyway. The re-frame retry still widens it if one clips.
     if pose == "block":
         tighten = max(int(tighten or 0), 1)
     margin = [
@@ -5074,7 +5130,7 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None, out
 # and only affects how the phases are paced against each other; `units` is that job's
 # expected total sampler steps (tokens for the story) and is the denominator the live
 # per-step fraction from ComfyUI's socket is measured against.
-def _plan_v6(steps, sound_mode="music_and_sound"):
+def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False):
     st = int(steps)
     plan = [
         # key,             label,                                                    weight, units
@@ -5082,8 +5138,9 @@ def _plan_v6(steps, sound_mode="music_and_sound"):
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
-        # Every player pose + every frame of all three foes, all in the one krea2 job.
-        ("frames",         "Animating the swing and the walk with krea2 turbo...",        80, (len(V6_FRAME_NAMES) + _enemy_frame_count()) * st),
+        # Every player pose + every frame of all three foes, all in the one krea2 job - the
+        # strike frames included when the Last Attack Frame option asked for them.
+        ("frames",         "Animating the swing and the walk with krea2 turbo...",        80, (len(V6_FRAME_NAMES) + _enemy_frame_count(last_attack_frame)) * st),
         # "enemy_variants" is NOT here on purpose. It only runs when the species naming
         # failed and the flyer/boss have to be derived from the walker instead, so it is
         # registered with PROGRESS.add_job at that point. A planned job that never runs is
@@ -6563,7 +6620,8 @@ def _krea2_regen_pose_frame(look, enemy_style, guard, pose, seed, size, steps, p
     return None if problem else fp
 
 
-def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=None):
+def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=None,
+                              last_attack_frame=False):
     """Add the enemy branches to a shared krea2 payload, keyed `enemy_<variant>`, and return
     the list of variants added.
 
@@ -6576,13 +6634,17 @@ def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=N
     towards one pose and composition; within a foe it is what holds the design still while
     only the pose clause changes. Branches are keyed `enemy_<variant>_<frame>`.
 
+    `last_attack_frame` adds ENEMY_STRIKE_FRAME to every designed foe. The fallback path has
+    no attack frame to follow, so it never gets one.
+
     Returns ({variant: [frames]}, {variant: seed}) - the frames so the caller knows what to
     collect, and the seeds so a single mis-framed pose frame can be re-drawn on the same one
     (see _krea2_regen_pose_frame)."""
     added, seeds = {}, {}
     for v in (ENEMY_VARIANT_NAMES if species else KREA2_FALLBACK_DIRECT_VARIANTS):
         seed = seeds[v] = random.randint(1, 1000000000)
-        frames = ENEMY_VARIANT_FRAMES.get(v, ENEMY_FRAME_FALLBACK) if species else ENEMY_FRAME_FALLBACK
+        frames = (_enemy_variant_frames(v, last_attack_frame) if species
+                  else ENEMY_FRAME_FALLBACK)
         for f in frames:
             prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style, pose=f,
                                                 guard=species[v].get("guard")) if species
@@ -6904,8 +6966,9 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
                                               sq, steps, prefix, variant=v)
                       if species and (seeds or {}).get(v) else None)
                 if not fp:
+                    fallback = "the attack frame" if f == ENEMY_STRIKE_FRAME else "idle"
                     print(f"[krea2] {prefix} {v} {f} frame is unusable - dropping it, "
-                          f"the frontend will use idle for that pose")
+                          f"the frontend will use {fallback} for that pose")
                     continue
             if fp:
                 got[f] = fp
@@ -7083,12 +7146,13 @@ def krea2_frame_prompts(player_style, weapon_style, brief=None):
 
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                 steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None,
-                                enemy_named=None):
+                                enemy_named=None, last_attack_frame=False):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames and an enemy, then a
     separate krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {"frames": [7 paths], "enemy": path|None,
     "portrait": path|None, "portraits": [4]|None}. `gfx` is a GFX_QUALITY_PROFILES entry -
     `player` sizes the 7 pose frames, `enemy` the foe sprites, `portrait` the HUD busts.
+    `last_attack_frame` gives every foe its ENEMY_STRIKE_FRAME as well.
 
     `brief` is a generate_theme_brief() dict (or None) supplying a concrete weapon object and
     a concrete enemy subject when the typed words were abstract. `enemy_named` is the enemy
@@ -7131,7 +7195,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     frame_prompts = krea2_frame_prompts(player_style, weapon_style, brief)
     for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
         _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
-    added, seeds = _krea2_add_enemy_variants(payload, enemy_style, esq, steps, "v6", species=species)
+    added, seeds = _krea2_add_enemy_variants(payload, enemy_style, esq, steps, "v6", species=species,
+                                             last_attack_frame=last_attack_frame)
 
     keys = V6_FRAME_NAMES + [f"enemy_{v}_{f}" for v, fs in added.items() for f in fs]
     t0 = time.time()
@@ -7265,7 +7330,8 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       steps=KREA2_STEPS_DEFAULT, player_image=None,
-                      sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT):
+                      sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT,
+                      last_attack_frame=False):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model.
@@ -7275,7 +7341,10 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gfx is a GFX_QUALITY_PROFILES entry (normal / optimized / reduced) giving the target
     px for each asset class - textures, player frames, enemy sprites, HUD portraits.
     gfx_name is the plain dropdown key that gfx was resolved from, kept on the bundle so
-    the History window can show which quality tier the assets were rendered at."""
+    the History window can show which quality tier the assets were rendered at.
+    last_attack_frame is the Options toggle of that name: every foe also gets the frame
+    game.js shows on the tick its blow lands (ENEMY_STRIKE_FRAME), and the run is saved as
+    frame version 2."""
     global gen_progress
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     gen_progress["is_generating"] = True
@@ -7285,7 +7354,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["total_steps"] = 4
     gen_progress["story"] = None
     gen_progress["phase"] = ""
-    PROGRESS.begin_plan(_plan_v6(steps, sound_mode))
+    PROGRESS.begin_plan(_plan_v6(steps, sound_mode, last_attack_frame))
 
     def _b64(path):
         with open(path, "rb") as tf:
@@ -7328,7 +7397,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(named["text"]["player"], named["text"]["weapon"],
                                              named["text"]["enemy"], steps, gfx, brief,
-                                             enemy_named=named["enemy"])
+                                             enemy_named=named["enemy"],
+                                             last_attack_frame=last_attack_frame)
 
         # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
         # card rather than competing with them. Both calls are skippable via sound_mode. Audio
@@ -7358,6 +7428,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # The "Graphics Quality" dropdown key these assets were rendered at
             # (normal / optimized / reduced). Read back by save_dungeon_session.
             "graphics_quality": gfx_name,
+            # 2 when the Last Attack Frame option was on for this run, so the foes below carry
+            # a "strike" frame; 1 otherwise. Read back by save_dungeon_session for History.
+            "frame_version": FRAME_VERSION_STRIKE if last_attack_frame else FRAME_VERSION_BASE,
             "wall_style": wall_style,
             # What the set designer resolved the typed words into, or None if it was
             # skipped or failed. Kept so a bad render can be diagnosed from the saved
@@ -7383,7 +7456,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             "enemy_sprites": [_b64(bundle["enemy"])] if bundle.get("enemy") else [],
             # walker / flyer / boss - the frontend picks one at random on each battle entry.
             # {variant: {frame: dataurl}} - idle/attack for every foe, plus block for the two
-            # that fight on the ground. Always an object, never a bare string.
+            # that fight on the ground, plus strike on a frame version 2 run. Always an object,
+            # never a bare string.
             "enemy_variants": ({v: {f: _b64(p) for f, p in fr.items()}
                                 for v, fr in bundle["enemies"].items()}
                                if bundle.get("enemies") else None),
@@ -7501,6 +7575,14 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             # sessions saved before this was recorded have neither.
             "quality": bundle.get("graphics_quality", ""),
             "quality_text": GFX_QUALITY_LABELS.get(bundle.get("graphics_quality", ""), ""),
+            # 2 = made with the Last Attack Frame option on. strike_frames names the foes that
+            # really came out of generation holding one, since the quality gate can drop a pose
+            # frame - so a version 2 run whose boss lost its strike frame says so in History.
+            # Sessions saved before this existed have neither key; list_dungeon_sessions reads
+            # a missing frame_version as 1.
+            "frame_version": bundle.get("frame_version", FRAME_VERSION_BASE),
+            "strike_frames": [v for v, fr in (bundle.get("enemy_variants") or {}).items()
+                              if isinstance(fr, dict) and fr.get(ENEMY_STRIKE_FRAME)],
             "wall_style": wall_style or "",
             "player_style": (player_style or "").strip(),
             "weapon_style": (weapon_style or "").strip(),
@@ -7561,6 +7643,8 @@ def list_dungeon_sessions():
             with open(meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
             meta["id"] = name          # the folder is the truth, whatever the file says
+            # Every run saved before the Last Attack Frame option existed is frame version 1.
+            meta.setdefault("frame_version", FRAME_VERSION_BASE)
             out.append(meta)
         except Exception as e:
             print(f"[history] skipping {name} ({e})")
@@ -7758,6 +7842,9 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 # -> normal. Resolves to a per-asset-class px profile. v5/v6 only.
                 graphics_quality = data.get("graphics_quality", GFX_QUALITY_DEFAULT)
                 gfx = _gfx_profile(graphics_quality)
+                # Options' "Last Attack Frame" toggle: one more frame per foe, shown when its
+                # blow lands. v6 only; absent (an older page) means off.
+                last_attack_frame = bool(data.get("last_attack_frame", False))
                 # krea2 steps was a UI input once, never touched - run_batch_* just uses
                 # KREA2_STEPS_DEFAULT now.
 
@@ -7801,13 +7888,15 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     t = threading.Thread(target=run_batch_v6_krea,
                                          args=(wall_style, player_style, weapon_style, enemy_style),
                                          kwargs={"player_image": player_image, "sound_mode": sound_mode,
-                                                 "gfx": gfx, "gfx_name": graphics_quality},
+                                                 "gfx": gfx, "gfx_name": graphics_quality,
+                                                 "last_attack_frame": last_attack_frame},
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,
                                          args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
                                          daemon=True)
-                print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx}")
+                print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx} "
+                      f"last_attack_frame={last_attack_frame}")
                 t.start()
                 GEN_THREAD = t
                 return

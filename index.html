@@ -535,6 +535,23 @@
       color: #ffffff;
       letter-spacing: 0.04em;
     }
+    /* A row's frame version (buildFrameVersionTag in game.js): a sunken grey chip for version 1,
+       which is every run made without Last Attack Frame, and the same chip on a pale amber
+       ground for version 2, so the runs that carry the strike frame pick out of a long list. */
+    .hist-frame-ver {
+      background: #e7e7e7;
+      color: #334155;
+      border-top: 1px solid #808080;
+      border-left: 1px solid #808080;
+      border-right: 1px solid #ffffff;
+      border-bottom: 1px solid #ffffff;
+      letter-spacing: 0.04em;
+      cursor: help;
+    }
+    .hist-frame-ver--v2 {
+      background: #fde68a;
+      color: #713f12;
+    }
     /* A starred row's trash can, locked. The 🔒 is an emoji, which ignores `color`, so the
        etched-grey disabled label the Undo button uses would not show - fade the whole button
        instead, and hold its bevel up so a click on it does not look like it went in. */
@@ -920,6 +937,27 @@
             </select>
             <!-- Hidden for now - may be shown again later. -->
             <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
+          </div>
+
+          <!-- Last Attack Frame: one more frame per foe, swapped in on the tick its blow lands
+               instead of leaving the wind-up's attack frame up for the whole attack. A pair of
+               buttons like the difficulty row rather than a dropdown, so the arrow keys walk
+               across it instead of being swallowed by a <select>. game.js (setLastAttackFrame)
+               keeps the pick pressed in and remembers it across reloads. -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800" id="lastAttackFrameLabel">
+              Last Attack Frame:
+            </label>
+            <div id="lastAttackFrameRow" class="flex gap-1.5" role="group" aria-labelledby="lastAttackFrameLabel">
+              <button type="button" data-last-attack-frame="off" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="Foes hold their attack frame for the whole attack. New dungeons are frame version 1.">
+                <span class="text-xs">Off</span>
+              </button>
+              <button type="button" data-last-attack-frame="on" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="Foes get one more frame, shown the moment their attack lands. New dungeons are frame version 2 and take a little longer to create.">
+                <span class="text-xs">On</span>
+              </button>
+            </div>
           </div>
 
           <div class="flex flex-col gap-1.5">

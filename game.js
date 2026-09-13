@@ -24,6 +24,8 @@
     const soundModeSelect = document.getElementById('soundModeSelect');
     const difficultyRow = document.getElementById('difficultyRow');
     const gridDesc = document.getElementById('gridDesc');
+    // Options' Off / On pair for Last Attack Frame - see setLastAttackFrame.
+    const lastAttackFrameRow = document.getElementById('lastAttackFrameRow');
 
     // Maze size is a three-way difficulty pick, not a free slider - one knob with three
     // meanings instead of a number nobody knows how to read. 111 is the new ceiling
@@ -77,6 +79,12 @@
       exitHallCells: 3
     };
     let selectedDifficulty = 'medium';
+    // LAST ATTACK FRAME. A foe's attack frame goes up with its telegraph, well before the blow
+    // lands. On, CREATE asks the server for one more frame per foe - its strike - which
+    // drawEnemyBody swaps in on the tick the blow actually lands, and the run is saved as frame
+    // version 2. The flag gates that swap too, so turning it back off puts every dungeon,
+    // version 2 ones included, back on the attack frame for the whole attack.
+    let lastAttackFrameOn = false;
     const wallPromptInput = document.getElementById('wallPromptInput');
     const playerPromptInput = document.getElementById('playerPromptInput');
     const playerFileInput = document.getElementById('playerFileInput');
@@ -1333,6 +1341,34 @@
     });
     setDifficulty(selectedDifficulty);
 
+    // Last Attack Frame's Off / On pair, drawn like the difficulty row: the pick stays pressed
+    // in. Unlike difficulty it sticks across reloads - it is a way of playing being tried out
+    // rather than a per-dungeon pick, and a refresh that quietly turned it off would cost a
+    // whole generation made without the frame.
+    const LAST_ATTACK_FRAME_KEY = 'comfycrawler.lastAttackFrame';
+
+    function setLastAttackFrame(on) {
+      lastAttackFrameOn = !!on;
+      if (!lastAttackFrameRow) return;
+      lastAttackFrameRow.querySelectorAll('.last-attack-frame-btn').forEach((btn) => {
+        const picked = (btn.dataset.lastAttackFrame === 'on') === lastAttackFrameOn;
+        btn.classList.toggle('is-selected', picked);
+        btn.setAttribute('aria-pressed', picked ? 'true' : 'false');
+      });
+    }
+
+    if (lastAttackFrameRow) {
+      lastAttackFrameRow.addEventListener('click', (e) => {
+        const btn = e.target.closest('.last-attack-frame-btn');
+        if (!btn) return;
+        setLastAttackFrame(btn.dataset.lastAttackFrame === 'on');
+        try { localStorage.setItem(LAST_ATTACK_FRAME_KEY, lastAttackFrameOn ? 'on' : 'off'); }
+        catch (_) { /* storage disabled or full - the pick just won't stick */ }
+      });
+    }
+    try { setLastAttackFrame(localStorage.getItem(LAST_ATTACK_FRAME_KEY) === 'on'); }
+    catch (_) { setLastAttackFrame(false); }
+
     btnSettings.addEventListener('click', () => {
       modalSettings.classList.remove('hidden');
       focusFirstIn(modalSettings, btnSaveSettings);
@@ -2138,6 +2174,7 @@
         swoopTimer: 0,
         blockTimer: 0,   // >0 = guarding; a player strike caught on it does no damage
         punishTimer: 0,  // walker: >0 = still recovering from its own attack, can't guard (the opening)
+        strikeLanded: false, // this attack's blow has landed: draw the strike frame (Last Attack Frame)
         atkCount: 0,     // boss: swings taken in the current patrol phase (3 -> hunt)
         hunting: false,  // boss: walking the player down instead of drifting left/right
         chargeCount: 0,  // boss: swings thrown since its last charge (5 -> the charge)
@@ -2559,6 +2596,7 @@
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
       e.punishTimer = 0;   // walker: frames left in the opening after its own attack
+      e.strikeLanded = false;   // the current attack's blow has landed - see landEnemyStrike
       e.deathFade = 0;
       // Circler: half a circle apart, around a centre at its own spawn x, so two of them are
       // on opposite sides of their patterns and the player never faces both low points at once.
@@ -3239,6 +3277,11 @@
     // on the shield is a property of the move rather than of the creature throwing it - the
     // boss's charge is the only one so far, and it takes the whole bar.
     function landEnemyStrike(e, dmg, dodgeMsg, blockMsg, hitLabel, opts) {
+      // This tick is the blow, whatever it turns out to do to the player. With Last Attack
+      // Frame on, the renderer swaps the foe from its attack frame (the wind-up) to its strike
+      // frame from here to the end of the attack - see drawEnemyBody. Cleared by tickEnemyAI as
+      // soon as the foe leaves the attack state.
+      e.strikeLanded = true;
       const tx = 160 + (e.x || 0) * 0.4;
       // 44px is a swing's reach. opts.reach widens it for a move that is not a swing - the
       // boss's charge is its whole body coming down a line, so getting clear of it means
@@ -3427,6 +3470,12 @@
       // Frames left with the guard forced down (the boss's charge recovery). Same deal - real
       // elapsed time, whatever the foe is doing with the rest of itself.
       if (e.noBlockTimer > 0) e.noBlockTimer--;
+      // The strike frame belongs to ONE attack: from the blow (landEnemyStrike) to the moment
+      // the foe leaves the attack state. Dropped here, ahead of anything below that could put
+      // it back into that state, because the boss's rush is 'attack' for its whole run-in and
+      // only lands at the end of it - a flag left over from its last swing would show the
+      // impact before the charge had reached anyone.
+      if (e.state !== 'attack') e.strikeLanded = false;
 
       // A boss mid-charge is not running the ordinary AI at all - see tickBossCharge.
       if (e.special && e.special !== 'none') { tickBossCharge(e, cfg); return; }
@@ -5128,7 +5177,12 @@
           frame = frames.idle;
           // Attack wins over block: the AI clears blockTimer when it commits to a strike, so
           // these do not overlap in practice, but the strike is the one that must read.
-          if (e.state === 'attack' || e.state === 'telegraph') frame = frames.attack || frame;
+          // The attack frame goes up with the telegraph, well before the blow lands. With Last
+          // Attack Frame on, the tick it DOES land swaps in the strike frame for the rest of the
+          // attack; a dungeon generated without one (every frame version 1 run) has no strike
+          // frame and simply stays on the attack frame, exactly as it did before.
+          if (e.state === 'attack' && e.strikeLanded && lastAttackFrameOn && frames.strike) frame = frames.strike;
+          else if (e.state === 'attack' || e.state === 'telegraph') frame = frames.attack || frame;
           else if (e.blockTimer > 0) frame = frames.block || frame;
           // Scale EVERY frame by the idle's content box. Sizing each frame on its own box
           // would shrink the whole foe whenever it lunged, since a thrust-out limb measures
@@ -8688,7 +8742,9 @@
             enemy_image: attachedImages.enemy || null,
             mode: activeMode,
             sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound',
-            graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal'
+            graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal',
+            // One more frame per foe, shown when its blow lands - see lastAttackFrameOn.
+            last_attack_frame: lastAttackFrameOn
           })
         });
 
@@ -8931,6 +8987,7 @@
         tag.title = 'This is the dungeon running behind this window';
         titleLine.appendChild(tag);
       }
+      titleLine.appendChild(buildFrameVersionTag(entry));
       col.appendChild(titleLine);
 
       const cast = document.createElement('div');
@@ -9001,6 +9058,44 @@
 
       paintHistoryFavorite(row, entry);
       return row;
+    }
+
+    // Which frame version a saved run was generated as. 1 is every run made without Last Attack
+    // Frame - including all of those saved before the option existed, which the server reports
+    // as 1 - and 2 is a run whose foes were drawn with a strike frame. Sits in the title line
+    // rather than the info line below it, because that line turns into a marquee when it runs
+    // long and would carry the version off the edge with it.
+    function buildFrameVersionTag(entry) {
+      const version = Number(entry.frame_version) === 2 ? 2 : 1;
+      const tag = document.createElement('span');
+      tag.className = 'hist-frame-ver text-[9px] font-black px-1.5 py-0.5 shrink-0'
+        + (version === 2 ? ' hist-frame-ver--v2' : '');
+      tag.textContent = 'FRAME V' + version;
+      if (version === 1) {
+        tag.title = 'Frame version 1 - its foes hold their attack frame for the whole attack,'
+          + ' wind-up and hit alike.';
+        return tag;
+      }
+      let tip = 'Frame version 2 - made with Last Attack Frame on: its foes switch to a strike'
+        + ' frame the moment their attack lands.';
+      // The quality gate can drop a pose frame it could not get framed, so say which foes it
+      // took - the others play that moment on their attack frame. Only when the list was
+      // recorded at all.
+      if (Array.isArray(entry.strike_frames)) {
+        const lost = ENEMY_VARIANT_KEYS.filter(k => !entry.strike_frames.includes(k));
+        if (lost.length === ENEMY_VARIANT_KEYS.length) {
+          tip += '\nNo foe came out of generation with one, so it plays like version 1.';
+        } else if (lost.length) {
+          tip += '\nNo strike frame on the ' + lost.join(' or ') + ' - generation dropped it.';
+        }
+      }
+      // The Options toggle also decides whether the frame is SHOWN, so a version 2 run replayed
+      // with it off looks like version 1 - worth saying before that reads as a broken run.
+      if (!lastAttackFrameOn) {
+        tip += '\nLast Attack Frame is off in Options, so it plays like version 1 right now.';
+      }
+      tag.title = tip;
+      return tag;
     }
 
     // The star and the trash can on one row, drawn from entry.favorite. Kept apart from
