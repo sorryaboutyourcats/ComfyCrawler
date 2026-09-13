@@ -6573,7 +6573,9 @@
       // Every door that survives is still a cut tile on the way to the Exit, still mandatory,
       // and still opened in order. Measured over 3000 dungeons a side, this fires on 0.8% of
       // Easy, 2.4% of Medium and 7.5% of Hard, and gives up one door when it does - Hard's mean
-      // door count goes 2.94 -> 2.86.
+      // door count goes 2.94 -> 2.86. When that was the maze's LAST door (Easy plans only one)
+      // the boss is left with nothing in front of it, and generateAuthentic3DMaze throws the
+      // whole carve away and starts again rather than keep it.
       //
       // Dropping a tier only ever ADDS anchors - tier t accepts every cell tier t+1 did, plus
       // the region in front of it - so the search stops at the highest tier that clears
@@ -6795,6 +6797,8 @@
         // ==========================================
     // AUTHENTIC 3DMAZE GENERATOR (GOLDEN STANDARD - EXACT TILES)
     // ==========================================
+    // Backstop on generateAuthentic3DMaze's reroll - see the note there.
+    const MAZE_BUILD_ATTEMPTS = 25;
     function generateAuthentic3DMaze(numGrids = DIFFICULTIES.medium.grids) {
       numGrids = Math.max(10, Math.min(MAX_GRIDS, numGrids));
 
@@ -6812,10 +6816,97 @@
       MAP_WIDTH = cellCols * 2 + 1;
       MAP_HEIGHT = cellRows * 2 + 1;
 
-      MAP = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(1));
       lanternList = [];
       doorList = [];
       switchList = [];
+
+      // The boss is only the last fight if a door stands in front of it, and nothing up to
+      // here promises one. relocateExit gives doors up when the region past them has no room
+      // for the stairs' hallway - and Easy only ever plans ONE door, so giving it up leaves the
+      // boss in the spawn's own region, reachable as the first or second fight of the run.
+      // Measured over 8000 Easy mazes that is ~0.5% of them, and a bigger maze is no cure: the
+      // rate swings with the grid's shape rather than its size (0.1% at 36 grids, 1.0% at 52)
+      // and only reaches zero past Medium. So check the finished maze and carve a new one when
+      // it came out that way.
+      //
+      // The stairs stand in for the boss here, which lets the check run before the lantern bake
+      // and the markers rather than after them: the boss stands in the stairs' hallway, and
+      // that hallway has no door in it, so one is reachable without a door exactly when the
+      // other is. A maze too short for planGates to gate at all (gatePlan null - none of 112000
+      // measured at 33 to 111 grids were) is let through, since no reroll would give it
+      // a door. The attempt cap is only a backstop; at ~0.5% a second reroll is already rare.
+      for (let attempt = 1; ; attempt++) {
+        const gatePlan = carveAndGateMaze(cellRows, cellCols, targetCells);
+        const reachable = _flood(startRoom, (x, y) => MAP[y][x] === 0);
+        if (!gatePlan || !reachable.has(_tileKey(exitRoom.x, exitRoom.y))) break;
+        if (attempt >= MAZE_BUILD_ATTEMPTS) {
+          console.info(`[maze] still no door before the boss after ${attempt} attempts - keeping it`);
+          break;
+        }
+        console.info(`[maze] attempt ${attempt}: boss reachable without a door - carving a new maze`);
+      }
+
+      // Add Lanterns to Walls - never beside a door or switch (see _nearGateOrSwitch above).
+      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+        for (let x = 1; x < MAP_WIDTH - 1; x++) {
+          if (MAP[y][x] === 1) {
+            const hasAdjacentFloor = (MAP[y-1][x] === 0 || MAP[y+1][x] === 0 || MAP[y][x-1] === 0 || MAP[y][x+1] === 0);
+            if (hasAdjacentFloor && (x + y) % 3 === 0 && !_nearGateOrSwitch(x, y)) {
+              MAP[y][x] = 2;
+              lanternList.push({ x, y });
+            }
+          }
+        }
+      }
+
+      // The lantern set is final, so bake its light field now - once - instead of re-summing
+      // it per pixel every frame. See buildLightMaps.
+      buildLightMaps();
+
+      passagesList = [];
+      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+        for (let x = 1; x < MAP_WIDTH - 1; x++) {
+          if (MAP[y][x] === 0) {
+            passagesList.push({ x, y });
+          }
+        }
+      }
+
+      // Needs the finished passagesList - and the finished gates, since a marker parked on a
+      // door tile would be unreachable until its switch was thrown.
+      placeEnemyMarkers();
+
+      // GUARANTEE player spawns facing the OPEN corridor (never facing a wall!)
+      let spawnDir = 1;
+      if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x + 1] === 0) spawnDir = 1;
+      else if (MAP[startRoom.y + 1] && MAP[startRoom.y + 1][startRoom.x] === 0) spawnDir = 2;
+      else if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x - 1] === 0) spawnDir = 3;
+      else if (MAP[startRoom.y - 1] && MAP[startRoom.y - 1][startRoom.x] === 0) spawnDir = 0;
+
+      player.gridX = startRoom.x;
+      player.gridY = startRoom.y;
+      player.dirIndex = spawnDir;
+      player.posX = startRoom.x + 0.5;
+      player.posY = startRoom.y + 0.5;
+      player.angle = dirToAngle(spawnDir);
+      player.isAnimating = false;
+
+      visitedTiles.clear();
+      visitedTiles.add(`${startRoom.x},${startRoom.y}`);
+      totalMoves = 0;
+      queuedAction = null;
+
+      if (mapProgressBadge) {
+        mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
+      }
+    }
+
+    // One carve of the maze proper - the tree, its gates, its loops and the stairs' hallway,
+    // in the order the note below explains - onto a fresh MAP of the size the caller already
+    // set. Returns the gate plan (null when the maze was too short to gate), which
+    // generateAuthentic3DMaze uses to decide whether this carve is one it keeps.
+    function carveAndGateMaze(cellRows, cellCols, targetCells) {
+      MAP = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(1));
 
       const visitedCells = Array(cellRows).fill(0).map(() => Array(cellCols).fill(false));
       const stack = [];
@@ -6912,60 +7003,7 @@
       const gateRegions = braidMaze(cellRows, cellCols, gatePlan);
       relocateExit(gatePlan, gateRegions);
       placeGatesAndSwitches(gatePlan);
-
-      // Add Lanterns to Walls - never beside a door or switch (see _nearGateOrSwitch above).
-      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
-        for (let x = 1; x < MAP_WIDTH - 1; x++) {
-          if (MAP[y][x] === 1) {
-            const hasAdjacentFloor = (MAP[y-1][x] === 0 || MAP[y+1][x] === 0 || MAP[y][x-1] === 0 || MAP[y][x+1] === 0);
-            if (hasAdjacentFloor && (x + y) % 3 === 0 && !_nearGateOrSwitch(x, y)) {
-              MAP[y][x] = 2;
-              lanternList.push({ x, y });
-            }
-          }
-        }
-      }
-
-      // The lantern set is final, so bake its light field now - once - instead of re-summing
-      // it per pixel every frame. See buildLightMaps.
-      buildLightMaps();
-
-      passagesList = [];
-      for (let y = 1; y < MAP_HEIGHT - 1; y++) {
-        for (let x = 1; x < MAP_WIDTH - 1; x++) {
-          if (MAP[y][x] === 0) {
-            passagesList.push({ x, y });
-          }
-        }
-      }
-
-      // Needs the finished passagesList - and the finished gates, since a marker parked on a
-      // door tile would be unreachable until its switch was thrown.
-      placeEnemyMarkers();
-
-      // GUARANTEE player spawns facing the OPEN corridor (never facing a wall!)
-      let spawnDir = 1;
-      if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x + 1] === 0) spawnDir = 1;
-      else if (MAP[startRoom.y + 1] && MAP[startRoom.y + 1][startRoom.x] === 0) spawnDir = 2;
-      else if (MAP[startRoom.y] && MAP[startRoom.y][startRoom.x - 1] === 0) spawnDir = 3;
-      else if (MAP[startRoom.y - 1] && MAP[startRoom.y - 1][startRoom.x] === 0) spawnDir = 0;
-
-      player.gridX = startRoom.x;
-      player.gridY = startRoom.y;
-      player.dirIndex = spawnDir;
-      player.posX = startRoom.x + 0.5;
-      player.posY = startRoom.y + 0.5;
-      player.angle = dirToAngle(spawnDir);
-      player.isAnimating = false;
-
-      visitedTiles.clear();
-      visitedTiles.add(`${startRoom.x},${startRoom.y}`);
-      totalMoves = 0;
-      queuedAction = null;
-
-      if (mapProgressBadge) {
-        mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
-      }
+      return gatePlan;
     }
 
     // Scatter the dungeon's foes over its corridors.
