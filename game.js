@@ -1565,6 +1565,7 @@
       setupBurstKey = burstKey || null;
       setupBurstAt = now;
       updateUndoRedoButtons();
+      syncFillInLabel();
     }
 
     // Run a multi-field action - a Quick idea, a History refill - as a single undo step
@@ -1585,6 +1586,7 @@
       try { applySetupSnapshot(setupPresent); } finally { setupHistorySuspended = false; }
       setupBurstKey = null;     // the next keystroke starts a fresh run, never joins the old one
       updateUndoRedoButtons();
+      syncFillInLabel();
 
       // Show what moved. Undo is usually pressed from the button at the bottom of the screen,
       // with the fields it rewrote some way up it, so every field that changed flashes and the
@@ -1605,6 +1607,30 @@
 
     function undoSetup() { stepSetupHistory(setupPast, setupFuture); }
     function redoSetup() { stepSetupHistory(setupFuture, setupPast); }
+
+    // Keeps the button below reading "Fill-in" while any mad-lib field is still empty, and
+    // "Randomize all" once every one of them already has something in it to replace - called
+    // from every place above that can change a field (typing, undo/redo; Quick idea/History
+    // Prompts/image attach all end in recordSetupChange too). Self-contained (its own DOM
+    // lookups, and fillInFlight/fillInNoticeTimer are declared further down the file) rather
+    // than closing over anything from the button's own wiring, since this runs long before that
+    // wiring exists in source order - see the call sites above for why that is still safe: none
+    // of them can fire until the whole script, that wiring included, has already run once.
+    // Skipped mid-request or while a result/error is flashing on the button; both put the right
+    // label back themselves when they are done.
+    function syncFillInLabel() {
+      if (typeof fillInFlight !== 'undefined' && (fillInFlight || fillInNoticeTimer)) return;
+      const btn = document.getElementById('btnFillIn');
+      if (!btn) return;
+      const label = btn.querySelector('span');
+      // A field with a photo attached is disabled and stands as already answered - the photo -
+      // same rule Fill-in itself uses, so attaching a photo to every field also flips this.
+      const allFilled = SETUP_TEXT_FIELDS.every(([, el]) => el.disabled || el.value.trim());
+      if (label) label.textContent = allFilled ? '🔀 Randomize all' : '🔮 Fill-in';
+      btn.title = allFilled
+        ? 'Every field is filled in - randomize all four'
+        : "Fill in every empty field to go with what you've typed";
+    }
 
     SETUP_TEXT_FIELDS.forEach(([key, el]) => {
       el.addEventListener('input', (e) => {
@@ -1714,6 +1740,10 @@
       'GTA Vice City':     { player: '"Carl Johnson"',        weapon: 'golf club',        enemy: '"Teletubby"' },
       'Colorful town of "Mow Meow"': { player: '"Salescat" the colorful cat', weapon: 'ryobi lawnmower', enemy: 'grass' },
       'Mixer streaming platform': { player: 'The most like omg popular streamer', weapon: 'Elgato Stream Deck', enemy: 'troll doll' },
+      // Quotes on the wall and player push both down the named-entity path (same reasoning as
+      // manhattan/Sonic/Elon Musk above): the wall renders the real mascot's forest and the
+      // player draws Smokey himself, rather than a generic "bear" bucket.
+      '"Smokey the bear" forest': { player: '"Smokey the bear"', weapon: 'fire extinguisher', enemy: 'fire pokemon' },
       // Secret 30th idea - see the shuffle-unlock block below. Not a named preset: "LSD dream
       // emulator" hits the lsddream bucket in _STYLE_BUCKETS_NAMED (server.py) on its own, so
       // the wall renders the game's PS1-collage look untouched, no quotes needed.
@@ -8770,10 +8800,15 @@
     const btnCreateLabel = btnCreate.querySelector('span');
     const btnCreateText = btnCreateLabel ? btnCreateLabel.textContent : '';
     let settlingWatchActive = false;
-    // Set while Fill-in waits on the server. The server handles one request at a time, so a
-    // CREATE pressed meanwhile would sit behind the text call - CREATE stays disabled for it,
-    // and the settling watcher must not re-enable it early.
+    // Set while Fill-in/Randomize all waits on the server. The server handles one request at a
+    // time, so a CREATE pressed meanwhile would sit behind the text call - CREATE stays disabled
+    // for it, and the settling watcher must not re-enable it early.
     let fillInFlight = false;
+    // Non-null while the button is showing a temporary result/error ("✓ All filled", "⚠ Try
+    // again") instead of its resting label - syncFillInLabel leaves it alone until that clears.
+    // Top-level (not declared inside the button's own wiring below) so syncFillInLabel, called
+    // from the setup-history functions far above, can see it too.
+    let fillInNoticeTimer = null;
 
     function setCreateSettling(settling) {
       btnCreate.disabled = settling || fillInFlight;
@@ -8810,49 +8845,55 @@
       }
     }
 
-    // ---- Fill-in: write every empty mad-lib field to go with what is already typed ----------
-    // All four empty and the server invents a whole set; any typed at all and only the gaps are
-    // written, around them. A field with a photo attached is disabled and counts as filled - the
-    // photo is the answer for that line. The result lands as one undo step, and only in fields
-    // that are STILL empty when it arrives, so anything typed while waiting is never overwritten.
+    // ---- Fill-in / Randomize all: write mad-lib fields to go with what is already typed -----
+    // Any field empty (and at least one filled) -> Fill-in: only the gaps are written, around
+    // whatever is already there. Every field already filled -> the button reads "Randomize all"
+    // instead, and a click replaces all four with a whole new set, the same way a Quick idea
+    // does. All four empty is Fill-in too, and the server invents a whole set for that same
+    // reason - the two only differ once something is typed. A field with a photo attached is
+    // disabled and counts as filled either way - the photo is the answer for that line, and
+    // this never overwrites it or asks the model to replace it, only to write around it.
     const btnFillIn = document.getElementById('btnFillIn');
     if (btnFillIn) {
       const btnFillInLabel = btnFillIn.querySelector('span');
-      const btnFillInText = btnFillInLabel ? btnFillInLabel.textContent : '';
-      const btnFillInTitle = btnFillIn.title;
-      let fillInNoticeTimer = null;
 
       const fieldIsOpen = (el) => !el.disabled && !el.value.trim();
+      const allFieldsFilled = () => SETUP_TEXT_FIELDS.every(([, el]) => el.disabled || el.value.trim());
 
-      // A short word on the button itself, then back to normal - the setup row has no spare
-      // line for a message, and adding one would wrap it.
+      // A short word on the button itself, then back to whichever resting label fits the fields
+      // now - the setup row has no spare line for a message, and adding one would wrap it.
       const flashFillIn = (label, title) => {
         clearTimeout(fillInNoticeTimer);
         if (btnFillInLabel) btnFillInLabel.textContent = label;
         btnFillIn.title = title;
         fillInNoticeTimer = setTimeout(() => {
-          if (btnFillInLabel) btnFillInLabel.textContent = btnFillInText;
-          btnFillIn.title = btnFillInTitle;
+          fillInNoticeTimer = null;
+          syncFillInLabel();
         }, 2500);
       };
 
       btnFillIn.addEventListener('click', async () => {
         if (fillInFlight) return;
+        // Decided once, up front: everything below - what gets sent, the in-flight label, and
+        // which fields the reply is allowed to overwrite - follows this same call's answer, even
+        // if typing during the wait would have changed it.
+        const randomize = allFieldsFilled();
         const fields = {};
         SETUP_TEXT_FIELDS.forEach(([key, el]) => {
-          // A photo-filled field goes up as filled, described rather than blank.
-          fields[key] = el.disabled ? (el.value.trim() || 'an attached photo') : el.value.trim();
+          // A photo-filled field is described rather than blank either way, so the model still
+          // writes the other fields to go with it instead of inventing a hero that gets thrown
+          // away. Otherwise: Randomize all blanks every field out to ask for a whole new set;
+          // Fill-in sends each one as it stands, so only its own gaps come back.
+          fields[key] = el.disabled ? (el.value.trim() || 'an attached photo')
+                                    : (randomize ? '' : el.value.trim());
         });
-        if (!SETUP_TEXT_FIELDS.some(([, el]) => fieldIsOpen(el))) {
-          flashFillIn('✓ All filled', 'Every field is already filled in - clear one to have it filled.');
-          return;
-        }
 
         fillInFlight = true;
         clearTimeout(fillInNoticeTimer);
+        fillInNoticeTimer = null;
         btnFillIn.disabled = true;
-        btnFillIn.title = btnFillInTitle;
-        if (btnFillInLabel) btnFillInLabel.textContent = '⏳ Filling...';
+        btnFillIn.title = '';
+        if (btnFillInLabel) btnFillInLabel.textContent = randomize ? '⏳ Randomizing...' : '⏳ Filling...';
         setCreateSettling(false);   // fillInFlight holds it disabled
 
         let reply = null;
@@ -8872,19 +8913,22 @@
         } finally {
           fillInFlight = false;
           btnFillIn.disabled = false;
-          if (btnFillInLabel) btnFillInLabel.textContent = btnFillInText;
           setCreateSettling(false);
           watchForSettling();   // puts CREATE back the way the server actually is
         }
 
-        if (screenSetup.classList.contains('hidden')) return;   // left the menu meanwhile
+        if (screenSetup.classList.contains('hidden')) { syncFillInLabel(); return; }   // left the menu meanwhile
         if (error) { flashFillIn('⚠ Try again', error); return; }
 
         const got = (reply && reply.fields) || {};
         let firstFilled = null;
         asOneSetupStep(() => {
           SETUP_TEXT_FIELDS.forEach(([key, el]) => {
-            if (!got[key] || !fieldIsOpen(el)) return;
+            if (!got[key] || el.disabled) return;
+            // Fill-in only ever writes into a field still empty on arrival, so anything typed
+            // while waiting survives; Randomize all replaces every field regardless, same as a
+            // Quick idea, which is the point of asking for it by name.
+            if (!randomize && !fieldIsOpen(el)) return;
             el.value = got[key];
             if (!firstFilled) firstFilled = el;
           });
@@ -8892,9 +8936,11 @@
         if (firstFilled) {
           firstFilled.focus({ preventScroll: true });
         } else {
-          flashFillIn('⚠ Try again', 'The idea writer came back empty - press Fill-in again.');
+          flashFillIn('⚠ Try again', 'The idea writer came back empty - press the button again.');
         }
       });
+
+      syncFillInLabel();   // set the resting label for whatever the fields hold on page load
     }
 
     btnCreate.addEventListener('click', async () => {
