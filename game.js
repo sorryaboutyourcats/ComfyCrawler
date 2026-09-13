@@ -8770,9 +8770,13 @@
     const btnCreateLabel = btnCreate.querySelector('span');
     const btnCreateText = btnCreateLabel ? btnCreateLabel.textContent : '';
     let settlingWatchActive = false;
+    // Set while Fill-in waits on the server. The server handles one request at a time, so a
+    // CREATE pressed meanwhile would sit behind the text call - CREATE stays disabled for it,
+    // and the settling watcher must not re-enable it early.
+    let fillInFlight = false;
 
     function setCreateSettling(settling) {
-      btnCreate.disabled = settling;
+      btnCreate.disabled = settling || fillInFlight;
       if (btnCreateLabel) {
         btnCreateLabel.textContent = settling ? '⏳ CLEARING...' : btnCreateText;
       }
@@ -8804,6 +8808,93 @@
       } finally {
         settlingWatchActive = false;
       }
+    }
+
+    // ---- Fill-in: write every empty mad-lib field to go with what is already typed ----------
+    // All four empty and the server invents a whole set; any typed at all and only the gaps are
+    // written, around them. A field with a photo attached is disabled and counts as filled - the
+    // photo is the answer for that line. The result lands as one undo step, and only in fields
+    // that are STILL empty when it arrives, so anything typed while waiting is never overwritten.
+    const btnFillIn = document.getElementById('btnFillIn');
+    if (btnFillIn) {
+      const btnFillInLabel = btnFillIn.querySelector('span');
+      const btnFillInText = btnFillInLabel ? btnFillInLabel.textContent : '';
+      const btnFillInTitle = btnFillIn.title;
+      let fillInNoticeTimer = null;
+
+      const fieldIsOpen = (el) => !el.disabled && !el.value.trim();
+
+      // A short word on the button itself, then back to normal - the setup row has no spare
+      // line for a message, and adding one would wrap it.
+      const flashFillIn = (label, title) => {
+        clearTimeout(fillInNoticeTimer);
+        if (btnFillInLabel) btnFillInLabel.textContent = label;
+        btnFillIn.title = title;
+        fillInNoticeTimer = setTimeout(() => {
+          if (btnFillInLabel) btnFillInLabel.textContent = btnFillInText;
+          btnFillIn.title = btnFillInTitle;
+        }, 2500);
+      };
+
+      btnFillIn.addEventListener('click', async () => {
+        if (fillInFlight) return;
+        const fields = {};
+        SETUP_TEXT_FIELDS.forEach(([key, el]) => {
+          // A photo-filled field goes up as filled, described rather than blank.
+          fields[key] = el.disabled ? (el.value.trim() || 'an attached photo') : el.value.trim();
+        });
+        if (!SETUP_TEXT_FIELDS.some(([, el]) => fieldIsOpen(el))) {
+          flashFillIn('✓ All filled', 'Every field is already filled in - clear one to have it filled.');
+          return;
+        }
+
+        fillInFlight = true;
+        clearTimeout(fillInNoticeTimer);
+        btnFillIn.disabled = true;
+        btnFillIn.title = btnFillInTitle;
+        if (btnFillInLabel) btnFillInLabel.textContent = '⏳ Filling...';
+        setCreateSettling(false);   // fillInFlight holds it disabled
+
+        let reply = null;
+        let error = null;
+        try {
+          const res = await fetch(`${SERVER_URL}/api/fill_in`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(fields),
+          });
+          try { reply = await res.json(); } catch (err) { /* not JSON */ }
+          if (!res.ok || !reply || !reply.success) {
+            error = (reply && reply.error) || 'The server could not fill these in.';
+          }
+        } catch (err) {
+          error = 'Could not reach the server.';
+        } finally {
+          fillInFlight = false;
+          btnFillIn.disabled = false;
+          if (btnFillInLabel) btnFillInLabel.textContent = btnFillInText;
+          setCreateSettling(false);
+          watchForSettling();   // puts CREATE back the way the server actually is
+        }
+
+        if (screenSetup.classList.contains('hidden')) return;   // left the menu meanwhile
+        if (error) { flashFillIn('⚠ Try again', error); return; }
+
+        const got = (reply && reply.fields) || {};
+        let firstFilled = null;
+        asOneSetupStep(() => {
+          SETUP_TEXT_FIELDS.forEach(([key, el]) => {
+            if (!got[key] || !fieldIsOpen(el)) return;
+            el.value = got[key];
+            if (!firstFilled) firstFilled = el;
+          });
+        });
+        if (firstFilled) {
+          firstFilled.focus({ preventScroll: true });
+        } else {
+          flashFillIn('⚠ Try again', 'The idea writer came back empty - press Fill-in again.');
+        }
+      });
     }
 
     btnCreate.addEventListener('click', async () => {

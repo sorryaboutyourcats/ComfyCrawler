@@ -18,6 +18,7 @@ if sys.platform == "win32":
 import http.server
 import socketserver
 import urllib.request
+import urllib.error
 import urllib.parse
 import json
 import os
@@ -5679,6 +5680,234 @@ def generate_story_names(wall_style, player_style, enemy_style, image_name=None,
     return names
 
 
+# ---------------------------------------------------------------------------
+# Fill-in: the setup screen's 🔮 button writes whichever mad-lib fields are still empty
+# ---------------------------------------------------------------------------
+# Same Qwen3-VL-4B, same cached k_clip loader, same hand-built template as the naming call.
+# Every field the player already typed is written into the reply BEFORE the model starts, as
+# lines it has apparently already answered, and the reply is left open on the first empty
+# label. The model then only ever continues a form that already agrees with the player - it
+# never gets the chance to "improve" a kept field, and anything it does echo for one is ignored.
+# Called from the request handler, not a run thread, so it reports no PROGRESS.
+
+FILL_IN_FIELDS = ("wall", "player", "weapon", "enemy")
+FILL_IN_MAX_TOKENS = 120        # four short lines
+FILL_IN_TEMPERATURE = 0.95      # inventing, not sorting - the whole point is a surprise
+FILL_IN_MAX_WORDS = 12          # the longest Quick idea ("Clippy" the giant paperclip...) is 11
+FILL_IN_MAX_CHARS = 90
+FILL_IN_FIELD_MAX_CHARS = 200   # what the request is allowed to send per field
+
+_FILL_IN_LABELS = {"wall": "DUNGEON", "player": "PLAYER", "weapon": "WEAPON", "enemy": "ENEMY"}
+
+FILL_IN_SYSTEM = (
+    "You are the idea writer for a silly 1990s dungeon crawler. You fill in a four-line setup "
+    "form with short, funny, vivid picks. You never explain yourself and you never break format."
+)
+
+# A handful of the Quick ideas (PRESET_IDEAS in game.js), as the model's sense of the tone.
+# A random few are shown each call and in a random order, so an all-empty fill-in is not
+# anchored to the same example every time.
+_FILL_IN_EXAMPLES = (
+    ("Doom 2", "Doom guy", "chainsaw", '"Thomas the Tank Engine"'),
+    ("supermarket", "cashier", "shopping basket", "old person"),
+    ("Sega arcade", '"Goodcow" the cow', "Dreamcast controller", '"Sonic"'),
+    ("pizza toppings", "cat chef", "pepperoni", "pasta"),
+    ('"Apple Store"', '"Steve Jobs"', "sledgehammer", '"Clippy" the giant paperclip creature'),
+    ("NYC subway station", "MTA conductor", "huge MetroCard", "NYC subway train"),
+    ("italian restaurant", '"Will Smith"', "huge fork", "spaghetti monster"),
+    ("World of Warcraft", "Night Elf", "sentinel glaive", "Elf on a shelf"),
+    ("pet store", "Yorkshire Terrier", "whip", "bright stuffed animal"),
+    ("corn maze", "pickup truck robot", "pitchfork", "zombie animal"),
+    ("motherboard", "anime fluffy cat", "halberd", "anime villainess"),
+    ('Colorful town of "Mow Meow"', '"Salescat" the colorful cat', "ryobi lawnmower", "grass"),
+)
+FILL_IN_EXAMPLE_COUNT = 5
+
+# Only used when the dungeon line is one of the empty ones: a small model left to "invent a
+# place" at any temperature keeps landing on the same haunted castle. A nudge toward one kind of
+# place is enough to spread it out, and it is only a nudge - the model still picks the place.
+_FILL_IN_WALL_SPARKS = (
+    "a video game", "a real city or landmark", "a kind of store", "a food",
+    "a place in nature", "a website or app", "a holiday", "a workplace", "a toy or a hobby",
+    "a famous movie or TV show", "an old computer or console", "a sport", "a school subject",
+    "a weather or season", "a room in a house",
+)
+
+_FILL_IN_USER = """Fill in the setup form for a dungeon crawler. Every line is one short
+phrase of 1 to 8 words, never a sentence:
+
+DUNGEON is the place the dungeon is built out of - its walls, floors and whole look.
+PLAYER is the hero the player plays as.
+WEAPON is what the hero fights with.
+ENEMY is what the dungeon is full of.
+
+Rules:
+1. The best picks are an odd, funny crossover that still makes sense together.
+2. Put "double quotes" around a real, named person, character, brand or place - "Sonic",
+   "Steve Jobs", "Apple Store" - and around nothing else.
+3. Lines that are already filled in are the player's own picks. Make every new line go with
+   them.
+4. Write something new - do not copy the examples.
+
+Examples of finished forms:
+
+{examples}
+{spark}
+Reply with EXACTLY these four labels, each on its own line, in this order. No preamble, no
+markdown, no commentary:
+
+DUNGEON: <a place>
+PLAYER: <a hero>
+WEAPON: <a weapon>
+ENEMY: <an enemy>"""
+
+# Answers that are a blank the model failed to fill rather than a pick.
+_FILL_IN_BLANKS = frozenset((
+    "none", "n/a", "na", "unknown", "same", "same as above", "keep", "kept", "tbd", "empty",
+    "a place", "a hero", "a weapon", "an enemy", "dungeon", "player", "weapon", "enemy",
+))
+
+_FILL_IN_LABEL_RE = re.compile(r"^\s*(DUNGEON|WALL|PLAYER|HERO|WEAPON|ENEMY|ENEMIES)\s*:\s*(.*)$",
+                               re.IGNORECASE)
+_FILL_IN_LABEL_FIELD = {"dungeon": "wall", "wall": "wall", "player": "player", "hero": "player",
+                        "weapon": "weapon", "enemy": "enemy", "enemies": "enemy"}
+
+
+def _fill_in_reply_start(fields):
+    """The already-answered part of the reply: every kept line up to the first empty one, then
+    that empty line's label, left open for the model to finish."""
+    lines = []
+    for field in FILL_IN_FIELDS:
+        value = (fields.get(field) or "").strip()
+        if not value:
+            lines.append(_FILL_IN_LABELS[field] + ":")
+            break
+        lines.append(f"{_FILL_IN_LABELS[field]}: {value}")
+    return "\n".join(lines)
+
+
+def _fill_in_prompt(fields, rng=random):
+    """Same hand-built chat template as _story_prompt - see there for why - with the reply
+    already begun on _fill_in_reply_start(fields). `fields` maps every FILL_IN_FIELDS key to
+    the player's text, "" for a field to fill in."""
+    shown = rng.sample(_FILL_IN_EXAMPLES, FILL_IN_EXAMPLE_COUNT)
+    examples = "\n\n".join(
+        f"DUNGEON: {w}\nPLAYER: {p}\nWEAPON: {we}\nENEMY: {e}" for w, p, we, e in shown)
+    later = [f"{_FILL_IN_LABELS[f]}: {fields[f].strip()}" for f in FILL_IN_FIELDS
+             if (fields.get(f) or "").strip()]
+    spark = ""
+    if not (fields.get("wall") or "").strip():
+        spark = f"\nFor the DUNGEON this time, pick something like {rng.choice(_FILL_IN_WALL_SPARKS)}.\n"
+    user = _FILL_IN_USER.format(examples=examples, spark=spark)
+    if later:
+        # Kept lines after the first empty one are not in the reply start, so every kept line
+        # is also listed up front.
+        user += "\n\nThe player already filled in:\n" + "\n".join(later)
+    return (
+        "<|im_start|>system\n" + FILL_IN_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n" + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n" + _fill_in_reply_start(fields)
+    )
+
+
+def _fill_in_value(raw):
+    """One answer tidied into something a mad-lib field can hold, or None. Quotes are kept -
+    they are what sends a name down the named-entity path - so only unbalanced ones go."""
+    text = _ascii_ify(raw or "").strip()
+    text = re.sub(r"^[<\[(]+|[>\])]+$", "", text).strip()
+    text = text.rstrip(".,;:!").strip()
+    words = text.split()
+    if len(words) > FILL_IN_MAX_WORDS:
+        words = words[:FILL_IN_MAX_WORDS]
+    while words and words[-1].lower().strip('"') in _STORY_TRAILING_STOPWORDS:
+        words.pop()
+    text = " ".join(words)
+    if len(text) > FILL_IN_MAX_CHARS:
+        text = text[:FILL_IN_MAX_CHARS].rsplit(" ", 1)[0]
+    if text.count('"') % 2:
+        text = text.replace('"', "")
+    text = text.strip().rstrip(".,;:!").strip()
+    if not text or text.lower().strip('"') in _FILL_IN_BLANKS or "<" in text or ">" in text:
+        return None
+    return text
+
+
+def parse_fill_in(raw, fields):
+    """Read a fill-in reply. `raw` is everything after the prompt - _fill_in_reply_start is put
+    back on the front here, so the first answer has its label. Returns {field: text} for the
+    EMPTY fields only; a field that did not come back usable is left out. A kept field is never
+    in the result, and an answer that just copies a kept field is not a pick."""
+    missing = [f for f in FILL_IN_FIELDS if not (fields.get(f) or "").strip()]
+    kept = {(fields.get(f) or "").strip().lower() for f in FILL_IN_FIELDS} - {""}
+    text = _fill_in_reply_start(fields) + (raw or "")
+    got = {}
+    for line in text.splitlines():
+        m = _FILL_IN_LABEL_RE.match(_MARKDOWN_SYMBOL_RE.sub("", line))
+        if not m:
+            continue
+        field = _FILL_IN_LABEL_FIELD[m.group(1).lower()]
+        if field not in missing or field in got:
+            continue
+        value = _fill_in_value(m.group(2))
+        if value and value.lower() not in kept:
+            got[field] = value
+    return got
+
+
+def generate_fill_in(fields):
+    """Ask Qwen3-VL for every empty field in `fields`, retrying once on a fresh seed if any of
+    them did not come back. Returns what it got ({} if nothing). Raises only when ComfyUI could
+    not be reached at all, so the page can say so."""
+    fields = {f: (fields.get(f) or "").strip() for f in FILL_IN_FIELDS}
+    missing = [f for f in FILL_IN_FIELDS if not fields[f]]
+    got = {}
+    last_error = None
+    for attempt in range(2):
+        want = {f: (fields[f] or got.get(f, "")) for f in FILL_IN_FIELDS}
+        if all(want.values()):
+            break
+        payload = {
+            # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+            "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                       "class_type": "CLIPLoader"},
+            "fill_gen": {
+                "inputs": {
+                    "clip": ["k_clip", 0],
+                    "prompt": _fill_in_prompt(want),
+                    "max_length": FILL_IN_MAX_TOKENS,
+                    "sampling_mode": "on",
+                    "sampling_mode.temperature": FILL_IN_TEMPERATURE,
+                    "sampling_mode.top_k": 64,
+                    "sampling_mode.top_p": 0.95,
+                    "sampling_mode.min_p": 0.05,
+                    "sampling_mode.repetition_penalty": 1.05,
+                    "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                    "thinking": False,
+                    "use_default_template": False,
+                },
+                "class_type": "TextGenerate",
+            },
+            "fill_out": {"inputs": {"source": ["fill_gen", 0]}, "class_type": "PreviewAny"},
+        }
+        try:
+            t0 = time.time()
+            raw = _submit_and_collect_text(payload, "fill_out", timeout=60)
+            # A second attempt is asked with the first attempt's good answers already written
+            # in, so parse against that and keep only what was still missing.
+            new = parse_fill_in(raw, want)
+            got.update({f: v for f, v in new.items() if f in missing})
+            print(f"[fill_in] attempt {attempt + 1} in {time.time()-t0:.1f}s: {raw!r} -> {new}")
+        except Exception as e:
+            last_error = e
+            print(f"[fill_in Error] {e}")
+            if isinstance(e, urllib.error.URLError):
+                break   # ComfyUI is not there; a retry will not find it either
+    if not got and last_error is not None:
+        raise last_error
+    return got
+
+
 _STORY_USER = """A player is about to descend into a generated dungeon. They described it like this:
 
 The dungeon looks like: {wall}
@@ -8499,6 +8728,37 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass  # client already gone, or headers were sent before the throw
                 return
+
+        elif self.path == "/api/fill_in":
+            # The setup screen's Fill-in button. Blocks this (single-threaded) server for the few
+            # seconds the text call takes, which is why the page holds CREATE disabled meanwhile.
+            status, reply = 200, None
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                fields = {f: str(data.get(f) or "")[:FILL_IN_FIELD_MAX_CHARS] for f in FILL_IN_FIELDS}
+                if gen_progress.get("is_generating") or run_is_settling():
+                    # ComfyUI is busy with a dungeon; the fill-in would queue behind all of it.
+                    status, reply = 409, {"success": False, "busy": True,
+                                          "error": "ComfyUI is busy with a dungeon - try again in a moment."}
+                elif all(v.strip() for v in fields.values()):
+                    reply = {"success": True, "fields": {}}
+                else:
+                    reply = {"success": True, "fields": generate_fill_in(fields)}
+            except urllib.error.URLError as e:
+                status, reply = 502, {"success": False, "error": "Couldn't reach ComfyUI - is it running?"}
+            except Exception as e:
+                print(f"[fill_in Request Error] {e}")
+                status, reply = 500, {"success": False, "error": str(e)}
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(reply, ensure_ascii=True).encode("utf-8"))
+            except Exception:
+                pass  # the page went away while the model was writing
+            return
 
         elif self.path == "/api/history_delete":
             # The trash can in the History window, after the player has confirmed. Erases

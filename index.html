@@ -886,9 +886,18 @@
           </button>
         </div>
 
-        <button id="btnCreate" class="win95-btn px-6 py-1.5 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200 font-bold">
-          <span>✨ CREATE</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <!-- Fill-in writes only the mad-lib fields that are still empty, to go with whatever
+               is already typed (all four, from scratch, when nothing is) - see btnFillIn in
+               game.js and /api/fill_in in server.py. -->
+          <button id="btnFillIn" class="win95-btn px-3 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Fill in every empty field to go with what you've typed">
+            <span>🔮 Fill-in</span>
+          </button>
+
+          <button id="btnCreate" class="win95-btn px-6 py-1.5 text-sm text-black flex items-center gap-2 bg-yellow-100 hover:bg-yellow-200 font-bold">
+            <span>✨ CREATE</span>
+          </button>
+        </div>
       </div>
     </div>
 
