@@ -141,6 +141,18 @@
       padding: 4px 8px;
       outline: none;
     }
+    /* Plain checkbox, tinted navy to match the title bars rather than the browser default
+       blue - the one checkbox in an otherwise fully custom-drawn UI, so it only needs a
+       nudge, not a full redraw. */
+    .win95-checkbox {
+      accent-color: #000080;
+      width: 13px;
+      height: 13px;
+      cursor: pointer;
+    }
+    .win95-checkbox:disabled {
+      cursor: default;
+    }
     .win95-prog-chunk {
       background: #000080;
       width: 10px;
@@ -1073,6 +1085,18 @@
         <div class="px-3 pb-3 flex justify-between items-center gap-2">
           <span id="historyFootNote" class="text-[10px] text-slate-600 font-bold truncate min-w-0"></span>
           <div class="flex items-center gap-2 shrink-0">
+            <!-- Filters the list above to runs whose dungeon style is close to a reference -
+                 the dungeon actually being played when History is opened over a live run, else
+                 whatever is on the main menu's mad-lib fields right now. See
+                 historySimilarReference in game.js. Greys out (and unchecks itself) when there
+                 is nothing to compare against, the same "nothing to act on" treatment as Erase
+                 Current Run. -->
+            <label id="historySimilarOnlyLabel" for="historySimilarOnly"
+                   class="flex items-center gap-1 text-[10px] text-slate-700 font-bold cursor-pointer select-none"
+                   title="Only show saved runs that look like the dungeon you're in now (or, at the menu, the prompt you're typing)">
+              <input type="checkbox" id="historySimilarOnly" class="win95-checkbox" />
+              Similar only
+            </label>
             <button id="btnOpenSessionsFolder" class="win95-btn px-3 py-1.5 text-xs text-black hover:bg-slate-300"
                     title="Open dungeon_sessions - one folder per saved run">
               &#128193; Saved Runs

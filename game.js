@@ -122,6 +122,8 @@
     const historyFootNote = document.getElementById('historyFootNote');
     const btnCloseHistory = document.getElementById('btnCloseHistory');
     const btnHistoryOk = document.getElementById('btnHistoryOk');
+    const historySimilarOnly = document.getElementById('historySimilarOnly');
+    const historySimilarOnlyLabel = document.getElementById('historySimilarOnlyLabel');
     const btnOpenSessionsFolder = document.getElementById('btnOpenSessionsFolder');
     const btnOpenAssetsFolder = document.getElementById('btnOpenAssetsFolder');
     const modalHistoryConfirm = document.getElementById('modalHistoryConfirm');
@@ -9408,6 +9410,75 @@
       renderHistoryFootNote();
     }
 
+    // "Similar only". Two prompts count as the same idea only when one is written inside the
+    // other ("windows 95" / "windows 95 3d maze") or they're identical outright - NOT merely
+    // sharing a word, which let a "corn maze" through as "similar" to a "windows 95 3d maze"
+    // on nothing but both saying "maze".
+    function historyFieldsSimilar(current, saved) {
+      const a = (current || '').trim().toLowerCase().replace(/["“”]/g, '');
+      const b = (saved || '').trim().toLowerCase().replace(/["“”]/g, '');
+      if (!a || !b) return false;
+      return a === b || a.includes(b) || b.includes(a);
+    }
+
+    // What "similar" is measured against. Mid-run, that's the dungeon actually being played -
+    // not the mad-lib fields, which Start-from-History never touches (so they can be whatever
+    // was last typed there, unrelated to the run you're now in) and which may simply hold a
+    // different idea you're drafting for next time. Only at the menu, with no run behind the
+    // window, do the fields themselves become the reference.
+    function historySimilarReference() {
+      const active = (Array.isArray(historyEntries) && currentRunHistoryId)
+        ? historyEntries.find(e => e.id === currentRunHistoryId) : null;
+      if (active) {
+        return {
+          wall: active.wall_style || '', player: active.player_style || '',
+          weapon: active.weapon_style || '', enemy: active.enemy_style || ''
+        };
+      }
+      return {
+        wall: wallPromptInput ? wallPromptInput.value : '',
+        player: playerPromptInput ? playerPromptInput.value : '',
+        weapon: weaponPromptInput ? weaponPromptInput.value : '',
+        enemy: enemyPromptInput ? enemyPromptInput.value : ''
+      };
+    }
+
+    function historyReferenceIsBlank(ref) {
+      return !ref.wall.trim() && !ref.player.trim() && !ref.weapon.trim() && !ref.enemy.trim();
+    }
+
+    // The dungeon's look (wall_style) is what a saved run actually reads as "the same" at a
+    // glance - the thumbnail and title are both built from it - so it alone decides the match
+    // whenever there is one to compare. Player/weapon/enemy only step in when no dungeon style
+    // is set at all, rather than being OR'd in alongside it: that OR is what previously let a
+    // matching hero alone wave through a completely different-looking dungeon.
+    function historyEntryMatchesReference(entry, ref) {
+      if (ref.wall.trim()) return historyFieldsSimilar(ref.wall, entry.wall_style);
+      return historyFieldsSimilar(ref.player, entry.player_style)
+          || historyFieldsSimilar(ref.weapon, entry.weapon_style)
+          || historyFieldsSimilar(ref.enemy, entry.enemy_style);
+    }
+
+    // The checkbox greys itself out (and drops its own tick) whenever there is nothing to
+    // compare against, rather than sitting there checked and silently doing nothing.
+    function syncHistorySimilarOnly() {
+      if (!historySimilarOnly) return;
+      const blank = historyReferenceIsBlank(historySimilarReference());
+      if (blank) historySimilarOnly.checked = false;
+      historySimilarOnly.disabled = blank;
+      if (historySimilarOnlyLabel) historySimilarOnlyLabel.classList.toggle('opacity-50', blank);
+    }
+
+    // The subset of historyEntries the list is actually showing right now - every saved run,
+    // unless "Similar only" is both checked and has something to filter by.
+    function visibleHistoryEntries() {
+      if (!Array.isArray(historyEntries)) return historyEntries;
+      syncHistorySimilarOnly();
+      if (!historySimilarOnly || !historySimilarOnly.checked) return historyEntries;
+      const ref = historySimilarReference();
+      return historyEntries.filter(entry => historyEntryMatchesReference(entry, ref));
+    }
+
     function renderHistoryList() {
       if (!historyList) return;
       if (historyEntries === null) {
@@ -9420,8 +9491,14 @@
         if (historyFootNote) historyFootNote.textContent = '';
         return;
       }
+      const visible = visibleHistoryEntries();
+      if (!visible.length) {
+        setHistoryMessage('No saved runs look like the prompt on the main menu. Uncheck "Similar only" to see them all.');
+        renderHistoryFootNote();
+        return;
+      }
       historyList.innerHTML = '';
-      historyEntries.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
+      visible.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
       // Opened from inside a run, the row for that run is the one the player came to find -
       // and it can be anywhere in a list of thirty - so bring the list to it and flash it once.
       const currentRow = historyRevealCurrent
@@ -9466,8 +9543,15 @@
       const total = historyEntries.reduce((sum, e) => sum + (e.size || 0), 0);
       const size = historySizeText(total);
       const favs = historyEntries.filter(e => e.favorite).length;
+      // Disk usage and favorites still describe the whole library even while filtered - only
+      // the headline count narrows, so it reads "3 of 12" rather than a plain "3 dungeons"
+      // that would make the filter look like the entire saved history.
+      const visible = visibleHistoryEntries();
+      const countText = visible.length === historyEntries.length
+        ? historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
+        : visible.length + ' of ' + historyEntries.length + ' dungeons similar to this prompt';
       historyFootNote.textContent =
-        historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
+        countText
         + (favs ? '  ·  ' + favs + (favs === 1 ? ' favorite' : ' favorites') : '')
         + (size ? '  ·  ' + size + ' on disk' : '');
     }
@@ -9514,6 +9598,7 @@
     function openHistory() {
       if (!modalHistory) return;
       modalHistory.classList.remove('hidden');
+      syncHistorySimilarOnly();
       setHistoryMessage('Reading saved dungeons...');
       if (historyFootNote) historyFootNote.textContent = '';
       // Opened mid-run: the list that comes back should arrive scrolled to the dungeon being
@@ -9834,6 +9919,7 @@
     if (btnHistory) btnHistory.addEventListener('click', openHistory);
     if (btnCloseHistory) btnCloseHistory.addEventListener('click', closeHistory);
     if (btnHistoryOk) btnHistoryOk.addEventListener('click', closeHistory);
+    if (historySimilarOnly) historySimilarOnly.addEventListener('change', renderHistoryList);
     if (btnOpenSessionsFolder) btnOpenSessionsFolder.addEventListener('click', () => openServerFolder('sessions'));
     if (btnOpenAssetsFolder) btnOpenAssetsFolder.addEventListener('click', () => openServerFolder('assets'));
     if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);
