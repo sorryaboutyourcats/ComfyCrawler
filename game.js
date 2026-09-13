@@ -1677,7 +1677,7 @@
       // renders the real city, not a "manhattan"-shaped bucket. The data-val is &quot;-encoded
       // in index.html and the browser hands us the quoted string, so the key must include them.
       '"manhattan"':     { player: 'rat',                     weapon: 'pizza',            enemy: 'everything bagel with cheese' },
-      'hell':            { player: 'lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
+      '"hell"':            { player: '"Rachel" lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
       'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villainess' },
       'pet store':       { player: 'Yorkshire Terrier',       weapon: 'whip',             enemy: 'bright stuffed animal' },
       'Sega arcade':     { player: '"Goodcow" the cow',       weapon: 'Dreamcast controller', enemy: '"Sonic"' },
