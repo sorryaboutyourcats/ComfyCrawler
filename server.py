@@ -3726,8 +3726,21 @@ def _theme_inline(value):
 #    BUST, which drawEnemyContent scales against the idle frame and blows up into the camera.
 #  * A FEW BIG FACES, NOT A CRUST OF SMALL ONES. "covered in emojis" packs eighty tiny faces
 #    that collapse into a purple smear at corridor scale; three big ones stay readable.
+#  * IT MUST NAME THE FEET, OR THE CHEST-UP BUST FROM THE BLOCK POSE COMES BACK HERE TOO.
+#    Reported live on the FLYER of a "chat" theme: glasses, angel wings, bubble - everything
+#    from the collarbone up, nothing below it, blown up to fill the combat view exactly like
+#    the ENEMY_BLOCK_POSES "arms" clause once did (see the note above it). The cause is the
+#    same one: this clause LEADS every LOOK line in the family and is entirely upper-body
+#    content (head, hair, bubble), and the flyer's own look has no ground contact to counter
+#    it with either. Reproduced 3 of 3 on fixed seeds with an unchanged subject and wings,
+#    changing only this clause - and one of the three passed _enemy_frame_problem anyway,
+#    because a wide wingspan alone satisfies ENEMY_MIN_FILL on its own; that guard cannot see
+#    a bust with its arms (wings) spread. Adding "their whole body in view from head to feet"
+#    turned the SAME three seeds into full-body sprites, 3 of 3 - stance-neutral wording on
+#    purpose, since whether this family stands or hovers is still the LOOK's job, not this
+#    clause's.
 #
-# The last two live in _CHAT_ENEMY_LOOK rather than in the subject, because the subject is
+# The last three live in _CHAT_ENEMY_LOOK rather than in the subject, because the subject is
 # repeated eight times inside the bestiary prompt and this is a 4B model that starts dropping
 # labels when that prompt grows (see THEME_BRIEF_ATTEMPTS for what that failure looks like).
 _CHAT_ENEMY_PEOPLE = [
@@ -3749,7 +3762,7 @@ _CHAT_ENEMY_SUBJECT = "{person} with a purple emoji speech bubble over their hea
 _CHAT_ENEMY_MARK = "purple emoji speech bubble"
 _CHAT_ENEMY_LOOK = ("A purple speech bubble sits in the air above their head with three big "
                     "yellow emoji faces in it, its pointed tail reaching down to touch their "
-                    "hair")
+                    "hair, their whole body in view from head to feet")
 
 # Matched on WORD boundaries, not as substrings, so "chatbot" stays a robot for anyone who
 # actually typed one - it is only the bare idea of chat that has no picture of its own.

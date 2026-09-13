@@ -1695,7 +1695,7 @@
       'Volcanic Depths': { player: 'ash-scarred fire dwarf in obsidian mail', weapon: 'molten iron greataxe',         enemy: 'lumbering magma golem' },
       'Sunken Ruins':    { player: 'coral-armored deep diver',                weapon: 'barnacled bronze trident',     enemy: 'tentacled kraken spawn' },
       "Pharaoh's Tomb":  { player: 'bandaged tomb raider in linen wraps',     weapon: 'golden khopesh sword',         enemy: 'shambling scarab-covered mummy' },
-      'internet':        { player: 'cat',                     weapon: 'memes',            enemy: 'chat' },
+      'internet':        { player: 'cat',                     weapon: 'cat memes',            enemy: 'chat' },
       'trippy':          { player: 'pink and green cat',      weapon: 'skateboard',       enemy: 'business cat' },
       'classroom':       { player: 'nun',                     weapon: 'ruler',            enemy: 'devil' },
       'cut up fruit':    { player: 'watermelon',              weapon: 'fat cat',          enemy: 'blueberries with guns' },
