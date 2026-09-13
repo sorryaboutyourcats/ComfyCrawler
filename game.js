@@ -2586,12 +2586,12 @@
     // was designed to fly is not a tagged version of the walker. Without one (older bundle, or
     // the naming call failed) fall back to the tag + the story's common foe name: "THE HORDE",
     // "FLYING THE HORDE".
-    // The boss is different: it always fights under the story's own champion title
-    // (enemyBossName, e.g. "DREAD THE OVERCLOCKED") rather than its species name, because that
-    // title is the same one already baked into the intro crawl, the victory outro and the
+    // The boss is different: it always fights under the story's own champion name
+    // (enemyBossName, e.g. "SALLY THE CASHIER") rather than its species name, because that
+    // name is the same one already baked into the intro crawl, the victory outro and the
     // screensaver marquee (see ssStoryMarqueeText) - naming it anything else here would make
     // combat disagree with all three. Species name and tag+style are only a fallback for when
-    // the story never produced a boss title.
+    // the story never produced a boss name.
     // A pack foe never has a generated name of its own - it wears its base variant's name under
     // its own tag, which is exactly what it looks like: "RUNT GRAVEWING SHRIKE".
     function enemyDisplayName(key, cfg) {

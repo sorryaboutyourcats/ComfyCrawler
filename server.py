@@ -3198,6 +3198,15 @@ Rules for the LOOK lines. They are fed straight to an image generator, so:
    giving it a humanoid torso and shoulders, replaces it with a generic armoured warrior and
    the subject vanishes - this is the single most common way this job goes wrong.
 
+Rules for the NAME lines. A name is what the health bar shows during the fight, so it has to
+point straight at the foe it belongs to:
+
+8. Make every NAME out of {enemy} itself - its own word, or a play on that word - plus a word
+   for what sets this one apart from the other two. A hard-sounding word that could belong to
+   any monster at all says nothing about {enemy}.
+9. Three different names, one for each foe. People are named the way you would point one out
+   in real life, in plain everyday words.
+
 Reply using EXACTLY these eight labels, each on its own line, in this order. No preamble, no
 markdown, no commentary, no asterisks:
 
@@ -3212,11 +3221,11 @@ GUARD: <copy exactly ONE of these three words and nothing else. It says how thes
   do have some big broad tough part of themselves they could turn into the blow. Write FIELD
   if they are an object, a machine or a device that would answer a swing by throwing up a
   glowing energy barrier in front of itself>
-GRUNT_NAME: <1-3 word proper name for this ONE foe, not a plural>
+GRUNT_NAME: <1-3 word name for this ONE foe, made from {enemy}, not a plural>
 GRUNT_LOOK: <one sentence>
-FLYER_NAME: <1-3 word proper name, not a plural>
+FLYER_NAME: <1-3 word name, made from {enemy}, not a plural>
 FLYER_LOOK: <one sentence>
-BOSS_NAME: <1-3 word proper name, not a plural>
+BOSS_NAME: <1-3 word name, made from {enemy}, not a plural>
 BOSS_LOOK: <one sentence>"""
 
 
@@ -3425,6 +3434,53 @@ def parse_enemy_species(text):
     return out
 
 
+# The brief's own role labels, copied into the names - "Stonehugger Boss", "Skyroot Flyer", and
+# one whole family came back "Grunt Customer", "Flyer Customer" and "Boss Customer". GRUNT is
+# left alone: a grunt is a real word for a foot soldier, and "Gummy Grunt" reads as a name.
+_SPECIES_LABEL_ECHO = re.compile(r"\b(?:flyer|boss)\b", re.IGNORECASE)
+
+# What a foe's name is rebuilt around when the model's has nothing to do with it, and how long
+# that subject may run first: every name is worn under a pack's "RUNT " / "FLEDGLING " too, on
+# a 320px health bar (drawEnemyHpBar), so "Chat-bubble Twitch Viewer" goes in as "Twitch Viewer".
+_SPECIES_NAME_LEADS = {"walker": "", "flyer": "Flying ", "boss": "Big "}
+_SPECIES_WHAT_MAX = 16
+
+
+def _tidy_species_names(species, enemy_style):
+    """Make the three NAME lines belong to their foes, in place - _ENEMY_SPECIES_USER's name
+    rules say what the model is asked for, and this is what is enforced:
+
+    1. Label echoes come off: "Skyroot Flyer" -> "Skyroot".
+    2. A name with nothing to do with its foe - no five-letter run of the subject's words, or of
+       that foe's own LOOK line, anywhere in it (_name_connects) - is rebuilt from the subject.
+       Across 95 saved runs "Ironclad Grunt", "Skywhip" and "Golemforge" fought for "maga
+       people", "Stone Skull" for a dinosaur and "Squeaky Scribe" for a business cat. The LOOK
+       counts because it is what is drawn: "Rusty Knuckle" for a fingercreeper is a name for
+       the giant knuckled hand on screen, even without "finger" in it.
+    3. The three come out different - "MONEY MAN" was once the answer for all of them."""
+    what = _clean_what(enemy_style)
+    if what:
+        words = what.split(" ")
+        while len(words) > 1 and len(" ".join(words)) > _SPECIES_WHAT_MAX:
+            words.pop(0)
+        what = " ".join(words)
+    seen = set()
+    for v in ENEMY_VARIANT_NAMES:
+        entry = species[v]
+        name = re.sub(r"\s{2,}", " ", _SPECIES_LABEL_ECHO.sub("", entry["name"])).strip(" -_")
+        name = name or entry["name"]
+        lead = _SPECIES_NAME_LEADS[v]
+        if what and not _name_connects(name, enemy_style, entry.get("look")):
+            print(f"[species] {v} name {name!r} has nothing to do with {enemy_style!r} "
+                  f"- renamed {lead + what!r}")
+            name = lead + what
+        if name.lower() in seen and not name.lower().startswith(lead.lower()):
+            name = lead + name
+        entry["name"] = name
+        seen.add(name.lower())
+    return species
+
+
 def generate_enemy_species(enemy_style):
     """Design the three foes. Never raises: on any failure returns None and the caller falls
     back to the walker-plus-Kontext-derivation path, which still produces three usable
@@ -3459,6 +3515,7 @@ def generate_enemy_species(enemy_style):
         if not species:
             print(f"[species] reply did not carry all six foe labels - deriving instead\n{raw[:300]}")
             return None
+        species = _tidy_species_names(species, enemy_style)
         species = _enemy_look_lead(species, enemy_style)
         for v in ENEMY_VARIANT_NAMES:
             print(f"[species] {v:6s} {species[v]['name']!r} - {species[v]['look']}")
@@ -5135,6 +5192,7 @@ def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False):
     plan = [
         # key,             label,                                                    weight, units
         ("theme_brief",    "Designing the set with Qwen3-VL...",                          6, THEME_BRIEF_MAX_TOKENS),
+        ("names",          "Naming the hero and the boss with Qwen3-VL...",                3, NAMING_TYPICAL_TOKENS),
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
@@ -5165,6 +5223,7 @@ def _plan_v5(steps):
     st = int(steps)
     return [
         ("theme_brief",    "Designing the set with Qwen3-VL...",                          6, THEME_BRIEF_MAX_TOKENS),
+        ("names",          "Naming the hero and the boss with Qwen3-VL...",                3, NAMING_TYPICAL_TOKENS),
         ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
         ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
         ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
@@ -5191,6 +5250,435 @@ STORY_SYSTEM = (
     "You never break character and you never explain yourself."
 )
 
+# ---------------------------------------------------------------------------
+# NAMES - what the crawl calls the hero, the boss and the place.
+# ---------------------------------------------------------------------------
+# Left to itself the 4B names everything out of one small dark-fantasy word bag, whatever the
+# thing actually is. Across 95 saved runs: "Apex The Unmaker" was the boss of "maga people", a
+# cashier hero was named "Cashier" twice, "Whisker" and "Paws" were half of every animal hero
+# (three of those Whiskers were a Yorkshire Terrier), and "Ashen" crept into the place names
+# of every dark theme.
+#
+# RULES IN THE CRAWL PROMPT DO NOT FIX IT. That was tried first - a "name a person like a
+# person, a pet like a pet" block with fresh example names drawn for every story - and run live
+# on ten themes. People came out right ("Terry the Cashier", "Biscuit the Dog"); everything
+# else copied whichever example was nearest to hand, fitting or not: "Old Mossback", the
+# moss-bear example, as the boss of a supermarket's crazy customers, "Ron the Cashier" as the
+# boss of office furniture in "Todd's Discount Foods", and "The Great Waffleton" over a dungeon
+# of blueberries. It is the same habit that once put one "miners of Ashfen" example into every
+# crawl. The cat was still "Whisker", the reporter still "Lady Reporter", and the maga boss
+# "The Last Scribe".
+#
+# So the model is only asked what it is reliably good at - what KIND of thing the hero and the
+# boss are, and what that thing is called in plain words - in a small call of its own ahead of
+# the crawl (generate_story_names), and the name itself is decided in code (_decide_name): a
+# person gets an everyday name, a pet a pet's name, a famous character its own. The crawl is
+# then written around names that are already final.
+
+NAMING_MAX_TOKENS = 120     # six short lines
+NAMING_TYPICAL_TOKENS = 50  # progress denominator only - see STORY_TYPICAL_TOKENS
+NAMING_TEMPERATURE = 0.7    # sorting into kinds, not inventing - NAME_ID_TEMPERATURE's reasoning
+
+# Everyday first names for an everyday person - the "why isn't it just Bill" names. Plain and
+# a little dated on purpose: a neighbour, a coworker, whoever is on the next register over.
+_EVERYDAY_NAMES = (
+    "Bill", "Ellen", "Sally", "Doug", "Linda", "Gary", "Barb", "Stan", "Brenda", "Carl",
+    "Denise", "Earl", "Gail", "Hank", "Irene", "Jerry", "Kathy", "Larry", "Marge", "Ned",
+    "Phil", "Rhonda", "Ron", "Sheila", "Ted", "Trudy", "Walt", "Wanda", "Dolores", "Clyde",
+    "Norm", "Bev", "Gus", "Tammy", "Dale", "Deb", "Lou", "Patty", "Herb", "Joanne",
+    "Duane", "Lorraine", "Gordon", "Mitch", "Todd", "Janet", "Dot", "Myrtle", "Bernie",
+    "Ethel", "Harold", "Mildred", "Vern", "Lyle", "Sal", "Rita", "Connie", "Marty", "Darlene",
+    "Wendell", "Fran", "Glen", "Hal", "Lois", "Midge", "Pam", "Randy", "Terry", "Vicky",
+    "Wes", "Roy", "Peggy", "Frank", "Nancy", "Carol", "Bob", "Judy", "Rick", "Shirley",
+)
+
+# What real owners call real pets. Mostly food, a few with titles, and a few plain people
+# names, because a cat called Gerald is funnier than a cat called anything cat-shaped.
+_PET_NAMES = (
+    "Biscuit", "Noodle", "Pickles", "Waffles", "Pudding", "Meatball", "Nugget", "Muffin",
+    "Pumpkin", "Peanut", "Mochi", "Tofu", "Pancake", "Marshmallow", "Butterscotch", "Gizmo",
+    "Oreo", "Cheddar", "Toast", "Dumpling", "Sprinkles", "Fig", "Olive", "Pepper", "Smokey",
+    "Chonk", "Beefcake", "Sir Fluffington", "Captain Floof", "Duchess", "Princess Chunk",
+    "Tater Tot", "Cupcake", "Jellybean", "Crouton", "Gnocchi", "Burrito", "Nacho", "Pretzel",
+    "Bubbles", "Fuzzy", "Button", "Ziggy", "Rocket", "Bandit", "Taco", "Gerald", "Steve",
+    "Brian", "Susan", "Dennis", "Maureen", "Lord Wigglesworth", "Admiral Snuggles",
+)
+
+# How a real place ends up with its name - two are offered to each crawl, so no one of them
+# becomes every dungeon's. Described rather than exemplified, for the reason in the note above:
+# a whole example name is a thing to copy, and "Todd's Discount Foods" landed on an office.
+_PLACE_NAME_SHAPES = (
+    "with somebody's name on it, the way a shop or a company has one",
+    "with a number in it, the way an aisle, a floor or a room has one",
+    "as a pun on what is in there",
+    "after the one thing it is best known for",
+    "after an old family, a founder or a landmark",
+    "after the street, the stop or the part of town it is in",
+)
+
+# "Ashen" is the one place word the model still reaches for once places are named their own
+# way: the last two "hell" dungeons came back "Ashen Womb" and "people of Ashen Maw", and two
+# Demon's Souls runs "the Ashen Spire" and "the Ashen Grotto". parse_story_block trades it for a
+# backup from the same scorched family, so the place keeps the feel the model was going for -
+# just not the same word every time. Only inside a place name: "the Ashen One" is a real Dark
+# Souls name.
+_STOCK_PLACE_WORDS = ("ashen", "ashfen")
+_PLACE_WORD_BACKUPS = (
+    "Cinder", "Ember", "Soot", "Brimstone", "Kiln", "Scorch", "Smolder", "Slag", "Coal",
+    "Flint", "Furnace", "Sulfur", "Pyre", "Charcoal", "Bonfire", "Tinder",
+)
+
+NAMING_SYSTEM = (
+    "You are the casting director for a 1990s dungeon crawler. You say what kind of character "
+    "each one is. You never explain yourself and you never break format."
+)
+
+# Laid out like the bestiary and identity briefs - numbered rules, then labels each carrying a
+# <placeholder> - because the first draft was not, and it was unusable: it spelled the options
+# out under "KIND:"-style headings and closed on six bare, empty labels, and the model read the
+# whole brief as a form to recite, answering every run by echoing it back from the top.
+_NAMING_USER = """A player typed this to set up a dungeon crawler:
+
+The player is: {player}
+The enemies are: {enemy}
+The dungeon looks like: {wall}
+
+Sort out two characters: the PLAYER, and the BOSS - the one biggest enemy, the champion of
+those enemies.
+
+Rules:
+1. KIND is exactly ONE of five words. PERSON is any sort of human being - someone with a job,
+   a type of person, a knight, an elf, or one out of a crowd of people. ANIMAL is a real
+   animal or a pet. FAMOUS is one particular famous person, character or mascot - out of real
+   life, a game, a film or a cartoon - named in what the player typed, even in lowercase. THING
+   is an object, a food, a machine or a plant. MONSTER is a monster, a ghost, a demon or a
+   creature out of a legend.
+2. WHAT is one or two plain words for what it is, singular - "Cashier", "Night Elf", "Cat",
+   "Blueberry", "Devil", "Office Chair".
+3. NAME is its real name if it is FAMOUS, a funny name made out of its own word if it is a
+   THING or a MONSTER, and NONE if it is a PERSON or an ANIMAL.
+
+Reply using EXACTLY these labels, each on its own line, in this order. No preamble, no
+markdown, no commentary, no asterisks:
+
+PLAYER_KIND: <PERSON, ANIMAL, FAMOUS, THING or MONSTER>
+PLAYER_WHAT: <one or two words>
+PLAYER_NAME: <a name, or NONE>
+BOSS_KIND: <PERSON, ANIMAL, FAMOUS, THING or MONSTER>
+BOSS_WHAT: <one or two words>
+BOSS_NAME: <a name, or NONE>"""
+
+_NAMING_KINDS = ("PERSON", "ANIMAL", "FAMOUS", "THING", "MONSTER")
+
+# WHAT answers that say nothing about the character - "Ellen the Person" is not a joke, it is
+# a blank the model failed to fill. Read as no answer at all.
+_BLAND_WHATS = frozenset((
+    "person", "human", "people", "being", "animal", "pet", "object", "character", "none",
+    "n/a", "unknown",
+))
+
+# Words a description is full of that never make a name belong to the thing it names - "Big
+# Tony" does not connect to "big blueberries" by sharing "big", and a bestiary LOOK line (see
+# _tidy_species_names) says "crimson", "glowing" and "legs" about everything it draws.
+_CONNECT_SKIP = frozenset((
+    "the", "and", "for", "its", "his", "her", "who", "one", "big", "old", "new", "bad", "mad",
+    "red", "with", "from", "that", "this", "they", "them", "their", "into", "onto", "over",
+    "under", "some", "very", "like", "wearing", "called", "named", "real", "none", "body",
+    "legs", "arms", "head", "eyes", "tail", "huge", "tiny", "tall", "long", "wide", "thin",
+    "dark", "pale", "made", "each", "atop", "side", "four", "small", "large", "giant",
+    "massive", "thick", "bright", "glowing", "black", "white", "green", "blue", "gold",
+    "golden", "grey", "gray", "silver", "purple", "orange", "yellow", "pink", "brown",
+    "crimson", "several", "covered", "standing", "stands",
+))
+
+# Past this many characters "<name> the <what>" stops fitting on the boss's health bar, which
+# lives in a 320px view (drawEnemyHpBar in game.js).
+_NAME_WITH_WHAT_MAX = 26
+
+# Worn by a thing or a monster instead of an everyday name a third of the time - "King
+# Blueberry", "Grandpa Office Chair", "Baby Devil" - so a dungeon full of objects is not always
+# "<name> the <thing>". The model almost never offers a name of its own for one: across sixteen
+# live replies it wrote NONE for every thing and monster but two, and neither of those two
+# ("DDR4" for a RAM stick, "Toothed Toy" for a stuffed animal) had anything to do with the foe.
+_THING_TITLES = (
+    "Big", "King", "Queen", "Sir", "Lady", "Captain", "Old", "Mister", "Lord", "Auntie",
+    "Uncle", "Grandpa", "Baby",
+)
+
+
+# The reply is started for the model: the prompt ends on this label, so the first token it
+# writes is the player's KIND. Even laid out like the working briefs, three replies in four
+# opened on a line of scene-setting ("You're in a supermarket dungeon.") and one in four recited
+# the brief back until the token cap cut it off before a single label. parse_story_names puts
+# the label back on the front of what comes out.
+_NAMING_REPLY_START = "PLAYER_KIND:"
+
+
+def _naming_prompt(wall_style, player_style, enemy_style, with_image=False):
+    """Same hand-built chat template as _story_prompt - see there for why - with the reply
+    already begun on _NAMING_REPLY_START."""
+    user = _NAMING_USER.format(
+        wall=(wall_style or "").strip() or "a forgotten place",
+        player=(player_style or "").strip() or "a nameless wanderer",
+        enemy=(enemy_style or "").strip() or "things that shamble",
+    )
+    vision = ""
+    if with_image:
+        vision = "<|vision_start|><|image_pad|><|vision_end|>"
+        user = "This is what the player looks like.\n\n" + user
+    return (
+        "<|im_start|>system\n" + NAMING_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n" + vision + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n" + _NAMING_REPLY_START
+    )
+
+
+def _read_kind(answer):
+    """One of _NAMING_KINDS, or None. Read the way _read_guard reads GUARD - capitals first,
+    because the brief prints the options in capitals and a copied verdict keeps them while the
+    prose around it does not, then any case - except that an answer naming two different kinds
+    is not an answer. It is the model reciting the options ("PERSON is any sort of human being.
+    ANIMAL is..."), and an unread kind is the safe outcome: _decide_name still names the thing
+    after what it is."""
+    text = (answer or "").strip()
+    for hay, needle in ((text, str.upper), (text.lower(), str.lower)):
+        hits = {kind for kind in _NAMING_KINDS if re.search(r"\b" + needle(kind) + r"\b", hay)}
+        if hits:
+            return hits.pop() if len(hits) == 1 else None
+    return None
+
+
+# Where a description stops saying what the thing IS and starts hanging things off it - "guy
+# in a shirt and tie" is a guy, "blueberries with swords" are blueberries, "a cat called
+# Billy" is a cat. Only the part before the first of these is kept, and of that only the last
+# three words, which in English is where the noun is: "pink and green cat" -> "green cat".
+# "of" is deliberately not a cut: "stick of RAM" is a stick of RAM, not a stick.
+_WHAT_CUT_RE = re.compile(
+    r",|\s+(?:in|with|from|on|wearing|holding|carrying|that|who|which|called|named)\s+",
+    re.IGNORECASE)
+_WHAT_EDGE_WORDS = frozenset(("a", "an", "the", "and", "or", "of"))
+_WHAT_IRREGULAR_PLURALS = {"people": "Person", "men": "Man", "women": "Woman", "mice": "Mouse"}
+
+
+def _clean_what(answer):
+    """WHAT - or a typed description standing in for it - as a short, title-cased, singular
+    noun phrase: "cashiers" -> "Cashier", "a night elf" -> "Night Elf", "blueberries with
+    swords" -> "Blueberry", "maga people" -> "Maga Person". None when nothing usable is left."""
+    text = re.sub(r"^<|>$", "", _ascii_ify(answer or "").strip().strip(_STORY_STRIP)).strip()
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", _WHAT_CUT_RE.split(text, maxsplit=1)[0])[-3:]
+    while words and words[0].lower() in _WHAT_EDGE_WORDS:
+        words.pop(0)
+    while words and words[-1].lower() in _WHAT_EDGE_WORDS:
+        words.pop()
+    phrase = " ".join(words)
+    if not phrase or phrase.lower() in _BLAND_WHATS or _is_generic_name(phrase):
+        return None
+    last = words[-1]
+    if "of" in (w.lower() for w in words):
+        pass    # "Bag of Chips" is one bag - its last word is not the thing being counted
+    elif last.lower() in _WHAT_IRREGULAR_PLURALS:
+        words[-1] = _WHAT_IRREGULAR_PLURALS[last.lower()]
+    elif len(last) > 4 and last.lower().endswith("ies"):
+        words[-1] = last[:-3] + ("Y" if last.isupper() else "y")
+    else:
+        words[-1] = _singular_creature_name(last)
+    return " ".join(w if w.lower() in _WHAT_EDGE_WORDS else w[:1].upper() + w[1:] for w in words)
+
+
+def _clean_given_name(answer):
+    """NAME as a proper name, or None for NONE, a role word or nothing at all."""
+    name = _story_name(answer, "", max_words=3)
+    if not name or re.match(r"^(?:none|n/?a|unknown)\b", name, re.I) or _is_generic_name(name):
+        return None
+    return name
+
+
+def parse_story_names(text):
+    """{"hero": {"kind", "what", "name"}, "boss": {...}} out of the naming reply. Never raises;
+    anything missing or unreadable comes back None, and _decide_name copes with every
+    combination of those.
+
+    A label that turns up more than once keeps its first READABLE answer rather than its first
+    answer: the reply is begun on _NAMING_REPLY_START for the model, so a reply that opens with
+    a sentence anyway files that sentence under the player's KIND, ahead of the real one."""
+    fields = {"hero": {}, "boss": {}}
+    text = _ascii_ify(text or "")
+    if not text.lstrip().upper().startswith(_NAMING_REPLY_START):
+        text = _NAMING_REPLY_START + text
+    for raw_line in text.splitlines():
+        label, sep, value = raw_line.strip().strip(_STORY_STRIP).partition(":")
+        m = re.fullmatch(r"(player|hero|boss)[\s_]*(kind|what|name)", label.strip().lower())
+        if sep and m:
+            who = "boss" if m.group(1) == "boss" else "hero"
+            fields[who].setdefault(m.group(2), []).append(value.strip())
+    readers = {"kind": _read_kind, "what": _clean_what, "name": _clean_given_name}
+    return {who: {field: next((got for got in map(read, answers.get(field, [])) if got), None)
+                  for field, read in readers.items()}
+            for who, answers in fields.items()}
+
+
+def _name_connects(name, *sources):
+    """True when a name visibly comes from what it names: some five-letter run of a source word
+    turns up inside it. "Barry Blueberry" and "Skyberry" connect to Blueberry on "berry", "Sir
+    Melonsworth" to Watermelon on "melon"; "The Great Waffleton" over blueberries and
+    "Gristleclaw" for a fingercreeper do not - copied from somewhere else, or invented with no
+    tie to the thing at all. A four-letter source word ("moss", "chat") only has to appear
+    somewhere in the name, a three-letter one ("RAM", "elf") as a whole word of it.
+
+    Five letters, not four: four let "Glitch Wisp" pass as a name for a Twitch viewer on the
+    "itch" the two words happen to share. Each source word is tried singular as well, because
+    "blueberries" never spells "berry" and "Berrybloom" was thrown out over it."""
+    low = (name or "").lower()
+    squashed = re.sub(r"[^a-z0-9]", "", low)
+    if not squashed:
+        return False
+    for src in sources:
+        for plain in re.findall(r"[a-z0-9]+", (src or "").lower()):
+            singular = plain[:-3] + "y" if len(plain) > 4 and plain.endswith("ies") else plain
+            for word in {plain, singular}:
+                if _word_in_name(word, low, squashed):
+                    return True
+    return False
+
+
+def _word_in_name(word, low, squashed):
+    """_name_connects for one source word against one name (lowercased, and squashed to its
+    letters and digits)."""
+    if len(word) < 3 or word in _CONNECT_SKIP:
+        return False
+    if len(word) == 3:
+        return bool(re.search(r"(?<![a-z0-9])" + word + r"(?![a-z0-9])", low))
+    return any(word[i:i + 5] in squashed for i in range(max(1, len(word) - 4)))
+
+
+def _decide_name(kind, what, name, typed, rng=random, avoid=()):
+    """The name a hero or boss actually goes by, from what the naming call made of it:
+
+      PERSON   an everyday first name - "Ellen" - or, half the time, one that says what they
+               are: "Sally the Cashier".
+      ANIMAL   the same out of _PET_NAMES - "Meatball", "Gerald the Cat".
+      FAMOUS   its own real name, as long as that name has something to do with what was typed
+               - otherwise the typed words themselves.
+      THING, MONSTER, or a kind that could not be read
+               the model's own name when it connects to the thing (_name_connects), otherwise
+               an everyday name wearing what it is: "Doug the Desk".
+
+    `typed` is the field as the player wrote it - the fallback for WHAT when the reply gave
+    none, and the other thing a name is allowed to connect to. `avoid` is first names already
+    taken, lowercase, so the hero and the boss never both come out as Doug."""
+    what = what or _clean_what(typed)
+    if kind == "FAMOUS":
+        if name and _name_connects(name, typed):
+            return name
+        return (_story_title(_story_name(typed, "", max_words=3), "") or what
+                or rng.choice(_EVERYDAY_NAMES))
+    person_or_pet = kind in ("PERSON", "ANIMAL")
+    if not person_or_pet:
+        if name and _name_connects(name, what, typed):
+            return name
+        if what and rng.random() < 1 / 3:
+            titled = f"{rng.choice(_THING_TITLES)} {what}"
+            if len(titled) <= _NAME_WITH_WHAT_MAX:
+                return titled
+    pool = [n for n in (_PET_NAMES if kind == "ANIMAL" else _EVERYDAY_NAMES)
+            if n.lower() not in avoid]
+    # A person or a pet is funny either way, so they get both; a thing or a monster needs its
+    # "the <what>" - without it "Doug" has nothing to do with the desk. A WHAT too long for any
+    # name to fit in front of it loses words off its front until one does, since the noun is at
+    # the end: "Moss-covered Dire Bear" -> "Kathy the Dire Bear".
+    if what and (not person_or_pet or rng.random() < 0.5):
+        words = what.split(" ")
+        while words:
+            short = " ".join(words)
+            fits = [n for n in pool if len(n) + len(" the ") + len(short) <= _NAME_WITH_WHAT_MAX]
+            if fits:
+                return f"{rng.choice(fits)} the {short}"
+            words.pop(0)
+    return rng.choice(pool)
+
+
+def generate_story_names(wall_style, player_style, enemy_style, image_name=None, named=None):
+    """Decide what the crawl calls the hero and the boss, before it is written - see the NAMES
+    note above. Never raises: with no usable reply both names are still decided, from the typed
+    words alone.
+
+    Returns {"hero", "boss", "foe", "location"}. A quoted field names its character outright
+    (same readiness rules as parse_story_block's overrides - a quoted player always, a quoted
+    enemy or wall only once resolve_named_styles placed its kind), and with both the player and
+    the enemy quoted there is nothing left to ask. "foe" is the boss's WHAT - what one of the
+    common enemies is - and None when there was none to read. "location" is only ever a quoted
+    wall; otherwise it is None and the crawl call names the place itself."""
+    named = named or {}
+    player_ent, enemy_ent, wall_ent = named.get("player"), named.get("enemy"), named.get("wall")
+    names = {
+        "hero": player_ent["name"] if player_ent else None,
+        "boss": enemy_ent["name"] if enemy_ent and enemy_ent.get("kind") else None,
+        "foe": None,
+        "location": wall_ent["name"] if wall_ent and wall_ent.get("kind") else None,
+    }
+    if names["hero"] and names["boss"]:
+        PROGRESS.finish_job("names")
+        return names
+
+    payload = {
+        # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+        "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                   "class_type": "CLIPLoader"},
+        "names_gen": {
+            "inputs": {
+                "clip": ["k_clip", 0],
+                "prompt": _naming_prompt(wall_style, player_style, enemy_style,
+                                         with_image=bool(image_name)),
+                "max_length": NAMING_MAX_TOKENS,
+                "sampling_mode": "on",
+                "sampling_mode.temperature": NAMING_TEMPERATURE,
+                "sampling_mode.top_k": 64,
+                "sampling_mode.top_p": 0.95,
+                "sampling_mode.min_p": 0.05,
+                "sampling_mode.repetition_penalty": 1.05,
+                "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                "thinking": False,
+                "use_default_template": False,
+            },
+            "class_type": "TextGenerate",
+        },
+        "names_out": {"inputs": {"source": ["names_gen", 0]}, "class_type": "PreviewAny"},
+    }
+    if image_name:
+        payload["names_img"] = {"inputs": {"image": image_name}, "class_type": "LoadImage"}
+        payload["names_gen"]["inputs"]["image"] = ["names_img", 0]
+
+    cast = {"hero": {}, "boss": {}}
+    try:
+        t0 = time.time()
+        raw = _submit_and_collect_text(payload, "names_out", timeout=90, job_key="names")
+        cast = parse_story_names(raw)
+        print(f"[cast] sorted in {time.time()-t0:.1f}s")
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[cast Error] {e} - naming from the typed words alone")
+        PROGRESS.finish_job("names")
+
+    typed = {"hero": player_style, "boss": enemy_style}
+    for who in ("hero", "boss"):
+        if names[who]:
+            continue
+        got = cast.get(who) or {}
+        taken = {n.lower() for other in ("hero", "boss") if names[other]
+                 for n in (names[other], names[other].split(" the ")[0])}
+        names[who] = _decide_name(got.get("kind"), got.get("what"), got.get("name"),
+                                  (typed[who] or "").strip(), avoid=taken)
+        print(f"[cast] {who}: {got.get('kind') or '?'} / {got.get('what')!r} / model said "
+              f"{got.get('name')!r} -> {names[who]!r}")
+    # The crawl used to be asked for a FOE line of its own, and once it had been told the
+    # boss's name it simply copied that in: "Stan the Crazy" for a supermarket of crazy
+    # customers. What the boss IS already says what its followers are.
+    names["foe"] = (cast.get("boss") or {}).get("what")
+    return names
+
+
 _STORY_USER = """A player is about to descend into a generated dungeon. They described it like this:
 
 The dungeon looks like: {wall}
@@ -5198,7 +5686,9 @@ The player is: {player}
 Their weapon is: {weapon}
 The enemies are: {enemy}
 
-Invent proper names, then write the opening crawl. It must build to something worth
+{cast}
+
+Name the rest, then write the opening crawl. It must build to something worth
 fighting for and end feeling like the start of a hero's journey, not a warning label:
 
 - Paragraph 1 sets the scene and the danger. Do not introduce the player by name or
@@ -5219,23 +5709,19 @@ spirit of these (write an ORIGINAL one that fits THIS dungeon - do not reuse the
   "You strike the match, step past the threshold, and let the labyrinth swallow you whole."
   "The stone doors grind shut behind you, and the darkness exhales."
 
-Reply using EXACTLY these seven labels, each on its own line, in this order. No preamble,
+{place_rule}
+
+Reply using EXACTLY these four labels, each on its own line, in this order. No preamble,
 no markdown, no commentary, no asterisks:
 
 LOCATION: <a 2-4 word proper name for the dungeon>
-HERO: <a 1-3 word proper name for the player>
-FOE: <a 1-3 word proper name for ONE single common enemy - not a group or plural name, so
-  do not end it in "s" unless the word genuinely needs it (e.g. do not invent "Overclockers"
-  for one creature)>
-BOSS: <a 1-3 word proper name for their champion - also one individual, same rule: no
-  trailing "s" unless the word needs it>
 SAVED: <2-6 words naming who or what is safe once the BOSS falls - the same stake paragraph
   two makes concrete. PLURAL, and written to follow the word "The" and take a plural verb.
   Build it out of THIS dungeon: the people, creatures or places that live in or around
-  {wall}, named with the proper names you invented above. Follow a shape like "<the people>
-  of <the LOCATION you named>" or "<the places> along <a landmark of this world>" - do not
-  copy those shapes literally, and never invent an unrelated town, village or region to put
-  them in. Never one person, never an abstraction like "hope" or "the future">
+  {wall}, named with the names above. Follow a shape like "<the people> of <the LOCATION>"
+  or "<the places> along <a landmark of this world>" - do not copy those shapes literally,
+  and never invent an unrelated town, village or region to put them in. Never one person,
+  never an abstraction like "hope" or "the future">
 CRAWL:
 <paragraph one - the scene and danger>
 
@@ -5246,10 +5732,11 @@ HOOK: <one short, vivid send-off sentence>
 
 The line "CRAWL:" is required and must appear on its own, and so is "HOOK:". Write exactly
 three paragraphs after CRAWL:, separated by blank lines, each 2 or 3 sentences. Use the
-names you invented."""
+names above."""
 
 
-def _story_prompt(wall_style, player_style, weapon_style, enemy_style, with_image=False):
+def _story_prompt(wall_style, player_style, weapon_style, enemy_style, with_image=False,
+                  names=None):
     """Hand-built chat template - two subtleties, both of which silently ruin the output.
 
     1. Krea2Tokenizer replaces the default template with KREA2_TEMPLATE, whose system prompt
@@ -5258,19 +5745,35 @@ def _story_prompt(wall_style, player_style, weapon_style, enemy_style, with_imag
        and take our text verbatim instead.
     2. skip_template ALSO skips the automatic <think></think> suppressor, which lives inside
        the non-skip branch. Without the empty think block appended here, Qwen3 reasons out
-       loud and the monologue lands in the crawl."""
+       loud and the monologue lands in the crawl.
+
+    `names` is generate_story_names()'s decision: the crawl is written around that hero and
+    boss (and a quoted wall's location) instead of inventing its own - see the NAMES note."""
+    names = names or {}
+    hero = names.get("hero") or _story_title(player_style, "The Nameless")
+    boss = names.get("boss") or "The Warden"
+    cast = (f"The player is called {hero}, and the boss - the champion of those enemies - is "
+            f"called {boss}. Both names are already decided: use them exactly as written.")
+    if names.get("location"):
+        place_rule = f"The dungeon is already named too: it is called {names['location']}."
+    else:
+        shapes = random.sample(_PLACE_NAME_SHAPES, 2)
+        place_rule = ("Name the dungeon the way a real place like it gets named, out of what is "
+                      f"actually in it - for this one, try naming it {shapes[0]}; or {shapes[1]}.")
     user = _STORY_USER.format(
         wall=(wall_style or "").strip() or "a forgotten place",
         player=(player_style or "").strip() or "a nameless wanderer",
         weapon=(weapon_style or "").strip() or "a rusted blade",
         enemy=(enemy_style or "").strip() or "things that shamble",
+        cast=cast,
+        place_rule=place_rule,
     )
     vision = ""
     if with_image:
         # The image-pad substitution scans tokenized ids for 151655 regardless of
         # skip_template, so splicing the vision block in by hand works.
         vision = "<|vision_start|><|image_pad|><|vision_end|>"
-        user = "This is what the player looks like. Name the hero to suit them.\n\n" + user
+        user = "This is what the player looks like.\n\n" + user
     return (
         "<|im_start|>system\n" + STORY_SYSTEM + "<|im_end|>\n"
         "<|im_start|>user\n" + vision + user + "<|im_end|>\n"
@@ -5323,19 +5826,13 @@ _STORY_LABELS = ("location", "hero", "foe", "boss", "saved")
 # literal name: "the asterisk cursed asterisk blade". Stripped everywhere, not just the ends.
 _MARKDOWN_SYMBOL_RE = re.compile(r"[*_#`]")
 
-# Prepended to the invented BOSS name to make its combat title, e.g. "The Overclocked" ->
-# "Dread The Overclocked" - matching the tag the boss enemy variant fights under in combat
-# (ENEMY_VARIANTS.boss in game.js). Picked once per story so the crawl text, the HUD, and
-# the health bar all agree on the same title. Varied rather than always "Dread" so bosses
-# across different dungeons don't all sound the same.
-_BOSS_TITLE_PREFIXES = [
-    "Dread", "Ancient", "Corrupted", "Apex", "Undying", "Grim",
-    "Sovereign", "Forsaken", "Hollow", "Doom", "Shattered", "Fallen",
-]
-
-# Safety net for when the small model forgets the name it invented three lines earlier and
-# falls back to a generic "the boss" / "boss" instead - caught and swapped for the real title
-# in parse_story_block's _use_real_boss_name.
+# Safety net for when the small model forgets the boss's name and falls back to a generic
+# "the boss" / "boss" instead - caught and swapped for the real name by _name_rewriter.
+#
+# The boss used to fight under a random title prepended to its name as well ("Dread", "Apex",
+# "Undying" ...). It is gone: it was half of "Apex The Unmaker" on a dungeon of people, and it
+# turned "Doom Tickle" and "Undying Grassy" into names that had nothing to do with a stuffed
+# animal or a lawn. The boss is called its name - "just Bill".
 _GENERIC_BOSS_PHRASE_RE = re.compile(r"\bthe\s+boss\b", re.IGNORECASE)
 _GENERIC_BOSS_WORD_RE = re.compile(r"\bboss\b", re.IGNORECASE)
 
@@ -5356,13 +5853,46 @@ def _is_generic_name(name):
     return bool(words) and all(w in _GENERIC_NAME_WORDS for w in words)
 
 
-def _boss_title(name):
-    """Pick the combat title, skipping any prefix that is already a word inside the name. A
-    random "Hollow" landing on an invented "The Hollow" reads as the same word twice rather
-    than a title plus a name, and it was half of "Hollow Hollow The Hollow The Boss"."""
-    words = set(re.findall(r"[a-zA-Z]+", (name or "").lower()))
-    return random.choice([p for p in _BOSS_TITLE_PREFIXES if p.lower() not in words]
-                         or _BOSS_TITLE_PREFIXES)
+def _name_rewriter(keep=(), renames=None, boss=None):
+    """One regex, one pass, for every name the narrated text has to agree on - see the note in
+    parse_story_block for why it can never be several passes. Its alternatives, longest first
+    so the fullest name wins wherever two could start:
+
+      keep     names that must come through exactly as written. They are listed only so that
+               nothing shorter can bite into the middle of one: a foe called "Boss Byte" is not
+               the generic word "boss" plus "Byte".
+      renames  old name -> new, any case, trailing plural "s" included: a name the reply wrote
+               into its own prose that something since replaced - a quoted name, or a place
+               with its stock word swapped out.
+      boss     the boss's final name: its plural folds back into it, and the generic "the
+               boss" / "boss" the model falls back on becomes it too.
+
+    Returns text -> text. Replacements come out of a function, so a name is never reread as a
+    regex backreference."""
+    entries = []    # (length, pattern, replacement - None hands the match back untouched)
+    for name in keep:
+        if name:
+            entries.append((len(name), "(?i:" + re.escape(name) + ")", None))
+    for old, new in (renames or {}).items():
+        if old and new and old.lower() != new.lower():
+            entries.append((len(old), "(?i:" + re.escape(old) + ")s?", new))
+    if boss:
+        entries.append((len(boss), "(?i:" + re.escape(boss) + ")s?", boss))
+    entries.sort(key=lambda e: e[0], reverse=True)
+    patterns = [r"(?<![A-Za-z0-9])" + p + r"(?![A-Za-z0-9])" for _, p, _ in entries]
+    replacements = [r for _, _, r in entries]
+    if boss:
+        for generic in (_GENERIC_BOSS_PHRASE_RE, _GENERIC_BOSS_WORD_RE):
+            patterns.append("(?i:" + generic.pattern + ")")
+            replacements.append(boss)
+    if not patterns:
+        return lambda text: text or ""
+    rx = re.compile("|".join("(" + p + ")" for p in patterns))
+
+    def _sub(m):
+        new = replacements[m.lastindex - 1]
+        return m.group(0) if new is None else new
+    return lambda text: rx.sub(_sub, text or "")
 
 
 
@@ -5380,7 +5910,7 @@ def _ascii_ify(text):
 # conjunctions that only make sense with whatever came next (which the word cap ate).
 _STORY_TRAILING_STOPWORDS = frozenset((
     "the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "with",
-    "from", "by", "as", "into", "that", "this", "these", "those", "'s",
+    "from", "by", "as", "into", "that", "this", "these", "those", "'s", "&",
 ))
 
 
@@ -5516,14 +6046,38 @@ def _squash(text):
     return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
+# A typed description that already starts on one of these takes no "a" in front of it.
+_DESCRIPTION_DETERMINERS = frozenset((
+    "a", "an", "the", "my", "your", "his", "her", "their", "our", "some", "one", "two", "three",
+))
+
+
 def _hero_opener(hero, player_desc):
     """Build the "You are <name>[, <what they are>]." line that opens paragraph 1. The
     invented HERO name is often just a title-cased echo of the player's own description
     ("gingerbread paladin with frosting armor" -> "Gingerbread Paladin"), which would read
     as "You are Gingerbread Paladin, gingerbread paladin with frosting armor." - so the
-    description is dropped whenever the name already contains it."""
+    description is dropped whenever the name already contains it.
+
+    And the other way round, now that a hero can be named for what they are: "Sally the
+    Cashier" for a cashier would read "You are Sally the Cashier, cashier.", and "Biscuit the
+    Fluffy Cat" for a fluffy white cat hardly needs the three words after it either. So a
+    description is also dropped when the name already carries all of its words, or when it is
+    short and the name's "the <what>" is made of its words. Whole words only, so a cat named
+    "Catherine" still gets to be a cat.
+
+    A description that is kept gets an article unless it brought one - "You are Ellen, a
+    cashier." - since a hero named Ellen now leaves it standing alone after the comma."""
     if _squash(hero) and _squash(hero) in _squash(player_desc):
         return f"You are {hero}."
+    desc_words = re.findall(r"[a-z0-9]+", player_desc.lower())
+    hero_words = set(re.findall(r"[a-z0-9]+", hero.lower()))
+    what_words = set(re.findall(r"[a-z0-9]+", hero.lower().partition(" the ")[2]))
+    if desc_words and (set(desc_words) <= hero_words
+                       or (what_words and len(desc_words) <= 3 and what_words <= set(desc_words))):
+        return f"You are {hero}."
+    if desc_words[:1] and desc_words[0] not in _DESCRIPTION_DETERMINERS:
+        player_desc = _a_or_an(player_desc)
     return f"You are {hero}, {player_desc}."
 
 
@@ -5534,12 +6088,17 @@ def _story_title(text, fallback):
     return " ".join(w[:1].upper() + w[1:] for w in text.split())[:48]
 
 
-def parse_story_block(text, wall_style="", player_style="", enemy_style="", named=None):
-    """Pull the four names and the crawl paragraphs out of the model's reply. Never raises.
+def parse_story_block(text, wall_style="", player_style="", enemy_style="", named=None,
+                      names=None):
+    """Pull the names and the crawl paragraphs out of the model's reply. Never raises.
 
-    The 4B emits the LOCATION/HERO/FOE/BOSS lines reliably but drops the bare "CRAWL:"
-    marker perhaps half the time, so the prose is taken as everything after the last label
-    line rather than requiring the marker to be there.
+    The 4B emits the label lines reliably but drops the bare "CRAWL:" marker perhaps half the
+    time, so the prose is taken as everything after the last label line rather than requiring
+    the marker to be there.
+
+    `names` is generate_story_names()'s decision, which the crawl was written around: its hero,
+    boss and foe win over any HERO/BOSS/FOE line in the reply. The crawl prompt no longer asks
+    for those lines, so they only matter when no decision was passed in.
 
     `named` is a resolve_named_styles() dict (or None). A quoted wall/player/enemy field
     overrides LOCATION/HERO/BOSS below regardless of what the model invented - a named
@@ -5551,7 +6110,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
     fallbacks = {
         "location": _story_title(wall_style, "The Dungeon"),
         "hero": _story_title(player_style, "The Nameless"),
-        "foe": _story_title(enemy_style, "The Horde"),
+        "foe": _clean_what(enemy_style) or "The Horde",
         "boss": "The Warden",
         "saved": random.choice(_STAKE_FALLBACKS),
     }
@@ -5559,7 +6118,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
 
     max_words = {"location": 6, "hero": 3, "foe": 3, "boss": 3, "saved": 6}
     last_label_end = 0
-    found = 0
+    found = set()
     for key in _STORY_LABELS:
         m = re.search(r"^\s*" + key + r"\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
         if m:
@@ -5569,17 +6128,27 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
                 # "BOSS: The Boss" is the model answering with the label instead of a name.
                 # Downstream everything treats this as a proper noun - the health bar, the
                 # crawl rewrite, the outro - so it is caught here, at the only point where
-                # the themed fallback is still in reach.
+                # the themed fallback is still in reach. The boss's fallback is the foe it
+                # champions, made bigger, when the reply did name one: "Big Ring Runner" has
+                # something to do with the dungeon, "The Warden" never did.
                 if _is_generic_name(out[key]):
                     out[key] = fallbacks[key]
+                    if key == "boss" and "foe" in found:
+                        out[key] = "Big " + re.sub(r"^the\s+", "", out["foe"], flags=re.I)
             last_label_end = max(last_label_end, m.end())
-            found += 1
+            found.add(key)
+
+    # What the reply itself called the boss and the dungeon - the prose was written around
+    # these, so whatever replaces them below has to be carried back into it.
+    model_boss = out["boss"] if "boss" in found else None
+    model_location = out["location"] if "location" in found else None
+
+    for key in ("hero", "boss", "foe", "location"):
+        if (names or {}).get(key):
+            out[key] = names[key]
 
     # A quoted wall/player field names the location/hero outright - the model's own invented
-    # name (or its title-cased fallback) loses to it unconditionally. Nothing here needs a
-    # prose rewrite the way BOSS does below: LOCATION and HERO are used to BUILD sentences
-    # (_lead(location), _hero_opener(hero, ...)) rather than searched-and-replaced inside ones
-    # the model already wrote.
+    # name (or its title-cased fallback) loses to it unconditionally.
     wall_ent = (named or {}).get("wall")
     if wall_ent and wall_ent.get("kind"):
         out["location"] = wall_ent["name"]
@@ -5596,63 +6165,72 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
     if player_ent:
         out["hero"] = player_ent["name"]
 
-    # SAVED is a noun phrase, not a proper name - it goes through the label loop for the
-    # CRAWL-marker bookkeeping above, then loses its determiner here.
-    out["saved"] = _story_stake(out["saved"], fallbacks["saved"])
-
-    # The BOSS line names the champion, e.g. "The Overclocked" - but that's not the name it
-    # fights under. Combat prepends a title (ENEMY_VARIANTS.boss in game.js), so bake the same
-    # title in here and rewrite every mention in the prose to match, rather than let the crawl
-    # say "The Overclocked" while the health bar reads "DREAD THE OVERCLOCKED".
-    #
-    # A quoted enemy field overrides the CHAMPION'S NAME the same unconditional way LOCATION
-    # and HERO just did above - the whole point of "Billy" the cat is that the boss is Billy,
-    # not whatever the model invented instead. Unlike LOCATION/HERO this one DOES need a prose
-    # rewrite: the model was hardly discouraged from using the name it was handed ("a cat
-    # called Billy" in its own input), so if it already wrote "Billy" a few times, both the
-    # model's own invented name AND the entity's real name are swapped for the final title -
-    # whichever one the prose actually used, the reader always gets the same title back.
-    model_boss = out["boss"]
-    bare_boss = model_boss
+    # A quoted enemy field overrides the CHAMPION'S NAME the same unconditional way - the
+    # whole point of "Billy" the cat is that the boss is Billy, not whatever the model invented
+    # instead. The model was hardly discouraged from using the name it was handed ("a cat
+    # called Billy" in its own input), so both the reply's own boss name AND the entity's real
+    # name are rewritten to the final one below - whichever the prose actually used, the reader
+    # always gets the same name back.
     enemy_ent = (named or {}).get("enemy")
     if enemy_ent and enemy_ent.get("kind"):
-        bare_boss = enemy_ent["name"]
-    out["boss"] = f"{_boss_title(bare_boss)} {bare_boss}"
+        out["boss"] = enemy_ent["name"]
+
+    # "Ashen" out of the model's own place names - see _STOCK_PLACE_WORDS. Swapped as a whole
+    # place name read out of the reply's location and stake ("Ashen Womb" -> "Cinder Womb"),
+    # never as a bare word, because the prose is full of other uses of it: "the Ashen One" is a
+    # name and "Ashen skies" is weather. A decided or quoted location is the player's own word.
+    backup = random.choice(_PLACE_WORD_BACKUPS)
+    stock_re = re.compile(r"\b(?:" + "|".join(_STOCK_PLACE_WORDS) + r")\b", re.IGNORECASE)
+    place_renames = {}
+    own_location = model_location if out["location"] == model_location else ""
+    for label in (out["saved"], own_location):
+        for phrase in re.findall(r"[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)+", label or ""):
+            phrase = re.sub(r"^The\s+", "", phrase)
+            if " " in phrase and stock_re.search(phrase):
+                place_renames[phrase] = stock_re.sub(backup, phrase)
+    if own_location:
+        out["location"] = _name_rewriter(renames=place_renames)(out["location"])
 
     # ONE alternation, ONE pass, and that is the entire point. Run as four separate re.sub
-    # calls, each pass rescanned the text the previous pass had already rewritten, so a title
+    # calls, each pass rescanned the text the previous pass had already rewritten, so a name
     # containing any word a later pattern looks for grew every time it was substituted. With
-    # the model answering "BOSS: The Boss", the crawl went "The Boss" -> "Hollow The Boss" ->
-    # "Hollow Hollow The Boss" -> "Hollow Hollow The Hollow The Boss". re.sub never rescans
-    # its own replacement, so one combined regex fixes it outright. Longest name first, and
-    # both names ahead of the two generic patterns, so the fullest match wins at any position.
+    # the model answering "BOSS: The Boss" under the old random boss titles, the crawl went
+    # "The Boss" -> "Hollow The Boss" -> "Hollow Hollow The Boss" -> "Hollow Hollow The Hollow
+    # The Boss". re.sub never rescans its own replacement, so one combined regex fixes it
+    # outright - see _name_rewriter.
     #
-    # The trailing "s?" is load-bearing: the label loop already ran the name through
-    # _singular_creature_name, so a model that answered "BOSS: Whiskers" leaves "Whisker"
-    # here while the prose it wrote still says "Whiskers". Without it the mention is missed
-    # entirely; matching bare, without the closing \b, would swap the stem and strand the "s"
-    # as "Dread Billys".
-    boss_alts = dict.fromkeys(
-        sorted((p for p in (model_boss, bare_boss) if p), key=len, reverse=True))
-    boss_mentions_re = re.compile(
-        "|".join([r"\b(?:" + re.escape(a) + r")s?\b" for a in boss_alts]
-                 + [_GENERIC_BOSS_PHRASE_RE.pattern, _GENERIC_BOSS_WORD_RE.pattern]),
-        re.IGNORECASE)
+    # The trailing "s?" on the boss is load-bearing: the label loop already ran the name
+    # through _singular_creature_name, so a model that answered "BOSS: Whiskers" leaves
+    # "Whisker" here while the prose it wrote still says "Whiskers". Without it the mention is
+    # missed entirely; matching bare would swap the stem and strand the "s" as "Billys".
+    renames = {}
+    if model_boss:
+        renames[model_boss] = out["boss"]
+    if enemy_ent and enemy_ent.get("kind"):
+        renames[enemy_ent["name"]] = out["boss"]
+    if model_location:
+        renames[model_location] = out["location"]
+        # "The Ashen Maw" is just "Ashen Maw" mid-sentence. Only for a name of two words or
+        # more: a bare "Vault" would take every ordinary vault in the prose with it.
+        bare = re.sub(r"^The\s+", "", model_location, flags=re.IGNORECASE)
+        if bare != model_location and " " in bare:
+            renames.setdefault(bare, re.sub(r"^The\s+", "", out["location"], flags=re.IGNORECASE))
+    for phrase, swapped in place_renames.items():
+        renames.setdefault(phrase, swapped)     # a quoted location outranks a swapped word
+    rewrite = _name_rewriter(keep=(out["hero"], out["foe"], out["location"]),
+                             renames=renames, boss=out["boss"])
 
-    def _use_real_boss_name(t):
-        """Swap in the boss's actual title wherever the prose names it - the model's own
-        invented name, the entity's real name when a quoted enemy overrode it, and, as a
-        safety net for when the model falls back to a generic word instead of the name it
-        invented three lines earlier, "the boss" / "boss" on their own. The replacement is
-        returned from a lambda so a name is never reread as a regex backreference."""
-        return boss_mentions_re.sub(lambda m: out["boss"], t)
+    # SAVED is a noun phrase, not a proper name - it goes through the label loop for the
+    # CRAWL-marker bookkeeping above, then takes the same renames as the prose (it is where
+    # "people of Ashen Maw" lived) and loses its determiner.
+    out["saved"] = _story_stake(rewrite(out["saved"]), fallbacks["saved"])
 
     # HOOK is a single sentence, not a name, so it skips the word-count truncation the
     # other labels get - only pulled out here so it doesn't get swept into the paragraphs.
     hook_match = re.search(r"^\s*HOOK\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
     hook_fallback = random.choice(_STORY_HOOK_FALLBACKS)
     out["hook"] = _story_hook(hook_match.group(1), hook_fallback) if hook_match else hook_fallback
-    out["hook"] = _use_real_boss_name(out["hook"])
+    out["hook"] = rewrite(out["hook"])
 
     m = re.search(r"^\s*CRAWL\s*:\s*$", text, re.IGNORECASE | re.MULTILINE)
     body = text[m.end():] if m else text[last_label_end:]
@@ -5669,7 +6247,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
                                   re.IGNORECASE)]
             para = " ".join(lines).strip().strip("*_#")
             if len(para) > 20:
-                para = _use_real_boss_name(para)
+                para = rewrite(para)
                 paragraphs.append(re.sub(r"\s+", " ", para))
 
     # Always used to open paragraph 1 with "You are <name>, <what they are>." - built here,
@@ -5684,8 +6262,8 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
     if not paragraphs:
         # Even the degraded fallback earns a rallying ending, not a warning label - the
         # crawl is meant to send the player in fired up, whether the model wrote it or not.
-        # out["boss"] is already a full title ("Dread The Overclocked"), so it reads like a
-        # proper name and takes no extra article - unlike _lead(hero)/(location) below.
+        # out["boss"] is a proper name ("Sally the Cashier", "The Warden") and takes no extra
+        # article - unlike _lead(location) below.
         paragraphs = [
             hero_opener + " You enter "
             + _lead(out["location"], upper=False)
@@ -5704,7 +6282,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
         out["crawl"].pop()
 
     # Built here, not in the client, so the same sentence can be handed to Piper - see
-    # _VICTORY_OUTROS. out["boss"] already carries its title by this point.
+    # _VICTORY_OUTROS. out["boss"] is final by this point.
     out["outro"] = _story_outro(out)
 
     return out
@@ -5866,8 +6444,10 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
     story failure must not cost the player their assets, so it degrades to names derived
     from what they typed.
 
-    `named` is a resolve_named_styles() dict (or None), forwarded to parse_story_block so a
-    quoted wall/player/enemy field names the location/hero/boss outright - see there."""
+    The hero and the boss are named first, by generate_story_names, and the crawl is written
+    around them. `named` is a resolve_named_styles() dict (or None), forwarded to both so a
+    quoted wall/player/enemy field names the location/hero/boss outright - see
+    parse_story_block."""
     image_name = None
     if player_image:
         try:
@@ -5879,6 +6459,9 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
             print(f"[story] could not stage the player image ({e}) - writing text-only")
             image_name = None
 
+    names = generate_story_names(wall_style, player_style, enemy_style, image_name=image_name,
+                                 named=named)
+
     payload = {
         # Byte-identical to _krea2_loaders()["k_clip"] on purpose: any difference in these
         # inputs forks ComfyUI's cache and loads a second 5.2GB copy of the model.
@@ -5888,7 +6471,7 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
             "inputs": {
                 "clip": ["k_clip", 0],
                 "prompt": _story_prompt(wall_style, player_style, weapon_style, enemy_style,
-                                        with_image=bool(image_name)),
+                                        with_image=bool(image_name), names=names),
                 "max_length": STORY_MAX_TOKENS,
                 # DynamicCombo in API format: the parent widget takes the option KEY and the
                 # option's own widgets are dot-prefixed with it. Passing a nested dict makes
@@ -5915,13 +6498,15 @@ def generate_intro_story(wall_style, player_style, weapon_style, enemy_style, pl
     try:
         t0 = time.time()
         raw = _submit_and_collect_text(payload, "story_out", job_key="story")
-        story = parse_story_block(raw, wall_style, player_style, enemy_style, named=named)
+        story = parse_story_block(raw, wall_style, player_style, enemy_style, named=named,
+                                  names=names)
         print(f"[story] '{story['location']}' - {story['hero']} vs {story['foe']} / "
               f"{story['boss']}, {len(story['crawl'])} paragraphs, {time.time()-t0:.1f}s")
     except Exception as e:
         print(f"[story Error] {e} - falling back to names from the player's own words")
         PROGRESS.finish_job("story")
-        story = parse_story_block("", wall_style, player_style, enemy_style, named=named)
+        story = parse_story_block("", wall_style, player_style, enemy_style, named=named,
+                                  names=names)
 
     # Narrate whichever text the player is actually about to see - including the fallback
     # crawl, which deserves a voice just as much as a model-written one. Order matches the

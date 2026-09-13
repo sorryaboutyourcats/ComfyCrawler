@@ -197,16 +197,15 @@ named_all = {"wall": {"raw": "alley pond park", "name": "Alley Pond Park", "kind
 out = srv.parse_story_block(reply, "alley pond park", "frodo", "billy the cat", named=named_all)
 ck(out["location"] == "Alley Pond Park", f"LOCATION override failed: {out['location']!r}")
 ck(out["hero"] == "Frodo", f"HERO override failed: {out['hero']!r}")
-ck(out["boss"].endswith("Billy"), f"BOSS override failed: {out['boss']!r}")
+ck(out["boss"] == "Billy", f"BOSS override failed: {out['boss']!r}")
 ck("Whiskers" not in " ".join(out["crawl"]) and "Whiskers" not in out["hook"],
    f"the model's own invented boss name leaked into the prose: {out['crawl']} / {out['hook']!r}")
 ck(out["boss"] in " ".join(out["crawl"]) or out["boss"] in out["hook"],
    "the overridden boss title never actually appears in the narrated text")
 
-# no named entities -> unchanged behaviour. out["boss"] (and any prose mentioning it, via
-# _use_real_boss_name) carries a RANDOM title prefix picked fresh on every call
-# (random.choice(_BOSS_TITLE_PREFIXES)), so `random` is reseeded identically before each call
-# to make the two comparable at all.
+# no named entities -> unchanged behaviour. parse_story_block still draws on `random` (the stake
+# and hook fallbacks, the backup for a stock place word), so `random` is reseeded identically
+# before each call to make the two comparable at all.
 import random as _random
 _random.seed(4242)
 plain_out = srv.parse_story_block(reply, "some dungeon", "a wanderer", "a horde")

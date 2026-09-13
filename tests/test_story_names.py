@@ -49,24 +49,23 @@ for seed in range(40):
        f"seed {seed}: expected 2 rewritten mentions, got "
        f"{out['crawl'][1].count(out['boss'])} in {out['crawl'][1]!r}")
 
-# "The Boss" is not a name - it must lose to the fallback rather than reach the health bar.
+# "The Boss" is not a name - it must lose to the fallback rather than reach the health bar,
+# and with a FOE line to hand that fallback is the foe made bigger, not an unrelated "Warden".
 random.seed(0)
 ck("Boss" not in story("BOSS: The Boss")["boss"],
    "the generic BOSS answer was taken at face value as a proper name")
-random.seed(0)
-ck(story("BOSS: The Overclocked")["boss"].endswith("The Overclocked"),
-   "a real invented BOSS name must survive the generic guard")
+ck(story("BOSS: The Boss")["boss"] == "Big Ring Runner",
+   f"the generic-boss fallback should be the foe, bigger: {story('BOSS: The Boss')['boss']!r}")
 
-# ---- the title must not repeat a word already inside the name ---------------------
-for prefix in srv._BOSS_TITLE_PREFIXES:
-    for seed in range(20):
-        random.seed(seed)
-        got = story(f"BOSS: The {prefix}")["boss"]
-        ck(stutter(got) is None, f"title collided with the name: {got!r}")
-ck(srv._boss_title("Hollow") != "Hollow", "_boss_title handed back the name's own word")
-# Every prefix colliding at once still has to return something rather than raise.
-ck(srv._boss_title(" ".join(srv._BOSS_TITLE_PREFIXES)) in srv._BOSS_TITLE_PREFIXES,
-   "_boss_title must still pick a title when every prefix collides")
+# ---- no random title in front of the boss ------------------------------------------
+# "Apex The Unmaker" for a dungeon of people, "Doom Tickle" for a stuffed animal: the prefix is
+# gone, and the boss is called exactly its name.
+for seed in range(20):
+    random.seed(seed)
+    ck(story("BOSS: The Overclocked")["boss"] == "The Overclocked",
+       f"seed {seed}: the boss name picked up a title: {story('BOSS: The Overclocked')['boss']!r}")
+ck(not hasattr(srv, "_BOSS_TITLE_PREFIXES") and not hasattr(srv, "_boss_title"),
+   "the random boss title table is back")
 
 # ---- the generic-name guard itself ------------------------------------------------
 for name in ("The Boss", "boss", "the champion", "Enemy", "THE FOE"):
