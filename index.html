@@ -323,6 +323,16 @@
       border-bottom: 2px solid #ffffff;
       box-shadow: inset 1px 1px #0a0a0a;
     }
+    /* The victory box's keyboard cursor (↑↓ move it, SPACE/ENTER takes it) - same treatment
+       as .deadchoice above, reads on either the grey Favorite button or the yellow Main Menu. */
+    .victorychoice.selected {
+      background: #bfdbfe;
+      border-top: 2px solid #808080;
+      border-left: 2px solid #808080;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      box-shadow: inset 1px 1px #0a0a0a;
+    }
     canvas, img, svg {
       image-rendering: pixelated !important;
     }
@@ -793,9 +803,6 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="&quot;manhattan&quot;">
             <span>🗽 Manhattan</span>
           </button>
-          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="&quot;hell&quot;">
-            <span>🥇 Hell</span>
-          </button>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="motherboard">
             <span>🖥️ Motherboard</span>
           </button>
@@ -856,12 +863,21 @@
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="&quot;Smokey the bear&quot; forest">
             <span>🐻 Smokey the Bear</span>
           </button>
-          <!-- Secret 30th and 31st ideas - ship hidden with preset-btn-secret instead of
-               preset-btn, so shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see
-               .preset-btn) never touch them. game.js promotes each one to a real preset-btn once
-               the 🎲 has been clicked data-unlock-at times - see the shuffle-unlock block there. -->
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="Tokyo Tower">
+            <span>🗼 Tokyo Tower</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn flex items-center gap-1.5" data-val="craigslist">
+            <span>📋 Craigslist</span>
+          </button>
+          <!-- Secret ideas - ship hidden with preset-btn-secret instead of preset-btn, so
+               shuffleQuickIdeas/trimQuickIdeasToTwoRows (which only see .preset-btn) never touch
+               them. game.js promotes each one to a real preset-btn once the 🎲 has been clicked
+               data-unlock-at times - see the shuffle-unlock block there. -->
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn-secret hidden flex items-center gap-1.5" data-val="LSD dream emulator" data-unlock-at="42">
             <span>👁️ LSD Dream Emulator</span>
+          </button>
+          <button class="win95-btn text-xs px-2.5 py-1 preset-btn-secret hidden flex items-center gap-1.5" data-val="&quot;hell&quot;" data-unlock-at="100">
+            <span>🥇 Hell</span>
           </button>
           <button class="win95-btn text-xs px-2.5 py-1 preset-btn-secret hidden flex items-center gap-1.5" data-val="&quot;Rome&quot;" data-unlock-at="111">
             <span>✝️ Rome</span>
@@ -1342,7 +1358,10 @@
                 <div class="text-[11px] font-bold text-blue-900 bg-blue-100 px-3 py-1 rounded w-full">
                   Steps taken: <span id="winMovesCount">0</span>
                 </div>
-                <button id="btnPlayAgain" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full mt-1">
+                <button id="btnVictoryFavorite" type="button" class="victorychoice win95-btn px-4 py-1.5 text-xs text-black bg-slate-100 hover:bg-yellow-200 w-full">
+                  ☆ Favorite this run
+                </button>
+                <button id="btnPlayAgain" class="victorychoice win95-btn px-4 py-1.5 text-xs text-black bg-yellow-200 hover:bg-yellow-300 w-full mt-1">
                   ← Back to Main Menu
                 </button>
               </div>

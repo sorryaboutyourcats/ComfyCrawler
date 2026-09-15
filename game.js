@@ -7,6 +7,7 @@
     const modalSettings = document.getElementById('modalSettings');
     const victoryModal = document.getElementById('victoryModal');
     const btnPlayAgain = document.getElementById('btnPlayAgain');
+    const btnVictoryFavorite = document.getElementById('btnVictoryFavorite');
     const winMovesCount = document.getElementById('winMovesCount');
     const victoryText = document.getElementById('victoryText');
     const confettiCanvas = document.getElementById('confettiCanvas');
@@ -366,6 +367,16 @@
     // starts, cleared back to null on openSetupScreen. Lets "Erase Current Run" in the quit
     // menu delete this exact saved session without the player having to find it in History.
     let currentRunHistoryId = null;
+    // Whether currentRunHistoryId is already starred, mirrored here rather than read off
+    // historyEntries because the victory box can show up before the History window has ever
+    // been opened this session (historyEntries still []). Set alongside currentRunHistoryId
+    // itself at both of its assignments below; the Victory box's star reads this, not the list.
+    let currentRunFavorite = false;
+    // The four prompts a History replay was made from, or null for a freshly generated run (its
+    // own prompts are already sitting in the mad-lib fields - nothing to restore). Set only by
+    // loadHistoryDungeon; openSetupScreen writes these back into the fields - as one undo step,
+    // so whatever was typed there before is one Ctrl+Z away - then clears this back to null.
+    let currentRunHistoryPrompts = null;
     let crawlStarted = false;
     // Date.now() timestamp until which the intro crawl counts as "being read", so the screen
     // saver's idle timer holds off even if the story shipped with no narration audio (or
@@ -1198,6 +1209,22 @@
       // clear it so it can't keep the screen saver (idle or ✕-forced) suppressed here.
       crawlReadingUntil = 0;
       currentRunHistoryId = null;
+      currentRunFavorite = false;
+      // Landing back on the menu from a History replay: put that run's own prompts back into
+      // the fields, so what's shown matches what was actually just played instead of whatever
+      // draft was sitting there beforehand - and one undo step restores that draft if it was
+      // wanted after all. A freshly generated run never sets this: its own prompts are already
+      // in the fields, untouched since Create was pressed.
+      if (currentRunHistoryPrompts) {
+        const prompts = currentRunHistoryPrompts;
+        currentRunHistoryPrompts = null;
+        asOneSetupStep(() => {
+          fillPromptField(wallPromptInput, prompts.wall, null);
+          fillPromptField(playerPromptInput, prompts.player, 'player');
+          fillPromptField(weaponPromptInput, prompts.weapon, 'weapon');
+          fillPromptField(enemyPromptInput, prompts.enemy, 'enemy');
+        });
+      }
       stopConfetti();
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
@@ -1706,7 +1733,7 @@
       // in index.html and the browser hands us the quoted string, so the key must include them.
       '"manhattan"':     { player: 'rat',                     weapon: 'pizza',            enemy: 'everything bagel with cheese' },
       '"hell"':            { player: '"Rachel" lady reporter',           weapon: 'baseball bat',     enemy: '"Donald Trump"' },
-      'motherboard':     { player: 'anime fluffy cat',        weapon: 'halberd',          enemy: 'anime villainess' },
+      'motherboard':     { player: 'colorful anime fluffy cat', weapon: 'halberd',          enemy: 'anime villainess' },
       'pet store':       { player: 'Yorkshire Terrier',       weapon: 'whip',             enemy: 'bright stuffed animal' },
       'Sega arcade':     { player: '"Goodcow" the cow',       weapon: 'Dreamcast controller', enemy: '"Sonic"' },
       'supermarket':     { player: 'cashier',                 weapon: 'shopping basket',  enemy: 'old person' },
@@ -1755,6 +1782,8 @@
       // manhattan/Sonic/Elon Musk above): the wall renders the real city and the player draws
       // the real figure, rather than a generic bucket.
       '"Rome"': { player: '"Jesus"', weapon: 'cross', enemy: 'balaclava wearing people with tactical law enforcement gear' },
+      'Tokyo Tower': { player: 'anime fluffy cat', weapon: 'ramen spoon', enemy: '"Sailor Moon"' },
+      'craigslist':  { player: 'good waifu',        weapon: 'crowbar',    enemy: 'evil waifu' },
     };
 
     function bindPresetButton(btn) {
@@ -3223,6 +3252,24 @@
     }
     function takeDeadChoice() {
       (deadChoiceIndex === 0 ? restartDungeon : openSetupScreen)();
+    }
+
+    // Victory-box keyboard cursor: same shape as the death box's above, but starts on "Back to
+    // Main Menu" (index 1) rather than index 0 - that button is what Enter/Space always did
+    // here before Favorite existed, and defaulting to it keeps that muscle memory working.
+    const victoryChoiceBtns = [btnVictoryFavorite, btnPlayAgain];
+    let victoryChoiceIndex = 1;
+    function syncVictoryChoice() {
+      victoryChoiceBtns.forEach((b, i) => { if (b) b.classList.toggle('selected', i === victoryChoiceIndex); });
+    }
+    function moveVictorySelection(delta) {
+      const n = victoryChoiceBtns.length;
+      victoryChoiceIndex = (victoryChoiceIndex + delta + n) % n;
+      syncVictoryChoice();
+      playSfx('turn', { gain: 0.4 });
+    }
+    function takeVictoryChoice() {
+      (victoryChoiceIndex === 0 ? toggleVictoryFavorite : openSetupScreen)();
     }
 
     // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
@@ -7217,8 +7264,14 @@
       // let a run of luck make the whole opening walkers, which is exactly the "you never saw a
       // flyer before the wing" case this is meant to prevent. The very first one is pinned to
       // the walker regardless - it is the foe every other one is a variation on.
+      // Capped at easeCount - 1 (once there's more than one) rather than a bare ceil: on a
+      // small Easy maze easeCount often lands on exactly 2 (one door, most of the maze in
+      // front of it), and ceil(2*4/7) = 2 dealt both of them walker - zero flyers - which is
+      // the "every enemy is the same default walking enemy" case. Capping guarantees a flyer
+      // shows up as soon as there is a second eased foe to give one to.
       const easeCount = easeSet.size;
-      const easeWalkers = Math.ceil(easeCount * 4 / 7);
+      const easeWalkers = easeCount <= 1 ? easeCount
+        : Math.min(Math.ceil(easeCount * 4 / 7), easeCount - 1);
       const easeDeal = [];
       for (let i = 0; i < easeCount; i++) easeDeal.push(i < easeWalkers ? 'walker' : 'flyer');
       _shuffle(easeDeal);
@@ -7774,6 +7827,9 @@
       const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
       if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
         winMovesCount.textContent = totalMoves;
+        paintVictoryFavorite();
+        victoryChoiceIndex = 1;   // keyboard cursor starts on "Back to Main Menu"
+        syncVictoryChoice();
         showVictoryOutro();
         playSfx('end', { vary: 0 });
         victoryModal.classList.remove('hidden');
@@ -8040,16 +8096,24 @@
         return;
       }
 
-      // The victory box is up and its only control is "Back to Main Menu": Enter (or Space)
-      // takes it, the same as clicking the button, so a keyboard player never has to reach
-      // for the mouse to leave a won run.
+      // The victory box is up: ↑↓ (also ←→ / WASD) move the cursor between its two buttons -
+      // "Favorite this run" and "Back to Main Menu" - and Enter/Space takes the highlighted
+      // one, same pattern as the death box below. Defaults to Main Menu (see syncVictoryChoice
+      // at the box's open) so a bare Enter still exits instantly, same as before this had a
+      // second button to choose between.
       if (victoryModal && !victoryModal.classList.contains('hidden')) {
-        if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') {
+        if (['ArrowUp', 'KeyW', 'ArrowLeft', 'KeyA'].includes(e.code)) {
+          e.preventDefault();
+          moveVictorySelection(-1);
+        } else if (['ArrowDown', 'KeyS', 'ArrowRight', 'KeyD'].includes(e.code)) {
+          e.preventDefault();
+          moveVictorySelection(1);
+        } else if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') {
           e.preventDefault();
           // Stop the same keypress reaching the setup-screen listener below, which would
           // otherwise see the now-visible setup screen and fire CREATE.
           e.stopImmediatePropagation();
-          openSetupScreen();
+          takeVictoryChoice();
         }
         return;
       }
@@ -9038,6 +9102,7 @@
               clearInterval(timerInterval);
               generationInFlight = false;
               currentRunHistoryId = p.completed_bundle.history_id || null;
+              currentRunFavorite = false;   // a freshly generated run has never been starred
               armEnterDungeon(p.completed_bundle);
             } else if (p.error) {
               clearInterval(pollInterval);
@@ -9410,6 +9475,50 @@
       renderHistoryFootNote();
     }
 
+    // The Victory box's own star, so a run worth keeping can be locked in the moment it's won
+    // instead of the player having to remember its wall/prompt combo and go find it in History
+    // afterward. Mirrors currentRunFavorite rather than an entry.favorite lookup - see that
+    // variable's declaration for why - and pushes the same change into historyEntries when a
+    // matching row exists there, so the History window agrees without a refetch.
+    function paintVictoryFavorite() {
+      if (!btnVictoryFavorite) return;
+      btnVictoryFavorite.disabled = !currentRunHistoryId;
+      btnVictoryFavorite.textContent = currentRunFavorite ? '⭐ Favorited' : '☆ Favorite this run';
+      btnVictoryFavorite.classList.toggle('is-selected', currentRunFavorite);
+      btnVictoryFavorite.title = !currentRunHistoryId
+        ? 'This run has no saved History entry to favorite.'
+        : currentRunFavorite
+          ? 'Favorite - locked against deleting in History. Click to unstar it.'
+          : 'Favorite this dungeon - it cannot be deleted from History while it is starred';
+    }
+
+    async function toggleVictoryFavorite() {
+      if (!currentRunHistoryId) return;
+      const wasFavorite = currentRunFavorite;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/history_favorite`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: currentRunHistoryId, favorite: !wasFavorite })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || 'The server refused the change.');
+        currentRunFavorite = !!data.favorite;
+      } catch (err) {
+        console.error('Victory favorite error:', err);
+        alert('Could not change that favorite.\n\n' + err.message);
+        return;
+      }
+      // Keep the History window's own copy in sync so opening it later needs no refetch -
+      // same reasoning as currentRunFavorite's own comment.
+      if (Array.isArray(historyEntries)) {
+        const entry = historyEntries.find(e => e.id === currentRunHistoryId);
+        if (entry) entry.favorite = currentRunFavorite;
+      }
+      paintVictoryFavorite();
+    }
+    if (btnVictoryFavorite) btnVictoryFavorite.addEventListener('click', toggleVictoryFavorite);
+
     // "Similar only". Two prompts count as the same idea only when one is written inside the
     // other ("windows 95" / "windows 95 3d maze") or they're identical outright - NOT merely
     // sharing a word, which let a "corn maze" through as "similar" to a "windows 95 3d maze"
@@ -9598,6 +9707,14 @@
     function openHistory() {
       if (!modalHistory) return;
       modalHistory.classList.remove('hidden');
+      // "Similar only" compares against the dungeon actually being played mid-run - at the
+      // menu there is no run to compare against, only whatever is sitting in the mad-lib
+      // fields (which may just be a different idea being drafted), so the checkbox is hidden
+      // there rather than filtering the list against something that isn't really a "current
+      // dungeon". historySimilarReference()'s own menu fallback is left in place - nothing
+      // reads it while this is unchecked and hidden.
+      if (historySimilarOnlyLabel) historySimilarOnlyLabel.classList.toggle('hidden', !currentRunHistoryId);
+      if (!currentRunHistoryId && historySimilarOnly) historySimilarOnly.checked = false;
       syncHistorySimilarOnly();
       setHistoryMessage('Reading saved dungeons...');
       if (historyFootNote) historyFootNote.textContent = '';
@@ -9762,6 +9879,11 @@
         paintProgressChunks(100);
         setTabTitlePercent(100);
         currentRunHistoryId = entry.id || null;
+        currentRunFavorite = !!entry.favorite;
+        currentRunHistoryPrompts = {
+          wall: entry.wall_style || '', player: entry.player_style || '',
+          weapon: entry.weapon_style || '', enemy: entry.enemy_style || ''
+        };
         armEnterDungeon(bundle);
         if (progHeaderIcon) progHeaderIcon.textContent = '📜';
         if (progHeaderText) progHeaderText.textContent = 'Loaded from History!';
@@ -9834,6 +9956,11 @@
 
     function applyHistoryPrompts(entry) {
       closeHistory();
+      // Cleared before the openSetupScreen() call below rather than after: that call has its
+      // own auto-refill for a run started from History (see currentRunHistoryPrompts), and
+      // without this a "Prompts" press on such a run would fill the fields with the CURRENT
+      // run's prompts as one undo step and then this entry's as a second, right on top of it.
+      currentRunHistoryPrompts = null;
       // Leave for the menu exactly as the quit box's "Back to Main Menu" does. Only ever
       // reached mid-run once the player has said yes in the box above.
       if (screenSetup.classList.contains('hidden')) openSetupScreen();
