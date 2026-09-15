@@ -521,21 +521,6 @@
       0%   { opacity: 1; }
       100% { opacity: 0; }
     }
-    #endingSkipHint {
-      position: absolute;
-      right: 8px;
-      bottom: 6px;
-      padding: 1px 6px;
-      font-size: 10px;
-      font-weight: bold;
-      letter-spacing: 1px;
-      color: rgba(255, 255, 255, 0.85);
-      background: rgba(0, 0, 0, 0.45);
-      opacity: 0;
-      transition: opacity 0.6s ease;
-      pointer-events: none;
-    }
-    #endingSkipHint.is-shown { opacity: 1; }
     /* The victory box over the clip's held last frame: a much lighter wash than the usual 60%,
        and sat at the bottom of the viewport instead of dead centre - the clip ends on the hero
        cheering in the middle of the frame, which a centred box covered completely. Id selectors,
@@ -666,6 +651,20 @@
     .hist-movie[data-kind="filming"]:hover {
       opacity: 0.9;
       background: #fecaca;
+    }
+    /* A run with no ending movie yet: its 🎥 is faded well down, so the rows that already have a
+       🎬 stand out at a glance. Still clickable (it films one), so hover and the keyboard cursor
+       bring it back up - the opacity would otherwise fade the dotted focus outline with it. When
+       it is also disabled (another movie is filming) it drops lower than any other grey button. */
+    .hist-movie[data-kind="film"] {
+      opacity: 0.35;
+    }
+    .hist-movie[data-kind="film"]:hover,
+    .hist-movie[data-kind="film"]:focus-visible {
+      opacity: 0.85;
+    }
+    .hist-movie[data-kind="film"]:disabled {
+      opacity: 0.22;
     }
     /* History's ending movie player: the clip at its own 4:3, never pixelated, on black. */
     #endingPlayerFrame {
@@ -1220,7 +1219,7 @@
          paying for generation, or bin one to get the disk space back. Rows are built by
          renderHistoryList() in game.js. -->
     <div id="modalHistory" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
-      <div class="win95-box w-full max-w-2xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
+      <div class="win95-box w-full max-w-4xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
         <div class="win95-title flex items-center justify-between mb-2">
           <span>📜 History</span>
           <button id="btnCloseHistory" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
@@ -1511,12 +1510,11 @@
             <!-- ENDING CUTSCENE (Options > Ending Video). Takes the whole viewport the moment the
                  boss's health runs out, and stays up on the clip's last frame once it ends, with
                  the victory box raised over it. z-20: under the death / victory boxes (z-30) and
-                 the level-up box (z-40). The flash sheet is the white cut into the clip; the hint
-                 fades in after a moment. All driven by game.js - see beginEndingPlayback. -->
+                 the level-up box (z-40). The flash sheet is the white cut into the clip. All
+                 driven by game.js - see beginEndingPlayback. -->
             <div id="endingCutscene" class="absolute inset-0 z-20 hidden">
               <video id="endingVideo" playsinline preload="auto"></video>
               <div id="endingFlash"></div>
-              <div id="endingSkipHint">ESC to skip</div>
             </div>
 
             <div id="defeatModal" class="absolute inset-0 bg-black/70 z-30 flex items-center justify-center p-4 hidden">

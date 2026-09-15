@@ -3298,7 +3298,6 @@
     const endingCutscene = document.getElementById('endingCutscene');
     const endingVideoEl = document.getElementById('endingVideo');
     const endingFlash = document.getElementById('endingFlash');
-    const endingSkipHint = document.getElementById('endingSkipHint');
     const endingBadge = document.getElementById('endingBadge');
     const victoryEndingStatus = document.getElementById('victoryEndingStatus');
     const btnVictoryEnding = document.getElementById('btnVictoryEnding');
@@ -3307,9 +3306,6 @@
     // The killing blow's beat before the cut: the damage number and the death cry land and the boss
     // reels in its hurt look for a moment, so the white flash reads as that blow's impact.
     const ENDING_CUT_DELAY_MS = 900;
-    // The skip hint waits, so a player still mashing strike through the killing blow sees the
-    // clip open before being offered a way out of it.
-    const ENDING_SKIP_HINT_MS = 1500;
     // The last frame gets a beat to itself before the victory box rises over it - the clip ends on
     // the hero's victory pose, and it should land before the window does. ESC/Enter cut it short.
     const ENDING_HOLD_MS = 1100;
@@ -3319,14 +3315,45 @@
     // against the reference's -15.0), and that bed plays through musicMaster at 0.6 - so 0.6 here
     // lands the cutscene's score where the fight's music just was.
     const ENDING_VOLUME = 0.6;
+    // H3 stops the soundtrack dead with the picture: the fanfare is at its loudest in the clip's
+    // last tenth of a second (measured -12 dB RMS against -14 across the rest), so a clip left to
+    // play out ends mid-note. Both players ride its sound down over this last stretch instead - and
+    // the cutscene starts the victory loop as the ride begins, so the loop is already up by the
+    // last frame and scores the hold under it.
+    const ENDING_AUDIO_FADE_SEC = 2.0;
 
-    let endingRunId = null;        // the History id everything below belongs to
+    // Keeps `video`'s volume on the fade for as long as it plays, frame by frame - the <video>
+    // sits outside the WebAudio graph, so there is no gain ramp to schedule. `onFadeStart` fires
+    // once per play-through, as the fade begins; seeking back to the start re-arms it. A hidden tab
+    // gets no animation frames and so no fade, which is why the cutscene's end starts the victory
+    // loop again for itself.
+    function fadeEndingAudioOut(video, onFadeStart) {
+      let raf = 0;
+      let fading = false;
+      const step = () => {
+        raf = 0;
+        const left = Number.isFinite(video.duration) ? video.duration - video.currentTime : Infinity;
+        const level = Math.max(0, Math.min(1, left / ENDING_AUDIO_FADE_SEC));
+        video.volume = ENDING_VOLUME * level;
+        if (level >= 1) {
+          fading = false;
+        } else if (!fading) {
+          fading = true;
+          if (onFadeStart) onFadeStart();
+        }
+        if (!video.paused && !video.ended) raf = requestAnimationFrame(step);
+      };
+      video.addEventListener('play', () => {
+        if (!raf) raf = requestAnimationFrame(step);
+      });
+    }
+
+    let endingRunId = null;       // the History id everything below belongs to
     let endingClipUrl = null;      // blob: URL of that run's clip, once fetched
     let endingStatus = null;       // the last /api/ending_video_status reply for that run
     let endingSawFilming = false;  // a background render was seen in progress this run
     let endingPollTimer = null;
     let endingCutTimer = null;
-    let endingHintTimer = null;
     let endingHoldTimer = null;
     // 'idle' -> 'pending' (the beat after the killing blow) -> 'playing' -> 'held' (ended, last
     // frame up under the victory box). "Watch / Replay Ending" runs held-or-idle -> playing -> held.
@@ -3366,7 +3393,6 @@
     function hideEndingLayer() {
       if (endingCutscene) endingCutscene.classList.add('hidden');
       if (endingFlash) endingFlash.classList.remove('is-flashing');
-      if (endingSkipHint) endingSkipHint.classList.remove('is-shown');
     }
 
     // Whatever the last run left: its poll, its clip in memory, the layer on screen. Runs as every
@@ -3374,7 +3400,6 @@
     function resetEndingCutscene() {
       if (endingPollTimer) { clearTimeout(endingPollTimer); endingPollTimer = null; }
       if (endingCutTimer) { clearTimeout(endingCutTimer); endingCutTimer = null; }
-      if (endingHintTimer) { clearTimeout(endingHintTimer); endingHintTimer = null; }
       if (endingHoldTimer) { clearTimeout(endingHoldTimer); endingHoldTimer = null; }
       hideEndingLayer();
       if (endingVideoEl) {
@@ -3565,14 +3590,6 @@
         void endingFlash.offsetWidth;   // restart the animation on a replay
         endingFlash.classList.add('is-flashing');
       }
-      if (endingSkipHint) {
-        endingSkipHint.classList.remove('is-shown');
-        if (endingHintTimer) clearTimeout(endingHintTimer);
-        endingHintTimer = setTimeout(() => {
-          endingHintTimer = null;
-          if (endingPhase === 'playing') endingSkipHint.classList.add('is-shown');
-        }, ENDING_SKIP_HINT_MS);
-      }
       endingVideoEl.volume = ENDING_VOLUME;
       endingVideoEl.muted = false;
       try { endingVideoEl.currentTime = 0; } catch (e) { /* not seekable yet - it starts at 0 anyway */ }
@@ -3595,8 +3612,9 @@
       if (endingPhase !== 'playing' && endingPhase !== 'pending') return;
       endingPhase = 'held';
       endingPlayed = true;
-      if (endingHintTimer) { clearTimeout(endingHintTimer); endingHintTimer = null; }
-      if (endingSkipHint) endingSkipHint.classList.remove('is-shown');
+      // Normally already playing, started as the clip's sound began to fade. A skip, or a clip
+      // that played out in a hidden tab, never got that far - and the hold must not sit in silence.
+      playScreenMusic('victory');
       if (endingHoldTimer) clearTimeout(endingHoldTimer);
       endingHoldTimer = setTimeout(raiseEndingVictoryBox, ENDING_HOLD_MS);
     }
@@ -3658,6 +3676,11 @@
     }
 
     if (endingVideoEl) {
+      // The victory loop crossfades in under the clip's fading fanfare. playScreenMusic is
+      // idempotent, so showVictoryBox asking for it again when the box rises changes nothing.
+      fadeEndingAudioOut(endingVideoEl, () => {
+        if (endingPhase === 'playing') playScreenMusic('victory');
+      });
       endingVideoEl.addEventListener('ended', finishEndingPlayback);
       endingVideoEl.addEventListener('error', () => {
         if (endingPhase === 'playing') finishEndingPlayback();
@@ -10483,11 +10506,19 @@
 
     function replayEndingPlayer() {
       if (!endingPlayerUrl || !endingPlayerVideo) return;
+      duckMusicForMovie(true);   // the last play-through handed it back as its sound faded
       try { endingPlayerVideo.currentTime = 0; } catch (e) {}
       const p = endingPlayerVideo.play();
       if (p && p.catch) p.catch(() => {});
     }
 
+    // Same fade as the cutscene, and the music the movie ducked comes back up underneath it, so
+    // the movie ends on a crossfade here too rather than a hard stop into the quiet.
+    if (endingPlayerVideo) {
+      fadeEndingAudioOut(endingPlayerVideo, () => {
+        if (modalEndingPlayer && !modalEndingPlayer.classList.contains('hidden')) duckMusicForMovie(false);
+      });
+    }
     if (btnEndingPlayerClose) btnEndingPlayerClose.addEventListener('click', closeEndingPlayer);
     if (btnEndingPlayerOk) btnEndingPlayerOk.addEventListener('click', closeEndingPlayer);
     if (btnEndingPlayerReplay) btnEndingPlayerReplay.addEventListener('click', replayEndingPlayer);
