@@ -388,6 +388,17 @@
     // "you will lose this" refresh warning and the cancel beacon further down - see the
     // beforeunload/pagehide pair next to the CREATE handler.
     let generationInFlight = false;
+    // The one ending movie render happening outside a run, as /api/ending_video_job last
+    // reported it: {state, session, percent, error, manual}. manual = a History row's movie button
+    // asked for it, and while one of those is filming CREATE, Fill-in and the other rows' movie
+    // buttons are greyed out - see watchEndingJob. Declared up here because the Fill-in label code
+    // reads it while the page is still loading.
+    let endingJob = { state: 'idle', session: null, percent: 0, error: null, manual: false };
+    const ENDING_FILMING_LOCK_TITLE =
+      'An ending movie is being filmed from History - this comes back as soon as it is done.';
+    function endingManualFilming() {
+      return !!endingJob.manual && (endingJob.state === 'queued' || endingJob.state === 'rendering');
+    }
 
     // ---- Intro narration (Piper, pre-rendered server-side) -----------------
     // The server picks one narrator (alan or kristin) per story and ships back one WAV
@@ -1205,6 +1216,9 @@
       resetTabTitle();
       screenGame.classList.add('hidden');
       stopOutroNarration();
+      // The run's cutscene - playing, held under the box, or still being polled for - goes with
+      // it. A background render keeps filming server-side until something else needs ComfyUI.
+      resetEndingCutscene();
       // Any leftover "still reading the intro crawl" hold is meaningless back on the menu -
       // clear it so it can't keep the screen saver (idle or ✕-forced) suppressed here.
       crawlReadingUntil = 0;
@@ -1447,6 +1461,65 @@
     // offer, so it's forced here rather than read back from a stored pick made before that.
     setLastAttackFrame('mixed');
 
+    // Ending Video's two Off / On rows - see the ENDING CUTSCENE section for what they drive. Both
+    // default to Off and, like difficulty, stick across reloads: a refresh that quietly turned the
+    // cutscene off would cost a whole generation made without it. The second row (film it in the
+    // background while playing) is greyed out while the first is Off, since it has nothing to
+    // move off the loading screen - but it keeps its own pick for when the cutscene comes back on.
+    const ENDING_VIDEO_KEY = 'comfycrawler.endingVideo';
+    const ENDING_BACKGROUND_KEY = 'comfycrawler.endingVideoBackground';
+    const endingVideoRow = document.getElementById('endingVideoRow');
+    const endingBackgroundRow = document.getElementById('endingBackgroundRow');
+    const endingBackgroundLabel = document.getElementById('endingBackgroundLabel');
+    let endingVideoOn = false;
+    let endingBackgroundOn = false;
+
+    function paintEndingOptionRows() {
+      const paintRow = (row, key, on, disabled) => {
+        if (!row) return;
+        row.querySelectorAll('button').forEach((btn) => {
+          const picked = (btn.dataset[key] === 'on') === on;
+          btn.classList.toggle('is-selected', picked);
+          btn.setAttribute('aria-pressed', picked ? 'true' : 'false');
+          btn.disabled = disabled;
+        });
+      };
+      paintRow(endingVideoRow, 'endingVideo', endingVideoOn, false);
+      paintRow(endingBackgroundRow, 'endingBackground', endingBackgroundOn, !endingVideoOn);
+      if (endingBackgroundLabel) endingBackgroundLabel.classList.toggle('opacity-50', !endingVideoOn);
+    }
+
+    function saveEndingOptions() {
+      try {
+        localStorage.setItem(ENDING_VIDEO_KEY, endingVideoOn ? 'on' : 'off');
+        localStorage.setItem(ENDING_BACKGROUND_KEY, endingBackgroundOn ? 'on' : 'off');
+      } catch (_) { /* storage disabled or full - the pick just won't stick */ }
+    }
+
+    if (endingVideoRow) {
+      endingVideoRow.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ending-video-btn');
+        if (!btn || btn.disabled) return;
+        endingVideoOn = btn.dataset.endingVideo === 'on';
+        paintEndingOptionRows();
+        saveEndingOptions();
+      });
+    }
+    if (endingBackgroundRow) {
+      endingBackgroundRow.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ending-background-btn');
+        if (!btn || btn.disabled) return;
+        endingBackgroundOn = btn.dataset.endingBackground === 'on';
+        paintEndingOptionRows();
+        saveEndingOptions();
+      });
+    }
+    try {
+      endingVideoOn = localStorage.getItem(ENDING_VIDEO_KEY) === 'on';
+      endingBackgroundOn = localStorage.getItem(ENDING_BACKGROUND_KEY) === 'on';
+    } catch (_) { /* no storage - both stay Off */ }
+    paintEndingOptionRows();
+
     btnSettings.addEventListener('click', () => {
       modalSettings.classList.remove('hidden');
       focusFirstIn(modalSettings, btnSaveSettings);
@@ -1660,6 +1733,7 @@
       btn.title = allFilled
         ? 'Every field is filled in - randomize all four'
         : "Fill in every empty field to go with what you've typed";
+      if (endingManualFilming()) btn.title = ENDING_FILMING_LOCK_TITLE;
     }
 
     SETUP_TEXT_FIELDS.forEach(([key, el]) => {
@@ -2210,8 +2284,10 @@
     // The victory box locks input the same way: once the player has taken the stairs out, the
     // run is over and the character must not be walked around behind the outro. It stays locked
     // until a full reset (restartDungeon / back to menu) hides the box again.
+    // The ending cutscene locks it from the killing blow on: the run is over once it starts.
     function inputLocked() {
-      return levelUpOpen || (victoryModal && !victoryModal.classList.contains('hidden'));
+      return levelUpOpen || (victoryModal && !victoryModal.classList.contains('hidden'))
+        || endingPhase !== 'idle';
     }
 
     const btnCombatDodgeL = document.getElementById('btnCombatDodgeL');
@@ -2579,6 +2655,31 @@
       return cv;
     }
 
+    // A red-washed copy of a frame, for the beaten boss held before the ending cutscene's cut (see
+    // endingHold). Same caching and the same image-like canvas as recolorFrame, and the same size
+    // as its source, so drawEnemyContent still sizes it off the idle's measured box.
+    const _hurtTintCache = new WeakMap();
+    function hurtTintFrame(img) {
+      if (!img || !img.complete || !(img.naturalWidth > 0)) return img;
+      const hit = _hurtTintCache.get(img);
+      if (hit) return hit;
+      const w = img.naturalWidth, h = img.naturalHeight;
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const cx = cv.getContext('2d');
+      cx.drawImage(img, 0, 0, w, h);
+      // source-atop paints only where the sprite already has pixels, so the silhouette keeps its
+      // own edges and the transparent surround stays transparent.
+      cx.globalCompositeOperation = 'source-atop';
+      cx.fillStyle = 'rgba(255, 40, 30, 0.55)';
+      cx.fillRect(0, 0, w, h);
+      Object.defineProperty(cv, 'naturalWidth', { value: w });
+      Object.defineProperty(cv, 'naturalHeight', { value: h });
+      Object.defineProperty(cv, 'complete', { value: true });
+      _hurtTintCache.set(img, cv);
+      return cv;
+    }
+
     // The {idle, attack, block} set a variant draws with. Base variants own theirs; a pack foe
     // borrows its base's and recolours every frame of it. Null means the sprite it needs never
     // arrived, which is the caller's cue to fall back to whatever the mode did ship.
@@ -2715,6 +2816,7 @@
       e.enraged = false;   // walker: gave up fleeing and is charging the player instead
       e.strikeLanded = false;   // the current attack's blow has landed - see landEnemyStrike
       e.deathFade = 0;
+      e.endingHold = false;     // a beaten boss held on screen for the ending cutscene's cut
       // Circler: half a circle apart, around a centre at its own spawn x, so two of them are
       // on opposite sides of their patterns and the player never faces both low points at once.
       // slotX/orbitBase are that arrangement kept as the slot this one OWNS for the whole
@@ -2901,6 +3003,7 @@
       if ((activeMarker && activeMarker.variant === 'boss') ||
           (combatState.enemy && combatState.enemy.variant === 'boss')) {
         bossDefeated = true;
+        markRunBeaten();
       }
       if (activeMarker) activeMarker.alive = false;
       activeMarker = null;
@@ -3148,6 +3251,421 @@
       }, OUTRO_NARRATE_DELAY_MS);
     }
 
+    // The one victory box, raised either by stepping onto the stairs (drawMinimap) or over the
+    // ending cutscene's last frame (finishEndingPlayback). `overEnding` lightens the wash so the
+    // held frame reads through it. A box coming back up after the player replayed the cutscene
+    // from it does not narrate the outro a second time.
+    let victoryShownThisRun = false;
+    function showVictoryBox(overEnding) {
+      if (!victoryModal || !victoryModal.classList.contains('hidden')) return;
+      const firstTime = !victoryShownThisRun;
+      victoryShownThisRun = true;
+      markRunBeaten();
+      winMovesCount.textContent = totalMoves;
+      victoryModal.classList.toggle('over-ending', !!overEnding);
+      paintVictoryFavorite();
+      paintVictoryEnding();
+      victoryChoiceBtn = btnPlayAgain;   // keyboard cursor starts on "Back to Main Menu"
+      syncVictoryChoice();
+      showVictoryOutro();
+      playSfx('end', { vary: 0 });
+      victoryModal.classList.remove('hidden');
+      startConfetti();
+      if (firstTime) startOutroNarration();
+      // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
+      // and the victory loop scores the box until the player heads back to the menu.
+      fadeOutDungeonMusic(0.6);
+      // Cancellable: hitting Enter straight through the win box calls stopScreenMusic()
+      // (via returnToMenuMusic) before this fires, and the victory loop must not then
+      // start up over the menu music the player has already gone back to.
+      deferScreenMusic('victory', 700);
+    }
+
+    // ==========================================
+    // ENDING CUTSCENE (Options > Ending Video)
+    // ==========================================
+    // server.py films one clip per run with MiniMax H3 - the hero landing the final blow, the
+    // boss falling apart with the stairs out glowing at the end of the corridor, the hero cheering
+    // - and keeps it beside the saved run as dungeon_sessions/<id>/ending.mp4 (see
+    // render_ending_video). This end asks whether the run being played has one, or has one filming
+    // in the background; pulls it into memory as a blob the moment it exists; and cuts to it the
+    // instant the boss's health runs out. When it ends, the clip's last frame stays up and the
+    // victory box rises over it - the same box the stairs raise.
+    //
+    // A boss that falls before a background render is done gets the ordinary ending: the corpse
+    // dissolves, the player walks to the stairs, and the victory box offers the clip ("Watch
+    // Ending") once it lands.
+    const endingCutscene = document.getElementById('endingCutscene');
+    const endingVideoEl = document.getElementById('endingVideo');
+    const endingFlash = document.getElementById('endingFlash');
+    const endingSkipHint = document.getElementById('endingSkipHint');
+    const endingBadge = document.getElementById('endingBadge');
+    const victoryEndingStatus = document.getElementById('victoryEndingStatus');
+    const btnVictoryEnding = document.getElementById('btnVictoryEnding');
+    const btnVictoryKeepExploring = document.getElementById('btnVictoryKeepExploring');
+
+    // The killing blow's beat before the cut: the damage number and the death cry land and the boss
+    // reels in its hurt look for a moment, so the white flash reads as that blow's impact.
+    const ENDING_CUT_DELAY_MS = 900;
+    // The skip hint waits, so a player still mashing strike through the killing blow sees the
+    // clip open before being offered a way out of it.
+    const ENDING_SKIP_HINT_MS = 1500;
+    // The last frame gets a beat to itself before the victory box rises over it - the clip ends on
+    // the hero's victory pose, and it should land before the window does. ESC/Enter cut it short.
+    const ENDING_HOLD_MS = 1100;
+    const ENDING_POLL_MS = 4000;
+    // The <video> plays outside the WebAudio graph, so it gets the music bus's level by hand. H3
+    // masters the soundtrack about as hot as the battle bed it was given (measured -14.0 dB mean
+    // against the reference's -15.0), and that bed plays through musicMaster at 0.6 - so 0.6 here
+    // lands the cutscene's score where the fight's music just was.
+    const ENDING_VOLUME = 0.6;
+
+    let endingRunId = null;        // the History id everything below belongs to
+    let endingClipUrl = null;      // blob: URL of that run's clip, once fetched
+    let endingStatus = null;       // the last /api/ending_video_status reply for that run
+    let endingSawFilming = false;  // a background render was seen in progress this run
+    let endingPollTimer = null;
+    let endingCutTimer = null;
+    let endingHintTimer = null;
+    let endingHoldTimer = null;
+    // 'idle' -> 'pending' (the beat after the killing blow) -> 'playing' -> 'held' (ended, last
+    // frame up under the victory box). "Watch / Replay Ending" runs held-or-idle -> playing -> held.
+    let endingPhase = 'idle';
+    let endingPlayed = false;      // the clip has played through at least once this run
+    let runBeatenSent = false;     // markRunBeaten has already told the server about this run
+
+    // The boss of the run being played is down - or its victory box is up, which covers a maze
+    // where the stairs could be reached around it. Recorded on the server once per run and never
+    // cleared: it is what unlocks the run's ending movie in History. The copy in historyEntries is
+    // updated too, so a History window opened straight after agrees without a refetch.
+    function markRunBeaten() {
+      const id = currentRunHistoryId;
+      if (!id || runBeatenSent) return;
+      runBeatenSent = true;
+      if (Array.isArray(historyEntries)) {
+        const entry = historyEntries.find(e => e.id === id);
+        if (entry) entry.beaten = true;
+      }
+      fetch(`${SERVER_URL}/api/history_beaten`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      }).then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); })
+        .catch(err => {
+          console.warn('Could not record this run as beaten:', err);
+          if (id === currentRunHistoryId) runBeatenSent = false;   // the victory box tries again
+        });
+    }
+
+    // True while the clip covers the viewport - playing, or holding its last frame. The combat
+    // sim freezes and the raycaster stops drawing under it.
+    function endingOwnsViewport() {
+      return endingPhase === 'playing' || endingPhase === 'held';
+    }
+
+    function hideEndingLayer() {
+      if (endingCutscene) endingCutscene.classList.add('hidden');
+      if (endingFlash) endingFlash.classList.remove('is-flashing');
+      if (endingSkipHint) endingSkipHint.classList.remove('is-shown');
+    }
+
+    // Whatever the last run left: its poll, its clip in memory, the layer on screen. Runs as every
+    // run starts (prepareEndingCutscene) and whenever one is left.
+    function resetEndingCutscene() {
+      if (endingPollTimer) { clearTimeout(endingPollTimer); endingPollTimer = null; }
+      if (endingCutTimer) { clearTimeout(endingCutTimer); endingCutTimer = null; }
+      if (endingHintTimer) { clearTimeout(endingHintTimer); endingHintTimer = null; }
+      if (endingHoldTimer) { clearTimeout(endingHoldTimer); endingHoldTimer = null; }
+      hideEndingLayer();
+      if (endingVideoEl) {
+        try { endingVideoEl.pause(); } catch (e) {}
+        if (endingVideoEl.getAttribute('src')) {
+          endingVideoEl.removeAttribute('src');
+          endingVideoEl.load();   // drops the decoded clip rather than keeping it buffered
+        }
+      }
+      if (endingClipUrl) { URL.revokeObjectURL(endingClipUrl); endingClipUrl = null; }
+      endingRunId = null;
+      endingStatus = null;
+      endingSawFilming = false;
+      endingPhase = 'idle';
+      endingPlayed = false;
+      runBeatenSent = false;
+      victoryShownThisRun = false;
+      if (victoryModal) victoryModal.classList.remove('over-ending');
+      paintEndingBadge();
+      paintVictoryEnding();
+    }
+
+    // A run is starting (enterDungeon): find out whether it has a clip or one on the way. Asks the
+    // server to start filming one when the background option is on and it has none - that covers
+    // a History replay of a run made without it, and a fresh run whose render the server lost.
+    function prepareEndingCutscene() {
+      resetEndingCutscene();
+      if (!endingVideoOn || !currentRunHistoryId) return;
+      endingRunId = currentRunHistoryId;
+      pollEndingStatus(endingRunId, endingBackgroundOn);
+    }
+
+    async function pollEndingStatus(id, mayStart) {
+      endingPollTimer = null;
+      if (id !== endingRunId) return;
+      let st = null;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/ending_video_status?id=${encodeURIComponent(id)}`);
+        st = await res.json();
+        if (st && st.state === 'none' && mayStart) {
+          const started = await fetch(`${SERVER_URL}/api/ending_video_start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          st = await started.json();
+        }
+      } catch (err) {
+        st = null;   // server away for a moment - keep asking at the normal pace
+      }
+      if (id !== endingRunId) return;   // the player left this run while the reply was coming
+      const state = st ? st.state : 'unknown';
+      if (st) endingStatus = st;
+      if (state === 'queued' || state === 'rendering') endingSawFilming = true;
+      paintEndingBadge();
+      paintVictoryEnding();
+      if (state === 'ready') { loadEndingClip(id); return; }
+      // Still filming, refused for now because a dungeon owns ComfyUI ('busy'), or no answer:
+      // look again shortly. none / failed / cancelled / missing are final for this run - a render
+      // that failed is not retried in a loop.
+      if (['queued', 'rendering', 'busy', 'unknown'].includes(state)) {
+        endingPollTimer = setTimeout(() => pollEndingStatus(id, mayStart), ENDING_POLL_MS);
+      }
+    }
+
+    async function loadEndingClip(id) {
+      if (endingClipUrl) return;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/ending_video?id=${encodeURIComponent(id)}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        if (id !== endingRunId || endingClipUrl) return;
+        endingClipUrl = URL.createObjectURL(blob);
+        // Handed to the element now rather than at the boss: preload="auto" decodes it ahead,
+        // so the cut lands on a clip that is already sitting in memory.
+        if (endingVideoEl) {
+          endingVideoEl.src = endingClipUrl;
+          endingVideoEl.load();
+        }
+      } catch (err) {
+        console.warn('Ending cutscene could not be loaded:', err);
+        // Asked again through the status poll rather than straight back at the file, so a clip
+        // that has genuinely gone (its run deleted) settles on "missing" instead of looping here.
+        if (id === endingRunId && !endingPollTimer) {
+          endingPollTimer = setTimeout(() => pollEndingStatus(id, false), ENDING_POLL_MS);
+        }
+      }
+      paintEndingBadge();
+      paintVictoryEnding();
+    }
+
+    // The little status-bar badge for a background render: how far it has got, then READY, so the
+    // player can tell whether reaching the boss now plays the cutscene. Only for a render actually
+    // seen filming - a clip that was made on the loading screen needs no announcement.
+    function paintEndingBadge() {
+      if (!endingBadge) return;
+      const st = endingStatus ? endingStatus.state : null;
+      const show = !!endingRunId && endingSawFilming;
+      endingBadge.classList.toggle('hidden', !show);
+      if (!show) return;
+      if (endingClipUrl) {
+        endingBadge.textContent = '🎬 READY';
+        endingBadge.title = 'The ending cutscene is ready - it plays when the boss falls.';
+      } else if (st === 'rendering' || st === 'queued') {
+        endingBadge.textContent = `🎬 ${Math.max(0, Math.min(99, endingStatus.percent || 0))}%`;
+        endingBadge.title = 'The ending cutscene is filming in the background. Beat the boss before'
+          + ' it finishes and you get the stairs ending instead.';
+      } else if (st === 'ready') {
+        endingBadge.textContent = '🎬 ...';
+        endingBadge.title = 'The ending cutscene is done - loading it.';
+      } else {
+        endingBadge.textContent = '🎬 ✕';
+        endingBadge.title = 'The ending cutscene did not finish'
+          + (endingStatus && endingStatus.error ? ': ' + endingStatus.error : '.')
+          + ' This run ends at the stairs.';
+      }
+    }
+
+    // The victory box's cutscene line and button - see the HTML comment on #victoryEndingStatus.
+    function paintVictoryEnding() {
+      if (!btnVictoryEnding || !victoryEndingStatus) return;
+      const hasClip = !!endingClipUrl;
+      const st = endingStatus ? endingStatus.state : null;
+      const filming = !hasClip && !!endingRunId && ['queued', 'rendering', 'busy', 'ready'].includes(st);
+      btnVictoryEnding.classList.toggle('hidden', !hasClip);
+      btnVictoryEnding.textContent = endingPlayed ? '🎬 Replay Ending' : '🎬 Watch Ending';
+      // Only over the cutscene's last frame, and only while the player is not already standing on
+      // the stairs - a box the stairs raised (or a replay watched from one) has nowhere to go back to.
+      if (btnVictoryKeepExploring) {
+        const onStairs = player.gridX === exitRoom.x && player.gridY === exitRoom.y;
+        btnVictoryKeepExploring.classList.toggle('hidden', !(endingPhase === 'held' && !onStairs));
+      }
+      victoryEndingStatus.classList.toggle('hidden', !filming);
+      if (filming) {
+        victoryEndingStatus.textContent = st === 'rendering'
+          ? `🎬 The ending cutscene is still filming... ${Math.min(99, endingStatus.percent || 0)}%`
+          : '🎬 The ending cutscene is on its way...';
+      }
+      // The button can appear under a box that is already up, so the cursor is re-drawn against
+      // whichever buttons are showing now.
+      syncVictoryChoice();
+    }
+
+    // The boss's health just hit zero. True when a cutscene is taking the ending over.
+    function startEndingCutscene() {
+      if (!endingVideoOn || !endingClipUrl || endingRunId !== currentRunHistoryId) return false;
+      if (endingPhase !== 'idle') return true;
+      endingPhase = 'pending';
+      releaseHeldKeys();
+      setCombatButtonsLive(false);
+      // What finishEncounterVictory would have recorded, had the fight been left to finish: the
+      // sim freezes under the clip, so it never gets there. The screensaver's story line reads
+      // bossDefeated, and the marker is the boss's spot on the map.
+      bossDefeated = true;
+      markRunBeaten();
+      if (activeMarker) activeMarker.alive = false;
+      endingCutTimer = setTimeout(() => {
+        endingCutTimer = null;
+        beginEndingPlayback();
+      }, ENDING_CUT_DELAY_MS);
+      return true;
+    }
+
+    // Cut to the clip - straight out of the boss fight, or from the victory box's button.
+    function beginEndingPlayback() {
+      if (!endingVideoEl || !endingClipUrl) { finishEndingPlayback(); return; }
+      const fromVictoryBox = !!(victoryModal && !victoryModal.classList.contains('hidden'));
+      endingPhase = 'playing';
+      if (fromVictoryBox) {
+        // The box comes down for the clip and everything scoring it goes with it; it rises
+        // again over the last frame when the clip ends.
+        victoryModal.classList.add('hidden');
+        victoryModal.classList.remove('over-ending');
+        stopConfetti();
+        stopOutroNarration();
+        stopScreenMusic(0.4);
+      } else {
+        // The dungeon's bed rides out under the flash - the clip brings its own score.
+        fadeOutDungeonMusic(0.5);
+        if (battleModeBadge) {
+          battleModeBadge.textContent = 'VICTORY';
+          battleModeBadge.className = 'text-[9px] font-bold px-1.5 py-0.2 rounded bg-yellow-400 text-yellow-950';
+        }
+      }
+      if (endingCutscene) endingCutscene.classList.remove('hidden');
+      if (endingFlash) {
+        endingFlash.classList.remove('is-flashing');
+        void endingFlash.offsetWidth;   // restart the animation on a replay
+        endingFlash.classList.add('is-flashing');
+      }
+      if (endingSkipHint) {
+        endingSkipHint.classList.remove('is-shown');
+        if (endingHintTimer) clearTimeout(endingHintTimer);
+        endingHintTimer = setTimeout(() => {
+          endingHintTimer = null;
+          if (endingPhase === 'playing') endingSkipHint.classList.add('is-shown');
+        }, ENDING_SKIP_HINT_MS);
+      }
+      endingVideoEl.volume = ENDING_VOLUME;
+      endingVideoEl.muted = false;
+      try { endingVideoEl.currentTime = 0; } catch (e) { /* not seekable yet - it starts at 0 anyway */ }
+      const p = endingVideoEl.play();
+      if (p && p.catch) {
+        p.catch(() => {
+          // Sound refused (no recent gesture to vouch for it): a silent cutscene still beats
+          // skipping it. Anything else wrong with the clip goes straight to the victory box.
+          if (endingPhase !== 'playing') return;
+          endingVideoEl.muted = true;
+          endingVideoEl.play().catch(() => finishEndingPlayback());
+        });
+      }
+    }
+
+    // The clip is over - played out, skipped, or unplayable. Its last frame stays on screen (an
+    // ended or paused <video> keeps showing the frame it stopped on) and, after a beat, the
+    // victory box rises over it.
+    function finishEndingPlayback() {
+      if (endingPhase !== 'playing' && endingPhase !== 'pending') return;
+      endingPhase = 'held';
+      endingPlayed = true;
+      if (endingHintTimer) { clearTimeout(endingHintTimer); endingHintTimer = null; }
+      if (endingSkipHint) endingSkipHint.classList.remove('is-shown');
+      if (endingHoldTimer) clearTimeout(endingHoldTimer);
+      endingHoldTimer = setTimeout(raiseEndingVictoryBox, ENDING_HOLD_MS);
+    }
+
+    // The hold is over - or ESC/Enter cut it short.
+    function raiseEndingVictoryBox() {
+      if (endingHoldTimer) { clearTimeout(endingHoldTimer); endingHoldTimer = null; }
+      if (endingPhase === 'held') showVictoryBox(true);
+    }
+
+    // True from the clip's end until its victory box is up.
+    function endingHolding() {
+      return endingPhase === 'held' && !!endingHoldTimer;
+    }
+
+    function skipEndingCutscene() {
+      if (endingPhase !== 'playing' || !endingVideoEl) return;
+      try {
+        endingVideoEl.pause();
+        // Jump to the final frame, so a skip holds the same still a full watch would.
+        if (Number.isFinite(endingVideoEl.duration)) {
+          endingVideoEl.currentTime = Math.max(0, endingVideoEl.duration - 0.05);
+        }
+      } catch (e) { /* the still is whatever frame it stopped on */ }
+      finishEndingPlayback();
+    }
+
+    function watchEndingFromVictoryBox() {
+      if (!endingClipUrl || endingPhase === 'playing' || endingPhase === 'pending') return;
+      beginEndingPlayback();
+    }
+
+    // "Keep Exploring" on the box over the cutscene's last frame: the boss is down, but the run is
+    // not over until the player walks out. The box and the clip step aside, the fight the cut
+    // interrupted finishes the ordinary way (the boss leaves the arena, its XP is paid - which can
+    // raise the level-up box - and the dungeon comes back), and the stairs raise the victory box
+    // again at the end. The clip stays loaded, so that box still offers "Replay Ending".
+    function keepExploringAfterEnding() {
+      if (endingPhase !== 'held') return;
+      if (endingHoldTimer) { clearTimeout(endingHoldTimer); endingHoldTimer = null; }
+      victoryModal.classList.add('hidden');
+      victoryModal.classList.remove('over-ending');
+      stopConfetti();
+      stopOutroNarration();
+      stopScreenMusic(0.6);
+      if (endingVideoEl) { try { endingVideoEl.pause(); } catch (e) {} }
+      hideEndingLayer();
+      endingPhase = 'idle';
+      combatState.enemies.forEach(en => { en.endingHold = false; });
+      combatState.winTick = 0;
+      combatState.winIsLevelUp = false;
+      // The dungeon's beds were faded out and torn down under the flash - bring them back from the
+      // top, the way a restart does. finishEncounterVictory below takes the battle flag down first,
+      // and the beds only start once they have decoded, so they come up on the exploration track.
+      if (dungeonSnapshot && dungeonSnapshot.bundle) loadMusicBank(dungeonSnapshot.bundle.music);
+      finishEncounterVictory();
+      render3D();
+      updateHUD();
+    }
+
+    if (endingVideoEl) {
+      endingVideoEl.addEventListener('ended', finishEndingPlayback);
+      endingVideoEl.addEventListener('error', () => {
+        if (endingPhase === 'playing') finishEndingPlayback();
+      });
+    }
+    if (btnVictoryEnding) btnVictoryEnding.addEventListener('click', watchEndingFromVictoryBox);
+    if (btnVictoryKeepExploring) btnVictoryKeepExploring.addEventListener('click', keepExploringAfterEnding);
+
     // Player defeat. Until this existed playerHp simply floored at 0 in landEnemyStrike and the
     // fight carried on, so there was no moment for a death sound to belong to.
     function killPlayer() {
@@ -3202,6 +3720,11 @@
       if (victoryModal) victoryModal.classList.add('hidden');
       stopOutroNarration();
       stopConfetti();
+      // A player who kept exploring after the ending cutscene and then died is rolled back to a
+      // boss that is standing again - so its next defeat plays the cutscene and narrates the
+      // outro fresh, as the first one did. The clip itself stays loaded.
+      victoryShownThisRun = false;
+      endingPlayed = false;
 
       // Maze back to its start-of-run shape: closed doors (MAP 3), un-thrown switches (MAP 4),
       // and the walkable-tile list without any tiles a since-opened door had added.
@@ -3263,21 +3786,37 @@
     }
 
     // Victory-box keyboard cursor: same shape as the death box's above, but starts on "Back to
-    // Main Menu" (index 1) rather than index 0 - that button is what Enter/Space always did
-    // here before Favorite existed, and defaulting to it keeps that muscle memory working.
-    const victoryChoiceBtns = [btnVictoryFavorite, btnPlayAgain];
-    let victoryChoiceIndex = 1;
+    // Main Menu" rather than the first button - that button is what Enter/Space always did here
+    // before Favorite existed, and defaulting to it keeps that muscle memory working. Held as the
+    // button itself rather than an index, because "Watch / Replay Ending" comes and goes at the
+    // top of the list (see paintVictoryEnding) and an index would slide onto a different button.
+    let victoryChoiceBtn = btnPlayAgain;
+    function victoryChoiceBtns() {
+      return [btnVictoryEnding, btnVictoryKeepExploring, btnVictoryFavorite, btnPlayAgain]
+        .filter(b => b && !b.classList.contains('hidden'));
+    }
     function syncVictoryChoice() {
-      victoryChoiceBtns.forEach((b, i) => { if (b) b.classList.toggle('selected', i === victoryChoiceIndex); });
+      const btns = victoryChoiceBtns();
+      if (!btns.includes(victoryChoiceBtn)) victoryChoiceBtn = btnPlayAgain;
+      btns.forEach(b => b.classList.toggle('selected', b === victoryChoiceBtn));
+      [btnVictoryEnding, btnVictoryKeepExploring].forEach(b => {
+        if (b && !btns.includes(b)) b.classList.remove('selected');
+      });
     }
     function moveVictorySelection(delta) {
-      const n = victoryChoiceBtns.length;
-      victoryChoiceIndex = (victoryChoiceIndex + delta + n) % n;
+      const btns = victoryChoiceBtns();
+      const n = btns.length;
+      if (!n) return;
+      const at = Math.max(0, btns.indexOf(victoryChoiceBtn));
+      victoryChoiceBtn = btns[(at + delta + n) % n];
       syncVictoryChoice();
       playSfx('turn', { gain: 0.4 });
     }
     function takeVictoryChoice() {
-      (victoryChoiceIndex === 0 ? toggleVictoryFavorite : openSetupScreen)();
+      if (victoryChoiceBtn === btnVictoryEnding) watchEndingFromVictoryBox();
+      else if (victoryChoiceBtn === btnVictoryKeepExploring) keepExploringAfterEnding();
+      else if (victoryChoiceBtn === btnVictoryFavorite) toggleVictoryFavorite();
+      else openSetupScreen();
     }
 
     // Full combat reset for a brand new dungeon. Without this, stamina (and HP, and any in-flight
@@ -3866,7 +4405,10 @@
       // The level-up box stops the world, not just the input: no stamina regen, no floating
       // text ageing, no enemy clock. It only ever opens between fights, but a frozen sim means
       // the dungeon is exactly as it was left when the choice is taken.
-      if (levelUpOpen) return;
+      // The ending cutscene stops it the same way, for a different reason: the fight it replaced
+      // must not finish itself behind the clip - no XP payout raising the level-up box over it,
+      // no hand-back to exploration fading the dungeon's bed in under its soundtrack.
+      if (levelUpOpen || endingOwnsViewport()) return;
 
       if (combatState.inBattle && combatState.introFrame < INTRO_TOTAL) {
         combatState.introFrame++;
@@ -3876,7 +4418,10 @@
       // the rest of its pack fights on, so this can no longer be "the enemy is fading" - the
       // dungeon only comes back once every one of them is down AND the last corpse has
       // finished dissolving.
-      if (combatState.inBattle && combatState.enemies.length && !combatState.dead) {
+      // Not while the ending cutscene's cut is pending: the beaten boss is being held on screen for
+      // it, so there is no corpse to dissolve, and the hero's win outro (fading them out, "LEVEL
+      // UP!") must not start in the beat before the clip takes over.
+      if (combatState.inBattle && combatState.enemies.length && !combatState.dead && endingPhase !== 'pending') {
         let stillFading = false, allDown = true;
         for (const e of combatState.enemies) {
           if (e.deathFade > 0) {
@@ -4050,11 +4595,21 @@
               playSfx('hit_enemy', { rate: cfg.sfxRate });
 
               if (e.hp <= 0) {
-                e.state = 'defeated';
                 e.blockTimer = 0;
-                // Starts the dither-out. combatTick counts it up and calls
-                // finishEncounterVictory() once every corpse has fully dissolved.
-                e.deathFade = 1;
+                // The boss's health is gone - with a cutscene in hand, the ending takes it from here.
+                // The boss does NOT dissolve then: the clip opens on it standing, so a corpse that
+                // vanished only to be back on screen a moment later read as a glitch. It reels,
+                // held in its hurt look (see endingHold in drawEnemyBody), until the cut. Without a
+                // clip nothing changes: the corpse dissolves and the stairs are the ending.
+                if (e.variant === 'boss' && startEndingCutscene()) {
+                  e.state = 'hurt';
+                  e.endingHold = true;
+                } else {
+                  e.state = 'defeated';
+                  // Starts the dither-out. combatTick counts it up and calls
+                  // finishEncounterVictory() once every corpse has fully dissolved.
+                  e.deathFade = 1;
+                }
                 // Same species, several sizes: one death cry serves every variant, pitched by
                 // cfg.sfxRate to sell the flyer's smaller frame or the boss's bulk.
                 playSfx('death_enemy', { rate: cfg.sfxRate });
@@ -4173,7 +4728,8 @@
       if (playerStmText) playerStmText.textContent = `${Math.ceil(combatState.playerStm)}/${combatState.playerMaxStm}`;
 
       renderDoomFace();
-      if (activeMode !== 'v1_video') {
+      // Nothing to raycast under the ending cutscene - it covers the whole viewport.
+      if (activeMode !== 'v1_video' && !endingOwnsViewport()) {
         render3D();
       }
     }
@@ -5163,7 +5719,7 @@
       // withdrawn foe sorts behind anything merely airborne. Sorted on a copy: the array order
       // is the pack order everywhere else (formOffset, orbit phase) and must not move.
       const order = combatState.enemies
-        .filter(e => e.hp > 0 || e.deathFade > 0)
+        .filter(e => e.hp > 0 || e.deathFade > 0 || e.endingHold)
         .slice()
         .sort((a, b) => ((b.altitude || 0) + (b.depth || 0) * 120)
                       - ((a.altitude || 0) + (a.depth || 0) * 120));
@@ -5419,7 +5975,13 @@
           c.ellipse(ex, groundY + 3, targetH * 0.32 * sh, targetH * 0.08 * sh, 0, 0, Math.PI * 2);
           c.fill();
 
-          if (e.state === 'hurt') { c.translate((Math.random() * 8 - 4), 0); c.globalAlpha = 0.9; }
+          if (e.endingHold) {
+            // A beaten boss held for the ending cutscene: the ordinary hurt shake, harder, with the
+            // frame flashing red every other beat - it has to read as "that finished it" for the
+            // whole wait before the cut, not as one more hit it shrugs off.
+            c.translate((Math.random() * 12 - 6), 0);
+            if (Math.floor(Date.now() / 110) % 2 === 0) frame = hurtTintFrame(frame);
+          } else if (e.state === 'hurt') { c.translate((Math.random() * 8 - 4), 0); c.globalAlpha = 0.9; }
           else if (e.blockTimer > 0) { c.globalAlpha = 0.94; }
 
           // Mirrored about its own centre line when it is walking the other way. Scoped to the
@@ -7854,25 +8416,12 @@
       c.stroke();
       c.restore();
 
-      // Check Victory Condition
+      // Check Victory Condition. Not while the ending cutscene has the viewport: a clip watched
+      // from the victory box after the stairs ending leaves the player standing on the exit with
+      // the box taken down for the replay, and it must not pop straight back up over the clip.
       const isExit = (player.gridX === exitRoom.x && player.gridY === exitRoom.y);
-      if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0) {
-        winMovesCount.textContent = totalMoves;
-        paintVictoryFavorite();
-        victoryChoiceIndex = 1;   // keyboard cursor starts on "Back to Main Menu"
-        syncVictoryChoice();
-        showVictoryOutro();
-        playSfx('end', { vary: 0 });
-        victoryModal.classList.remove('hidden');
-        startConfetti();
-        startOutroNarration();
-        // Same hand-off as the death box: the dungeon's bed rides out under the 'end' sting
-        // and the victory loop scores the box until the player heads back to the menu.
-        fadeOutDungeonMusic(0.6);
-        // Cancellable: hitting Enter straight through the win box calls stopScreenMusic()
-        // (via returnToMenuMusic) before this fires, and the victory loop must not then
-        // start up over the menu music the player has already gone back to.
-        deferScreenMusic('victory', 700);
+      if (isExit && victoryModal.classList.contains('hidden') && totalMoves > 0 && endingPhase === 'idle') {
+        showVictoryBox(false);
       }
     }
 
@@ -8127,11 +8676,28 @@
         return;
       }
 
-      // The victory box is up: ↑↓ (also ←→ / WASD) move the cursor between its two buttons -
-      // "Favorite this run" and "Back to Main Menu" - and Enter/Space takes the highlighted
-      // one, same pattern as the death box below. Defaults to Main Menu (see syncVictoryChoice
-      // at the box's open) so a bare Enter still exits instantly, same as before this had a
-      // second button to choose between.
+      // The ending cutscene owns the keyboard from the killing blow until its victory box is up.
+      // ESC or Enter skips to the clip's last frame, and pressed again during the hold on that
+      // frame raises the box at once; every other key is swallowed, so a strike still being
+      // mashed through the blow does nothing behind the clip. Space and the arrows are held off
+      // their browser defaults too - the focused combat button would take a Space.
+      if (endingPhase === 'pending' || endingPhase === 'playing' || endingHolding()) {
+        if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          if (endingPhase === 'playing') skipEndingCutscene();
+          else if (endingHolding()) raiseEndingVictoryBox();
+        } else if (e.code === 'Space' || e.code.startsWith('Arrow')) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // The victory box is up: ↑↓ (also ←→ / WASD) move the cursor between its buttons -
+      // "Watch / Replay Ending" when there is a cutscene, "Favorite this run" and "Back to Main
+      // Menu" - and Enter/Space takes the highlighted one, same pattern as the death box below.
+      // Defaults to Main Menu (see showVictoryBox) so a bare Enter still exits instantly, same as
+      // before this had more than one button to choose between.
       if (victoryModal && !victoryModal.classList.contains('hidden')) {
         if (['ArrowUp', 'KeyW', 'ArrowLeft', 'KeyA'].includes(e.code)) {
           e.preventDefault();
@@ -8443,6 +9009,11 @@
       // A brand new dungeon is a brand new hero: level 1, base bars, no banked picks.
       resetProgression();
       updateProgressionHUD();
+      // Does this run have an ending cutscene, or one filming? currentRunHistoryId is already
+      // this run's by now - set by the poll loop for a fresh run, by loadHistoryDungeon for a
+      // replay. Asked at ENTER rather than at arming, so a player who sits on the crawl still
+      // gets a clip that finished while they read.
+      prepareEndingCutscene();
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
       // ...and drop the crawl-reading hold with it. startCrawl() sets crawlReadingUntil up to
@@ -8818,8 +9389,8 @@
     // Which dialog the arrow keys belong to right now, innermost first: the two confirm
     // boxes sit on top of the window that opened them, so they win while they are up.
     function topmostOpenDialog() {
-      const stack = [modalEraseConfirm, modalHistoryConfirm, modalLeaveRunConfirm,
-                     modalQuitConfirm, modalHistory, modalSettings];
+      const stack = [modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm, modalHistoryConfirm,
+                     modalLeaveRunConfirm, modalQuitConfirm, modalHistory, modalSettings];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -8907,14 +9478,19 @@
     // from the setup-history functions far above, can see it too.
     let fillInNoticeTimer = null;
 
+    // The last settling answer, kept so something other than the settling watcher (an ending
+    // movie finishing, see paintEndingJobLocks) can repaint CREATE without guessing it.
+    let createSettlingNow = false;
     function setCreateSettling(settling) {
-      btnCreate.disabled = settling || fillInFlight;
+      createSettlingNow = !!settling;
+      const filming = endingManualFilming();
+      btnCreate.disabled = settling || fillInFlight || filming;
       if (btnCreateLabel) {
-        btnCreateLabel.textContent = settling ? '⏳ CLEARING...' : btnCreateText;
+        btnCreateLabel.textContent = settling ? '⏳ CLEARING...' : filming ? '🎬 FILMING...' : btnCreateText;
       }
       btnCreate.title = settling
         ? 'Still stopping the cancelled run - ComfyUI is being cleared.'
-        : '';
+        : filming ? ENDING_FILMING_LOCK_TITLE : '';
     }
 
     // Polls one request at a time (not on an interval) so a slow reply can never stack up,
@@ -9009,7 +9585,7 @@
           error = 'Could not reach the server.';
         } finally {
           fillInFlight = false;
-          btnFillIn.disabled = false;
+          btnFillIn.disabled = endingManualFilming();
           setCreateSettling(false);
           watchForSettling();   // puts CREATE back the way the server actually is
         }
@@ -9088,7 +9664,11 @@
             graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal',
             // One more frame per foe, shown when its blow lands - see lastAttackFrameMode. Quick
             // needs nothing generated, so only 'on' asks for it.
-            last_attack_frame: lastAttackFrameMode === 'on'
+            last_attack_frame: lastAttackFrameMode === 'on',
+            // The ending cutscene, and whether it is filmed on this loading screen or in the
+            // background once the run starts - see the ENDING CUTSCENE section.
+            ending_video: endingVideoOn,
+            ending_video_background: endingVideoOn && endingBackgroundOn
           })
         });
 
@@ -9253,6 +9833,9 @@
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
       row.className = 'hist-row win95-box p-1.5 flex items-center gap-2';
+      // So a row can be found and repainted in place by its run - the movie button's progress
+      // ticks along without rebuilding the list (see repaintHistoryMovies).
+      row.dataset.id = entry.id || '';
       // History can be opened over a still-running game (the quit box's "Load a Different
       // Dungeon"), so one of these rows may be the dungeon the player is standing in. Mark it
       // here; the CSS gives it the selected-row look and renderHistoryList scrolls to it.
@@ -9355,6 +9938,9 @@
       // reduced). Absent on dungeons saved before this was recorded.
       if (entry.quality_text) metaBits.push(entry.quality_text);
       if (entry.has_music) metaBits.push('♪ music');
+      // An ending cutscene saved beside the run (Options > Ending Video). The server reads the
+      // file itself for this, so a clip a background render finished later shows up too.
+      if (entry.has_ending_video) metaBits.push('🎬 ending');
       meta.textContent = metaBits.join('  ·  ');
       col.appendChild(meta);
 
@@ -9386,6 +9972,15 @@
       btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
       row.appendChild(btnPrompts);
 
+      // The run's ending movie: plays it once the run has been beaten, films it if the run never
+      // got one. What it will do right now - and why it won't - is in its tooltip, drawn by
+      // paintHistoryMovie. A fixed w-12, wide enough for the "42%" it shows while filming.
+      const btnMovie = document.createElement('button');
+      btnMovie.type = 'button';
+      btnMovie.className = 'hist-movie win95-btn w-12 px-0 py-1.5 text-xs shrink-0 hover:bg-blue-200';
+      btnMovie.addEventListener('click', () => historyMovieAction(entry, btnMovie));
+      row.appendChild(btnMovie);
+
       // The star sits right beside the trash can because it is that button's lock: starring a
       // dungeon greys the can out, and the server refuses to delete it until it is unstarred.
       // Both are a fixed w-10 rather than padded to their glyph: ☆ is narrower than ⭐ and 🔒
@@ -9403,6 +9998,7 @@
       row.appendChild(btnTrash);
 
       paintHistoryFavorite(row, entry);
+      paintHistoryMovie(row, entry);
       return row;
     }
 
@@ -9547,6 +10143,360 @@
       paintVictoryFavorite();
     }
     if (btnVictoryFavorite) btnVictoryFavorite.addEventListener('click', toggleVictoryFavorite);
+
+    // ==========================================
+    // ENDING MOVIES IN HISTORY
+    // ==========================================
+    // Every row carries a movie button for its run's ending - the same clip Options > Ending Video
+    // plays in the dungeon, kept as dungeon_sessions/<id>/ending.mp4. A run that has been beaten
+    // plays it back here (before that it is a spoiler, and the button stays locked); a run that
+    // never got one films one on the spot. While that H3 render runs, nothing else that needs
+    // ComfyUI can be started from this page: CREATE, Fill-in and the other rows' movie buttons grey
+    // out - the server refuses them too - and come back the moment it is done.
+    const ENDING_JOB_POLL_MS = 2000;
+    // What one 512x384 clip took on this machine - see ENDING_PLAN_WEIGHT in server.py.
+    const ENDING_MOVIE_TIME_TEXT = 'about 3½ minutes';
+    let endingJobWatchTimer = null;
+    let endingJobWatchSeq = 0;
+
+    function endingJobActive(job) {
+      const j = job || endingJob;
+      return j.state === 'queued' || j.state === 'rendering';
+    }
+
+    // What a row's movie button does right now: {kind: filming | watch | locked | film, label,
+    // title, disabled}. The title is the player-facing status, so every branch says why.
+    function historyMovieState(entry) {
+      if (endingJobActive() && endingJob.session === entry.id) {
+        // Left clickable - only greyed a little by CSS - because clicking it again is how filming
+        // is stopped: it asks first, in askStopEndingFilm.
+        const pct = Math.max(0, Math.min(99, endingJob.percent || 0));
+        const who = endingJob.manual
+          ? "Filming this dungeon's ending movie"
+          : "Filming this dungeon's ending movie in the background, for the run being played";
+        return {
+          kind: 'filming', disabled: false,
+          label: endingJob.state === 'rendering' ? pct + '%' : '⏳',
+          title: who + (endingJob.state === 'rendering'
+            ? ' - ' + pct + '% done.' : ' - waiting for ComfyUI to start on it.')
+            + ' Click to stop filming.',
+        };
+      }
+      if (entry.has_ending_video) {
+        return entry.beaten
+          ? { kind: 'watch', disabled: false, label: '🎬',
+              title: "Watch this dungeon's ending movie." }
+          : { kind: 'locked', disabled: true, label: '🎬',
+              title: 'This dungeon has an ending movie - beat its boss to unlock it.' };
+      }
+      // Another render this button must not replace: one the player asked for, or the background
+      // render of the run they are standing in. (A background render for a run they have left
+      // just gives way, the same as it does for CREATE.)
+      if (endingJobActive() && (endingJob.manual || endingJob.session === currentRunHistoryId)) {
+        return { kind: 'film', disabled: true, label: '🎥',
+                 title: 'Another ending movie is being filmed - wait for it to finish.' };
+      }
+      const failed = endingJob.session === entry.id && endingJob.state === 'failed';
+      const head = failed
+        ? "Filming this dungeon's ending movie failed"
+          + (endingJob.error ? ' (' + endingJob.error + ')' : '') + '. Click to try again'
+        : 'No ending movie yet - click to film one';
+      return {
+        kind: 'film', disabled: false, label: '🎥',
+        title: head + ' (' + ENDING_MOVIE_TIME_TEXT + '). CREATE and Fill-in wait until it is done.'
+          + (entry.beaten ? '' : ' Beat this dungeon to watch it.'),
+      };
+    }
+
+    function paintHistoryMovie(row, entry) {
+      const btn = row.querySelector('.hist-movie');
+      if (!btn) return;
+      const st = historyMovieState(entry);
+      const hadFocus = document.activeElement === btn;
+      btn.textContent = st.label;
+      btn.title = st.title;
+      btn.setAttribute('aria-label', st.title);
+      btn.dataset.kind = st.kind;
+      btn.disabled = st.disabled;
+      // Greying out the button under the keyboard cursor (it just started filming) would drop
+      // focus on the page, and the arrow keys would have nothing to move from - hand it to the
+      // same row's Start instead.
+      if (hadFocus && st.disabled) {
+        const start = row.querySelector('.hist-start');
+        if (start) start.focus({ preventScroll: true });
+      }
+    }
+
+    // The rows are repainted in place rather than rebuilt: rebuilding every two seconds would
+    // restart every marquee and throw the keyboard cursor off whatever it is sitting on.
+    function repaintHistoryMovies() {
+      if (!historyList || !Array.isArray(historyEntries)) return;
+      historyList.querySelectorAll('.hist-row').forEach(row => {
+        const entry = historyEntries.find(e => e.id === row.dataset.id);
+        if (entry) paintHistoryMovie(row, entry);
+      });
+    }
+
+    // Everything a render outside a run greys out, repainted from endingJob.
+    function paintEndingJobLocks() {
+      setCreateSettling(createSettlingNow);
+      if (btnFillIn && !fillInFlight) {
+        btnFillIn.disabled = endingManualFilming();
+        syncFillInLabel();
+      }
+      repaintHistoryMovies();
+      paintStopEndingFilm();
+    }
+
+    // ---- Stopping a render: the filming button, clicked again -------------------------------
+    // Stopping throws minutes of work away, so it asks first in its own box stacked over History,
+    // opening on Keep Filming - never on the button that stops it.
+    const modalEndingStopConfirm = document.getElementById('modalEndingStopConfirm');
+    const endingStopName = document.getElementById('endingStopName');
+    const endingStopText = document.getElementById('endingStopText');
+    const btnEndingStopClose = document.getElementById('btnEndingStopClose');
+    const btnEndingStopKeep = document.getElementById('btnEndingStopKeep');
+    const btnEndingStopGo = document.getElementById('btnEndingStopGo');
+    let endingStopPending = null;   // {id, btn} while the box is asking about a run
+
+    function askStopEndingFilm(entry, btn) {
+      if (!modalEndingStopConfirm) return;
+      endingStopPending = { id: entry.id, btn: btn || null };
+      if (endingStopName) {
+        endingStopName.textContent = historyTitleOf(entry)
+          + (entry.created_text ? '  —  ' + entry.created_text : '');
+      }
+      // Shown before it is painted: paintStopEndingFilm only ever touches a box that is up.
+      modalEndingStopConfirm.classList.remove('hidden');
+      paintStopEndingFilm();
+      focusFirstIn(modalEndingStopConfirm, btnEndingStopKeep);
+    }
+
+    // Keeps the box's progress line current while it is up, and takes the box down on its own if
+    // the render it is asking about stops existing - it finished, or failed - since there is then
+    // nothing left to stop.
+    function paintStopEndingFilm() {
+      if (!endingStopPending || !modalEndingStopConfirm
+          || modalEndingStopConfirm.classList.contains('hidden')) return;
+      if (!(endingJobActive() && endingJob.session === endingStopPending.id)) {
+        closeStopEndingFilm();
+        return;
+      }
+      if (!endingStopText) return;
+      const pct = Math.max(0, Math.min(99, endingJob.percent || 0));
+      endingStopText.textContent =
+        (endingJob.state === 'rendering' ? 'It is ' + pct + '% done. ' : 'It has not started yet. ')
+        + 'Stopping throws that away - filming it again starts over from the beginning.'
+        + (endingJob.manual ? ''
+          : ' It is filming for the run you are playing, which will then end at the stairs instead.');
+    }
+
+    function closeStopEndingFilm() {
+      const wasOpen = modalEndingStopConfirm && !modalEndingStopConfirm.classList.contains('hidden');
+      const back = endingStopPending && endingStopPending.btn;
+      endingStopPending = null;
+      if (modalEndingStopConfirm) modalEndingStopConfirm.classList.add('hidden');
+      if (!wasOpen) return;
+      // Back onto the movie button it came from, like the delete box hands back to the list.
+      if (back && back.isConnected && !back.disabled) back.focus({ preventScroll: true });
+      else if (modalHistory && !modalHistory.classList.contains('hidden')) focusFirstIn(modalHistory, btnHistoryOk);
+    }
+
+    async function confirmStopEndingFilm() {
+      const pending = endingStopPending;
+      if (!pending) { closeStopEndingFilm(); return; }
+      // Greyed-out buttons come back as soon as the server says it has stopped, rather than on the
+      // next two-second poll - so ask it, then look straight away.
+      try {
+        const res = await fetch(`${SERVER_URL}/api/ending_video_cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: pending.id })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || 'The server refused.');
+      } catch (err) {
+        console.error('Stop filming error:', err);
+        alert('Could not stop filming that ending movie.\n\n' + err.message);
+      }
+      closeStopEndingFilm();
+      watchEndingJob();
+    }
+
+    if (btnEndingStopClose) btnEndingStopClose.addEventListener('click', closeStopEndingFilm);
+    if (btnEndingStopKeep) btnEndingStopKeep.addEventListener('click', closeStopEndingFilm);
+    if (btnEndingStopGo) btnEndingStopGo.addEventListener('click', confirmStopEndingFilm);
+    if (modalEndingStopConfirm) {
+      modalEndingStopConfirm.addEventListener('click', (e) => {
+        if (e.target === modalEndingStopConfirm) closeStopEndingFilm();
+      });
+    }
+
+    // Follows the one render outside a run until it is done, then puts everything back. Started
+    // at page load (a reload in the middle of one), when History opens, and by a row's button.
+    async function watchEndingJob() {
+      if (endingJobWatchTimer) { clearTimeout(endingJobWatchTimer); endingJobWatchTimer = null; }
+      const seq = ++endingJobWatchSeq;
+      let next = null;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/ending_video_job`);
+        next = await res.json();
+      } catch (err) {
+        next = null;   // server away for a moment
+      }
+      if (seq !== endingJobWatchSeq) return;   // a newer check is already on its way
+      const before = endingJob;
+      if (next) endingJob = next;
+      if (endingJobActive(before) && !endingJobActive() && endingJob.session === before.session) {
+        endingJobFinished(endingJob);
+      }
+      paintEndingJobLocks();
+      if (next ? endingJobActive() : endingJobActive(before)) {
+        endingJobWatchTimer = setTimeout(watchEndingJob, ENDING_JOB_POLL_MS);
+      }
+    }
+
+    function endingJobFinished(job) {
+      if (job.state !== 'ready') return;   // failed or cancelled: the row's tooltip says which
+      if (Array.isArray(historyEntries)) {
+        const entry = historyEntries.find(e => e.id === job.session);
+        if (entry) entry.has_ending_video = true;
+      }
+      // History is open over the very run it was filmed for, with Ending Video on: that run's
+      // cutscene should pick it up now rather than only on the next visit.
+      if (endingVideoOn && job.session === endingRunId && !endingClipUrl && !endingPollTimer) {
+        pollEndingStatus(endingRunId, false);
+      }
+    }
+
+    async function historyMovieAction(entry, btn) {
+      const st = historyMovieState(entry);
+      if (st.disabled) return;
+      if (st.kind === 'filming') { askStopEndingFilm(entry, btn); return; }
+      if (st.kind === 'watch') { openEndingPlayer(entry, btn); return; }
+      if (st.kind !== 'film') return;
+      // Everything greys out on the click rather than a poll later - there is a round trip to the
+      // server before the job exists, and a second click must not land in it.
+      endingJob = { state: 'queued', session: entry.id, percent: 0, error: null, manual: true };
+      paintEndingJobLocks();
+      let reply = null;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/ending_video_start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: entry.id, manual: true })
+        });
+        reply = await res.json().catch(() => null);
+      } catch (err) {
+        reply = null;
+      }
+      if (!reply) {
+        alert('Could not reach the server to film that ending movie.');
+      } else if (reply.state === 'busy') {
+        alert('ComfyUI is still busy with something else - try again in a moment.');
+      } else if (reply.state === 'missing') {
+        alert('That saved dungeon is gone.');
+      } else if (reply.state === 'failed') {
+        alert('Could not start filming that ending movie.\n\n' + (reply.error || ''));
+      } else if (reply.state === 'ready') {
+        entry.has_ending_video = true;
+      }
+      // Whatever came back, the server's own job is the truth from here on.
+      watchEndingJob();
+      if (reply && reply.state === 'missing') refreshHistory();
+    }
+
+    // ---- The movie player, over the History window ------------------------------------------
+    const modalEndingPlayer = document.getElementById('modalEndingPlayer');
+    const endingPlayerVideo = document.getElementById('endingPlayerVideo');
+    const endingPlayerTitle = document.getElementById('endingPlayerTitle');
+    const endingPlayerNote = document.getElementById('endingPlayerNote');
+    const btnEndingPlayerClose = document.getElementById('btnEndingPlayerClose');
+    const btnEndingPlayerReplay = document.getElementById('btnEndingPlayerReplay');
+    const btnEndingPlayerOk = document.getElementById('btnEndingPlayerOk');
+    let endingPlayerUrl = null;      // blob: URL of the clip on show
+    let endingPlayerReturn = null;   // the row button to hand the keyboard cursor back to
+    let endingPlayerSeq = 0;         // bumped on every open and close, so a late download is dropped
+
+    // Whatever music is up - the menu loop, or the dungeon behind a History opened mid-run - sits
+    // well under the movie's own soundtrack while it plays, then comes back.
+    function duckMusicForMovie(on) {
+      const ctx = sfxContext();
+      if (!ctx || !musicMaster) return;
+      const g = musicMaster.gain;
+      const now = ctx.currentTime;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(on ? 0.08 : 0.6, now + (on ? 0.4 : 0.9));
+    }
+
+    async function openEndingPlayer(entry, returnTo) {
+      if (!modalEndingPlayer || !endingPlayerVideo) return;
+      const seq = ++endingPlayerSeq;
+      endingPlayerReturn = returnTo || null;
+      if (endingPlayerTitle) endingPlayerTitle.textContent = '🎬 ' + historyTitleOf(entry);
+      if (endingPlayerNote) endingPlayerNote.textContent = 'Loading the ending movie...';
+      if (btnEndingPlayerReplay) btnEndingPlayerReplay.disabled = true;
+      modalEndingPlayer.classList.remove('hidden');
+      focusFirstIn(modalEndingPlayer, btnEndingPlayerOk);
+      duckMusicForMovie(true);
+      try {
+        const res = await fetch(`${SERVER_URL}/api/ending_video?id=${encodeURIComponent(entry.id)}`);
+        if (!res.ok) throw new Error(res.status === 404 ? 'It is not on disk any more.' : 'HTTP ' + res.status);
+        const blob = await res.blob();
+        if (seq !== endingPlayerSeq) return;   // closed while it downloaded
+        endingPlayerUrl = URL.createObjectURL(blob);
+        endingPlayerVideo.src = endingPlayerUrl;
+        endingPlayerVideo.volume = ENDING_VOLUME;
+        endingPlayerVideo.muted = false;
+        if (endingPlayerNote) {
+          endingPlayerNote.textContent = [entry.hero, entry.boss].filter(Boolean).join('  vs  ');
+        }
+        if (btnEndingPlayerReplay) btnEndingPlayerReplay.disabled = false;
+        const p = endingPlayerVideo.play();
+        if (p && p.catch) p.catch(() => {});
+      } catch (err) {
+        if (seq !== endingPlayerSeq) return;
+        if (endingPlayerNote) endingPlayerNote.textContent = 'Could not load the ending movie. ' + err.message;
+      }
+    }
+
+    function closeEndingPlayer() {
+      if (!modalEndingPlayer || modalEndingPlayer.classList.contains('hidden')) return;
+      endingPlayerSeq++;
+      if (endingPlayerVideo) {
+        try { endingPlayerVideo.pause(); } catch (e) {}
+        endingPlayerVideo.removeAttribute('src');
+        endingPlayerVideo.load();
+      }
+      if (endingPlayerUrl) { URL.revokeObjectURL(endingPlayerUrl); endingPlayerUrl = null; }
+      modalEndingPlayer.classList.add('hidden');
+      duckMusicForMovie(false);
+      const back = endingPlayerReturn;
+      endingPlayerReturn = null;
+      if (back && back.isConnected && !back.disabled) {
+        back.focus({ preventScroll: true });
+      } else if (modalHistory && !modalHistory.classList.contains('hidden')) {
+        focusFirstIn(modalHistory, btnHistoryOk);
+      }
+    }
+
+    function replayEndingPlayer() {
+      if (!endingPlayerUrl || !endingPlayerVideo) return;
+      try { endingPlayerVideo.currentTime = 0; } catch (e) {}
+      const p = endingPlayerVideo.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+
+    if (btnEndingPlayerClose) btnEndingPlayerClose.addEventListener('click', closeEndingPlayer);
+    if (btnEndingPlayerOk) btnEndingPlayerOk.addEventListener('click', closeEndingPlayer);
+    if (btnEndingPlayerReplay) btnEndingPlayerReplay.addEventListener('click', replayEndingPlayer);
+    // Clicking the darkened list behind it backs out, like every other box stacked on History.
+    if (modalEndingPlayer) {
+      modalEndingPlayer.addEventListener('click', (e) => {
+        if (e.target === modalEndingPlayer) closeEndingPlayer();
+      });
+    }
 
     // "Similar only". Two prompts count as the same idea only when one is written inside the
     // other ("windows 95" / "windows 95 3d maze") or they're identical outright - NOT merely
@@ -9754,12 +10704,17 @@
       // it up onto the first Start once there is a list to move onto.
       focusFirstIn(modalHistory, btnHistoryOk);
       refreshHistory();
+      // The rows' movie buttons show whatever ending render is going - including one the server
+      // started on its own at the end of a background-mode run, which this page never asked for.
+      watchEndingJob();
     }
 
     function closeHistory() {
       if (modalHistory) modalHistory.classList.add('hidden');
       closeDeleteConfirm();
       closeLeaveRunConfirm();
+      closeEndingPlayer();
+      closeStopEndingFilm();
     }
 
     // ---- Leaving a live run from History ----------------------------------
@@ -9857,6 +10812,7 @@
       if (victoryModal) victoryModal.classList.add('hidden');
       stopOutroNarration();
       stopConfetti();
+      resetEndingCutscene();
       crawlReadingUntil = 0;
 
       const wallStyle = entry.wall_style || 'Windows 95';
@@ -10098,7 +11054,15 @@
     // this never fires over it.
     window.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' && e.code !== 'Escape') return;
-      if (modalEraseConfirm && !modalEraseConfirm.classList.contains('hidden')) {
+      if (modalEndingStopConfirm && !modalEndingStopConfirm.classList.contains('hidden')) {
+        // Backing out means Keep Filming.
+        e.preventDefault();
+        closeStopEndingFilm();
+      } else if (modalEndingPlayer && !modalEndingPlayer.classList.contains('hidden')) {
+        // Stacked on History, so this ESC closes only the movie and leaves the list open.
+        e.preventDefault();
+        closeEndingPlayer();
+      } else if (modalEraseConfirm && !modalEraseConfirm.classList.contains('hidden')) {
         // Only reached if the quit box underneath is somehow gone; normally the in-game
         // handler has already peeled this one off and stopped there.
         e.preventDefault();
@@ -10668,6 +11632,9 @@
     // Catches the reload-out-of-a-cancel case: this page is brand new, but the server may
     // still be stopping the run the previous page abandoned on its way out.
     watchForSettling();
+    // ...and the reload-in-the-middle-of-a-movie case: an ending movie asked for from History may
+    // still be filming, and CREATE / Fill-in have to come up greyed out until it is done.
+    watchEndingJob();
     buildDefaultTextures();
     generateAuthentic3DMaze(DIFFICULTIES.medium.grids);
     render3D();

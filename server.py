@@ -563,6 +563,11 @@ class ProgressTracker:
         mtype = msg.get("type")
         data = msg.get("data") or {}
 
+        # A background ending render (see start_ending_video_job) shares this socket but belongs
+        # to no run's plan - its steps must not move the bar of a dungeon loading beside it.
+        if mtype in ("progress_state", "executing") and _ending_job_progress(data):
+            return
+
         if mtype == "progress_state":
             nodes = data.get("nodes") or {}
             done_units = 0.0
@@ -5201,7 +5206,7 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None, out
 # and only affects how the phases are paced against each other; `units` is that job's
 # expected total sampler steps (tokens for the story) and is the denominator the live
 # per-step fraction from ComfyUI's socket is measured against.
-def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False):
+def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, ending_video="off"):
     st = int(steps)
     plan = [
         # key,             label,                                                    weight, units
@@ -5230,6 +5235,11 @@ def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False):
         # Unmeasured weight - two 30s/40-step generations will run far longer than the sfx
         # pack's eight 2s/8-step ones; correct this once a real run has been timed.
         plan.append(("music", "Composing dungeon music with Stable Audio 3...", 30, len(MUSIC_NAMES) * MUSIC_STEPS))
+    # Only when Options films the ending on the loading screen - the background mode renders it
+    # after the run is saved, outside this plan.
+    if ending_video == "loading":
+        plan.append(("ending_video", "Filming the ending cutscene with MiniMax H3...",
+                     ENDING_PLAN_WEIGHT, ENDING_STEPS))
     return plan
 
 
@@ -8419,7 +8429,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       steps=KREA2_STEPS_DEFAULT, player_image=None,
                       sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT,
-                      last_attack_frame=False):
+                      last_attack_frame=False, ending_video="off"):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model.
@@ -8432,7 +8442,10 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     the History window can show which quality tier the assets were rendered at.
     last_attack_frame is the Options toggle of that name: every foe also gets the frame
     game.js shows on the tick its blow lands (ENEMY_STRIKE_FRAME), and the run is saved as
-    frame version 2."""
+    frame version 2.
+    ending_video is the Options pair of that name, resolved by the request handler: "off",
+    "loading" (the cutscene is filmed here, as the run's last stage) or "background" (the run is
+    saved without it and start_ending_video_job films it while the player plays)."""
     global gen_progress
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     gen_progress["is_generating"] = True
@@ -8442,7 +8455,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["total_steps"] = 4
     gen_progress["story"] = None
     gen_progress["phase"] = ""
-    PROGRESS.begin_plan(_plan_v6(steps, sound_mode, last_attack_frame))
+    PROGRESS.begin_plan(_plan_v6(steps, sound_mode, last_attack_frame, ending_video))
 
     def _b64(path):
         with open(path, "rb") as tf:
@@ -8498,6 +8511,20 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
                                  named["clean"]["weapon"], named["clean"]["enemy"])
                if sound_mode != "skip" else None)
         music = generate_music_pack(named["clean"]["wall"]) if sound_mode == "music_and_sound" else None
+
+        # The ending cutscene, when Options films it on the loading screen. Dead last: it takes
+        # the battle bed above as its reference audio, and H3 is by far the heaviest thing the
+        # run loads, so nothing after it has to wait for the card to swap back.
+        ending_path = None
+        if ending_video == "loading":
+            enemies = bundle.get("enemies") or {}
+            boss_frames = enemies.get("boss") or enemies.get("walker") or {}
+            portraits = bundle.get("portraits") or []
+            ending_path = generate_ending_video(
+                {"hero": bundle["frames"][0], "face": portraits[0] if portraits else None,
+                 "boss": boss_frames.get("idle"),
+                 "wall": w_path, "floor": f_path, "ceiling": c_path},
+                (music or {}).get("battle"), named["clean"])
 
         PROGRESS.end_plan()
         gen_progress["status_message"] = "Assembling 3D world & Valbrace combat..."
@@ -8568,8 +8595,12 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         # from the in-game quit menu, which is just a history_delete for this id.
         history_id = save_dungeon_session(gen_progress["completed_bundle"],
                              wall_style, player_style, weapon_style, enemy_style,
-                             sound_mode)
+                             sound_mode, ending_video_path=ending_path)
         gen_progress["completed_bundle"]["history_id"] = history_id
+        # Background mode starts filming the moment the run is on disk - while the player is
+        # still reading the crawl, which is free time the render would otherwise not get.
+        if ending_video == "background" and history_id:
+            start_ending_video_job(history_id, from_run=True)
 
     except GenerationCancelled as c:
         # Not a failure: the page that asked for this run is gone, and /api/cancel_generation
@@ -8636,9 +8667,11 @@ def _session_thumb(bundle):
 
 
 def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_style,
-                         sound_mode="music_and_sound"):
+                         sound_mode="music_and_sound", ending_video_path=None):
     """Persist a finished bundle under dungeon_sessions/. Returns the new id, or None if
-    anything went wrong - a history save must never turn a good run into a failed one."""
+    anything went wrong - a history save must never turn a good run into a failed one.
+    `ending_video_path` is the cutscene render_ending_video filmed during the run, if any; it
+    is copied in beside the bundle as ENDING_FILENAME."""
     if not bundle:
         return None
     session_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -8648,6 +8681,14 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
         bundle_path = os.path.join(folder, "bundle.json")
         with open(bundle_path, "w", encoding="utf-8") as f:
             json.dump(bundle, f, ensure_ascii=True)
+        has_ending = False
+        if ending_video_path:
+            try:
+                shutil.copyfile(ending_video_path, os.path.join(folder, ENDING_FILENAME))
+                has_ending = True
+            except Exception as e:
+                # The run is still worth keeping - it just ends at the stairs.
+                print(f"[history] ending cutscene not saved with the run ({e})")
 
         story = bundle.get("story") or {}
         meta = {
@@ -8692,6 +8733,10 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             "has_music": bool(bundle.get("music")),
             "has_sfx": bool(bundle.get("sfx")),
             "has_narration": bool(story.get("audio")),
+            # An ending cutscene sits beside the bundle (Options > Ending Video). A background
+            # render finishing later flips this through _store_session_ending, and the listing
+            # reads the file itself anyway.
+            "has_ending_video": has_ending,
             "size": os.path.getsize(bundle_path),
             "thumb": _session_thumb(bundle),
             # The History star - a favorite cannot be deleted (delete_dungeon_session). Sessions
@@ -8733,6 +8778,11 @@ def list_dungeon_sessions():
             meta["id"] = name          # the folder is the truth, whatever the file says
             # Every run saved before the Last Attack Frame option existed is frame version 1.
             meta.setdefault("frame_version", FRAME_VERSION_BASE)
+            # Same rule for the cutscene: the file on disk decides, so a meta.json that missed a
+            # background render's update (or predates the option) still lists what is there.
+            meta["has_ending_video"] = os.path.exists(os.path.join(SESSIONS_DIR, name, ENDING_FILENAME))
+            # Runs saved before "beaten" was recorded have never been beaten as far as anyone knows.
+            meta["beaten"] = bool(meta.get("beaten"))
             out.append(meta)
         except Exception as e:
             print(f"[history] skipping {name} ({e})")
@@ -8751,21 +8801,50 @@ def _read_session_meta(folder):
         return json.load(f)
 
 
+# Held around every read-modify-write of a meta.json. The HTTP handler is single-threaded, but a
+# background ending render stores its clip (and flips has_ending_video) from its own thread, and
+# without this a star or a "beaten" landing in the same instant could be written over.
+_META_LOCK = threading.Lock()
+
+
+def _update_session_meta(folder, changes):
+    """Merge `changes` into a session's meta.json and return the result. Written through a temp
+    file and os.replace, because a half-written meta.json would make list_dungeon_sessions drop
+    the row entirely."""
+    with _META_LOCK:
+        meta = _read_session_meta(folder)
+        meta.update(changes)
+        tmp_path = os.path.join(folder, "meta.json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=True)
+        os.replace(tmp_path, os.path.join(folder, "meta.json"))
+        return meta
+
+
 def set_dungeon_session_favorite(session_id, favorite):
     """Star or unstar one saved dungeon. Returns the flag as written, or None if the session
-    is not there. meta.json goes through a temp file and os.replace, because a half-written
-    one would make list_dungeon_sessions drop the row - the very run the player is protecting."""
+    is not there."""
     folder = _session_dir(session_id)
     if not folder or not os.path.isdir(folder):
         return None
-    meta = _read_session_meta(folder)
-    meta["favorite"] = bool(favorite)
-    tmp_path = os.path.join(folder, "meta.json.tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=True)
-    os.replace(tmp_path, os.path.join(folder, "meta.json"))
+    meta = _update_session_meta(folder, {"favorite": bool(favorite)})
     print(f"[history] {'favorited' if meta['favorite'] else 'unfavorited'} {session_id}")
     return meta["favorite"]
+
+
+def mark_dungeon_session_beaten(session_id):
+    """Record that the player has beaten this dungeon - its boss is down. It is what unlocks the
+    run's ending movie in the History window (a spoiler until then), and it never un-sets: a later
+    replay that dies does not un-beat it. Returns True if recorded (or already was), None if the
+    session is not there. Sessions saved before this existed have no key and read as not beaten."""
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return None
+    if _read_session_meta(folder).get("beaten"):
+        return True
+    _update_session_meta(folder, {"beaten": True, "beaten_at": time.time()})
+    print(f"[history] beaten {session_id}")
+    return True
 
 
 def delete_dungeon_session(session_id):
@@ -8781,8 +8860,597 @@ def delete_dungeon_session(session_id):
         locked = False
     if locked:
         raise SessionLocked("That dungeon is a favorite. Unstar it in History before deleting it.")
+    # A background render still filming this run would otherwise finish into a folder that no
+    # longer exists.
+    cancel_ending_video_job("its dungeon was deleted", session_id=session_id)
     shutil.rmtree(folder)
     print(f"[history] deleted {session_id}")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Ending cutscene: MiniMax H3 films the boss going down (Options > Ending Video)
+# ---------------------------------------------------------------------------
+# One short clip per run. game.js plays it in the viewport the moment the boss's health hits
+# zero and raises the victory box over its held last frame. H3's ref2va weights take the run's
+# own art as reference pictures - the hero's battle sprite and HUD portrait, the boss, the wall /
+# floor / ceiling textures - plus its battle bed as a reference audio, and render picture and
+# soundtrack together in one pass (the `va` is video+audio). So the cutscene is scored in the
+# dungeon's own theme with no separate audio job - the one thing H3's audio head is actually
+# built for, unlike the isolated one-shots in the sfx pack above.
+#
+# Off by default. With Ending Video on, Options picks one of two ways to pay for it:
+#   "loading"    - one more planned stage at the end of run_batch_v6_krea, so ENTER arms with the
+#                  clip already on disk. The loading screen gets the whole render added to it.
+#   "background" - (experimental) the run is saved without it, and a worker renders it while the
+#                  player is already walking the maze. game.js polls for it and plays the plain
+#                  stairs ending if the boss falls before it is done.
+# Either way the clip lives next to the run as dungeon_sessions/<id>/ending.mp4 - never inside
+# bundle.json, which is one base64 JSON blob the page parses whole.
+#
+# The graph is the user's own "H3 reference sage rtx" ComfyUI workflow (the Comfy-Org r2v
+# template plus KJNodes sage attention), minus its RTX 2x upscale: the clip is drawn into the 4:3
+# viewport, which is about 1050px wide even in a fullscreen 1080p window.
+ENDING_UNET = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+ENDING_CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+ENDING_VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
+ENDING_AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
+ENDING_STEPS = 20
+ENDING_SAMPLER = "res_multistep"
+ENDING_SCHEDULER = "simple"
+ENDING_FPS = 24
+# H3 only renders lengths on its 17k+5 frame grid at 24 fps (see align_frame_count in
+# comfy_extras/nodes_minimax_h3.py); 192 frames is exactly 8.0s - room for the three beats the
+# prompt asks for: the blow, the fall, the cheer.
+ENDING_FRAMES = 192
+# 4:3 to match the viewport, every side a multiple of 32 as H3's canvas needs. One size whatever
+# the Graphics tier: all three of 768x576 / 640x480 / 512x384 were filmed and compared, and the
+# user settled on the smallest (2026-09-15) - it films in about a third of the largest's time and
+# still holds up in the viewport.
+ENDING_WIDTH, ENDING_HEIGHT = 512, 384
+# How much of the 30s battle bed goes in as <Audio 1>. Reference tokens ride along every
+# sampling step, and ten seconds already carries the instruments and the tempo.
+ENDING_REF_AUDIO_SEC = 10.0
+ENDING_FILENAME = "ending.mp4"
+# Generous: a cold start has to load a 20GB DiT and a 15GB text encoder before the first step.
+ENDING_TIMEOUT = 45 * 60
+# _plan_v6 weight for the "loading" mode's stage, on the same rough wall-clock scale as the rest of
+# the plan (the krea2 frames job is weight 80 for ~100-170s). Measured on the 3090, sage attention
+# on, 8.0s clip with all six pictures + the battle bed: 512x384 took 198s as the last stage of a
+# real run. For comparison, 640x480 ran 14.9s a step (354s) and 768x576 24.7s a step (570s cold).
+ENDING_PLAN_WEIGHT = 120
+
+
+def ending_video_prompt(pictures, styles, has_audio):
+    """The H3 prompt. `pictures` lists which reference kinds were actually attached, in
+    connection order - any of hero / face / boss / wall / floor / ceiling - because ref2va
+    numbers them <Picture 1>, <Picture 2>... in exactly that order and the prompt must name
+    each by its real tag ("be explicit about which reference drives which part of the shot",
+    per the Comfy-Org template notes). `styles` is the run's clean typed words."""
+    player = (styles.get("player") or "").strip() or "armored warrior"
+    weapon = (styles.get("weapon") or "").strip() or "sword"
+    enemy = (styles.get("enemy") or "").strip() or "monster"
+    tag = {kind: f"<Picture {i + 1}>" for i, kind in enumerate(pictures)}
+
+    parts = [
+        "The ending cutscene of a fantasy role-playing video game, staged and edited like a "
+        "late-1990s JRPG pre-rendered cinematic: bold dramatic camera angles, hard cuts between "
+        "shots, a slow-motion finishing blow, bright flashes of light on impact, rich saturated "
+        "lighting."
+    ]
+    refs = []
+    if "hero" in tag:
+        refs.append(f"{tag['hero']} is the hero, {_a_or_an(player)} holding {_a_or_an(weapon)}, "
+                    "seen from behind the way the player sees them in battle. Keep this exact "
+                    "character - body, clothes, colours and weapon - in every shot and from "
+                    "every angle.")
+    else:
+        refs.append(f"The hero is {_a_or_an(player)} holding {_a_or_an(weapon)}.")
+    if "face" in tag:
+        refs.append(f"{tag['face']} is the same hero's face. Every shot that shows the hero from "
+                    "the front shows exactly this face.")
+    if "boss" in tag:
+        refs.append(f"{tag['boss']} is the boss, {_a_or_an(enemy)}: the final opponent, towering "
+                    "over the hero. Keep its exact shape, colours and details in every shot.")
+    else:
+        refs.append(f"The boss is a huge {enemy}, the final opponent, towering over the hero.")
+    surfaces = [f"{tag[k]} is its {k}" if k != "wall" else f"{tag[k]} is its walls"
+                for k in ("wall", "floor", "ceiling") if k in tag]
+    if surfaces:
+        refs.append("The whole scene takes place in one long dungeon corridor built from exactly "
+                    "these surfaces: " + ", ".join(surfaces) + ".")
+    if has_audio:
+        refs.append("<Audio 1> is this dungeon's battle music. The soundtrack is that same battle "
+                    "theme - the same instruments, tempo and sound - swelling into a triumphant "
+                    "victory fanfare.")
+    parts.append(" ".join(refs))
+    parts.append(
+        "The hero and the boss face off in the corridor. Far down the corridor behind the boss, "
+        "a staircase climbs up and out of the dungeon, glowing with warm daylight: the way out."
+    )
+    parts.append(
+        f"[0s-3s] Shot 1: a low-angle close-up. The hero lunges and lands the final blow on the "
+        f"boss with the {weapon}, in slow motion, with a blinding white flash and a burst of "
+        f"sparks on impact.\n"
+        f"[3s-5s] Shot 2: the boss reels back, glowing cracks of light split across it, and it "
+        f"collapses and bursts apart into embers that drift away.\n"
+        f"[5s-8s] Shot 3: a wide shot down the now empty corridor, daylight from the staircase in "
+        f"the distance pouring down the hallway. The camera pushes in as the hero turns toward it "
+        f"and cheers, thrusting the {weapon} high overhead in a joyful victory pose, and holds "
+        f"that pose to the end."
+    )
+    parts.append(
+        ("Audio: the battle theme from <Audio 1> rising into a victory fanfare, "
+         if has_audio else "Audio: an epic orchestral battle theme rising into a victory fanfare, ")
+        + "the heavy impact of the final blow, the boss's last cry as it falls apart, and the "
+        "hero's wordless triumphant cheer."
+    )
+    parts.append("No subtitles, captions, logos, interface or on-screen text.")
+    return "\n\n".join(parts)
+
+
+def _ending_open_image(src):
+    """A file path or a data URL -> PIL image."""
+    if src.startswith("data:"):
+        return Image.open(io.BytesIO(base64.b64decode(src.split(",", 1)[1])))
+    return Image.open(src)
+
+
+def _ending_ref_image(src, name):
+    """Write one reference picture into COMFY_INPUT_DIR and return its filename, or None.
+    The sprites are RGBA cutouts and LoadImage keeps only RGB - whatever colour the transparent
+    pixels happen to hold would come through as a background - so everything is flattened onto
+    plain white first, the way a character reference sheet looks."""
+    if not src:
+        return None
+    img = _ending_open_image(src).convert("RGBA")
+    flat = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    flat.alpha_composite(img)
+    flat.convert("RGB").save(os.path.join(COMFY_INPUT_DIR, name), format="PNG")
+    return name
+
+
+def _ending_ref_audio(src, name):
+    """The battle bed (a data:audio/wav URL, see _finish_music) cut to ENDING_REF_AUDIO_SEC and
+    written into COMFY_INPUT_DIR. Returns its filename, or None when the run has no music."""
+    if not src:
+        return None
+    raw = base64.b64decode(src.split(",", 1)[1])
+    with wave.open(io.BytesIO(raw), "rb") as wf:
+        rate, channels, width = wf.getframerate(), wf.getnchannels(), wf.getsampwidth()
+        frames = wf.readframes(min(wf.getnframes(), int(rate * ENDING_REF_AUDIO_SEC)))
+    with wave.open(os.path.join(COMFY_INPUT_DIR, name), "wb") as out:
+        out.setnchannels(channels)
+        out.setsampwidth(width)
+        out.setframerate(rate)
+        out.writeframes(frames)
+    return name
+
+
+def _ending_refs_from_bundle(b):
+    """The reference sources a saved bundle carries - the same six render_ending_video takes
+    straight from file paths during a run, as data URLs here."""
+    ev = b.get("enemy_variants") or {}
+    boss = ev.get("boss") or ev.get("walker") or {}
+    if isinstance(boss, str):            # a bundle from before foes had pose frames
+        boss = {"idle": boss}
+    sprites = b.get("player_sprites") or []
+    faces = b.get("player_faces") or []
+    hero = sprites[0] if sprites else b.get("player_sprite")
+    face = faces[0] if faces else b.get("player_face")
+    return {"hero": hero,
+            # A run whose portraits all failed ships the battle sprite as its "face" - the
+            # hero's back - which must not go in labelled as a face.
+            "face": face if face != hero else None,
+            "boss": boss.get("idle"),
+            "wall": b.get("wall_texture"),
+            "floor": b.get("floor_texture"),
+            "ceiling": b.get("ceiling_texture")}
+
+
+_SAGE_NODE_PRESENT = None
+
+
+def _sage_attention_available():
+    """Whether ComfyUI has KJNodes' sage attention patch. Asked once per process: the user's H3
+    workflows run through it, but a graph naming a node that is not installed fails validation
+    outright, so it is only ever wired in when ComfyUI says it is there."""
+    global _SAGE_NODE_PRESENT
+    if _SAGE_NODE_PRESENT is None:
+        try:
+            with urllib.request.urlopen(f"{COMFY_URL}/object_info/PathchSageAttentionKJ",
+                                        timeout=15) as resp:
+                _SAGE_NODE_PRESENT = "PathchSageAttentionKJ" in json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return False                  # ask again next time rather than caching a hiccup
+    return _SAGE_NODE_PRESENT
+
+
+def ending_video_payload(image_names, audio_name, prompt, width, height, seed, sage=False):
+    """The ComfyUI API graph for one ending clip. Reference inputs are Autogrow slots, so they
+    are keyed in the API format by their dotted path (ref_images.ref_image_0 ...), and SaveVideo's
+    format/codec pair is a nested DynamicCombo keyed the same way."""
+    p = {
+        "ending_unet": {"inputs": {"unet_name": ENDING_UNET, "weight_dtype": "default"},
+                        "class_type": "UNETLoader"},
+        "ending_clip": {"inputs": {"clip_name": ENDING_CLIP, "type": "minimax", "device": "default"},
+                        "class_type": "CLIPLoader"},
+        "ending_vae": {"inputs": {"vae_name": ENDING_VIDEO_VAE}, "class_type": "VAELoader"},
+        "ending_avae": {"inputs": {"vae_name": ENDING_AUDIO_VAE}, "class_type": "VAELoader"},
+    }
+    model = ["ending_unet", 0]
+    if sage:
+        p["ending_sage"] = {"inputs": {"model": model, "sage_attention": "auto", "allow_compile": False},
+                            "class_type": "PathchSageAttentionKJ"}
+        model = ["ending_sage", 0]
+    cond = {"clip": ["ending_clip", 0], "vae": ["ending_vae", 0], "audio_vae": ["ending_avae", 0],
+            "prompt": prompt, "width": width, "height": height, "length": ENDING_FRAMES,
+            "ref_image_size": "match"}
+    for i, name in enumerate(image_names):
+        p[f"ending_ref{i}"] = {"inputs": {"image": name}, "class_type": "LoadImage"}
+        cond[f"ref_images.ref_image_{i}"] = [f"ending_ref{i}", 0]
+    if audio_name:
+        p["ending_music"] = {"inputs": {"audio": audio_name}, "class_type": "LoadAudio"}
+        cond["ref_audios.ref_audio_0"] = ["ending_music", 0]
+    p["ending_cond"] = {"inputs": cond, "class_type": "MiniMaxH3ReferenceToVideo"}
+    p["ending_noise"] = {"inputs": {"noise_seed": seed}, "class_type": "RandomNoise"}
+    p["ending_sampler"] = {"inputs": {"sampler_name": ENDING_SAMPLER}, "class_type": "KSamplerSelect"}
+    p["ending_sigmas"] = {"inputs": {"model": ["ending_unet", 0], "scheduler": ENDING_SCHEDULER,
+                                     "steps": ENDING_STEPS, "denoise": 1.0},
+                          "class_type": "BasicScheduler"}
+    p["ending_guider"] = {"inputs": {"model": model, "conditioning": ["ending_cond", 0]},
+                          "class_type": "BasicGuider"}
+    p["ending_samp"] = {"inputs": {"noise": ["ending_noise", 0], "guider": ["ending_guider", 0],
+                                   "sampler": ["ending_sampler", 0], "sigmas": ["ending_sigmas", 0],
+                                   "latent_image": ["ending_cond", 1]},
+                        "class_type": "SamplerCustomAdvanced"}
+    # The sampler's output is the packed video+audio latent; each decoder takes its own half.
+    p["ending_dec"] = {"inputs": {"samples": ["ending_samp", 0], "vae": ["ending_vae", 0]},
+                       "class_type": "VAEDecode"}
+    p["ending_adec"] = {"inputs": {"samples": ["ending_samp", 0], "vae": ["ending_avae", 0]},
+                        "class_type": "VAEDecodeAudio"}
+    p["ending_mux"] = {"inputs": {"images": ["ending_dec", 0], "audio": ["ending_adec", 0],
+                                  "fps": float(ENDING_FPS)},
+                       "class_type": "CreateVideo"}
+    p["ending_save"] = {"inputs": {"video": ["ending_mux", 0],
+                                   "filename_prefix": "video/comfycrawler_ending",
+                                   "format": "auto", "format.codec": "auto"},
+                        "class_type": "SaveVideo"}
+    return p
+
+
+class EndingVideoCancelled(Exception):
+    """A background ending render that something with a better claim on ComfyUI replaced."""
+
+
+def _interrupt_prompt(prompt_id, deadline=30.0):
+    """Get one prompt out of ComfyUI: delete it if it is still queued, interrupt it if it is
+    running. Repeated until the queue no longer holds it, for the reason _drain_cancelled_prompts
+    gives - an interrupt landing just before the prompt starts executing is forgotten."""
+    started = time.time()
+    while time.time() - started < deadline:
+        try:
+            with urllib.request.urlopen(f"{COMFY_URL}/queue", timeout=10) as resp:
+                q = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            print(f"[ending] queue read failed while interrupting ({e})")
+            return
+        running = any(len(e) > 1 and e[1] == prompt_id for e in q.get("queue_running", []))
+        pending = any(len(e) > 1 and e[1] == prompt_id for e in q.get("queue_pending", []))
+        if not running and not pending:
+            return
+        try:
+            if pending:
+                _comfy_post("/queue", {"delete": [prompt_id]})
+            if running:
+                _comfy_post("/interrupt", {"prompt_id": prompt_id})
+        except Exception as e:
+            print(f"[ending] interrupt failed ({e})")
+        time.sleep(0.5)
+
+
+def _ending_submit_and_wait(payload, job_key=None, job=None):
+    """Submit the clip and wait for SaveVideo. Unlike _krea2_submit_and_collect this one reads a
+    failure straight out of /history (an H3 out-of-memory would otherwise sit out the whole
+    45-minute timeout), and it takes the prompt back out of ComfyUI on any way out that is not
+    success.
+
+    In a run (`job` None) the prompt is tracked like every other, so a page refreshed mid-render
+    drains it with the rest of the run. A background `job` is deliberately NOT in
+    _INFLIGHT_PROMPTS - that list belongs to the dungeon being generated - and is stopped through
+    its own `cancelled` flag instead."""
+    _bail_if_cancelled()
+    PROGRESS.begin_job(job_key)
+    data = json.dumps({"prompt": payload, "client_id": COMFY_CLIENT_ID}).encode("utf-8")
+    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            prompt_id = json.loads(resp.read().decode("utf-8"))["prompt_id"]
+    except urllib.error.HTTPError as e:
+        # 400 = the graph failed validation (a model file missing, a node not installed) - say
+        # what ComfyUI said instead of a bare "Bad Request".
+        detail = e.read().decode("utf-8", "replace")[:600]
+        raise RuntimeError(f"ComfyUI refused the ending graph: {detail}")
+    if job is None:
+        _track_prompt(prompt_id)
+    else:
+        job["prompt_id"] = prompt_id
+
+    finished = False
+    try:
+        started = time.time()
+        while time.time() - started < ENDING_TIMEOUT:
+            time.sleep(1.0)
+            _bail_if_cancelled()
+            if job is not None and job.get("cancelled"):
+                raise EndingVideoCancelled("stopped or replaced")
+            with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=30) as h:
+                entry = json.loads(h.read().decode("utf-8")).get(prompt_id)
+            if not entry:
+                continue                  # history only gains the entry once the prompt is done
+            finished = True
+            saved = (entry.get("outputs") or {}).get("ending_save") or {}
+            files = saved.get("images") or []
+            if files:
+                PROGRESS.finish_job(job_key)
+                info = files[0]
+                return os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
+            status = entry.get("status") or {}
+            why = status.get("status_str") or "no video came out"
+            for kind, msg in status.get("messages") or []:
+                if kind == "execution_error":
+                    why = f"{msg.get('node_type')}: {msg.get('exception_message', '').strip()}"
+                elif kind == "execution_interrupted":
+                    # Nothing of ours interrupted it (that path raises before it gets here), so it
+                    # was stopped from ComfyUI's own queue - a choice, not a failure.
+                    raise EndingVideoCancelled("stopped from ComfyUI")
+            raise RuntimeError(f"H3 did not produce the ending ({why})")
+        raise TimeoutError(f"the ending took longer than {ENDING_TIMEOUT // 60} minutes")
+    finally:
+        if not finished:
+            _interrupt_prompt(prompt_id)
+
+
+def render_ending_video(refs, battle_music, styles, job_key=None, job=None, seed=None):
+    """Film one ending clip. `refs` maps hero / face / boss / wall / floor / ceiling to a file path
+    or a data URL (any may be None - a missing one is simply left out of the prompt and the
+    graph), `battle_music` is the run's battle bed as a data URL or None. Returns the MP4's path
+    in COMFY_OUTPUT_DIR; raises on failure - callers decide what a failure costs."""
+    tag = f"ending_{int(time.time() * 1000)}"
+    pictures, names = [], []
+    for kind in ("hero", "face", "boss", "wall", "floor", "ceiling"):
+        try:
+            name = _ending_ref_image(refs.get(kind), f"{tag}_{kind}.png")
+        except Exception as e:
+            print(f"[ending] {kind} reference unusable ({e}) - leaving it out")
+            name = None
+        if name:
+            pictures.append(kind)
+            names.append(name)
+    try:
+        audio_name = _ending_ref_audio(battle_music, f"{tag}_battle.wav")
+    except Exception as e:
+        print(f"[ending] battle music unusable as a reference ({e}) - leaving it out")
+        audio_name = None
+    width, height = ENDING_WIDTH, ENDING_HEIGHT
+    prompt = ending_video_prompt(pictures, styles, bool(audio_name))
+    payload = ending_video_payload(names, audio_name, prompt, width, height,
+                                   seed if seed is not None else random.randint(1, 2**48),
+                                   sage=_sage_attention_available())
+    t0 = time.time()
+    print(f"[ending] filming {width}x{height}, {ENDING_FRAMES / ENDING_FPS:.1f}s, refs "
+          f"{'/'.join(pictures) or 'none'}{' + battle music' if audio_name else ''}")
+    path = _ending_submit_and_wait(payload, job_key=job_key, job=job)
+    print(f"[ending] clip ready in {time.time() - t0:.0f}s: {path}")
+    return path
+
+
+def generate_ending_video(refs, battle_music, styles, job_key="ending_video"):
+    """The "loading" mode's stage inside run_batch_v6_krea. Never fails the run: a dungeon with
+    no cutscene just ends at the stairs, as every dungeon did before. Only an abandoned run
+    unwinds through here."""
+    try:
+        return render_ending_video(refs, battle_music, styles, job_key=job_key)
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[ending] no ending cutscene for this run ({e})")
+        PROGRESS.finish_job(job_key)
+        return None
+
+
+# ---- Renders outside a run: background mode, and History's movie button ------------------------
+# At most one at a time, of two kinds:
+#   background - started for the run being played (Render Ending While Playing, or a History
+#                replay with no clip yet). Anything else that needs ComfyUI - a new dungeon, the
+#                Fill-in button, a replay of a different run - replaces it: the player has moved
+#                on from the run it was for, and nothing should queue behind a multi-minute job.
+#   manual     - the player asked for this one by name, with a History row's movie button. It
+#                replaces a background render, but nothing replaces it: until it is done the
+#                page greys out CREATE, Fill-in and the other rows' movie buttons, and the server
+#                refuses those same requests (409) and answers a background request with "busy".
+_ENDING_LOCK = threading.Lock()
+_ENDING_JOB = None
+
+
+def _ending_session_file(session_id):
+    folder = _session_dir(session_id)
+    return os.path.join(folder, ENDING_FILENAME) if folder else None
+
+
+def _ending_job_view(job):
+    return {"state": job["state"], "percent": job["percent"], "error": job.get("error")}
+
+
+def ending_video_rendering():
+    """True while an ending render outside a run holds (or is about to hold) ComfyUI."""
+    job = _ENDING_JOB
+    return bool(job and job["state"] in ("queued", "rendering"))
+
+
+def ending_video_manual_rendering():
+    """True while a render the player asked for from History is filming - see the note above."""
+    job = _ENDING_JOB
+    return bool(job and job.get("manual") and job["state"] in ("queued", "rendering"))
+
+
+def ending_video_job_view():
+    """The one render outside a run, for a page that wants to know what ComfyUI is busy with:
+    {session, state, percent, error, manual}, or {state: "idle"} when there has not been one. A
+    finished job keeps reporting its last state, so a page that polls slowly still sees how it
+    ended."""
+    job = _ENDING_JOB
+    if not job:
+        return {"state": "idle", "session": None, "percent": 0, "error": None, "manual": False}
+    return dict(_ending_job_view(job), session=job["session"], manual=bool(job.get("manual")))
+
+
+def ending_video_status(session_id):
+    """{state: none | queued | rendering | ready | failed | cancelled | missing, percent, error}.
+    A clip on disk is "ready" whatever any job says - the folder is the truth, the same as for
+    the listing."""
+    path = _ending_session_file(session_id)
+    if not path or not os.path.isdir(os.path.dirname(path)):
+        return {"state": "missing", "percent": 0, "error": "That saved dungeon is gone."}
+    if os.path.exists(path):
+        return {"state": "ready", "percent": 100, "error": None}
+    with _ENDING_LOCK:
+        job = _ENDING_JOB
+        if job and job["session"] == session_id:
+            return _ending_job_view(job)
+    return {"state": "none", "percent": 0, "error": None}
+
+
+def start_ending_video_job(session_id, from_run=False, manual=False):
+    """Start filming a saved run's ending outside a run. Idempotent for the run it is already
+    filming - and asking by name (`manual`) for a run whose background render is already going
+    just promotes that render to manual. Refused ("busy") while a dungeon is generating unless
+    `from_run` - run_batch_v6_krea calls it as its very last step, when nothing of the run's own
+    is left to queue behind it - and refused while a manual render for another run is filming."""
+    global _ENDING_JOB
+    path = _ending_session_file(session_id)
+    folder = os.path.dirname(path) if path else None
+    if not folder or not os.path.exists(os.path.join(folder, "bundle.json")):
+        return {"state": "missing", "percent": 0, "error": "That saved dungeon is gone."}
+    if os.path.exists(path):
+        return {"state": "ready", "percent": 100, "error": None}
+    with _ENDING_LOCK:
+        job = _ENDING_JOB
+        if job and job["session"] == session_id and job["state"] in ("queued", "rendering"):
+            if manual:
+                job["manual"] = True
+            return _ending_job_view(job)
+    if not from_run and (gen_progress.get("is_generating") or run_is_settling()):
+        return {"state": "busy", "percent": 0, "error": None}
+    if ending_video_manual_rendering():
+        return {"state": "busy", "percent": 0, "error": None}
+    cancel_ending_video_job(f"replaced by {session_id}")
+    job = {"session": session_id, "state": "queued", "percent": 0, "error": None,
+           "prompt_id": None, "cancelled": False, "manual": bool(manual)}
+    with _ENDING_LOCK:
+        _ENDING_JOB = job
+    threading.Thread(target=_run_ending_video_job, args=(job,), daemon=True).start()
+    return _ending_job_view(job)
+
+
+def cancel_ending_video_job(reason, session_id=None):
+    """Stop the background render - only the one for `session_id`, when given. True if there was
+    one to stop. Returns straight away; the worker takes its prompt back out of ComfyUI."""
+    with _ENDING_LOCK:
+        job = _ENDING_JOB
+        if not job or job["state"] not in ("queued", "rendering"):
+            return False
+        if session_id is not None and job["session"] != session_id:
+            return False
+        job["cancelled"] = True
+        # Reported as cancelled from this instant, not once the worker has unwound: ComfyUI only
+        # notices an interrupt between sampling steps, and nothing that greyed out for this render
+        # should stay grey that long after the player said stop. The worker writes the same state
+        # again when it gets there.
+        job["state"] = "cancelled"
+        pid = job.get("prompt_id")
+    print(f"[ending] stopping the {'manual' if job.get('manual') else 'background'} render for "
+          f"{job['session']} - {reason}")
+    if pid:
+        # Not left to the worker alone: it only notices the flag on its next poll, and whatever
+        # replaced it wants the card now.
+        threading.Thread(target=_interrupt_prompt, args=(pid,), daemon=True).start()
+    return True
+
+
+def _store_session_ending(session_id, src_path):
+    """Move a finished clip in beside its run and mark the run as having one. Both writes go
+    through a temp file and os.replace, so a crash mid-copy never leaves a truncated ending.mp4
+    the page would try to play."""
+    dest = _ending_session_file(session_id)
+    folder = os.path.dirname(dest) if dest else None
+    if not folder or not os.path.isdir(folder):
+        raise RuntimeError("its saved dungeon was deleted while the ending was filming")
+    shutil.copyfile(src_path, dest + ".tmp")
+    os.replace(dest + ".tmp", dest)
+    try:
+        _update_session_meta(folder, {"has_ending_video": True})
+    except Exception as e:
+        print(f"[ending] clip stored, but meta.json was not updated ({e})")
+
+
+def _run_ending_video_job(job):
+    sid = job["session"]
+    try:
+        folder = _session_dir(sid)
+        with open(os.path.join(folder, "bundle.json"), encoding="utf-8") as f:
+            bundle = json.load(f)
+        # The clean typed words the run's own audio prompts used, falling back to the raw ones
+        # on the meta for a bundle saved before named styles existed.
+        styles = {}
+        try:
+            meta = _read_session_meta(folder)
+            styles = {k: meta.get(f"{k}_style", "") for k in ("wall", "player", "weapon", "enemy")}
+        except Exception:
+            pass
+        clean = (bundle.get("named_styles") or {}).get("clean")
+        if isinstance(clean, dict):
+            styles.update({k: v for k, v in clean.items() if v})
+        if job["cancelled"]:
+            raise EndingVideoCancelled("superseded before it started")
+        job["state"] = "rendering"
+        path = render_ending_video(_ending_refs_from_bundle(bundle),
+                                   (bundle.get("music") or {}).get("battle"), styles, job=job)
+        # Stopped in the last instant, between the clip landing and here: a stop is a stop, and the
+        # page has already been told this render is cancelled.
+        if job["cancelled"]:
+            raise EndingVideoCancelled("stopped just as it finished")
+        _store_session_ending(sid, path)
+        job["percent"] = 100
+        job["state"] = "ready"
+        print(f"[ending] background ending stored for {sid}")
+    except EndingVideoCancelled as e:
+        job["state"] = "cancelled"
+        print(f"[ending] render for {sid} stopped ({e})")
+    except Exception as e:
+        job["state"] = "cancelled" if job["cancelled"] else "failed"
+        job["error"] = str(e)
+        print(f"[ending] background render for {sid} {job['state']} ({e})")
+
+
+def _ending_job_progress(data):
+    """ProgressTracker hook: True (and the job's percent updated) when a socket message belongs to
+    the background render, which is no part of any run's progress plan. Sampling is the long
+    part, so it carries the percent; the last few points are the decode and the save."""
+    job = _ENDING_JOB
+    pid = data.get("prompt_id")
+    if not job or not pid or job.get("prompt_id") != pid:
+        return False
+    node = (data.get("nodes") or {}).get("ending_samp")
+    if node:
+        try:
+            mx = float(node.get("max") or 0.0)
+            val = float(node.get("value") or 0.0)
+        except (TypeError, ValueError):
+            return True
+        if mx > 1:
+            job["percent"] = max(job["percent"], int(95 * min(val, mx) / mx))
     return True
 
 
@@ -8838,6 +9506,57 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"success": False,
                                          "error": "That saved dungeon is gone."},
                                         ensure_ascii=True).encode("utf-8"))
+            return
+
+        # Where a run's ending cutscene stands - polled by game.js while a background render is
+        # filming, and asked once on entry to learn whether a clip is already there.
+        elif urllib.parse.urlparse(self.path).path == "/api/ending_video_status":
+            qs = urllib.parse.urlparse(self.path).query
+            session_id = urllib.parse.parse_qs(qs).get("id", [""])[0]
+            payload = json.dumps(ending_video_status(session_id), ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # The one ending render outside a run, whichever run it is for - polled by game.js while
+        # one is filming, so the History window can show its progress on the right row and the
+        # buttons it greys out come back the moment it is done (see ending_video_job_view).
+        elif self.path == "/api/ending_video_job":
+            payload = json.dumps(ending_video_job_view(), ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # The cutscene itself. game.js fetches it whole into a blob as soon as it exists, so the
+        # boss's last hit plays it from memory rather than asking this one-request-at-a-time
+        # server to stream it right then.
+        elif urllib.parse.urlparse(self.path).path == "/api/ending_video":
+            qs = urllib.parse.urlparse(self.path).query
+            session_id = urllib.parse.parse_qs(qs).get("id", [""])[0]
+            clip = _ending_session_file(session_id)
+            if clip and os.path.exists(clip):
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(os.path.getsize(clip)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(clip, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+                return
+            self.send_response(404)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
             return
 
         elif self.path == "/" or self.path == "/index.html":
@@ -8914,6 +9633,25 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     ensure_ascii=True).encode("utf-8"))
                 print("[generate_dungeon] refused - previous run still settling")
                 return
+            # Same backstop for an ending movie the player asked for from History: the page greys
+            # CREATE out until it is done, and nothing gets to replace it (see _ENDING_JOB).
+            if ending_video_manual_rendering():
+                try:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    if length:
+                        self.rfile.read(length)
+                except Exception:
+                    pass
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(
+                    {"success": False, "busy": True,
+                     "error": "An ending movie is being filmed - try again once it is done."},
+                    ensure_ascii=True).encode("utf-8"))
+                print("[generate_dungeon] refused - an ending movie from History is filming")
+                return
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length).decode("utf-8")
@@ -8933,6 +9671,16 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 # Options' "Last Attack Frame" toggle: one more frame per foe, shown when its
                 # blow lands. v6 only; absent (an older page) means off.
                 last_attack_frame = bool(data.get("last_attack_frame", False))
+                # Options' Ending Video pair: the cutscene itself, and whether it is filmed on the
+                # loading screen or in the background while the run is played. v6 only; absent
+                # (an older page) means off.
+                ending_video = "off"
+                if bool(data.get("ending_video", False)):
+                    ending_video = ("background" if bool(data.get("ending_video_background", False))
+                                    else "loading")
+                # A new dungeon outranks an ending still filming for a run the player has left:
+                # every prompt of this run would otherwise queue behind a multi-minute video job.
+                cancel_ending_video_job("a new dungeon is being generated")
                 # krea2 steps was a UI input once, never touched - run_batch_* just uses
                 # KREA2_STEPS_DEFAULT now.
 
@@ -8977,14 +9725,15 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                          args=(wall_style, player_style, weapon_style, enemy_style),
                                          kwargs={"player_image": player_image, "sound_mode": sound_mode,
                                                  "gfx": gfx, "gfx_name": graphics_quality,
-                                                 "last_attack_frame": last_attack_frame},
+                                                 "last_attack_frame": last_attack_frame,
+                                                 "ending_video": ending_video},
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,
                                          args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
                                          daemon=True)
                 print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx} "
-                      f"last_attack_frame={last_attack_frame}")
+                      f"last_attack_frame={last_attack_frame} ending_video={ending_video}")
                 t.start()
                 GEN_THREAD = t
                 return
@@ -9015,9 +9764,17 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     # ComfyUI is busy with a dungeon; the fill-in would queue behind all of it.
                     status, reply = 409, {"success": False, "busy": True,
                                           "error": "ComfyUI is busy with a dungeon - try again in a moment."}
+                elif ending_video_manual_rendering():
+                    # An ending movie the player asked for from History - see _ENDING_JOB.
+                    status, reply = 409, {"success": False, "busy": True,
+                                          "error": "An ending movie is being filmed - try again once it is done."}
                 elif all(v.strip() for v in fields.values()):
                     reply = {"success": True, "fields": {}}
                 else:
+                    # Same rule as a new dungeon: a background ending still filming for a run
+                    # the player has left would hold this call - and this whole server - behind
+                    # minutes of video. It gives way.
+                    cancel_ending_video_job("the Fill-in button needs ComfyUI")
                     reply = {"success": True, "fields": generate_fill_in(fields)}
             except urllib.error.URLError as e:
                 status, reply = 502, {"success": False, "error": "Couldn't reach ComfyUI - is it running?"}
@@ -9049,6 +9806,67 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "locked": True, "error": str(e)}, 409
             except Exception as e:
                 print(f"[history] delete failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/ending_video_start":
+            # Filming a saved run's ending outside a run. Body is {id, manual}: manual is a
+            # History row's movie button, anything else is background mode for the run being
+            # played. The reply is ending_video_status's shape, plus "busy" when a dungeon
+            # generation or a manual render owns ComfyUI (the page asks again later).
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                body, code = start_ending_video_job(data.get("id"), manual=bool(data.get("manual"))), 200
+            except Exception as e:
+                print(f"[ending] start failed ({e})")
+                body, code = {"state": "failed", "percent": 0, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/ending_video_cancel":
+            # "Stop Filming" in the confirm box a filming History row's movie button opens. Body is
+            # {id}; only the render for that run is stopped, and "stopped" says whether there was
+            # one - it may have finished while the question was on screen.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                session_id = data.get("id")
+                stopped = bool(session_id) and cancel_ending_video_job(
+                    "the player stopped it from History", session_id=session_id)
+                body, code = {"success": True, "stopped": stopped}, 200
+            except Exception as e:
+                print(f"[ending] cancel failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/history_beaten":
+            # The boss of a saved run just went down. Body is {id}. Recorded once and never
+            # cleared - it is what unlocks that run's ending movie in the History window.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                beaten = mark_dungeon_session_beaten(data.get("id"))
+                if beaten is None:
+                    body, code = {"success": False, "error": "That saved dungeon is gone."}, 404
+                else:
+                    body, code = {"success": True, "beaten": True}, 200
+            except Exception as e:
+                print(f"[history] beaten failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")

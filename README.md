@@ -17,6 +17,7 @@
   * **`v2 texture`**: Synthesizes high-res material textures with MiniMax H3 in a 3D raycaster.
   * **`v1 video` (Pre-Rendered FMV Clips)**: Generates 8 frame-chained 1.5s AI video clips with native reverse playback using MiniMax H3 diffusion.
 * 🔊 **Generated Sound Effects** (`v6`): Stable Audio 3 Small-SFX writes the game's foley from the same typed styles the art comes from - the footstep matches the floor, the swing matches the weapon, and the death cries match the hero and the foe. Eight one-shots per dungeon in about 12 seconds, with a procedural Web Audio bank standing in for anything that fails.
+* 🎬 **Ending Cutscene** (`v6`, off by default): switch on **Ending Video** in Options and MiniMax H3 films the hero landing the final blow on the boss, the stairs out glowing at the end of the corridor, and a victory cheer. The run's own hero sprite, HUD portrait, boss and textures go in as reference pictures and its battle music as a reference track for the score. It plays the moment the boss's health runs out and holds its last frame under the victory window. It is filmed at 512×384 on the loading screen (about 3½ minutes), or, with the experimental **Render Ending While Playing**, in the background while you explore. Every run in **History** has a movie button too: it plays the ending of a dungeon you have beaten, and films one for a dungeon that never got one.
 * 🖥️ **Authentic Windows 95 UI**: Classic beveled grey window styling, dynamic 3-space minimap (`[ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]`), D-pad controls, and real-time progress HUD.
 * 🚀 **Hardware Accelerated**: RTX Video Super Resolution (2x Ultra) + SageAttention integration for ultra-fast generation.
 
@@ -43,6 +44,12 @@
    * `text_encoders/t5gemma_b_b_ul2.safetensors` (1.2 GB) -> `models/text_encoders/`
 
    Optional: without them a v6 dungeon still generates and plays, using procedural sounds instead.
+4. For the `v6` ending cutscene, from [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3):
+   * `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` (21 GB) -> `models/diffusion_models/`
+   * `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` (15.7 GB) -> `models/text_encoders/`
+   * `vae/minimax_h3_video_vae_fp16.safetensors` and `vae/minimax_h3_audio_vae_fp32.safetensors` -> `models/vae/`
+
+   Optional: only needed with Ending Video turned on. [KJNodes](https://github.com/kijai/ComfyUI-KJNodes) with SageAttention installed is used automatically when present.
 
 ### Installation
 ```bash

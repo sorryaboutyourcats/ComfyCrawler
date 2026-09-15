@@ -115,7 +115,9 @@
     #modalHistoryConfirm button:focus-visible,
     #modalLeaveRunConfirm button:focus-visible,
     #modalQuitConfirm button:focus-visible,
-    #modalEraseConfirm button:focus-visible {
+    #modalEraseConfirm button:focus-visible,
+    #modalEndingPlayer button:focus-visible,
+    #modalEndingStopConfirm button:focus-visible {
       outline: 2px dotted #000080;
       outline-offset: -4px;
     }
@@ -262,6 +264,13 @@
        would lose to. */
     #btnCreate:disabled {
       background: #c0c0c0;
+      color: #808080;
+      text-shadow: 1px 1px #ffffff;
+      cursor: default;
+    }
+    /* Fill-in greys out the same way while an ending movie from History is filming (and while
+       its own request is out, where the "Filling..." label already says so). */
+    #btnFillIn:disabled {
       color: #808080;
       text-shadow: 1px 1px #ffffff;
       cursor: default;
@@ -480,6 +489,69 @@
       z-index: 1;
     }
 
+    /* ---- Ending cutscene (Options > Ending Video) ------------------------
+       The clip fills the 4:3 viewport over a black ground - contain, not cover, so nothing the
+       camera framed is cropped off - and is never pixelated: it is the one thing in the
+       viewport that was not rendered at 320x240. */
+    #endingCutscene {
+      background: #000000;
+      overflow: hidden;
+    }
+    #endingVideo {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: auto;
+    }
+    /* The cut into the clip: a white sheet that is fully up on the first frame and burns off,
+       the flash an RPG uses to jump from the fight into its cinematic. Re-armed per play by
+       toggling the class. */
+    #endingFlash {
+      position: absolute;
+      inset: 0;
+      background: #ffffff;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #endingFlash.is-flashing {
+      animation: endingFlash 0.7s ease-out forwards;
+    }
+    @keyframes endingFlash {
+      0%   { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    #endingSkipHint {
+      position: absolute;
+      right: 8px;
+      bottom: 6px;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      color: rgba(255, 255, 255, 0.85);
+      background: rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      transition: opacity 0.6s ease;
+      pointer-events: none;
+    }
+    #endingSkipHint.is-shown { opacity: 1; }
+    /* The victory box over the clip's held last frame: a much lighter wash than the usual 60%,
+       and sat at the bottom of the viewport instead of dead centre - the clip ends on the hero
+       cheering in the middle of the frame, which a centred box covered completely. Id selectors,
+       so they win over the modal's own bg-black/60 and items-center utilities. */
+    #victoryModal.over-ending {
+      background: rgba(0, 0, 0, 0.22);
+      align-items: flex-end;
+    }
+    /* "Render Ending While Playing" is greyed out while Ending Video is Off - the etched label
+       Windows 95 gave a disabled control, same as Undo / Redo. */
+    .ending-background-btn:disabled {
+      color: #808080;
+      text-shadow: 1px 1px 0 #ffffff;
+      cursor: default;
+    }
+
     /* History rows: an info line with more on it than fits its column (wall style · date ·
        size · quality · music) scrolls sideways on a loop - the Windows marquee screensaver
        the "windows 95 3d maze" dungeons are named after - rather than clipping to an
@@ -578,11 +650,39 @@
     /* A starred row's trash can, locked. The 🔒 is an emoji, which ignores `color`, so the
        etched-grey disabled label the Undo button uses would not show - fade the whole button
        instead, and hold its bevel up so a click on it does not look like it went in. */
-    .hist-trash:disabled {
+    .hist-trash:disabled,
+    .hist-movie:disabled {
       opacity: 0.5;
       cursor: default;
     }
-    .hist-trash:disabled:active {
+    /* The movie button while its run's ending is filming shows the percent instead of a glyph. It
+       stays clickable - clicking it again asks whether to stop filming - so it is only greyed a
+       little, well short of the 0.5 a disabled button gets, and the number stays readable. */
+    .hist-movie[data-kind="filming"] {
+      opacity: 0.72;
+      font-weight: 900;
+      color: #000080;
+    }
+    .hist-movie[data-kind="filming"]:hover {
+      opacity: 0.9;
+      background: #fecaca;
+    }
+    /* History's ending movie player: the clip at its own 4:3, never pixelated, on black. */
+    #endingPlayerFrame {
+      background: #000000;
+      aspect-ratio: 4 / 3;
+      max-height: 68vh;
+      margin: 0 auto;
+    }
+    #endingPlayerVideo {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: auto;
+    }
+    .hist-trash:disabled:active,
+    .hist-movie:disabled:active {
       border-top: 2px solid #ffffff;
       border-left: 2px solid #ffffff;
       border-right: 2px solid #808080;
@@ -1052,6 +1152,44 @@
             <div class="text-[10px] text-slate-500 font-bold" hidden>Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
           </div>
 
+          <!-- Ending Video: a MiniMax H3 cutscene of the boss going down, filmed from the run's own
+               hero, boss, textures and battle music, played the moment the boss's health runs out
+               and held on its last frame under the victory box. The second row moves the render
+               off the loading screen and into the background while the run is played - and only
+               means anything with the first row On, so game.js greys it out while that is Off.
+               Rows of buttons like the difficulty row rather than checkboxes, so the arrow keys
+               walk across them; game.js (setEndingVideo / setEndingBackground) keeps each pick
+               pressed in and remembers both across reloads. Both default to Off. -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800" id="endingVideoLabel">
+              Ending Video:
+            </label>
+            <div id="endingVideoRow" class="flex gap-1.5" role="group" aria-labelledby="endingVideoLabel">
+              <button type="button" data-ending-video="off" class="ending-video-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="No cutscene. Beat the boss, walk the last stretch to the stairs, and the dungeon is escaped.">
+                <span class="text-xs">Off</span>
+              </button>
+              <button type="button" data-ending-video="on" class="ending-video-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="Films a cutscene of your hero beating the boss, scored from the dungeon's battle music. It plays the moment the boss runs out of health. Filming it adds about three and a half minutes to creating a dungeon.">
+                <span class="text-xs">On</span>
+              </button>
+            </div>
+
+            <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
+              Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
+            </label>
+            <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
+              <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
+                <span class="text-xs">Off</span>
+              </button>
+              <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
+                <span class="text-xs">On</span>
+              </button>
+            </div>
+          </div>
+
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-slate-800" for="screensaverDelay">
               Screensaver Wait:
@@ -1162,6 +1300,69 @@
           </button>
           <button id="btnHistoryConfirmDelete" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ENDING MOVIE PLAYER - a History row's 🎬 button plays that run's ending movie here, for
+         a run that has been beaten. Stacked over the History window (z-[60]) like the confirm
+         boxes, so ESC, its ✕, OK or a click on the dark list behind it all land back on that
+         row. Built and torn down by openEndingPlayer / closeEndingPlayer in game.js. -->
+    <div id="modalEndingPlayer" class="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-2xl p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between gap-2 mb-2">
+          <span id="endingPlayerTitle" class="truncate min-w-0">🎬 Ending</span>
+          <button id="btnEndingPlayerClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200 shrink-0">✕</button>
+        </div>
+
+        <div class="px-2">
+          <div id="endingPlayerFrame" class="win95-inset">
+            <video id="endingPlayerVideo" playsinline preload="auto"></video>
+          </div>
+        </div>
+
+        <div class="px-3 py-2 flex justify-between items-center gap-2">
+          <span id="endingPlayerNote" class="text-[10px] text-slate-700 font-bold truncate min-w-0"></span>
+          <div class="flex items-center gap-2 shrink-0">
+            <button id="btnEndingPlayerReplay" class="win95-btn px-3 py-1.5 text-xs text-black hover:bg-slate-300">
+              ↺ Replay
+            </button>
+            <button id="btnEndingPlayerOk" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STOP-FILMING CONFIRMATION - clicking a History row's movie button again while that run's
+         ending movie is filming asks here first, because stopping throws the render away. Same
+         z-[60] stacking over History as the delete box, and it opens on Keep Filming, never on
+         the button that stops it. The name and progress line are filled in by
+         askStopEndingFilm / paintStopEndingFilm in game.js. -->
+    <div id="modalEndingStopConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>⚠️ Stop Filming?</span>
+          <button id="btnEndingStopClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div class="text-3xl leading-none select-none">🎥</div>
+          <div class="flex flex-col gap-1 min-w-0">
+            <p class="text-xs font-black text-slate-900">Stop filming this dungeon's ending movie?</p>
+            <p id="endingStopName" class="text-xs font-bold text-blue-900 break-words"></p>
+            <p id="endingStopText" class="text-[11px] text-slate-700"></p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnEndingStopKeep" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Keep Filming
+          </button>
+          <button id="btnEndingStopGo" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
+            Stop Filming
           </button>
         </div>
       </div>
@@ -1307,6 +1508,17 @@
               <source id="videoSource" src="" type="video/mp4">
             </video>
 
+            <!-- ENDING CUTSCENE (Options > Ending Video). Takes the whole viewport the moment the
+                 boss's health runs out, and stays up on the clip's last frame once it ends, with
+                 the victory box raised over it. z-20: under the death / victory boxes (z-30) and
+                 the level-up box (z-40). The flash sheet is the white cut into the clip; the hint
+                 fades in after a moment. All driven by game.js - see beginEndingPlayback. -->
+            <div id="endingCutscene" class="absolute inset-0 z-20 hidden">
+              <video id="endingVideo" playsinline preload="auto"></video>
+              <div id="endingFlash"></div>
+              <div id="endingSkipHint">ESC to skip</div>
+            </div>
+
             <div id="defeatModal" class="absolute inset-0 bg-black/70 z-30 flex items-center justify-center p-4 hidden">
               <div class="win95-box p-4 flex flex-col items-center gap-3 max-w-xs shadow-2xl text-center border-4 border-red-700">
                 <div class="text-3xl">💀</div>
@@ -1363,6 +1575,21 @@
                 <div class="text-[11px] font-bold text-blue-900 bg-blue-100 px-3 py-1 rounded w-full">
                   Steps taken: <span id="winMovesCount">0</span>
                 </div>
+                <!-- The ending cutscene from this box: "Watch Ending" once a background render
+                     finishes after the boss already fell, "Replay Ending" over a clip that just
+                     played. The line above it says where a render still filming has got to.
+                     game.js (paintVictoryEnding) shows whichever applies, or neither. -->
+                <div id="victoryEndingStatus" class="text-[10px] font-bold text-slate-600 w-full hidden"></div>
+                <button id="btnVictoryEnding" type="button" class="victorychoice win95-btn px-4 py-1.5 text-xs text-black bg-slate-100 hover:bg-blue-200 w-full hidden">
+                  🎬 Watch Ending
+                </button>
+                <!-- Over the ending cutscene's held last frame only: the boss is down but the player
+                     never walked out, so they can go back into the dungeon and take the stairs to
+                     finish. Hidden when the box was raised BY the stairs - there is nowhere left to
+                     go. See keepExploringAfterEnding in game.js. -->
+                <button id="btnVictoryKeepExploring" type="button" class="victorychoice win95-btn px-4 py-1.5 text-xs text-black bg-slate-100 hover:bg-green-200 w-full hidden">
+                  🧭 Keep Exploring
+                </button>
                 <button id="btnVictoryFavorite" type="button" class="victorychoice win95-btn px-4 py-1.5 text-xs text-black bg-slate-100 hover:bg-yellow-200 w-full">
                   ☆ Favorite this run
                 </button>
@@ -1380,6 +1607,9 @@
                  walking onto one of the enemy markers roaming the maze, so there is nothing
                  to toggle - and Space is the Use key. -->
             <div class="flex items-center gap-1.5 flex-shrink-0">
+              <!-- Where a background ending render has got to (Options > Render Ending While
+                   Playing), then READY. Hidden otherwise - see paintEndingBadge in game.js. -->
+              <span id="endingBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-yellow-300 cursor-help hidden"></span>
               <span id="battleModeBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800">EXPLORATION</span>
               <span id="encounterBadge" class="text-[10px] font-bold text-slate-600 hidden">Foes: 0</span>
             </div>
