@@ -1443,8 +1443,9 @@
         catch (_) { /* storage disabled or full - the pick just won't stick */ }
       });
     }
-    try { setLastAttackFrame(localStorage.getItem(LAST_ATTACK_FRAME_KEY)); }
-    catch (_) { setLastAttackFrame('off'); }
+    // Off/On/Quick/Flip are hidden from the settings row for now - Mixed is the only mode on
+    // offer, so it's forced here rather than read back from a stored pick made before that.
+    setLastAttackFrame('mixed');
 
     btnSettings.addEventListener('click', () => {
       modalSettings.classList.remove('hidden');
@@ -1783,7 +1784,7 @@
       // the real figure, rather than a generic bucket.
       '"Rome"': { player: '"Jesus"', weapon: 'cross', enemy: 'balaclava wearing people with tactical law enforcement gear' },
       'Tokyo Tower': { player: 'anime fluffy cat', weapon: 'ramen spoon', enemy: '"Sailor Moon"' },
-      'craigslist':  { player: 'good waifu',        weapon: 'crowbar',    enemy: 'evil waifu' },
+      'craigslist':  { player: 'good waifu',        weapon: 'crowbar',    enemy: 'anime trope' },
     };
 
     function bindPresetButton(btn) {
@@ -2446,6 +2447,11 @@
     const BOSS_WEAVE_RANGE = 96;            // how far either side of centre the weave sweeps
     const BOSS_CHARGE_DMG_MULT = 1.6;
     const BOSS_CHARGE_REACH = 62;           // vs. a swing's 44 - it is a body, not an arm
+    // A timid foe (walker) that has been fleeing this long gives up running and turns to fight
+    // instead - see the `flees`/`enraged` handling in tickEnemyAI's grounded branch.
+    const FLEE_ENRAGE_FRAMES = 300;         // 5s at the fixed 60fps tick
+    const ENRAGE_SPEED_MULT = 2.0;          // vs. the walker's ordinary 0.9 patrol speed
+    const ENRAGE_CADENCE_MULT = 0.35;       // shorter gap between swings while enraged
     // FLAT, not a fraction of playerMaxStm. On a base hero that is the entire bar and the guard
     // is a total loss; a hero who has taken STAMINA picks (playerMaxStm is BASE + bonusStm)
     // walks away from the same block with something still in hand. That is the point - it is one
@@ -2705,6 +2711,8 @@
       e.swoopTimer = cfg.fly ? 90 : 0;
       e.blockTimer = 0;
       e.punishTimer = 0;   // walker: frames left in the opening after its own attack
+      e.fleeTimer = 0;     // walker: consecutive frames spent fleeing (see FLEE_ENRAGE_FRAMES)
+      e.enraged = false;   // walker: gave up fleeing and is charging the player instead
       e.strikeLanded = false;   // the current attack's blow has landed - see landEnemyStrike
       e.deathFade = 0;
       // Circler: half a circle apart, around a centre at its own spawn x, so two of them are
@@ -3728,14 +3736,30 @@
         // half of every swarm fight into a chase. A foe in full retreat also stops working
         // its guard (see reactiveBlock below) - it is running, not parrying - so a fled
         // walker can be put down instead of turtling backwards all the way to the wall.
-        const flees = cfg.timid && e.hp <= e.maxHp * 0.3;
+        // A fled foe that keeps running for FLEE_ENRAGE_FRAMES straight gives up on retreat and
+        // turns to fight instead - `enraged` latches for the rest of the bout (it only ever
+        // triggers under 30% HP, so there is no "calm back down" to model). While it holds,
+        // `flees` is forced false below so the foe charges instead of backing away.
+        const wantsToFlee = cfg.timid && e.hp <= e.maxHp * 0.3;
+        if (wantsToFlee && !e.enraged) {
+          e.fleeTimer = (e.fleeTimer || 0) + 1;
+          if (e.fleeTimer > FLEE_ENRAGE_FRAMES) {
+            e.enraged = true;
+            showFloatingCombatText("😡 ENRAGED!", 160, 58, "#f87171");
+          }
+        } else if (!wantsToFlee) {
+          e.fleeTimer = 0;
+        }
+        const flees = wantsToFlee && !e.enraged;
         if (e.state !== 'attack' && e.state !== 'telegraph') {
           if (!cfg.slow || e.hunting) {
             const gap = (combatState.playerX + (e.formOffset || 0)) - e.x;
             const toward = gap < 0 ? -1 : 1;
             // A hunt closes faster than the patrol drift, but 0.8px/frame is still a fifth of
-            // the player's 3.8px strafe - it is outrunnable, just not ignorable.
-            e.vx = (flees ? -toward : toward) * (e.hunting ? spd * 1.6 : spd);
+            // the player's 3.8px strafe - it is outrunnable, just not ignorable. Enraged closes
+            // faster still - it gave up running, so it commits to catching the player.
+            const chaseMult = e.enraged ? ENRAGE_SPEED_MULT : (e.hunting ? 1.6 : 1);
+            e.vx = (flees ? -toward : toward) * spd * chaseMult;
             // Don't jitter once it is already standing on its mark.
             if (Math.abs(gap) < 6 && !flees) e.vx = 0;
           }
@@ -3790,7 +3814,10 @@
               showFloatingCombatText(cfg.slow ? "⚠️ HEAVY WIND-UP!" : "⚠️ ENEMY WIND-UP!", 160, 75, "#fbbf24");
             }
           } else if (e.attackTimer <= 0) {
-            e.attackTimer = cfg.cadence + Math.floor(Math.random() * 50);
+            // Enraged skips the usual cadence roll and comes back around fast - lots of
+            // attacks, one on top of the next, instead of the normal breathing room.
+            e.attackTimer = e.enraged ? Math.round(cfg.cadence * ENRAGE_CADENCE_MULT)
+              : cfg.cadence + Math.floor(Math.random() * 50);
             e.state = 'attack';
             e.stateTimer = cfg.slow ? 20 : 14;
             e.blockTimer = 0;
@@ -6171,6 +6198,10 @@
         small.width = sw; small.height = sh;
         const sc = small.getContext('2d');
         sc.imageSmoothingEnabled = true;
+        // The AI cutout comes back mirrored (handle on the wrong side) - flip it horizontally
+        // here so the fixture reads correctly on the wall.
+        sc.translate(sw, 0);
+        sc.scale(-1, 1);
         sc.drawImage(aiSwitchImg, 0, 0, sw, sh);
         fx.drawImage(small, cx - fw / 2, baseY - fh, fw, fh);
       } else {
@@ -8613,7 +8644,7 @@
       }
     }
 
-    function resetCrawl() {
+    function resetCrawl(enterButtonLabel = 'GENERATING ASSETS') {
       // Before anything else: a second CREATE must not leave the previous dungeon's
       // narrator talking over the new one, or its loading loop running under the menu music
       // this screen opens on.
@@ -8635,7 +8666,7 @@
       if (crawlPending) crawlPending.style.display = '';
       if (btnEnterDungeon) {
         btnEnterDungeon.disabled = true;
-        btnEnterDungeon.textContent = 'GENERATING ASSETS';
+        btnEnterDungeon.textContent = enterButtonLabel;
       }
     }
 
@@ -9838,7 +9869,7 @@
       const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
 
       resetCombatForNewDungeon();
-      resetCrawl();
+      resetCrawl('LOADING ASSETS');
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
       if (titleButtons) titleButtons.classList.add('hidden');

@@ -985,25 +985,29 @@
                foes in the air. A row of buttons like the difficulty row
                rather than a dropdown, so the arrow keys walk across it instead of being swallowed
                by a <select>. game.js (setLastAttackFrame) keeps the pick pressed in and remembers
-               it across reloads. -->
-          <div class="flex flex-col gap-1.5">
+               it across reloads.
+               The whole section is hidden for now - Mixed is the only mode offered and game.js
+               forces it, so there is nothing to pick. May be shown again later. -->
+          <div class="flex flex-col gap-1.5 hidden">
             <label class="text-xs font-bold text-slate-800" id="lastAttackFrameLabel">
               Last Attack Frame:
             </label>
             <div id="lastAttackFrameRow" class="flex gap-1.5" role="group" aria-labelledby="lastAttackFrameLabel">
-              <button type="button" data-last-attack-frame="off" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+              <!-- Off/On/Quick/Flip hidden for now - Mixed is the only mode offered; may be
+                   shown again later. -->
+              <button type="button" data-last-attack-frame="off" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
                       title="Foes show their attack frame as they wind up, and the blow lands a moment later. New dungeons are frame version 1.">
                 <span class="text-xs">Off</span>
               </button>
-              <button type="button" data-last-attack-frame="on" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+              <button type="button" data-last-attack-frame="on" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
                       title="Foes get one more frame, shown the moment their attack lands. New dungeons are frame version 2 and take a little longer to create.">
                 <span class="text-xs">On</span>
               </button>
-              <button type="button" data-last-attack-frame="quick" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+              <button type="button" data-last-attack-frame="quick" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
                       title="No extra frame and no wind-up: the attack frame appears the moment the blow lands. Foes attack just as often. Works on every dungeon; new ones are frame version 1.">
                 <span class="text-xs">Quick</span>
               </button>
-              <button type="button" data-last-attack-frame="flip" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+              <button type="button" data-last-attack-frame="flip" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
                       title="No extra frame and the same wind-up as Off, but the foe flips round the moment its blow lands, so the hit reads as a swipe. Works on every dungeon; new ones are frame version 1.">
                 <span class="text-xs">Flip</span>
               </button>
@@ -1369,12 +1373,15 @@
 
           </div>
 
-          <div class="win95-box px-2 py-1 text-xs flex justify-between items-center text-slate-800 flex-shrink-0 overflow-hidden box-border h-7">
+          <div class="win95-box px-2 py-1 text-xs flex justify-between items-center gap-2 text-slate-800 flex-shrink-0 overflow-hidden box-border h-7">
             <span class="truncate pr-1">Location: <strong id="statusPos">Spot (1, 1) [Facing EAST]</strong></span>
             <!-- The manual BATTLE (Space) toggle used to live here. Battles now begin by
                  walking onto one of the enemy markers roaming the maze, so there is nothing
                  to toggle - and Space is the Use key. -->
-            <span id="encounterBadge" class="text-[10px] font-bold text-slate-600 flex-shrink-0">Foes: 0</span>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+              <span id="battleModeBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800">EXPLORATION</span>
+              <span id="encounterBadge" class="text-[10px] font-bold text-slate-600 hidden">Foes: 0</span>
+            </div>
           </div>
         </div>
 
@@ -1394,12 +1401,9 @@
 
           <!-- Combat Doom Face & Stats Box -->
           <div id="battleStatsBox" class="win95-box p-1.5 flex flex-col gap-1 flex-shrink-0 bg-slate-100">
-            <div class="flex items-center justify-between">
-              <span id="heroStatusLabel" class="text-[10px] font-bold text-slate-700 truncate">WARRIOR STATUS:</span>
-              <div class="flex items-center gap-1 flex-shrink-0">
-                <span id="playerLevelBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-yellow-300 text-yellow-900 border border-yellow-600">LV 1</span>
-                <span id="battleModeBadge" class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-300 text-slate-800">EXPLORATION</span>
-              </div>
+            <div class="flex items-center justify-between gap-1">
+              <span id="heroStatusLabel" class="text-[10px] font-bold text-slate-700 truncate flex-1 min-w-0">WARRIOR STATUS:</span>
+              <span id="playerLevelBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-yellow-300 text-yellow-900 border border-yellow-600 flex-shrink-0">LV 1</span>
             </div>
             <div class="flex items-center gap-2">
               <!-- Doom-Style Face Portrait -->
