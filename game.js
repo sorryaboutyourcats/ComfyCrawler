@@ -9332,7 +9332,8 @@
         tag.title = 'This is the dungeon running behind this window';
         titleLine.appendChild(tag);
       }
-      titleLine.appendChild(buildFrameVersionTag(entry));
+      const frameVerTag = buildFrameVersionTag(entry);
+      if (frameVerTag) titleLine.appendChild(frameVerTag);
       col.appendChild(titleLine);
 
       const cast = document.createElement('div');
@@ -9407,22 +9408,19 @@
 
     // Which frame version a saved run was generated as. 1 is every run made without Last Attack
     // Frame - including all of those saved before the option existed, which the server reports
-    // as 1 - and 2 is a run whose foes were drawn with a strike frame. Sits in the title line
-    // rather than the info line below it, because that line turns into a marquee when it runs
-    // long and would carry the version off the edge with it.
+    // as 1 - and 2 is a run whose foes were drawn with a strike frame. Version 1 is the common
+    // case (most of history), so it gets no badge; only the version 2 runs - the ones that carry
+    // something extra - are worth flagging, and null here means the caller skips the tag
+    // entirely. Sits in the title line rather than the info line below it, because that line
+    // turns into a marquee when it runs long and would carry the version off the edge with it.
     function buildFrameVersionTag(entry) {
       const version = Number(entry.frame_version) === 2 ? 2 : 1;
+      if (version === 1) return null;
       const tag = document.createElement('span');
-      tag.className = 'hist-frame-ver text-[9px] font-black px-1.5 py-0.5 shrink-0'
-        + (version === 2 ? ' hist-frame-ver--v2' : '');
-      tag.textContent = 'FRAME V' + version;
+      tag.className = 'hist-frame-ver hist-frame-ver--v2 text-[9px] font-black px-1.5 py-0.5 shrink-0';
+      tag.textContent = 'FRAME V2';
       // Said in terms of what the run HAS, not how it plays - that is the Options setting's call
       // (Quick plays either version without a wind-up), and the note at the bottom covers it.
-      if (version === 1) {
-        tag.title = 'Frame version 1 - made without Last Attack Frame, so its foes have no strike'
-          + ' frame. It plays with whatever Last Attack Frame is set to, minus that frame.';
-        return tag;
-      }
       let tip = 'Frame version 2 - made with Last Attack Frame on: its foes also have a strike'
         + ' frame, shown the moment their attack lands.';
       // The quality gate can drop a pose frame it could not get framed, so say which foes it

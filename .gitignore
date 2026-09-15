@@ -6,3 +6,5 @@ server.log.1
 .DS_Store
 Thumbs.db
 piper_voices/
+recent_cast_names.json
+recent_cast_names.json.tmp

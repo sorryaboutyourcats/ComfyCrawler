@@ -5288,8 +5288,22 @@ STORY_SYSTEM = (
 # the crawl (generate_story_names), and the name itself is decided in code (_decide_name): a
 # person gets an everyday name, a pet a pet's name, a famous character its own. The crawl is
 # then written around names that are already final.
+#
+# THAT OVERSHOT INTO BLAND, AND INTO REPEATS. Its NAME check only asked whether a name shared
+# letters with the thing, and the model's "name" for a thing is mostly the thing itself - so the
+# boss came out plain "Taco", "Waifu" or "RAM Stick", and since the model says that the same way
+# every time, three Windows 95 runs in a row got the same cast. The old names were loud for a
+# reason people liked ("Shattered The Overclocker" - the drama word was random, but the
+# overclocker belonged to the computer), so the balance now is:
+#   - a TITLE per character, asked for in one randomly drawn SHAPE (_TITLE_SHAPES) described in
+#     words, never shown as an example, since an example is a thing to copy;
+#   - a name that is only the WHAT is no name (_is_just_the_what);
+#   - the boss wears a dramatic prefix a third of the time, and the title the rest
+#     (_dress_name);
+#   - recent names, titles and first names are remembered on disk (RECENT_CAST_PATH) and not
+#     handed out again straight away.
 
-NAMING_MAX_TOKENS = 120     # six short lines
+NAMING_MAX_TOKENS = 170     # eight short lines
 NAMING_TYPICAL_TOKENS = 50  # progress denominator only - see STORY_TYPICAL_TOKENS
 NAMING_TEMPERATURE = 0.7    # sorting into kinds, not inventing - NAME_ID_TEMPERATURE's reasoning
 
@@ -5370,7 +5384,12 @@ Rules:
 2. WHAT is one or two plain words for what it is, singular - "Cashier", "Night Elf", "Cat",
    "Blueberry", "Devil", "Office Chair".
 3. NAME is its real name if it is FAMOUS, a funny name made out of its own word if it is a
-   THING or a MONSTER, and NONE if it is a PERSON or an ANIMAL.
+   THING or a MONSTER, and NONE if it is a PERSON or an ANIMAL. A NAME is never just the
+   WHAT again or the words the player typed.
+4. TITLE is a nickname of one to three words that only this character could have, straight
+   out of what it is and the world it lives in. Never NONE, never just the WHAT, and never a
+   spooky word that has nothing to do with it. The PLAYER's TITLE is {hero_shape}. The BOSS's
+   TITLE is {boss_shape}.
 
 Reply using EXACTLY these labels, each on its own line, in this order. No preamble, no
 markdown, no commentary, no asterisks:
@@ -5378,9 +5397,60 @@ markdown, no commentary, no asterisks:
 PLAYER_KIND: <PERSON, ANIMAL, FAMOUS, THING or MONSTER>
 PLAYER_WHAT: <one or two words>
 PLAYER_NAME: <a name, or NONE>
+PLAYER_TITLE: <one to three words>
 BOSS_KIND: <PERSON, ANIMAL, FAMOUS, THING or MONSTER>
 BOSS_WHAT: <one or two words>
-BOSS_NAME: <a name, or NONE>"""
+BOSS_NAME: <a name, or NONE>
+BOSS_TITLE: <one to three words>"""
+
+# The shapes a TITLE is asked for in, one drawn per character per run. Described, never shown -
+# see the NAMES note: "Old Mossback" and "Todd's Discount Foods" were examples that got copied
+# onto dungeons they had nothing to do with. The draw is what makes the same theme come out with
+# a different cast each time; the model on its own says the same thing for the same words.
+_BOSS_TITLE_SHAPES = (
+    "a job title for the trouble it causes",
+    "the nickname its victims whisper about it",
+    "a pro wrestler's ring name built out of what it is",
+    "a pun on what it is",
+    "a royal title over the place it rules",
+    "the worst thing it is known for doing",
+    "a heavy metal band name about what it does",
+)
+_HERO_TITLE_SHAPES = (
+    "what they are best at",
+    "the nickname their friends or coworkers gave them",
+    "a pro wrestler's ring name built out of what they are",
+    "a pun on what they are",
+    "the one thing they are famous for around here",
+    "a superhero name built out of their job or what they are",
+)
+
+# Worn in front of the boss's title a third of the time, for the names people liked the old
+# random titles for: "Shattered The Overclocker". Only ever beside a title or a WHAT that says
+# what the boss is - on their own these were "Apex The Unmaker" over a dungeon of people.
+_DRAMATIC_PREFIXES = (
+    "Shattered", "Undying", "Corrupted", "Forsaken", "Sovereign", "Ancient", "Dread", "Apex",
+)
+DRAMATIC_PREFIX_CHANCE = 1 / 3
+HERO_TITLE_CHANCE = 0.5
+
+# The 4B's own dark-fantasy word bag - what "Apex The Unmaker", "Ancient The Hollow King",
+# "Corrupted Vox Maw" and "Shattered Gargantua" were made of. A TITLE leaning on one of them is
+# the model reaching for the bag instead of the thing, unless the player typed the word.
+_STOCK_TITLE_WORDS = frozenset((
+    "unmaker", "hollow", "maw", "gargantua", "void", "shadow", "shadows", "abyss", "wraith",
+    "bane", "gloom", "doom", "eternal", "fang", "scribe", "titan", "ashen", "ashfen", "vox",
+    "dread", "forsaken", "corrupted", "shattered", "undying", "sovereign", "ancient", "apex",
+))
+TITLE_MAX_WORDS = 3     # not counting "of", "the" and the like: "Blue Screen of Death" is three
+TITLE_MAX_CHARS = 24
+
+# Names already handed out lately. Kept on disk rather than read back out of dungeon_sessions,
+# because a cancelled or unsaved run leaves no session behind and its cast is repeated all the
+# same. The first names are held only briefly - the pools are not big enough to rest many.
+RECENT_CAST_PATH = os.path.join(PROJECT_DIR, "recent_cast_names.json")
+RECENT_CAST_KEEP = {"names": 40, "titles": 12, "firsts": 16}
+_RECENT_CAST_LOCK = threading.Lock()
 
 _NAMING_KINDS = ("PERSON", "ANIMAL", "FAMOUS", "THING", "MONSTER")
 
@@ -5428,13 +5498,15 @@ _THING_TITLES = (
 _NAMING_REPLY_START = "PLAYER_KIND:"
 
 
-def _naming_prompt(wall_style, player_style, enemy_style, with_image=False):
+def _naming_prompt(wall_style, player_style, enemy_style, with_image=False, rng=random):
     """Same hand-built chat template as _story_prompt - see there for why - with the reply
-    already begun on _NAMING_REPLY_START."""
+    already begun on _NAMING_REPLY_START, and a fresh title shape drawn for each character."""
     user = _NAMING_USER.format(
         wall=(wall_style or "").strip() or "a forgotten place",
         player=(player_style or "").strip() or "a nameless wanderer",
         enemy=(enemy_style or "").strip() or "things that shamble",
+        hero_shape=rng.choice(_HERO_TITLE_SHAPES),
+        boss_shape=rng.choice(_BOSS_TITLE_SHAPES),
     )
     vision = ""
     if with_image:
@@ -5508,10 +5580,21 @@ def _clean_given_name(answer):
     return name
 
 
+def _read_title(answer):
+    """TITLE as the model wrote it, minus brackets and quotes, or None for nothing / NONE. Only
+    the reading - whether it is any good depends on the WHAT and the typed words, so that is
+    _clean_title's job once those are known."""
+    text = re.sub(r"^<|>$", "", _ascii_ify(answer or "").strip().strip(_STORY_STRIP)).strip()
+    text = re.sub(r"\s+", " ", text.strip("\"'").strip())
+    if not text or re.match(r"^(?:none|n/?a|unknown)\b", text, re.I):
+        return None
+    return text
+
+
 def parse_story_names(text):
-    """{"hero": {"kind", "what", "name"}, "boss": {...}} out of the naming reply. Never raises;
-    anything missing or unreadable comes back None, and _decide_name copes with every
-    combination of those.
+    """{"hero": {"kind", "what", "name", "title"}, "boss": {...}} out of the naming reply.
+    Never raises; anything missing or unreadable comes back None, and _decide_name and
+    _dress_name cope with every combination of those.
 
     A label that turns up more than once keeps its first READABLE answer rather than its first
     answer: the reply is begun on _NAMING_REPLY_START for the model, so a reply that opens with
@@ -5522,11 +5605,12 @@ def parse_story_names(text):
         text = _NAMING_REPLY_START + text
     for raw_line in text.splitlines():
         label, sep, value = raw_line.strip().strip(_STORY_STRIP).partition(":")
-        m = re.fullmatch(r"(player|hero|boss)[\s_]*(kind|what|name)", label.strip().lower())
+        m = re.fullmatch(r"(player|hero|boss)[\s_]*(kind|what|name|title)", label.strip().lower())
         if sep and m:
             who = "boss" if m.group(1) == "boss" else "hero"
             fields[who].setdefault(m.group(2), []).append(value.strip())
-    readers = {"kind": _read_kind, "what": _clean_what, "name": _clean_given_name}
+    readers = {"kind": _read_kind, "what": _clean_what, "name": _clean_given_name,
+               "title": _read_title}
     return {who: {field: next((got for got in map(read, answers.get(field, [])) if got), None)
                   for field, read in readers.items()}
             for who, answers in fields.items()}
@@ -5566,6 +5650,68 @@ def _word_in_name(word, low, squashed):
     return any(word[i:i + 5] in squashed for i in range(max(1, len(word) - 4)))
 
 
+def _plain_words(text):
+    """The words of a name or description, lowercase and roughly singular, articles dropped -
+    for asking whether one is only the other again."""
+    words = []
+    for w in re.findall(r"[a-z0-9]+", _ascii_ify(text or "").lower()):
+        if w in ("the", "a", "an"):
+            continue
+        if len(w) > 4 and w.endswith("ies"):
+            w = w[:-3] + "y"
+        elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        words.append(w)
+    return words
+
+
+def _is_just_the_what(name, *sources):
+    """True when a name says nothing but what the thing is: every word of it is already a word
+    of the WHAT or of what the player typed. "RAM Stick" for a stick of computer RAM, "Taco" for
+    tacos, "Waifu" for a waifu - each passes _name_connects trivially, and the model gives the
+    same one every run, so on its own this was the whole cast of three Windows 95 runs in a row.
+    "Barry Blueberry" is a name; its "Barry" came from nowhere in the description."""
+    words = set(_plain_words(name))
+    if not words:
+        return False
+    return any(words <= set(_plain_words(src)) for src in sources if src)
+
+
+def _clean_title(answer, what=None, typed="", recent=()):
+    """A TITLE worth wearing, title-cased with any leading "The" taken off, or None:
+
+      - more than TITLE_MAX_WORDS words or TITLE_MAX_CHARS characters (the health bar, and a
+        long one is usually the drawn shape recited back instead of answered);
+      - a role word ("The Boss"), or only the WHAT again ("RAM Stick");
+      - leaning on a word out of _STOCK_TITLE_WORDS that the player never typed;
+      - one handed out in a recent run (`recent`, lowercase).
+
+    No _name_connects test: "Overclocker" shares no letters with a stick of RAM and is exactly
+    the title wanted. What ties a title to the thing is the shape it was asked for in."""
+    text = _read_title(answer)
+    if not text:
+        return None
+    # "Doug the Overclocker" as a TITLE is a name the model made up with the title inside it.
+    m = re.match(r"^[A-Za-z]+ the (.+)$", text)
+    if m and not re.match(r"^(?:king|queen|lord|lady|master|mistress|prince|princess)\b", text, re.I):
+        text = m.group(1)
+    text = re.sub(r"^the\s+", "", text, flags=re.I).strip(" .,!-")
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", text)
+    content = [w for w in words if w.lower() not in _STORY_TRAILING_STOPWORDS]
+    if not content or len(content) > TITLE_MAX_WORDS or len(" ".join(words)) > TITLE_MAX_CHARS:
+        return None
+    title = " ".join(w if i and w.lower() in _STORY_TRAILING_STOPWORDS else w[:1].upper() + w[1:]
+                     for i, w in enumerate(words))
+    if _is_generic_name(title) or _is_just_the_what(title, what, typed):
+        return None
+    typed_words = set(re.findall(r"[a-z0-9]+", (typed or "").lower()))
+    if any(w.lower() in _STOCK_TITLE_WORDS and w.lower() not in typed_words for w in words):
+        return None
+    if title.lower() in recent:
+        return None
+    return title
+
+
 def _decide_name(kind, what, name, typed, rng=random, avoid=()):
     """The name a hero or boss actually goes by, from what the naming call made of it:
 
@@ -5589,7 +5735,7 @@ def _decide_name(kind, what, name, typed, rng=random, avoid=()):
                 or rng.choice(_EVERYDAY_NAMES))
     person_or_pet = kind in ("PERSON", "ANIMAL")
     if not person_or_pet:
-        if name and _name_connects(name, what, typed):
+        if name and _name_connects(name, what, typed) and not _is_just_the_what(name, what, typed):
             return name
         if what and rng.random() < 1 / 3:
             titled = f"{rng.choice(_THING_TITLES)} {what}"
@@ -5610,6 +5756,93 @@ def _decide_name(kind, what, name, typed, rng=random, avoid=()):
                 return f"{rng.choice(fits)} the {short}"
             words.pop(0)
     return rng.choice(pool)
+
+
+def _fits(name):
+    return bool(name) and len(name) <= _NAME_WITH_WHAT_MAX
+
+
+def _dress_name(who, kind, what, base, title, rng=random, avoid=()):
+    """The name a character is finally called, built on _decide_name's `base` and the TITLE
+    (_clean_title, or None). A FAMOUS character keeps `base` untouched - it is their own name.
+
+      boss  a third of the time a dramatic prefix: "Shattered The Overclocker", or with no
+            title "Undying RAM Stick"; otherwise, with a title, "Doug the Overclocker" or "The
+            Blue Screen"; otherwise `base` ("King Taco", "Rhonda the Taco").
+      hero  with a title, half the time "Gary the Spreadsheet Slayer"; otherwise `base`.
+
+    Every shape that would not fit the health bar (_NAME_WITH_WHAT_MAX) falls through to the
+    next one, and `base` always fits. `avoid` is lowercase first names not to use."""
+    if kind == "FAMOUS" or not base:
+        return base
+    pool = _PET_NAMES if kind == "ANIMAL" else _EVERYDAY_NAMES
+    base_first = base.split(" the ")[0]
+    if base_first in pool:
+        first = base_first
+    else:
+        fresh = [n for n in pool if n.lower() not in avoid]
+        first = rng.choice(fresh or pool)
+    if title:
+        titled = [f"{first} the {title}", f"The {title}"]
+        if who == "hero":
+            titled = titled[:1]
+        elif rng.random() < 0.5:
+            titled.reverse()
+    else:
+        titled = []
+
+    shapes = []
+    if who == "boss" and rng.random() < DRAMATIC_PREFIX_CHANCE:
+        prefix = rng.choice(_DRAMATIC_PREFIXES)
+        if title:
+            # A title too long for "Sovereign The Memory Muncher" still gets its drama as
+            # "Sovereign Memory Muncher", or from a shorter prefix, before giving it up. Live,
+            # losing the title here turned good ones into "Dread Old Person".
+            shorter = sorted((p for p in _DRAMATIC_PREFIXES if p != prefix), key=len)
+            shapes += [f"{prefix} The {title}", f"{prefix} {title}"]
+            shapes += [f"{p} The {title}" for p in shorter] + titled
+        else:
+            # The WHAT loses words off its front until it fits, as in _decide_name.
+            words = (what or "").split()
+            while words:
+                shapes.append(f"{prefix} {' '.join(words)}")
+                words.pop(0)
+    elif titled and (who == "boss" or rng.random() < HERO_TITLE_CHANCE):
+        shapes.extend(titled)
+    return next((s for s in shapes if _fits(s)), base)
+
+
+def _load_recent_cast():
+    """{"names", "titles", "firsts"} of lowercase strings handed out lately - empty lists when
+    the file is missing or unreadable, which must never stop a run."""
+    recent = {key: [] for key in RECENT_CAST_KEEP}
+    try:
+        with open(RECENT_CAST_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for key in recent:
+            got = data.get(key) if isinstance(data, dict) else None
+            if isinstance(got, list):
+                recent[key] = [str(v).lower() for v in got if isinstance(v, str)]
+    except (OSError, ValueError):
+        pass
+    return recent
+
+
+def _remember_cast(names=(), titles=(), firsts=()):
+    """Add this run's cast to RECENT_CAST_PATH, newest last, each list cut to RECENT_CAST_KEEP.
+    Never raises."""
+    with _RECENT_CAST_LOCK:
+        recent = _load_recent_cast()
+        for key, new in (("names", names), ("titles", titles), ("firsts", firsts)):
+            add = [v.lower() for v in new if v]
+            recent[key] = ([v for v in recent[key] if v not in add] + add)[-RECENT_CAST_KEEP[key]:]
+        try:
+            tmp = RECENT_CAST_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(recent, f, indent=1)
+            os.replace(tmp, RECENT_CAST_PATH)
+        except OSError as e:
+            print(f"[cast] could not remember the cast: {e}")
 
 
 def generate_story_names(wall_style, player_style, enemy_style, image_name=None, named=None):
@@ -5676,16 +5909,44 @@ def generate_story_names(wall_style, player_style, enemy_style, image_name=None,
         PROGRESS.finish_job("names")
 
     typed = {"hero": player_style, "boss": enemy_style}
+    recent = _load_recent_cast()
+    decided = {"names": [], "titles": [], "firsts": []}
     for who in ("hero", "boss"):
         if names[who]:
             continue
         got = cast.get(who) or {}
+        typed_text = (typed[who] or "").strip()
+        what = got.get("what") or _clean_what(typed_text)
         taken = {n.lower() for other in ("hero", "boss") if names[other]
                  for n in (names[other], names[other].split(" the ")[0])}
-        names[who] = _decide_name(got.get("kind"), got.get("what"), got.get("name"),
-                                  (typed[who] or "").strip(), avoid=taken)
+        # Recently used first names are rested too, as long as the pool has others to give.
+        rested = taken | set(recent["firsts"])
+        title = _clean_title(got.get("title"), what, typed_text, set(recent["titles"]))
+        # A thing's NAME is often the better title when its TITLE is unusable - live, a RAM
+        # stick's "Memory Masher" name failed _name_connects and was lost, though it is exactly
+        # a title. Not for a person or a pet, whose NAME is asked to be NONE.
+        # Nor for a NAME _decide_name is about to keep as the name itself ("Barry Blueberry").
+        model_name = got.get("name")
+        if (not title and model_name and got.get("kind") not in ("PERSON", "ANIMAL", "FAMOUS")
+                and not _name_connects(model_name, what, typed_text)):
+            title = _clean_title(model_name, what, typed_text, set(recent["titles"]))
+        # A repeat of a recent name gets a few more draws - the shapes and first names are
+        # random, the model's title and base usually are not.
+        for _ in range(4):
+            base = _decide_name(got.get("kind"), got.get("what"), got.get("name"), typed_text,
+                                avoid=rested)
+            names[who] = _dress_name(who, got.get("kind"), what, base, title, avoid=rested)
+            if names[who].lower() not in recent["names"]:
+                break
+        decided["names"].append(names[who])
+        decided["titles"].append(title)
+        first = names[who].split(" the ")[0]
+        if first in _EVERYDAY_NAMES or first in _PET_NAMES:
+            decided["firsts"].append(first)
         print(f"[cast] {who}: {got.get('kind') or '?'} / {got.get('what')!r} / model said "
-              f"{got.get('name')!r} -> {names[who]!r}")
+              f"{got.get('name')!r}, title {got.get('title')!r} (kept {title!r}) -> {names[who]!r}")
+    if decided["names"]:
+        _remember_cast(**decided)
     # The crawl used to be asked for a FOE line of its own, and once it had been told the
     # boss's name it simply copied that in: "Stan the Crazy" for a supermarket of crazy
     # customers. What the boss IS already says what its followers are.

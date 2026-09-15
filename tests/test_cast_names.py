@@ -1,10 +1,12 @@
 """Offline checks on how the cast gets its names: the naming call's parse, the names decided
 from it, the crawl written around them, the "Ashen" swap, and the bestiary's own foe names.
 No ComfyUI needed - every model reply is faked."""
-import importlib.util, random, re, sys, os
+import importlib.util, random, re, sys, os, tempfile
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
 srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+# Never touch the real recent-cast memory from a test.
+srv.RECENT_CAST_PATH = os.path.join(tempfile.mkdtemp(), "recent_cast_names.json")
 
 fails = []
 def ck(cond, msg):
@@ -21,9 +23,19 @@ def decide(kind, what, name, typed, seeds=60, **kw):
 # The prompt starts the reply on "PLAYER_KIND:", so what comes back begins mid-line.
 reply = " PERSON\nPLAYER_WHAT: Cashier\nPLAYER_NAME: NONE\nBOSS_KIND: MONSTER\nBOSS_WHAT: Crazy Customers\nBOSS_NAME: None"
 cast = srv.parse_story_names(reply)
-ck(cast["hero"] == {"kind": "PERSON", "what": "Cashier", "name": None}, f"hero parse: {cast['hero']}")
-ck(cast["boss"] == {"kind": "MONSTER", "what": "Crazy Customer", "name": None},
+ck(cast["hero"] == {"kind": "PERSON", "what": "Cashier", "name": None, "title": None}, f"hero parse: {cast['hero']}")
+ck(cast["boss"] == {"kind": "MONSTER", "what": "Crazy Customer", "name": None, "title": None},
    f"boss parse (WHAT should come back singular): {cast['boss']}")
+titled_reply = (" PERSON\nPLAYER_WHAT: Office Guy\nPLAYER_NAME: NONE\nPLAYER_TITLE: <Spreadsheet Slayer>\n"
+                "BOSS_KIND: THING\nBOSS_WHAT: RAM Stick\nBOSS_NAME: RAM Stick\nBOSS_TITLE: \"The Overclocker\"")
+cast = srv.parse_story_names(titled_reply)
+ck(cast["hero"]["title"] == "Spreadsheet Slayer" and cast["boss"]["title"] == "The Overclocker",
+   f"titles misread: {cast}")
+naming_prompt = srv._naming_prompt("Windows 95", "office guy", "stick of computer RAM", rng=random.Random(1))
+ck("{" not in naming_prompt and "PLAYER_TITLE:" in naming_prompt and "BOSS_TITLE:" in naming_prompt,
+   "the naming prompt lost its TITLE lines or left a shape placeholder unfilled")
+shapes = {srv._naming_prompt("a", "b", "c", rng=random.Random(s)) for s in range(30)}
+ck(len(shapes) > 5, "the title shape is not drawn fresh per call")
 ck(srv._naming_prompt("supermarket", "cashier", "crazy customer").endswith(srv._NAMING_REPLY_START),
    "the naming prompt no longer starts the reply for the model - it recites the brief without it")
 
@@ -32,12 +44,12 @@ ck(srv._naming_prompt("supermarket", "cashier", "crazy customer").endswith(srv._
 chatty = " You're in a dungeon.\nPLAYER_KIND: ANIMAL\nPLAYER_WHAT: cats\nPLAYER_NAME: NONE\nBOSS_KIND: FAMOUS\nBOSS_WHAT: Donkey Kong\nBOSS_NAME: Donkey Kong"
 cast = srv.parse_story_names(chatty)
 ck(cast["hero"]["kind"] == "ANIMAL" and cast["hero"]["what"] == "Cat", f"chatty reply misread: {cast['hero']}")
-ck(cast["boss"] == {"kind": "FAMOUS", "what": "Donkey Kong", "name": "Donkey Kong"}, f"{cast['boss']}")
+ck(cast["boss"] == {"kind": "FAMOUS", "what": "Donkey Kong", "name": "Donkey Kong", "title": None}, f"{cast['boss']}")
 # A reply that recites the brief instead of answering reads as nothing at all, never as a kind.
 echo = " You're the casting director. PERSON is any sort of human being. ANIMAL is a real animal."
 ck(srv.parse_story_names(echo)["hero"]["kind"] is None,
    "a reply reciting the options must not read as whichever option it recited first")
-ck(srv.parse_story_names("garbage")["boss"] == {"kind": None, "what": None, "name": None},
+ck(srv.parse_story_names("garbage")["boss"] == {"kind": None, "what": None, "name": None, "title": None},
    "an unusable reply must parse to Nones")
 ck(srv._read_kind("it is a person, so PERSON") == "PERSON", "capitals must be read ahead of prose")
 ck(srv._read_kind("<THING>") == "THING", "a kind copied with its placeholder brackets")
@@ -108,6 +120,81 @@ ck({n.split(" the ")[0] for n in avoided} == {srv._EVERYDAY_NAMES[-1]}, "`avoid`
 # No kind at all (an unreadable reply) still names both, and never crashes on empty input.
 ck(all(decide(None, None, None, "")), "an empty, unreadable cast must still be named")
 
+# ---- a name that is only the thing again ------------------------------------------------
+for name, sources, want in (("RAM Stick", ("Computer RAM", "stick of computer RAM"), True),
+                            ("Taco", ("Taco", "tacos"), True),
+                            ("Waifu", ("Waifu", "waifu"), True),
+                            ("The Tacos", ("Taco",), True),
+                            ("Barry Blueberry", ("Blueberry", "blueberries"), False),
+                            ("Overclocker", ("Computer RAM", "stick of computer RAM"), False),
+                            ("", ("Taco",), False)):
+    ck(srv._is_just_the_what(name, *sources) is want, f"_is_just_the_what({name!r}, {sources}) should be {want}")
+for kind, what, name, typed in (("THING", "Computer RAM", "RAM Stick", "stick of computer RAM"),
+                                ("THING", "Taco", "Taco", "taco"),
+                                ("MONSTER", "Waifu", "Waifu", "waifu")):
+    got = decide(kind, what, name, typed)
+    ck(name not in got, f"{name!r} came out bare again: {sorted(set(got))}")
+    ck(len(set(got)) > 10, f"a thing's name does not vary: {sorted(set(got))}")
+
+# ---- titles -------------------------------------------------------------------------------
+ram = ("Computer RAM", "stick of computer RAM")
+for raw, want in (("The Overclocker", "Overclocker"), ("<blue screen of death>", "Blue Screen of Death"),
+                  ("Doug the Overclocker", "Overclocker"), ("King of the Motherboard", "King of the Motherboard"),
+                  ("RAM Stick", None), ("NONE", None), ("The Boss", None), ("", None),
+                  ("the nickname its victims whisper about it", None), ("Apex The Unmaker", None),
+                  ("Hollow Memory", None), ("Supercalifragilistic Memory Hog", None)):
+    got = srv._clean_title(raw, *ram)
+    ck(got == want, f"_clean_title({raw!r}) = {got!r}, want {want!r}")
+ck(srv._clean_title("Doom Slayer", "Doom Guy", "Doom guy") == "Doom Slayer",
+   "a stock word the player typed themselves must be allowed")
+ck(srv._clean_title("Overclocker", *ram, recent={"overclocker"}) is None, "a recently used title was allowed")
+
+def dress(who, kind, what, base, title, seeds=300, **kw):
+    return [srv._dress_name(who, kind, what, base, title, rng=random.Random(s), **kw) for s in range(seeds)]
+
+boss = dress("boss", "THING", "Computer RAM", "King Computer RAM", "Overclocker")
+prefixed = [n for n in boss if n.split(" ")[0] in srv._DRAMATIC_PREFIXES]
+ck(0.25 < len(prefixed) / len(boss) < 0.42, f"dramatic prefix rate is off: {len(prefixed)}/{len(boss)}")
+ck(any(re.fullmatch(r"\w+ The Overclocker", n) for n in prefixed), f"no 'Shattered The Overclocker' shape: {set(prefixed)}")
+ck("The Overclocker" in boss and any(re.fullmatch(r"\w+ the Overclocker", n) for n in boss),
+   f"the boss title shapes are missing: {sorted(set(boss))[:12]}")
+ck(all(len(n) <= srv._NAME_WITH_WHAT_MAX for n in boss), "a dressed boss name is too long for the health bar")
+untitled = dress("boss", "THING", "Taco", "Rhonda the Taco", None)
+ck(set(untitled) - {"Rhonda the Taco"} <= {f"{p} Taco" for p in srv._DRAMATIC_PREFIXES},
+   f"an untitled boss got an unexpected shape: {sorted(set(untitled))}")
+muncher = dress("boss", "THING", "RAM Stick", "Marge the RAM Stick", "Memory Muncher")
+ck(not any(re.fullmatch(r"\w+ RAM Stick", n) for n in muncher),
+   f"a title too long for 'Sovereign The Memory Muncher' was dropped for the bare WHAT: {sorted(set(muncher))}")
+ck(any(n.split(" ")[0] in srv._DRAMATIC_PREFIXES and "Memory Muncher" in n for n in muncher),
+   "a long title never got its dramatic prefix")
+long_title = dress("boss", "MONSTER", "Moss-covered Dire Bear", "Kathy the Dire Bear", "Blue Screen of Death")
+ck(all(len(n) <= srv._NAME_WITH_WHAT_MAX for n in long_title), f"too long: {[n for n in long_title if len(n) > 26]}")
+
+hero = dress("hero", "PERSON", "Office Guy", "Gary", "Excel Wizard")
+ck("Gary the Excel Wizard" in hero and "Gary" in hero, f"a hero should come out both ways: {set(hero)}")
+ck(set(dress("hero", "PERSON", "Office Guy", "Gary", "Spreadsheet Slayer")) == {"Gary"},
+   "'Gary the Spreadsheet Slayer' is 27 characters - past the cap it must fall back")
+ck(not any(n.split(" ")[0] in srv._DRAMATIC_PREFIXES or n.startswith("The ") for n in hero),
+   f"a hero got a boss-only shape: {set(hero)}")
+ck(set(dress("boss", "FAMOUS", "Donkey Kong", "Donkey Kong", "Barrel King")) == {"Donkey Kong"},
+   "a famous character must keep its own name, untitled")
+pet = dress("hero", "ANIMAL", "Cat", "King Cat", "Nap Champion")
+ck(all(n == "King Cat" or n.split(" the ")[0] in srv._PET_NAMES for n in pet), f"a titled pet got a people name: {set(pet)}")
+
+# ---- the recent-cast memory --------------------------------------------------------------
+with open(srv.RECENT_CAST_PATH, "w") as f:
+    f.write("{not json")
+ck(srv._load_recent_cast() == {"names": [], "titles": [], "firsts": []}, "a corrupt recent file broke the load")
+os.remove(srv.RECENT_CAST_PATH)
+ck(srv._load_recent_cast()["names"] == [], "a missing recent file broke the load")
+for i in range(60):
+    srv._remember_cast(names=[f"Name {i}"], titles=[f"Title {i}", None], firsts=["Doug"])
+got = srv._load_recent_cast()
+ck(len(got["names"]) == srv.RECENT_CAST_KEEP["names"] and got["names"][-1] == "name 59",
+   f"the recent names were not capped newest-last: {got['names'][-3:]}")
+ck(got["firsts"] == ["doug"], f"a repeated first name was stored twice: {got['firsts']}")
+os.remove(srv.RECENT_CAST_PATH)
+
 # ---- generate_story_names without ComfyUI ----------------------------------------------
 calls = []
 def fake_submit(reply_text):
@@ -129,6 +216,20 @@ try:
     ck(names["location"] is None, "no quoted wall, so no decided location")
     ck(names["hero"].split(" the ")[0] != names["boss"].split(" the ")[0],
        f"hero and boss share a first name: {names}")
+
+    # Three runs of the same theme, with the model saying the same thing every time: the
+    # Windows 95 cast that came out identical three times.
+    if os.path.exists(srv.RECENT_CAST_PATH):
+        os.remove(srv.RECENT_CAST_PATH)
+    srv._submit_and_collect_text = fake_submit(titled_reply)
+    runs = [srv.generate_story_names("Windows 95", "office guy", "stick of computer RAM") for _ in range(3)]
+    bosses = [r["boss"] for r in runs]
+    heroes = [r["hero"] for r in runs]
+    ck(len(set(bosses)) == 3 and len(set(heroes)) == 3, f"the same theme repeated its cast: {heroes} / {bosses}")
+    ck("RAM Stick" not in bosses, f"the boss came out as just the thing: {bosses}")
+    ck(os.path.exists(srv.RECENT_CAST_PATH), "the cast was not remembered")
+    os.remove(srv.RECENT_CAST_PATH)
+    srv._submit_and_collect_text = fake_submit(reply)
 
     # Both characters quoted: nothing to ask, so no call at all.
     calls.clear()
