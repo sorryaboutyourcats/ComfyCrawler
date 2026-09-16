@@ -7543,13 +7543,61 @@ STATIC_MUSIC = {
         "game, heavy and defeated, low strings and a distant tolling bell over a deep drone, "
         "sombre and final, very slow tempo."
     )),
+    # ---- The victory pool --------------------------------------------------
+    # Six loops share the victory box instead of one. Which of them plays is decided by the
+    # dungeon's own typed style: game.js hashes that string and indexes VICTORY_MUSIC_TRACKS
+    # with it (see victoryTrackFor there), so every "forest" run ever played wins to the same
+    # song and every "ocean" run wins to a different one - random-feeling across styles,
+    # fixed within one. VICTORY_MUSIC_TRACKS is game.js's copy of these keys IN THIS ORDER;
+    # the two lists have to be edited together, or a new track either never plays (missing
+    # there) or 404s on the loop it asks for (missing here).
+    #
+    # Written to differ from EACH OTHER, not to be five shades of the same fanfare - the pool
+    # only earns its download size if a new style reads as a new ending. All ninety seconds,
+    # same as the death loop: a box the player sits on for a while, but not forever.
+    #
     # Under the victory box, behind the 'end' sting that fires with it. Triumphant, but a bed
     # rather than a fanfare - a fanfare would fight the sting and then have nowhere to go on
-    # the loop seam.
+    # the loop seam. The original, and still the one an empty style falls back to.
     "victory": (90.0, (
         "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler video "
         "game, proud and resolved, bright brass and swelling strings over a steady confident "
         "march, celebratory and full."
+    )),
+    # Ceremony rather than celebration - the hero being honoured in a hall afterwards. The
+    # one track allowed to sound like a fanfare, because it is slow enough to be a bed anyway.
+    "victory_fanfare": (90.0, (
+        "Regal ceremonial fanfare music for a retro 1990s dungeon crawler video game, a royal "
+        "hall honouring the returning hero, bright ringing horns and timpani and ceremonial "
+        "bells over a stately processional, grand and formal, moderate tempo."
+    )),
+    # The pool's one non-orchestral voice, and the loudest break from the default - a style
+    # that lands here gets an ending that sounds like a different game.
+    "victory_synth": (90.0, (
+        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+        "punchy analog synth arpeggios and a chiptune lead over a crisp drum machine beat, "
+        "upbeat and jubilant, fast tempo."
+    )),
+    # Celebration on the ground: the village feast rather than the throne room.
+    "victory_folk": (90.0, (
+        "Cheerful medieval tavern celebration music for a retro 1990s dungeon crawler video "
+        "game, a village feast after the monster is slain, lively fiddle and lute and hand "
+        "drum in a dancing jig, warm and rowdy, quick tempo."
+    )),
+    # The quiet kind of win. Deliberately NOT triumphant - it has to stay clear of "death",
+    # which is the other slow track, so this one is warm and relieved where that one is cold
+    # and final.
+    "victory_serene": (90.0, (
+        "Calm peaceful fantasy music for the quiet after a hard-won battle in a retro 1990s "
+        "dungeon crawler video game, relieved and reflective, gentle harp and soft sustained "
+        "strings and a distant flute, tender and spacious, slow tempo."
+    )),
+    # A win that cost something. Still a victory - it resolves and stands up - but scored as
+    # survival rather than joy.
+    "victory_grim": (90.0, (
+        "Dark heroic music for a costly victory in a retro 1990s dungeon crawler video game, "
+        "defiant and battle-worn rather than joyful, heavy pounding war drums and low brass "
+        "over a brooding string ostinato, weighty and resolute, steady marching tempo."
     )),
     # Under the level-up choice box, which ducks the dungeon bed rather than replacing it and
     # is usually on screen for only a few seconds. Thirty is the shortest loop here on purpose:
@@ -9579,6 +9627,25 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/javascript; charset=utf-8")
                 self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+        # The tab icon: a cat in CC shades (the lenses are ComfyCrawler's two Cs), drawn
+        # as 16x16 pixel art - see the grid in the comment at the top of favicon.svg. The
+        # .ico is the same art at 16/32/48 for the bare /favicon.ico a browser asks for on
+        # its own, and for bookmarks/shortcuts that ignore SVG.
+        elif self.path in ("/favicon.svg", "/favicon.ico"):
+            name = self.path.lstrip("/")
+            icon_file = os.path.join(PROJECT_DIR, name)
+            if os.path.exists(icon_file):
+                with open(icon_file, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "image/svg+xml" if name.endswith(".svg") else "image/x-icon")
+                self.send_header("Content-Length", str(len(content)))
+                self.send_header("Cache-Control", "max-age=86400")
                 self.end_headers()
                 self.wfile.write(content)
                 return

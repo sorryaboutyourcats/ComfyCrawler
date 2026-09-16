@@ -116,6 +116,13 @@
     const btnCloseSettings = document.getElementById('btnCloseSettings');
     const btnSaveSettings = document.getElementById('btnSaveSettings');
 
+    // The title bar's ? - credits, the links, and the parts list. Static text; the stylesheet
+    // keeps the button itself to the main menu.
+    const btnAbout = document.getElementById('btnAbout');
+    const modalAbout = document.getElementById('modalAbout');
+    const btnCloseAbout = document.getElementById('btnCloseAbout');
+    const btnAboutOk = document.getElementById('btnAboutOk');
+
     // History window: the saved-dungeon list, plus the confirm box the trash can opens.
     const btnHistory = document.getElementById('btnHistory');
     const modalHistory = document.getElementById('modalHistory');
@@ -196,6 +203,17 @@
     const btnEraseConfirmClose = document.getElementById('btnEraseConfirmClose');
     const btnEraseConfirmCancel = document.getElementById('btnEraseConfirmCancel');
     const btnEraseConfirmErase = document.getElementById('btnEraseConfirmErase');
+
+    // The loading screen's own ✕ box - "stop generating" while the assets are being made,
+    // "leave without entering" once ENTER is armed. See openLoadingExitConfirm further down.
+    const modalLoadingExitConfirm = document.getElementById('modalLoadingExitConfirm');
+    const loadingExitTitle = document.getElementById('loadingExitTitle');
+    const loadingExitIcon = document.getElementById('loadingExitIcon');
+    const loadingExitHead = document.getElementById('loadingExitHead');
+    const loadingExitText = document.getElementById('loadingExitText');
+    const btnLoadingExitClose = document.getElementById('btnLoadingExitClose');
+    const btnLoadingExitStay = document.getElementById('btnLoadingExitStay');
+    const btnLoadingExitGo = document.getElementById('btnLoadingExitGo');
 
     // ==========================================
     // RAYCASTER MAZE & TEXTURE ENGINE
@@ -388,6 +406,16 @@
     // "you will lose this" refresh warning and the cancel beacon further down - see the
     // beforeunload/pagehide pair next to the CREATE handler.
     let generationInFlight = false;
+    // The two timers the loading screen runs: the tenth-of-a-second wall clock, and (on a fresh
+    // dungeon rather than a History replay) the progress poll. Held out here instead of inside
+    // the handlers that start them so the title bar's ✕ can stop a run from outside - see
+    // leaveLoadingScreen().
+    let genClockTimer = null;
+    let genPollTimer = null;
+    function stopGenerationTimers() {
+      if (genClockTimer) { clearInterval(genClockTimer); genClockTimer = null; }
+      if (genPollTimer) { clearInterval(genPollTimer); genPollTimer = null; }
+    }
     // The one ending movie render happening outside a run, as /api/ending_video_job last
     // reported it: {state, session, percent, error, manual}. manual = a History row's movie button
     // asked for it, and while one of those is filming CREATE, Fill-in and the other rows' movie
@@ -816,12 +844,13 @@
     }
 
     // ---- Screen music (static, generated once, NOT per-dungeon) -------------
-    // Four more fixed loops alongside the menu one, served from sounds/<name>_music.wav -
+    // Nine more fixed loops alongside the menu one, served from sounds/<name>_music.wav -
     // see STATIC_MUSIC in server.py:
     //   loading  picks up exactly where the intro narration puts it down and carries the
     //            loading screen to the ENTER button
     //   death    under the death box
-    //   victory  under the victory box
+    //   victory  under the victory box - six of these, one picked per dungeon style; see
+    //            VICTORY_MUSIC_TRACKS below
     //   levelup  under the level-up choice box. The odd one out: it plays DURING a run rather
     //            than over a box that ends one, so instead of the dungeon's bed being faded
     //            out under it, the bed is ducked on dungeonMusicBus and handed straight back.
@@ -931,6 +960,76 @@
       g.cancelScheduledValues(now);
       g.setValueAtTime(g.value, now);
       g.linearRampToValueAtTime(SCREEN_MUSIC_VOLUME * level, now + Math.max(0.01, sec));
+    }
+
+    // ---- The victory pool --------------------------------------------------
+    // Winning does not always sound the same. Six victory loops ship (see the victory block
+    // of STATIC_MUSIC in server.py, which this list mirrors IN ORDER - the index below is an
+    // index into both), and which one scores the victory box is decided by the dungeon's own
+    // typed style rather than by chance:
+    //
+    //     "forest" -> hash -> 3 -> victory_folk      every forest run, forever
+    //     "ocean"  -> hash -> 1 -> victory_fanfare   every ocean run, forever
+    //
+    // So it feels random when you look across styles, and is completely fixed within one: a
+    // brand new forest dungeon months later still ends on the song forest ends on. That is
+    // the whole point - the track becomes part of what a style IS, the way its walls are,
+    // instead of a coin flip the player can neither predict nor keep.
+    //
+    // Which style maps to which song is arbitrary and nobody should try to read meaning into
+    // it: the hash has no idea what a forest sounds like. What it guarantees is stability and
+    // a flat spread. Adding a track to the end of this list is safe; INSERTING or reordering
+    // one silently re-assigns every existing style to a different song, so don't, unless that
+    // is what you want.
+    const VICTORY_MUSIC_TRACKS = [
+      'victory',           // 0  warm orchestral march - the original, and the empty-style default
+      'victory_fanfare',   // 1  regal ceremonial horns and bells
+      'victory_synth',     // 2  retro synthwave, the one that isn't an orchestra
+      'victory_folk',      // 3  tavern fiddle-and-drum celebration
+      'victory_serene',    // 4  quiet relieved harp and strings
+      'victory_grim'       // 5  battle-worn war drums and low brass
+    ];
+
+    // Everything that should NOT change the song, removed: case, spacing, the quote marks that
+    // mark a style as a named entity server-side (see currentThemeName), and all punctuation.
+    // Letters and digits in order, nothing else - so "Forest", 'forest ', '"forest"' and
+    // "FOREST!" are one style, and so are "ice cave", "Ice-Cave" and "icecave".
+    //
+    // Spacing is stripped rather than collapsed on purpose. A player coming back to a dungeon
+    // they liked will not reproduce their own punctuation, and "Windows 95" / "Windows95" is
+    // exactly the pair that would otherwise end on two different songs for no reason a player
+    // could ever see. Word ORDER still counts: "cave ice" is a different style from "ice cave".
+    function themeMusicKey(style) {
+      return String(style || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '');
+    }
+
+    // FNV-1a over the normalised style. Any stable hash would do; this one is four lines, has
+    // no dependencies and scatters short strings (which is all a style ever is) well enough
+    // that neighbouring words - "forest", "forests", "forest temple" - land on unrelated
+    // tracks instead of clumping. Math.imul keeps the multiply in 32-bit territory, which is
+    // what makes it give the same answer in every browser, today and in a year.
+    function victoryTrackFor(style) {
+      const key = themeMusicKey(style);
+      if (!key) return VICTORY_MUSIC_TRACKS[0];   // no style typed: the original victory loop
+      let h = 0x811c9dc5;
+      for (let i = 0; i < key.length; i++) {
+        h ^= key.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      return VICTORY_MUSIC_TRACKS[(h >>> 0) % VICTORY_MUSIC_TRACKS.length];
+    }
+
+    // This run's track, resolved ONCE when the dungeon is entered rather than read off the
+    // style at the moment of the win. The style field on the setup screen is live - a player
+    // can be typing their next dungeon into it while the History window replays an old one -
+    // and the buffer is fetched a whole dungeon before it is needed, so the answer has to be
+    // pinned to the run, not to whatever the input happens to say later.
+    let runVictoryTrack = VICTORY_MUSIC_TRACKS[0];
+    function pickRunVictoryTrack(style) {
+      runVictoryTrack = victoryTrackFor(style);
+      return runVictoryTrack;
     }
 
     // Procedural stand-ins. Deliberately crude - shaped noise through a filter with a
@@ -1371,6 +1470,10 @@
     btnClose.addEventListener('click', () => {
       if (!screenGame.classList.contains('hidden')) {
         openQuitConfirm();
+      } else if (!screenProgress.classList.contains('hidden')) {
+        // The loading screen has its own box - one that can actually stop the generation
+        // behind it, which is the whole reason the ✕ is up there.
+        openLoadingExitConfirm();
       } else {
         // Off the game screen the window's ✕ "closes" it the only way a browser tab can:
         // the Win98 starfield takes the whole screen, exactly as it does after an idle
@@ -1379,6 +1482,66 @@
         showScreensaverManually();
       }
     });
+
+    // ---- Leaving the loading screen ---------------------------------------
+    // Before this the only way off a run being generated was a page reload: the beforeunload
+    // warning and the pagehide beacon were the whole cancel path. The loading screen's ✕ (and
+    // ESC, which does the same there) asks in-page instead, and the go button makes that same
+    // /api/cancel_generation call from a page that stays put. Once ENTER is armed nothing is
+    // running any more - the bundle is saved, History can start it again from disk - so the box
+    // rewords itself down to what is actually being given up: the spot in the crawl.
+    function openLoadingExitConfirm() {
+      if (!modalLoadingExitConfirm) return;
+      const generating = generationInFlight;
+      if (loadingExitTitle) loadingExitTitle.textContent = generating
+        ? '⛔ Stop Generating?' : '🚪 Leave the Loading Screen?';
+      if (loadingExitIcon) loadingExitIcon.textContent = generating ? '⛔' : '📜';
+      if (loadingExitHead) loadingExitHead.textContent = generating
+        ? 'Call off the dungeon being generated?'
+        : 'Go back to the menu without entering?';
+      if (loadingExitText) loadingExitText.textContent = generating
+        ? 'ComfyUI drops the prompts still queued and stops the one it is sampling. Nothing is '
+          + 'saved, so making this dungeon after all means generating it from the top.'
+        : 'This dungeon is already generated and saved. Nothing is lost – the History window '
+          + 'starts it again straight from disk, with no generating and no waiting.';
+      if (btnLoadingExitStay) btnLoadingExitStay.textContent = generating ? 'Keep Generating' : 'Keep Reading';
+      if (btnLoadingExitGo) btnLoadingExitGo.textContent = generating ? 'Stop Generating' : 'Back to Menu';
+      modalLoadingExitConfirm.classList.remove('hidden');
+      // The cursor starts on the safe button, the same as every other confirm box here.
+      focusFirstIn(modalLoadingExitConfirm, btnLoadingExitStay);
+    }
+
+    function closeLoadingExitConfirm() {
+      if (modalLoadingExitConfirm) modalLoadingExitConfirm.classList.add('hidden');
+    }
+
+    function leaveLoadingScreen() {
+      closeLoadingExitConfirm();
+      const wasGenerating = generationInFlight;
+      generationInFlight = false;   // before the fetch: no beforeunload warning on the way out
+      stopGenerationTimers();
+      if (wasGenerating) {
+        // Exactly what the pagehide beacon sends, just from a page that isn't dying. Nothing
+        // waits on the reply - the worker unwinds at its next checkpoint and the settling
+        // watcher below is what keeps CREATE disabled until ComfyUI is genuinely clear.
+        fetch(`${SERVER_URL}/api/cancel_generation`, { method: 'POST' })
+          .catch(() => { /* server already gone - there is nothing left to cancel */ });
+      }
+      resetCrawl();          // stops the narrator and the loading loop, disarms ENTER
+      screenProgress.classList.add('hidden');
+      openSetupScreen();     // resets the tab title, shows the menu, fades the menu music back in
+      if (wasGenerating) watchForSettling();
+    }
+
+    if (btnLoadingExitClose) btnLoadingExitClose.addEventListener('click', closeLoadingExitConfirm);
+    if (btnLoadingExitStay) btnLoadingExitStay.addEventListener('click', closeLoadingExitConfirm);
+    if (btnLoadingExitGo) btnLoadingExitGo.addEventListener('click', leaveLoadingScreen);
+    if (modalLoadingExitConfirm) {
+      // A click on the darkened crawl behind the box backs out too, same as the other confirms.
+      modalLoadingExitConfirm.addEventListener('click', (e) => {
+        if (e.target === modalLoadingExitConfirm) closeLoadingExitConfirm();
+      });
+    }
 
     btnPlayAgain.addEventListener('click', openSetupScreen);
 
@@ -1466,6 +1629,12 @@
     // cutscene off would cost a whole generation made without it. The second row (film it in the
     // background while playing) is greyed out while the first is Off, since it has nothing to
     // move off the loading screen - but it keeps its own pick for when the cutscene comes back on.
+    // ...except that the background row is hidden and forced Off for now (index.html holds the
+    // row behind a `hidden`), so every cutscene is filmed on the loading screen. Flip this back
+    // to true to offer it again: the row reappears, the stored pick is read back, and picks start
+    // being saved once more. Off while it is false, the stored pick is left untouched, so an
+    // earlier On is still there when the option returns.
+    const ENDING_BACKGROUND_OFFERED = false;
     const ENDING_VIDEO_KEY = 'comfycrawler.endingVideo';
     const ENDING_BACKGROUND_KEY = 'comfycrawler.endingVideoBackground';
     const endingVideoRow = document.getElementById('endingVideoRow');
@@ -1492,7 +1661,7 @@
     function saveEndingOptions() {
       try {
         localStorage.setItem(ENDING_VIDEO_KEY, endingVideoOn ? 'on' : 'off');
-        localStorage.setItem(ENDING_BACKGROUND_KEY, endingBackgroundOn ? 'on' : 'off');
+        if (ENDING_BACKGROUND_OFFERED) localStorage.setItem(ENDING_BACKGROUND_KEY, endingBackgroundOn ? 'on' : 'off');
       } catch (_) { /* storage disabled or full - the pick just won't stick */ }
     }
 
@@ -1509,6 +1678,7 @@
       endingBackgroundRow.addEventListener('click', (e) => {
         const btn = e.target.closest('.ending-background-btn');
         if (!btn || btn.disabled) return;
+        if (!ENDING_BACKGROUND_OFFERED) return;
         endingBackgroundOn = btn.dataset.endingBackground === 'on';
         paintEndingOptionRows();
         saveEndingOptions();
@@ -1516,7 +1686,7 @@
     }
     try {
       endingVideoOn = localStorage.getItem(ENDING_VIDEO_KEY) === 'on';
-      endingBackgroundOn = localStorage.getItem(ENDING_BACKGROUND_KEY) === 'on';
+      endingBackgroundOn = ENDING_BACKGROUND_OFFERED && localStorage.getItem(ENDING_BACKGROUND_KEY) === 'on';
     } catch (_) { /* no storage - both stay Off */ }
     paintEndingOptionRows();
 
@@ -1560,6 +1730,21 @@
     });
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+
+    // About box. Same shape as Options: the ✕, OK, ESC and a click on the darkened menu behind
+    // it all back out, and the keyboard cursor starts on OK rather than on the title bar's ✕.
+    function closeAbout() { if (modalAbout) modalAbout.classList.add('hidden'); }
+    if (btnAbout && modalAbout) {
+      btnAbout.addEventListener('click', () => {
+        modalAbout.classList.remove('hidden');
+        focusFirstIn(modalAbout, btnAboutOk);
+      });
+      modalAbout.addEventListener('click', (e) => {
+        if (e.target === modalAbout) closeAbout();
+      });
+    }
+    if (btnCloseAbout) btnCloseAbout.addEventListener('click', closeAbout);
+    if (btnAboutOk) btnAboutOk.addEventListener('click', closeAbout);
 
     // ==========================================
     // MAD-LIB UNDO / REDO
@@ -3312,7 +3497,7 @@
       // Cancellable: hitting Enter straight through the win box calls stopScreenMusic()
       // (via returnToMenuMusic) before this fires, and the victory loop must not then
       // start up over the menu music the player has already gone back to.
-      deferScreenMusic('victory', 700);
+      deferScreenMusic(runVictoryTrack, 700);
     }
 
     // ==========================================
@@ -4070,7 +4255,7 @@ void main() {
       endingPlayed = true;
       // Normally already playing, started as the clip's sound began to fade. A skip, or a clip
       // that played out in a hidden tab, never got that far - and the hold must not sit in silence.
-      playScreenMusic('victory');
+      playScreenMusic(runVictoryTrack);
       if (endingHoldTimer) clearTimeout(endingHoldTimer);
       endingHoldTimer = setTimeout(raiseEndingVictoryBox, ENDING_HOLD_MS);
     }
@@ -4135,7 +4320,7 @@ void main() {
       // The victory loop crossfades in under the clip's fading fanfare. playScreenMusic is
       // idempotent, so showVictoryBox asking for it again when the box rises changes nothing.
       fadeEndingAudioOut(endingVideoEl, () => {
-        if (endingPhase === 'playing') playScreenMusic('victory');
+        if (endingPhase === 'playing') playScreenMusic(runVictoryTrack);
       });
       createClipScaler(endingVideoEl, document.getElementById('endingCanvas'));
       endingVideoEl.addEventListener('ended', finishEndingPlayback);
@@ -9506,7 +9691,11 @@ void main() {
       // Fetch the win and death loops now, while the player still has a whole dungeon between
       // them and either box. Decoding a 90s buffer at the moment of death would be audible.
       loadScreenMusic('death');
-      loadScreenMusic('victory');
+      // Which win loop this run gets - decided here, off the style the run was actually built
+      // from (b.wall_style survives a History replay; currentThemeName covers a bundle saved
+      // before that field existed). Only the chosen one is fetched: the pool is six 5MB
+      // buffers, and pulling all six down to play one would cost the player 28MB for nothing.
+      loadScreenMusic(pickRunVictoryTrack(b.wall_style || currentThemeName));
       // The level-up loop is wanted mid-run and with no warning - the box opens the instant a
       // kill crosses a threshold - so it has to be in memory before the first fight, not
       // fetched when it is already needed.
@@ -9745,6 +9934,12 @@ void main() {
       btnEnterDungeon.classList.add('bg-yellow-100');
 
       // Nothing is generating any more, so the whole progress readout stops pretending.
+      // That includes the ✕'s box if it happens to be open: the assets landed while it was
+      // asking whether to stop them, so it rewords itself from "stop" to "leave" rather than
+      // offering to call off a run that has already finished.
+      if (modalLoadingExitConfirm && !modalLoadingExitConfirm.classList.contains('hidden')) {
+        openLoadingExitConfirm();
+      }
       setTabTitleReady();
       if (progHeaderText) progHeaderText.textContent = 'Generated!';
       if (progHeaderIcon) progHeaderIcon.textContent = '\u2705';
@@ -9769,6 +9964,11 @@ void main() {
     window.addEventListener('keydown', (e) => {
       if (e.code !== 'Space' && e.code !== 'Enter') return;
       if (screenProgress.classList.contains('hidden')) return;
+      // Both boxes that can be up over the crawl now - the title bar's ? and the ✕'s
+      // confirm - own the keyboard while they are: a Space meant for "Keep Generating"
+      // must not start the dungeon out from under them.
+      if (modalAbout && !modalAbout.classList.contains('hidden')) return;
+      if (modalLoadingExitConfirm && !modalLoadingExitConfirm.classList.contains('hidden')) return;
       if (!btnEnterDungeon || btnEnterDungeon.disabled || !pendingBundle) return;
       e.preventDefault();
       tryEnterDungeon();
@@ -9781,6 +9981,7 @@ void main() {
       if (e.code !== 'Enter') return;
       if (screenSetup.classList.contains('hidden')) return;
       if (modalSettings && !modalSettings.classList.contains('hidden')) return;
+      if (modalAbout && !modalAbout.classList.contains('hidden')) return;
       if (modalHistory && !modalHistory.classList.contains('hidden')) return;
       if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
       if (e.target && e.target.tagName === 'TEXTAREA') return;
@@ -9806,7 +10007,11 @@ void main() {
     // screen and, with the same geometry below, for each dialog box.
     function focusablesIn(root) {
       if (!root) return [];
-      return Array.from(root.querySelectorAll('input, select, button')).filter((el) => {
+      // a[href] is here for the About box's profile links - the only real hyperlinks in the
+      // app, and they have to be walkable like every other control. .scroll-pane is that same
+      // box's wall of text, which takes focus so the arrows can scroll it. Nothing else on
+      // screen is either, so this widens nothing in practice.
+      return Array.from(root.querySelectorAll('input, select, button, a[href], .scroll-pane')).filter((el) => {
         if (el.disabled || el.type === 'file') return false;
         return el.getClientRects().length > 0;   // on screen: not .hidden, not a collapsed badge
       });
@@ -9870,7 +10075,8 @@ void main() {
     // boxes sit on top of the window that opened them, so they win while they are up.
     function topmostOpenDialog() {
       const stack = [modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm, modalHistoryConfirm,
-                     modalLeaveRunConfirm, modalQuitConfirm, modalHistory, modalSettings];
+                     modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm, modalHistory,
+                     modalSettings, modalAbout];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -9883,6 +10089,14 @@ void main() {
       // A dropdown and a slider both own the arrow keys outright - stepping the value IS
       // what they are for, so focus only leaves them by Tab or a click.
       if (el && (el.tagName === 'SELECT' || (el.tagName === 'INPUT' && el.type === 'range'))) return;
+      // A pane of text that scrolls inside itself (the About box) owns the arrows the same way,
+      // but only until it runs out of text: at the top one more ArrowUp steps off it, at the
+      // bottom one more ArrowDown does, so the cursor is never trapped in the prose.
+      if (el && el.classList && el.classList.contains('scroll-pane')) {
+        const atTop = el.scrollTop <= 0;
+        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+        if ((dir === 'up' && !atTop) || (dir === 'down' && !atBottom)) return;   // let it scroll
+      }
       if (el && el.tagName === 'INPUT' && el.type === 'text' && (dir === 'left' || dir === 'right')) {
         const collapsed = el.selectionStart === el.selectionEnd;
         const atEdge = dir === 'left'
@@ -10114,7 +10328,8 @@ void main() {
       generationInFlight = true;
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
-      if (titleButtons) titleButtons.classList.add('hidden');
+      // The title bar stays up on the loading screen - the stylesheet trims it to ? and ✕
+      // there, and that ✕ is how a run is called off without reloading the page.
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
       generateAuthentic3DMaze(numGrids);
@@ -10123,7 +10338,7 @@ void main() {
       const startTime = Date.now();
       progTimer.textContent = "0.0s";
       setTabTitlePercent(0);
-      const timerInterval = setInterval(() => {
+      genClockTimer = setInterval(() => {
         progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
       }, 100);
 
@@ -10158,7 +10373,7 @@ void main() {
         if (!startRes.ok) {
           let msg = 'The server is still clearing the previous run - try again in a moment.';
           try { msg = (await startRes.json()).error || msg; } catch (err) { /* not JSON */ }
-          clearInterval(timerInterval);
+          stopGenerationTimers();
           generationInFlight = false;
           resetCrawl();
           resetTabTitle();
@@ -10171,7 +10386,7 @@ void main() {
           return;
         }
 
-        const pollInterval = setInterval(async () => {
+        genPollTimer = setInterval(async () => {
           try {
             const res = await fetch(`${SERVER_URL}/api/progress`);
             const p = await res.json();
@@ -10189,15 +10404,13 @@ void main() {
             paintProgressChunks(p.percent);
 
             if (!p.is_generating && p.completed_bundle) {
-              clearInterval(pollInterval);
-              clearInterval(timerInterval);
+              stopGenerationTimers();
               generationInFlight = false;
               currentRunHistoryId = p.completed_bundle.history_id || null;
               currentRunFavorite = false;   // a freshly generated run has never been starred
               armEnterDungeon(p.completed_bundle);
             } else if (p.error) {
-              clearInterval(pollInterval);
-              clearInterval(timerInterval);
+              stopGenerationTimers();
               generationInFlight = false;
               alert("Error: " + p.error);
               resetCrawl();
@@ -10213,7 +10426,7 @@ void main() {
         }, 600);
 
       } catch (err) {
-        clearInterval(timerInterval);
+        stopGenerationTimers();
         generationInFlight = false;
         alert('Server communication error. Make sure server.py is running!');
         resetCrawl();
@@ -11315,7 +11528,6 @@ void main() {
       resetCrawl('LOADING ASSETS');
       screenSetup.classList.add('hidden');
       screenProgress.classList.remove('hidden');
-      if (titleButtons) titleButtons.classList.add('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
       // The maze is never saved with the bundle, so a replay is the same cast on new ground,
@@ -11327,7 +11539,7 @@ void main() {
       // what it is doing instead of sitting on a dead bar.
       const startTime = Date.now();
       progTimer.textContent = '0.0s';
-      const timerInterval = setInterval(() => {
+      genClockTimer = setInterval(() => {
         progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
       }, 100);
       if (progHeaderIcon) progHeaderIcon.textContent = '📜';
@@ -11343,7 +11555,11 @@ void main() {
           `${SERVER_URL}/api/history_bundle?id=${encodeURIComponent(entry.id)}`);
         if (!res.ok) throw new Error('The server could not read that saved dungeon.');
         const bundle = await res.json();
-        clearInterval(timerInterval);
+        stopGenerationTimers();
+        // The title bar's ✕ can land while this read is in flight. It has already put the
+        // menu back up, so this bundle is no longer wanted - arming ENTER now would chime and
+        // start the narrator over a screen the player has left.
+        if (screenProgress.classList.contains('hidden')) return;
 
         // Nothing to wait for: fill the bar, then hand the bundle to the same function the
         // poll loop uses. It starts the crawl, starts the narration, plays the ready chime
@@ -11362,8 +11578,11 @@ void main() {
         if (progHeaderIcon) progHeaderIcon.textContent = '📜';
         if (progHeaderText) progHeaderText.textContent = 'Loaded from History!';
       } catch (err) {
-        clearInterval(timerInterval);
+        stopGenerationTimers();
         console.error('History load error:', err);
+        // Same as above: if the ✕ already took the player off this screen, the failure is
+        // moot - don't alert about a load nobody is waiting on any more.
+        if (screenProgress.classList.contains('hidden')) return;
         alert('Could not load that saved dungeon - it may have been deleted.\n\n' + err.message);
         resetCrawl();
         resetTabTitle();
@@ -11536,14 +11755,18 @@ void main() {
       });
     }
 
-    // ESC backs out of the Options and History windows, the same as clicking their ✕. The
+    // ESC backs out of the Options, About and History windows, the same as clicking their ✕. The
     // History delete-confirm sits on top of the list, so a first ESC closes just that and
     // leaves History open; a second ESC then closes History. While the screen saver is up its
     // own capture-phase key handler runs first and swallows the ESC to dismiss itself, so
     // this never fires over it.
     window.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' && e.code !== 'Escape') return;
-      if (modalEndingStopConfirm && !modalEndingStopConfirm.classList.contains('hidden')) {
+      if (modalLoadingExitConfirm && !modalLoadingExitConfirm.classList.contains('hidden')) {
+        // Backing out means carrying on generating / reading.
+        e.preventDefault();
+        closeLoadingExitConfirm();
+      } else if (modalEndingStopConfirm && !modalEndingStopConfirm.classList.contains('hidden')) {
         // Backing out means Keep Filming.
         e.preventDefault();
         closeStopEndingFilm();
@@ -11565,9 +11788,17 @@ void main() {
       } else if (modalSettings && !modalSettings.classList.contains('hidden')) {
         e.preventDefault();
         modalSettings.classList.add('hidden');
+      } else if (modalAbout && !modalAbout.classList.contains('hidden')) {
+        e.preventDefault();
+        closeAbout();
       } else if (modalHistory && !modalHistory.classList.contains('hidden')) {
         e.preventDefault();
         closeHistory();
+      } else if (!screenProgress.classList.contains('hidden')) {
+        // Nothing else is up, so ESC on the loading screen is its title-bar ✕ - the same
+        // pairing the dungeon screen has. Last in the chain so every open box wins first.
+        e.preventDefault();
+        openLoadingExitConfirm();
       }
     });
 

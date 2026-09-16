@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <title>ComfyCrawler by sorryaboutyourcats</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.ico" sizes="any">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * {
@@ -696,6 +698,66 @@
       object-fit: contain;
       image-rendering: auto;
     }
+    /* The title bar's ? belongs to the two screens with reading on them - the main menu and the
+       loading screen, where "what is doing the drawing?" is the question the wait itself raises.
+       appContainer wears exactly one mode- class at a time (game.js rewrites className outright),
+       so this hides the button the moment the dungeon itself starts and brings it back on the way
+       out. display:none also drops it out of the arrow-key focus walk, which filters on
+       getClientRects(). */
+    #appContainer:not(.mode-setup):not(.mode-progress) #btnAbout {
+      display: none !important;
+    }
+    /* ...and the loading screen's title bar carries only those two, ? and the ✕ that calls the
+       run off: the window is already sized to the crawl, and there is nothing yet to look at
+       full-screen. */
+    #appContainer.mode-progress #btnMaximize {
+      display: none !important;
+    }
+    /* Classic IE blue for the profile links - the only real hyperlinks in the whole app.
+       Each one is a full-width row on purpose: the arrow-key walker (moveFocusIn in game.js)
+       prefers a candidate that overlaps the current control's column, and a short inline link
+       sitting at the left margin never overlaps the ✕ or OK on the right, so the cursor jumped
+       straight past all three. A row that spans the pane always overlaps, so ArrowUp from OK
+       walks up through the links. The underline is on the URL only, not the whole row. */
+    .about-link {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      color: #0000cc;
+      font-weight: bold;
+      text-decoration: none;
+      padding: 1px 3px;
+      width: 100%;
+    }
+    .about-link .about-url {
+      text-decoration: underline;
+      word-break: break-all;
+    }
+    .about-link:hover {
+      color: #cc0000;
+      background: #efefef;
+    }
+    .about-link:focus {
+      outline: 1px dotted #000000;
+      outline-offset: 1px;
+      background: #efefef;
+    }
+    /* The model filenames under each entry in the About box's parts list. A line of their own,
+       not a tail on the sentence - run in, a 40-character checkpoint name buries the prose. */
+    .about-file {
+      display: block;
+      margin-top: 1px;
+      font-size: 10px;
+      font-weight: bold;
+      color: #6b7280;
+      word-break: break-word;
+    }
+    /* The About box's text pane takes focus so the arrows can scroll it (see the .scroll-pane
+       branch in game.js). Without a ring there is no way to tell the cursor is parked on it. */
+    .scroll-pane:focus {
+      outline: 1px dotted #000000;
+      outline-offset: -3px;
+    }
     .hist-trash:disabled:active,
     .hist-movie:disabled:active {
       border-top: 2px solid #ffffff;
@@ -714,10 +776,16 @@
     <!-- Title Bar -->
     <div class="win95-title text-xs flex items-center justify-between mb-1">
       <div class="flex items-center gap-1.5 font-bold">
-        <span>🎮</span>
+        <!-- The window icon: the same CC-shades cat as the tab favicon, at its native
+             16px so one SVG pixel lands on one CSS pixel. -->
+        <img src="/favicon.svg" alt="" width="16" height="16" class="shrink-0" style="image-rendering: pixelated;">
         <span>ComfyCrawler by sorryaboutyourcats</span>
       </div>
       <div id="titleButtons" class="flex gap-1 text-xs">
+        <!-- Main menu and the loading screen (see the #btnAbout rule in the stylesheet): who
+             made this, and what is doing the drawing. Sits inside titleButtons so it hides and
+             comes back with the other two whenever the title bar does. -->
+        <button id="btnAbout" class="win95-btn px-2 py-0.5 text-black hover:bg-slate-300" title="About ComfyCrawler">?</button>
         <button id="btnMaximize" class="win95-btn px-2 py-0.5 text-black hover:bg-slate-300" title="Toggle Fullscreen">□</button>
         <button id="btnClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" title="Back to Main Menu / Screen Saver">✕</button>
       </div>
@@ -1172,6 +1240,7 @@
                and held on its last frame under the victory box. The second row moves the render
                off the loading screen and into the background while the run is played - and only
                means anything with the first row On, so game.js greys it out while that is Off.
+               That second row is hidden and forced Off for now (see its own comment below).
                Rows of buttons like the difficulty row rather than checkboxes, so the arrow keys
                walk across them; game.js (setEndingVideo / setEndingBackground) keeps each pick
                pressed in and remembers both across reloads. Both default to Off. -->
@@ -1190,18 +1259,24 @@
               </button>
             </div>
 
-            <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
-              Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
-            </label>
-            <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
-              <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
-                <span class="text-xs">Off</span>
-              </button>
-              <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
-                <span class="text-xs">On</span>
-              </button>
+            <!-- Render Ending While Playing is hidden for now and forced Off - the cutscene is
+                 always filmed on the loading screen. The row is left here, wired up and all, so
+                 dropping the `hidden` below (and ENDING_BACKGROUND_OFFERED in game.js) brings it
+                 back. May be shown again later. -->
+            <div class="flex flex-col gap-1.5 hidden">
+              <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
+                Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
+              </label>
+              <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
+                <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
+                  <span class="text-xs">Off</span>
+                </button>
+                <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
+                  <span class="text-xs">On</span>
+                </button>
+              </div>
             </div>
 
             <!-- How the movie is drawn - the cutscene and History's player alike, so this row is
@@ -1246,6 +1321,181 @@
               OK
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ABOUT DIALOG - what the title bar's ? opens. Credits, the two links, and an honest
+         parts list of everything that does the drawing, so "what made this picture?" is
+         answerable from inside the game and not only from the README. All static text: it does
+         not read the server, so it has to be edited by hand when the pipeline changes. -->
+    <div id="modalAbout" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-2xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>❓ About ComfyCrawler</span>
+          <button id="btnCloseAbout" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="px-3 pt-1 flex items-center gap-3">
+          <div class="text-4xl leading-none select-none">🏰</div>
+          <div class="min-w-0">
+            <div class="text-base font-black text-slate-900">ComfyCrawler</div>
+            <div class="text-[11px] font-bold text-slate-700">A Windows&nbsp;95 3D Maze &amp; Valbrace styled dungeon crawler that draws itself, on your own hardware.</div>
+          </div>
+        </div>
+
+        <!-- .win95-inset paints itself black, so the white page ground is set inline here, the
+             same way the History list and the progress trough do it.
+             This is the one dialog body that is mostly prose rather than controls, so the pane
+             itself takes focus (tabindex) and .scroll-pane tells the arrow-key walker in game.js
+             to scroll the text instead of moving the cursor until it reaches an end. -->
+        <div class="win95-inset scroll-pane mx-3 my-2 p-3 overflow-y-auto flex flex-col gap-3.5 text-slate-900"
+             tabindex="0" role="region" aria-label="About ComfyCrawler"
+             style="background: #ffffff; max-height: 56vh;">
+
+          <div class="flex flex-col gap-1">
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">👤 sorryaboutyourcats</div>
+            <p class="text-[11px] text-slate-800">
+              All of this is theirs: the idea, the look, what the foes do, and which of a hundred
+              prompt wordings survived contact with a real render.
+            </p>
+            <div class="flex flex-col gap-0.5 mt-0.5 text-[11px]">
+              <a class="about-link" href="https://instagram.com/sorryaboutyourcats" target="_blank" rel="noopener noreferrer">
+                <span class="select-none">📷</span>
+                <span class="text-slate-800 shrink-0">Instagram</span>
+                <span class="about-url">instagram.com/sorryaboutyourcats</span>
+              </a>
+              <a class="about-link" href="https://github.com/sorryaboutyourcats" target="_blank" rel="noopener noreferrer">
+                <span class="select-none">💾</span>
+                <span class="text-slate-800 shrink-0">GitHub</span>
+                <span class="about-url">github.com/sorryaboutyourcats</span>
+              </a>
+              <a class="about-link" href="https://github.com/sorryaboutyourcats/ComfyCrawler" target="_blank" rel="noopener noreferrer">
+                <span class="select-none">🏰</span>
+                <span class="text-slate-800 shrink-0">This game</span>
+                <span class="about-url">github.com/sorryaboutyourcats/ComfyCrawler</span>
+              </a>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🎮 What this is</div>
+            <p class="text-[11px] text-slate-800">
+              You fill in four blanks on the main menu &ndash; a style, a hero, a weapon, a foe &ndash;
+              and a stack of models running on this machine builds the rest: the walls, ceiling and
+              floor, the hero and their swing, three different foes, the story that scrolls past
+              while you wait, the names, the footsteps, the music, and (if you switch it on) a short
+              film of the final blow.
+            </p>
+            <p class="text-[11px] text-slate-800">
+              Then you walk it. Every dungeon you finish making is kept in
+              <strong>dungeon_sessions/</strong> and can be started again from 📜&nbsp;History for
+              nothing, because the expensive part already happened.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🛠️ How it was made</div>
+            <p class="text-[11px] text-slate-800">
+              Written by <strong>sorryaboutyourcats</strong> together with <strong>Claude</strong>
+              (Anthropic), in Claude&nbsp;Code on Opus&nbsp;5. One Python server and one JavaScript
+              file, no build step and no framework beyond Tailwind off a CDN.
+            </p>
+            <p class="text-[11px] text-slate-800">
+              sorryaboutyourcats decided what it should be and played every build; Claude wrote the
+              code and measured what came back. Most of the prompt wording in here was settled by
+              counting pixels on real renders rather than by taste &ndash; foes used to draw at 4% of
+              their canvas until &ldquo;fill the frame&rdquo; replaced &ldquo;small, with a large
+              margin&rdquo;.
+            </p>
+            <p class="text-[11px] text-slate-700">
+              No MCP servers were in that loop either &ndash; just the repository, the running game
+              driven through a headless browser, and ComfyUI&rsquo;s own HTTP API for looking at what
+              it had just drawn.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🧠 What does the drawing</div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>Krea&nbsp;2 Turbo</strong> &mdash; walls, ceilings and floors, the hero&rsquo;s
+              nine poses, and all three foes. Eight steps at cfg&nbsp;1.0, which means there is no
+              negative prompt at all: every word is something being asked for.
+              <span class="about-file">krea2_turbo_fp8_scaled &middot; qwen_image_vae</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>Qwen3-VL&nbsp;4B</strong> &mdash; Krea&nbsp;2&rsquo;s own text encoder, doing
+              double duty as the writer: the intro crawl, the hero and boss names, and the three foe
+              species. It also looks at a finished sprite to decide whether the flying one gets
+              wings or thrusters.
+              <span class="about-file">qwen3vl_4b_fp8_scaled</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>FLUX.1 Kontext dev</strong> &mdash; the only model here that edits a picture
+              instead of drawing a new one: the four HUD portrait faces, the flyer&rsquo;s thrusters,
+              and the boss&rsquo;s scorch and embers.
+              <span class="about-file">flux1-dev-kontext_fp8_scaled &middot; t5xxl_fp8_e4m3fn &middot; clip_l &middot; ae</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>BiRefNet</strong> &mdash; cuts every sprite off its background, which is what
+              lets a hero drawn on white stand in a corridor.
+              <span class="about-file">birefnet.safetensors, via KJNodes</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>Stable Audio&nbsp;3 Small SFX</strong> &mdash; eleven one-shots per dungeon,
+              written from the same typed styles as the art: the footstep matches your floor, the
+              swing matches your weapon, and both death cries match who they belong to.
+              <span class="about-file">stable_audio_3_small_sfx &middot; t5gemma_b_b_ul2</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>Stable Audio&nbsp;3 Small</strong> (the checkpoint from before the one-shot
+              finetune) &mdash; the thirty-second exploration and battle loops, crossfaded at the
+              seam so you cannot hear where they join.
+              <span class="about-file">stable_audio_3_small_sfx_base</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>MiniMax&nbsp;H3</strong> (reference-to-video-and-audio) &mdash; the optional
+              ending cutscene: eight seconds at 512&times;384 with its own soundtrack, filmed from
+              this run&rsquo;s own hero, boss and textures as reference pictures and its battle music
+              as a reference track.
+              <span class="about-file">minimax_h3_ref2va_pruned_int8_convrot &middot; qwen3vl_32b_minimax_h3_nvfp4_awq &middot; video + audio VAEs</span>
+            </div>
+
+            <div class="text-[11px] text-slate-800">
+              <strong>Piper</strong> &mdash; the voice reading the intro crawl. The one model that
+              runs inside the Python server rather than in ComfyUI.
+              <span class="about-file">en_GB-alan-medium &middot; en_US-kristin-medium</span>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🔌 How it is plumbed</div>
+            <p class="text-[11px] text-slate-800">
+              A Python&nbsp;3.10 standard-library HTTP server on <strong>127.0.0.1:5555</strong> serves
+              the page and owns every run. Each model above is reached through <strong>ComfyUI</strong>
+              on <strong>127.0.0.1:8188</strong>: graphs are posted to its <strong>/prompt</strong>,
+              finished images and audio are collected from <strong>/history</strong>, and the loading
+              bar is fed by its WebSocket. SageAttention is switched on for the cutscene when the node
+              is installed.
+            </p>
+            <p class="text-[11px] font-bold text-slate-800">
+              No cloud API, no account, no key, no MCP server. The only thing this page talks to is
+              your own machine, and nothing you type into it leaves.
+            </p>
+          </div>
+        </div>
+
+        <div class="px-3 pb-3 flex justify-end">
+          <button id="btnAboutOk" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
+            OK
+          </button>
         </div>
       </div>
     </div>
@@ -1493,6 +1743,39 @@
           </button>
           <button id="btnEraseConfirmErase" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
             Erase
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOADING-SCREEN EXIT CONFIRMATION - what the loading screen's own title-bar ✕ (and ESC
+         there) opens. While the assets are still being made this is the only way to call a run
+         off without reloading the page, so it asks first and then makes the same
+         /api/cancel_generation call the pagehide beacon does. Once ENTER is armed there is
+         nothing left to cancel - the bundle is on disk - so the box only asks about giving up
+         the reading spot. Both lines and both button labels are written per state by
+         openLoadingExitConfirm() in game.js. -->
+    <div id="modalLoadingExitConfirm" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span id="loadingExitTitle">⚠️ Stop Generating?</span>
+          <button id="btnLoadingExitClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div id="loadingExitIcon" class="text-3xl leading-none select-none">⛔</div>
+          <div class="flex flex-col gap-1 min-w-0">
+            <p id="loadingExitHead" class="text-xs font-black text-slate-900"></p>
+            <p id="loadingExitText" class="text-[11px] text-slate-700"></p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnLoadingExitStay" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Keep Generating
+          </button>
+          <button id="btnLoadingExitGo" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
+            Stop Generating
           </button>
         </div>
       </div>
