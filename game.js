@@ -849,8 +849,8 @@
     //   loading  picks up exactly where the intro narration puts it down and carries the
     //            loading screen to the ENTER button
     //   death    under the death box
-    //   victory  under the victory box - a pool of these (currently two, mid-rework), one
-    //            picked per dungeon style; see VICTORY_MUSIC_TRACKS below
+    //   victory  under the victory box - a pool of five of these, one picked per dungeon
+    //            style; see VICTORY_MUSIC_TRACKS below
     //   levelup  under the level-up choice box. The odd one out: it plays DURING a run rather
     //            than over a box that ends one, so instead of the dungeon's bed being faded
     //            out under it, the bed is ducked on dungeonMusicBus and handed straight back.
@@ -963,13 +963,13 @@
     }
 
     // ---- The victory pool --------------------------------------------------
-    // Winning does not always sound the same. Victory loops ship (see the victory block of
+    // Winning does not always sound the same. Five victory loops ship (see the victory block of
     // STATIC_MUSIC in server.py, which this list mirrors IN ORDER - the index below is an index
     // into both), and which one scores the victory box is decided by the dungeon's own typed
     // style rather than by chance:
     //
-    //     "forest" -> hash -> 0 -> victory        every forest run, forever
-    //     "ocean"  -> hash -> 1 -> victory_synth  every ocean run, forever
+    //     "haunted mansion" -> hash -> 0 -> victory          every haunted mansion run, forever
+    //     "forest"          -> hash -> 3 -> victory_synth_2  every forest run, forever
     //
     // So it feels random when you look across styles, and is completely fixed within one: a
     // brand new forest dungeon months later still ends on the song forest ends on. That is
@@ -982,15 +982,17 @@
     // one silently re-assigns every existing style to a different song, so don't, unless that
     // is what you want.
     //
-    // Down to two while it's mid-rework - see server.py's STATIC_MUSIC for what has cycled
-    // through the other four slots and why. A batch of six new candidates, all variations of
-    // the two below, is being auditioned outside the game (generate_victory_candidates /
-    // --gen-victory-candidates in server.py, output in the gitignored sounds/victory_candidates/
-    // - not wired in or served); picks from it become slots 2-5 (or replace these two), each
-    // appended rather than inserted so today's forest/ocean assignment below survives.
+    // Slots 2-4 are the survivors of a six-way audition, not a guess: generate_victory_candidates
+    // in server.py rendered three variations each of victory and victory_synth into
+    // sounds/victory_candidates/ for listening, unwired; these three were picked and promoted to
+    // real STATIC_MUSIC entries, the other three deleted. See server.py's STATIC_MUSIC for the
+    // full history of what has cycled through this pool before (fanfare, folk, serene, grim).
     const VICTORY_MUSIC_TRACKS = [
-      'victory',          // 0  warm orchestral march - the original, and the empty-style default
-      'victory_synth'     // 1  retro synthwave, the one that isn't an orchestra
+      'victory',           // 0  warm orchestral march - the original, and the empty-style default
+      'victory_synth',     // 1  retro synthwave, the one that isn't an orchestra
+      'victory_2',         // 2  variation of 0: brighter/quicker, soaring strings lead
+      'victory_synth_2',   // 3  variation of 1: warm analog pads, soaring synth lead
+      'victory_synth_3'    // 4  variation of 1: bubbly chiptune arpeggios, square-wave lead
     ];
 
     // Everything that should NOT change the song, removed: case, spacing, the quote marks that

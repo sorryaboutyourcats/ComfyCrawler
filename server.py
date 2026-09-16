@@ -7552,21 +7552,23 @@ STATIC_MUSIC = {
         "sombre and final, very slow tempo."
     )),
     # ---- The victory pool --------------------------------------------------
-    # In flux: down to two tracks while a batch of six candidate variations of THEM is being
-    # auditioned outside the game (see the victory-candidates note below) - more will be added
-    # back as slots once picks are made. When it's settled, which of them plays is decided by
-    # the dungeon's own typed style: game.js hashes that string and indexes VICTORY_MUSIC_TRACKS
-    # with it (see victoryTrackFor there), so every "forest" run ever played wins to the same
-    # song and every "ocean" run wins to a different one - random-feeling across styles, fixed
-    # within one. VICTORY_MUSIC_TRACKS is game.js's copy of these keys IN THIS ORDER; the two
-    # lists have to be edited together, or a new track either never plays (missing there) or
-    # 404s on the loop it asks for (missing here).
+    # Five loops share the victory box. Which of them plays is decided by the dungeon's own
+    # typed style: game.js hashes that string and indexes VICTORY_MUSIC_TRACKS with it (see
+    # victoryTrackFor there), so every "forest" run ever played wins to the same song and every
+    # "ocean" run wins to a different one - random-feeling across styles, fixed within one.
+    # VICTORY_MUSIC_TRACKS is game.js's copy of these keys IN THIS ORDER; the two lists have to
+    # be edited together, or a new track either never plays (missing there) or 404s on the loop
+    # it asks for (missing here).
     #
-    # Past pool members cut so far: victory_fanfare (regal ceremonial horns), victory_folk
-    # (tavern jig) and victory_grim (war drums) were removed outright; victory_serene (harp)
-    # was kept but retired, on disk as sounds/unused_victory_serene_music.wav. victory_2 /
-    # victory_synth_2 / victory_synth_3 - variations of the two below - were tried and cut too,
-    # in favour of a proper batch of six to choose from instead of shipping the first attempt.
+    # Past pool members cut: victory_fanfare (regal ceremonial horns), victory_folk (tavern
+    # jig) and victory_grim (war drums) were removed outright; victory_serene (harp) was kept
+    # but retired, on disk as sounds/unused_victory_serene_music.wav.
+    #
+    # victory_2/victory_synth_2/victory_synth_3 below are the survivors of a proper six-way
+    # audition rather than a guess: generate_victory_candidates() rendered three variations each
+    # of victory and victory_synth into sounds/victory_candidates/ (gitignored, not wired in) and
+    # these three were the ones picked - a3_strings/b1_pad/b2_chiptune in that batch. The other
+    # three (a1_horn, a2_choir, b3_bass) were not picked and are gone.
     #
     # Under the victory box, behind the 'end' sting that fires with it. Triumphant, but a bed
     # rather than a fanfare - a fanfare would fight the sting and then have nowhere to go on
@@ -7582,6 +7584,27 @@ STATIC_MUSIC = {
         "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
         "punchy analog synth arpeggios and a chiptune lead over a crisp drum machine beat, "
         "upbeat and jubilant, fast tempo."
+    )),
+    # Variation of victory (see STATIC_MUSIC_VARIATIONS): brighter and quicker, the lead moved
+    # to soaring strings over a lighter brass march.
+    "victory_2": (90.0, (
+        "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler "
+        "video game, bright and energetic, a soaring string melody over a quicker confident "
+        "march with light brass, celebratory and full."
+    )),
+    # Variation of victory_synth: warm analog pads under a soaring synth lead, more anthem
+    # than arcade.
+    "victory_synth_2": (90.0, (
+        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+        "warm analog synth pads and a soaring synth lead melody over a crisp drum machine "
+        "beat, anthemic and jubilant, fast tempo."
+    )),
+    # Variation of victory_synth: bubbly chiptune arpeggios and a square-wave lead, the
+    # playful/arcade end of the same synth family.
+    "victory_synth_3": (90.0, (
+        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+        "bubbly chiptune arpeggios and a square wave lead over a punchy drum machine beat, "
+        "playful and jubilant, fast tempo."
     )),
     # Under the level-up choice box, which ducks the dungeon bed rather than replacing it and
     # is usually on screen for only a few seconds. Thirty is the shortest loop here on purpose:
@@ -7603,13 +7626,15 @@ STATIC_MUSIC = {
 # Each source is listed before its variations in STATIC_MUSIC, so --gen-static-audio re-rolls
 # a source first and its variations follow the new take.
 #
-# Empty for now: nothing has been picked from the six-candidate victory batch yet (see
-# generate_victory_candidates / --gen-victory-candidates below, and sounds/victory_candidates/,
-# gitignored - candidates are rendered with this same init_audio/denoise mechanism but aren't
-# wired in as real STATIC_MUSIC entries until chosen). 0.6-0.65 measured well against
-# victory/victory_synth: enough to read as a different take, not so much that it drifts to an
-# unrelated song or - past ~0.75 on the orchestral source - opens up near-silent patches.
-STATIC_MUSIC_VARIATIONS = {}
+# 0.65 measured well against victory/victory_synth: enough to read as a different take, not so
+# much that it drifts to an unrelated song or - past ~0.75 on the orchestral source - opens up
+# near-silent patches. See generate_victory_candidates / --gen-victory-candidates for how a
+# fresh batch of candidates at this same denoise gets auditioned before a name lands here.
+STATIC_MUSIC_VARIATIONS = {
+    "victory_2": ("victory", 0.65),
+    "victory_synth_2": ("victory_synth", 0.65),
+    "victory_synth_3": ("victory_synth", 0.65),
+}
 
 READY_CHIME_PROMPT = (
     "A bright cheerful two-note magical chime bell, one clean isolated cue sound announcing "
