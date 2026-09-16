@@ -968,8 +968,8 @@
     // index into both), and which one scores the victory box is decided by the dungeon's own
     // typed style rather than by chance:
     //
-    //     "forest" -> hash -> 3 -> victory_folk      every forest run, forever
-    //     "ocean"  -> hash -> 1 -> victory_fanfare   every ocean run, forever
+    //     "forest"          -> hash -> 0 -> victory           every forest run, forever
+    //     "haunted mansion" -> hash -> 1 -> victory_fanfare   every haunted mansion run, forever
     //
     // So it feels random when you look across styles, and is completely fixed within one: a
     // brand new forest dungeon months later still ends on the song forest ends on. That is
@@ -981,13 +981,17 @@
     // a flat spread. Adding a track to the end of this list is safe; INSERTING or reordering
     // one silently re-assigns every existing style to a different song, so don't, unless that
     // is what you want.
+    //
+    // Slots 3-5 used to be a folk jig, a serene harp piece and grim war drums. They were
+    // swapped for variations of the march and the synthwave track IN PLACE, keeping the list
+    // at six, so every style that already won to slots 0-2 still wins to the same song.
     const VICTORY_MUSIC_TRACKS = [
       'victory',           // 0  warm orchestral march - the original, and the empty-style default
       'victory_fanfare',   // 1  regal ceremonial horns and bells
       'victory_synth',     // 2  retro synthwave, the one that isn't an orchestra
-      'victory_folk',      // 3  tavern fiddle-and-drum celebration
-      'victory_serene',    // 4  quiet relieved harp and strings
-      'victory_grim'       // 5  battle-worn war drums and low brass
+      'victory_2',         // 3  variation of 0, french horn lead
+      'victory_synth_2',   // 4  variation of 2, soaring synth lead over pads
+      'victory_synth_3'    // 5  variation of 2, bubbly chiptune lead
     ];
 
     // Everything that should NOT change the song, removed: case, spacing, the quote marks that
@@ -2478,6 +2482,7 @@
       combatState.playerStm = combatState.playerMaxStm;
       // A refill that a still-running lock would immediately stamp back to zero is not a refill.
       combatState.exhaustLock = 0;
+      combatState.exhaustion = 0;
       updateProgressionHUD();
       playSfx('button', { vary: 0.05 });
 
@@ -3214,9 +3219,11 @@
       // everywhere (see the combat loop), so a drained bar would just race itself back to full
       // over the next few corridor steps anyway - snapping it here skips the pointless crawl and
       // opens every encounter fresh. The lock has to lift with it, or the regen guard stamps the
-      // refill straight back to zero for its two seconds. Matches the level-up refill.
+      // refill straight back to zero for its two seconds. Matches the level-up refill. The
+      // exhaustion look is cleared with it so the bar stops flashing red the same frame it fills.
       combatState.playerStm = combatState.playerMaxStm;
       combatState.exhaustLock = 0;
+      combatState.exhaustion = 0;
       // The boss going down is a story beat the screensaver marquee should reflect even before
       // the player walks the last stretch to the exit - see ssStoryMarqueeText.
       if ((activeMarker && activeMarker.variant === 'boss') ||
@@ -5065,15 +5072,61 @@ void main() {
       }
     }
 
+    // Stamina recovery and the exhaustion look that rides on it. Split out of combatTick() because
+    // it is the one part of the sim that must keep running while the rest is frozen: the win
+    // outro, the level-up box and the ending cutscene all stop the world, and a hero who won the
+    // fight out of breath used to sit behind them with a full bar still flashing its red
+    // "can't swing" warning - the flash keys off exhaustion, which only eased back to zero here.
+    // Nothing can spend stamina while those freezes hold (held keys are released and the guard
+    // drain lives behind battleReady()), so letting it recover under them changes no fight.
+    function tickStamina() {
+      // An overexertion lock outranks everything: while it runs the bar is HELD at zero rather
+      // than left to climb, so the two seconds it costs are two seconds of no swing, no guard
+      // and a staggering strafe no matter what the player does with the keys. It also ticks
+      // down out of battle, so fleeing a fight does not skip the debt - it just spends it
+      // walking the corridor instead.
+      //
+      // Otherwise: only an ACTIVE block suppresses regen. Gating on keysHeld.block alone meant a
+      // block flag that never got cleared left stamina pinned just above zero forever.
+      if (combatState.exhaustLock > 0) {
+        combatState.exhaustLock--;
+        combatState.playerStm = 0;
+      } else if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
+        // 0.45/tick is 27/s - a full base bar in under four seconds. SPEED picks scale it, so
+        // the pick buys swings-per-fight as much as it buys footwork.
+        combatState.playerStm = Math.min(combatState.playerMaxStm,
+          combatState.playerStm + 0.45 * playerSpeedMult());
+      }
+
+      // How wrecked the hero LOOKS. Nothing reads this to decide what they may do - the action
+      // gates are still playerStm against ATTACK_STM_COST / BLOCK_STM_FLOOR in combatTick() - it
+      // only drives the drawing (drawOverTheShoulderPlayer, renderDoomFace, the STM bar).
+      //
+      // It snaps to 0.45 the instant a swing becomes unaffordable rather than easing up from
+      // nothing, because that is the moment the player loses the fight's main verb and the
+      // sprite has to say so; from there it deepens to a fully spent 1.0 as the bar bottoms
+      // out and even the guard drops. Lerped rather than assigned so the pose eases in and out
+      // over ~1/4s instead of popping on the frame stamina crosses the line - regen refills
+      // the last 30 in about a second, and a hard switch flickered.
+      const spentTarget = (combatState.playerStm >= ATTACK_STM_COST || combatState.dead) ? 0
+        : 0.45 + 0.55 * (1 - combatState.playerStm / ATTACK_STM_COST);
+      combatState.exhaustion += (spentTarget - combatState.exhaustion) * 0.12;
+      if (Math.abs(spentTarget - combatState.exhaustion) < 0.004) combatState.exhaustion = spentTarget;
+    }
+
     // One fixed 1/60s step of combat. Pure simulation - no drawing, no DOM.
     function combatTick() {
-      // The level-up box stops the world, not just the input: no stamina regen, no floating
-      // text ageing, no enemy clock. It only ever opens between fights, but a frozen sim means
-      // the dungeon is exactly as it was left when the choice is taken.
+      // The level-up box stops the world, not just the input: no floating text ageing, no enemy
+      // clock. It only ever opens between fights, but a frozen sim means the dungeon is exactly
+      // as it was left when the choice is taken.
       // The ending cutscene stops it the same way, for a different reason: the fight it replaced
       // must not finish itself behind the clip - no XP payout raising the level-up box over it,
       // no hand-back to exploration fading the dungeon's bed in under its soundtrack.
-      if (levelUpOpen || endingOwnsViewport()) return;
+      // Stamina alone keeps recovering under both - see tickStamina().
+      if (levelUpOpen || endingOwnsViewport()) {
+        tickStamina();
+        return;
+      }
 
       if (combatState.inBattle && combatState.introFrame < INTRO_TOTAL) {
         combatState.introFrame++;
@@ -5119,6 +5172,7 @@ void main() {
           const outroLen = combatState.winIsLevelUp
             ? WIN_JOY_HOP_FRAMES
             : WIN_FADE_DELAY + WIN_FADE_FRAMES + WIN_FADE_HOLD;
+          tickStamina();
           updateCombatEffects();
           if (combatState.winTick >= outroLen) finishEncounterVictory();
           return;
@@ -5163,38 +5217,7 @@ void main() {
         }
       }
 
-      // An overexertion lock outranks everything: while it runs the bar is HELD at zero rather
-      // than left to climb, so the two seconds it costs are two seconds of no swing, no guard
-      // and a staggering strafe no matter what the player does with the keys. It also ticks
-      // down out of battle, so fleeing a fight does not skip the debt - it just spends it
-      // walking the corridor instead.
-      //
-      // Otherwise: only an ACTIVE block suppresses regen. Gating on keysHeld.block alone meant a
-      // block flag that never got cleared left stamina pinned just above zero forever.
-      if (combatState.exhaustLock > 0) {
-        combatState.exhaustLock--;
-        combatState.playerStm = 0;
-      } else if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
-        // 0.45/tick is 27/s - a full base bar in under four seconds. SPEED picks scale it, so
-        // the pick buys swings-per-fight as much as it buys footwork.
-        combatState.playerStm = Math.min(combatState.playerMaxStm,
-          combatState.playerStm + 0.45 * playerSpeedMult());
-      }
-
-      // How wrecked the hero LOOKS. Nothing reads this to decide what they may do - the action
-      // gates are still playerStm against ATTACK_STM_COST / BLOCK_STM_FLOOR above - it only
-      // drives the drawing (drawOverTheShoulderPlayer, renderDoomFace, the STM bar).
-      //
-      // It snaps to 0.45 the instant a swing becomes unaffordable rather than easing up from
-      // nothing, because that is the moment the player loses the fight's main verb and the
-      // sprite has to say so; from there it deepens to a fully spent 1.0 as the bar bottoms
-      // out and even the guard drops. Lerped rather than assigned so the pose eases in and out
-      // over ~1/4s instead of popping on the frame stamina crosses the line - regen refills
-      // the last 30 in about a second, and a hard switch flickered.
-      const spentTarget = (combatState.playerStm >= ATTACK_STM_COST || combatState.dead) ? 0
-        : 0.45 + 0.55 * (1 - combatState.playerStm / ATTACK_STM_COST);
-      combatState.exhaustion += (spentTarget - combatState.exhaustion) * 0.12;
-      if (Math.abs(spentTarget - combatState.exhaustion) < 0.004) combatState.exhaustion = spentTarget;
+      tickStamina();
 
       if (combatState.attackFrame > 0) {
         // SPEED picks play the whole swing out faster - wind-up, the blow at ATTACK_HIT_FRAME
@@ -10847,8 +10870,6 @@ void main() {
     // ComfyUI can be started from this page: CREATE, Fill-in and the other rows' movie buttons grey
     // out - the server refuses them too - and come back the moment it is done.
     const ENDING_JOB_POLL_MS = 2000;
-    // What one 512x384 clip took on this machine - see ENDING_PLAN_WEIGHT in server.py.
-    const ENDING_MOVIE_TIME_TEXT = 'about 3½ minutes';
     let endingJobWatchTimer = null;
     let endingJobWatchSeq = 0;
 
@@ -10896,7 +10917,7 @@ void main() {
         : 'No ending movie yet - click to film one';
       return {
         kind: 'film', disabled: false, label: '🎥',
-        title: head + ' (' + ENDING_MOVIE_TIME_TEXT + '). CREATE and Fill-in wait until it is done.'
+        title: head + '. CREATE and Fill-in wait until it is done.'
           + (entry.beaten ? '' : ' Beat this dungeon to watch it.'),
       };
     }

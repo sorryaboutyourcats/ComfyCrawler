@@ -57,6 +57,18 @@ for name in front:
     if secs < 60:
         fail(f"{name}: only {secs:.1f}s long - too short to sit under the victory box")
 
+# ---- variations re-sample a shipped take, so their source has to come first ------
+# --gen-static-audio walks STATIC_MUSIC in order; a variation listed before its source would be
+# re-sampled from the OLD take of a source that is re-rolled a moment later.
+order = list(srv.STATIC_MUSIC)
+for name, (source, denoise) in srv.STATIC_MUSIC_VARIATIONS.items():
+    if name not in front:
+        fail(f"{name} is a variation but not in the victory pool")
+    if source not in order or name not in order or order.index(source) > order.index(name):
+        fail(f"{name}'s source {source!r} is not listed before it in STATIC_MUSIC")
+    if not 0.0 < denoise < 1.0:
+        fail(f"{name}: denoise {denoise} - 1.0 ignores the source entirely, 0 copies it")
+
 # ---- the served whitelist covers them ------------------------------------------
 # do_GET builds its allowed set from STATIC_MUSIC, so this is really a check that nobody has
 # replaced that comprehension with a hardcoded tuple.
@@ -118,9 +130,12 @@ if lo < ideal * 0.6 or hi > ideal * 1.5:
 # The hash is a PROMISE about saved dungeons, so pin a few known answers. If one of these ever
 # changes, every player's forest dungeon has quietly changed its victory song - which is
 # allowed, but only on purpose.
+#
+# ocean and ice cave are the two that did change on purpose: they won to victory_folk and
+# victory_grim until slots 3-5 were swapped for variations of the march and the synthwave track.
 for style, expect in (("forest", "victory"),
-                      ("ocean", "victory_folk"),
-                      ("ice cave", "victory_grim"),
+                      ("ocean", "victory_2"),
+                      ("ice cave", "victory_synth_3"),
                       ("haunted mansion", "victory_fanfare"),
                       ("candy land", "victory_fanfare")):
     if victory_track_for(style) != expect:

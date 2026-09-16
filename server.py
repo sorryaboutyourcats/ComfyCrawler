@@ -7425,22 +7425,30 @@ def _finish_music(src, name):
     return "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), problem
 
 
-def _music_add_branch(payload, name, text, seed, seconds=None):
+def _music_add_branch(payload, name, text, seed, seconds=None, init_audio=None, denoise=1.0):
     """One text -> audio branch on a shared payload; the music twin of _sfx_add_branch.
 
     `seconds` defaults to MUSIC_SECONDS (the per-dungeon tracks); the static menu music asset
-    below passes its own, shorter length instead."""
+    below passes its own, shorter length instead. `init_audio` (a stereo file in
+    COMFY_INPUT_DIR) starts the sampler from that recording instead of from silence, and
+    `denoise` says how much of it to rewrite - the static victory variations use this, and the
+    length then comes from the recording, so `seconds` is ignored."""
     payload[f"{name}_pos"] = {"inputs": {"text": text, "clip": ["music_clip", 0]},
                               "class_type": "CLIPTextEncode"}
     payload[f"{name}_neg"] = {"inputs": {"text": "", "clip": ["music_clip", 0]},
                               "class_type": "CLIPTextEncode"}
-    payload[f"{name}_lat"] = {"inputs": {"seconds": MUSIC_SECONDS if seconds is None else seconds,
-                                         "batch_size": 1},
-                              "class_type": "EmptyLatentAudio"}
+    if init_audio:
+        payload[f"{name}_src"] = {"inputs": {"audio": init_audio}, "class_type": "LoadAudio"}
+        payload[f"{name}_lat"] = {"inputs": {"audio": [f"{name}_src", 0], "vae": ["music_ckpt", 2]},
+                                  "class_type": "VAEEncodeAudio"}
+    else:
+        payload[f"{name}_lat"] = {"inputs": {"seconds": MUSIC_SECONDS if seconds is None else seconds,
+                                             "batch_size": 1},
+                                  "class_type": "EmptyLatentAudio"}
     payload[f"{name}_samp"] = {"inputs": {"seed": seed, "steps": MUSIC_STEPS, "cfg": MUSIC_CFG,
                                           "sampler_name": MUSIC_SAMPLER,
                                           "scheduler": MUSIC_SCHEDULER,
-                                          "denoise": 1.0, "model": ["music_ckpt", 0],
+                                          "denoise": denoise, "model": ["music_ckpt", 0],
                                           "positive": [f"{name}_pos", 0],
                                           "negative": [f"{name}_neg", 0],
                                           "latent_image": [f"{name}_lat", 0]},
@@ -7552,9 +7560,10 @@ STATIC_MUSIC = {
     # the two lists have to be edited together, or a new track either never plays (missing
     # there) or 404s on the loop it asks for (missing here).
     #
-    # Written to differ from EACH OTHER, not to be five shades of the same fanfare - the pool
-    # only earns its download size if a new style reads as a new ending. All ninety seconds,
-    # same as the death loop: a box the player sits on for a while, but not forever.
+    # Three originals and three variations of them (see STATIC_MUSIC_VARIATIONS below). The
+    # folk jig and the grim war drums were cut from the pool; the serene harp piece was retired
+    # too, but its take is kept on disk as sounds/unused_victory_serene_music.wav. All ninety
+    # seconds, same as the death loop: a box the player sits on for a while, but not forever.
     #
     # Under the victory box, behind the 'end' sting that fires with it. Triumphant, but a bed
     # rather than a fanfare - a fanfare would fight the sting and then have nowhere to go on
@@ -7571,33 +7580,29 @@ STATIC_MUSIC = {
         "hall honouring the returning hero, bright ringing horns and timpani and ceremonial "
         "bells over a stately processional, grand and formal, moderate tempo."
     )),
-    # The pool's one non-orchestral voice, and the loudest break from the default - a style
-    # that lands here gets an ending that sounds like a different game.
+    # The pool's non-orchestral voice, and the loudest break from the default - a style that
+    # lands here gets an ending that sounds like a different game.
     "victory_synth": (90.0, (
         "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
         "punchy analog synth arpeggios and a chiptune lead over a crisp drum machine beat, "
         "upbeat and jubilant, fast tempo."
     )),
-    # Celebration on the ground: the village feast rather than the throne room.
-    "victory_folk": (90.0, (
-        "Cheerful medieval tavern celebration music for a retro 1990s dungeon crawler video "
-        "game, a village feast after the monster is slain, lively fiddle and lute and hand "
-        "drum in a dancing jig, warm and rowdy, quick tempo."
+    # The variations. Each prompt is its source's prompt with the lead voice moved, so the
+    # re-sampled half of the take has somewhere of its own to go.
+    "victory_2": (90.0, (
+        "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler video "
+        "game, proud and soaring, a bold french horn melody and swelling strings over a steady "
+        "confident march with rolling timpani, celebratory and full."
     )),
-    # The quiet kind of win. Deliberately NOT triumphant - it has to stay clear of "death",
-    # which is the other slow track, so this one is warm and relieved where that one is cold
-    # and final.
-    "victory_serene": (90.0, (
-        "Calm peaceful fantasy music for the quiet after a hard-won battle in a retro 1990s "
-        "dungeon crawler video game, relieved and reflective, gentle harp and soft sustained "
-        "strings and a distant flute, tender and spacious, slow tempo."
+    "victory_synth_2": (90.0, (
+        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+        "warm analog synth pads and a soaring synth lead melody over a crisp drum machine "
+        "beat, anthemic and jubilant, fast tempo."
     )),
-    # A win that cost something. Still a victory - it resolves and stands up - but scored as
-    # survival rather than joy.
-    "victory_grim": (90.0, (
-        "Dark heroic music for a costly victory in a retro 1990s dungeon crawler video game, "
-        "defiant and battle-worn rather than joyful, heavy pounding war drums and low brass "
-        "over a brooding string ostinato, weighty and resolute, steady marching tempo."
+    "victory_synth_3": (90.0, (
+        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+        "bubbly chiptune arpeggios and a square wave lead over a punchy drum machine beat, "
+        "playful and jubilant, fast tempo."
     )),
     # Under the level-up choice box, which ducks the dungeon bed rather than replacing it and
     # is usually on screen for only a few seconds. Thirty is the shortest loop here on purpose:
@@ -7611,10 +7616,39 @@ STATIC_MUSIC = {
     )),
 }
 
+# name -> (source, denoise) for the STATIC_MUSIC entries that are variations rather than fresh
+# rolls. A fresh roll on the same prompt is a different song that happens to share a
+# description; a variation starts from the source's shipped loop, VAE-encodes it and re-samples
+# only the top `denoise` of the noise schedule, so it keeps the source's key, tempo, instruments
+# and overall shape and rewrites the playing on top. Lower sticks closer to the source.
+# Each source is listed before its variations in STATIC_MUSIC, so --gen-static-audio re-rolls
+# a source first and its variations follow the new take.
+STATIC_MUSIC_VARIATIONS = {
+    "victory_2": ("victory", 0.65),
+    "victory_synth_2": ("victory_synth", 0.65),
+    "victory_synth_3": ("victory_synth", 0.65),
+}
+
 READY_CHIME_PROMPT = (
     "A bright cheerful two-note magical chime bell, one clean isolated cue sound announcing "
     "that something is ready and complete."
 )
+
+
+def _static_music_source(name):
+    """sounds/<name>_music.wav copied into COMFY_INPUT_DIR as stereo, for LoadAudio. Returns the
+    copy's filename. The shipped loops are mono (see _finish_music) and the Stable Audio 3 VAE
+    only encodes two channels, so a mono file fails at VAEEncodeAudio."""
+    with wave.open(os.path.join(PROJECT_DIR, "sounds", f"{name}_music.wav"), "rb") as wf:
+        rate, channels = wf.getframerate(), wf.getnchannels()
+        pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
+    out_name = f"static_{name}_music_stereo.wav"
+    with wave.open(os.path.join(COMFY_INPUT_DIR, out_name), "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes((np.repeat(pcm, 2) if channels == 1 else pcm).tobytes())
+    return out_name
 
 
 def generate_static_music_asset(name):
@@ -7628,7 +7662,16 @@ def generate_static_music_asset(name):
         "music_clip": {"inputs": {"clip_name": MUSIC_CLIP, "type": "stable_audio", "device": "default"},
                        "class_type": "CLIPLoader"},
     }
-    _music_add_branch(payload, name, prompt + _MUSIC_TAIL, seed, seconds=seconds)
+    init_audio, denoise = None, 1.0
+    if name in STATIC_MUSIC_VARIATIONS:
+        source, denoise = STATIC_MUSIC_VARIATIONS[name]
+        try:
+            init_audio = _static_music_source(source)
+        except Exception as e:
+            print(f"[{name} music] no {source} take to vary ({e}) - generate that one first")
+            return False
+    _music_add_branch(payload, name, prompt + _MUSIC_TAIL, seed, seconds=seconds,
+                      init_audio=init_audio, denoise=denoise)
     try:
         paths = _krea2_submit_and_collect(payload, [name], timeout=1800, out_key="audio")
         url, problem = _finish_music(paths[name], name)
