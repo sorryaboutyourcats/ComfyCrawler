@@ -1520,6 +1520,40 @@
     } catch (_) { /* no storage - both stay Off */ }
     paintEndingOptionRows();
 
+    // Ending Video Look: Smooth / Sharp / Pixel - how both movie players blow the small clip up to
+    // fill the screen (see createClipScaler). Sharp is the default. Each player's scaler registers
+    // itself in clipScalers when it is built further down, and takes the current pick then; a
+    // change here reaches every one of them at once, mid-play included.
+    const ENDING_LOOK_KEY = 'comfycrawler.endingVideoLook';
+    const ENDING_LOOKS = ['smooth', 'sharp', 'pixel'];
+    const endingLookRow = document.getElementById('endingLookRow');
+    const clipScalers = [];
+    let endingLook = 'sharp';
+
+    function setEndingLook(look) {
+      endingLook = ENDING_LOOKS.includes(look) ? look : 'sharp';
+      if (endingLookRow) {
+        endingLookRow.querySelectorAll('.ending-look-btn').forEach((btn) => {
+          const picked = btn.dataset.endingLook === endingLook;
+          btn.classList.toggle('is-selected', picked);
+          btn.setAttribute('aria-pressed', picked ? 'true' : 'false');
+        });
+      }
+      clipScalers.forEach((scaler) => scaler.setMode(endingLook));
+    }
+
+    if (endingLookRow) {
+      endingLookRow.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ending-look-btn');
+        if (!btn || btn.disabled) return;
+        setEndingLook(btn.dataset.endingLook);
+        try { localStorage.setItem(ENDING_LOOK_KEY, endingLook); }
+        catch (_) { /* storage disabled or full - the pick just won't stick */ }
+      });
+    }
+    try { setEndingLook(localStorage.getItem(ENDING_LOOK_KEY)); }
+    catch (_) { setEndingLook('sharp'); }
+
     btnSettings.addEventListener('click', () => {
       modalSettings.classList.remove('hidden');
       focusFirstIn(modalSettings, btnSaveSettings);
@@ -3348,6 +3382,428 @@
       });
     }
 
+    // ---- Ending Video Look ---------------------------------------------------------------------
+    // H3 films the clip at 512x384 and the viewport blows it up two to three and a half times. Left
+    // to the <video>, the browser does that with a soft bilinear stretch. Sharp and Pixel lay a
+    // WebGL2 canvas over the video instead and redraw every frame into it at the screen's own device
+    // pixels: Sharp through AMD FSR 1 (EASU's edge-aware upscale, then RCAS sharpening), Pixel as
+    // plain nearest-neighbour. The <video> underneath still plays, owns the sound and is what every
+    // other part of the ending talks to; the canvas only ever shows up once it has drawn a frame of
+    // the clip, so until then - and on Smooth, or with no WebGL2 - the video shows through as it
+    // always did.
+    //
+    // RCAS strength in FSR "stops": 0 is its sharpest, each +1 halves it. 0.2 is FSR's own default.
+    const ENDING_SHARPNESS = 0.2;
+
+    const CLIP_VERTEX_SHADER = `#version 300 es
+layout(location = 0) in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+    // Nearest-neighbour: every screen pixel takes the one clip texel it lands in.
+    const CLIP_PIXEL_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform vec2 uOrigin;    // the picture's bottom-left corner on the canvas, in device pixels
+uniform vec2 uInSize;    // the clip's size
+uniform vec2 uOutSize;   // the picture's size on the canvas
+out vec4 outColor;
+void main() {
+  vec2 p = floor((gl_FragCoord.xy - uOrigin) * (uInSize / uOutSize));
+  outColor = vec4(texelFetch(uSrc, ivec2(clamp(p, vec2(0.0), uInSize - 1.0)), 0).rgb, 1.0);
+}`;
+
+    // FSR 1 EASU and RCAS, ported from AMD's ffx_fsr1.h (FidelityFX Super Resolution 1.0).
+    // Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved. MIT license:
+    // Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+    // and associated documentation files (the "Software"), to deal in the Software without
+    // restriction, including without limitation the rights to use, copy, modify, merge, publish,
+    // distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+    // Software is furnished to do so, subject to the following conditions: The above copyright
+    // notice and this permission notice shall be included in all copies or substantial portions of
+    // the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    // PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+    // LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    // DEALINGS IN THE SOFTWARE.
+    //
+    // Differences from the header: texelFetch with clamped coordinates stands in for textureGather,
+    // the scale constants are worked out in the shader from the two sizes, and every reciprocal that
+    // can meet a zero (flat black, flat white) is guarded - a video's letterbox and fades are exactly
+    // that, and a NaN there would come out as a black speck.
+    const CLIP_EASU_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform vec2 uOrigin;
+uniform vec2 uInSize;
+uniform vec2 uOutSize;
+out vec4 outColor;
+
+vec3 at(vec2 fp, vec2 off) {
+  return texelFetch(uSrc, ivec2(clamp(fp + off, vec2(0.0), uInSize - 1.0)), 0).rgb;
+}
+float luma(vec3 c) { return c.b * 0.5 + (c.r * 0.5 + c.g); }
+
+// One of the four bilinear corners' say in the edge direction and how much of an edge it is.
+//    a
+//  b c d
+//    e
+void easuSet(inout vec2 dir, inout float len, float w,
+             float lA, float lB, float lC, float lD, float lE) {
+  float lenX = max(abs(lD - lC), abs(lC - lB));
+  float dirX = lD - lB;
+  dir.x += dirX * w;
+  lenX = clamp(abs(dirX) / max(lenX, 1e-6), 0.0, 1.0);
+  len += lenX * lenX * w;
+  float lenY = max(abs(lE - lC), abs(lC - lA));
+  float dirY = lE - lA;
+  dir.y += dirY * w;
+  lenY = clamp(abs(dirY) / max(lenY, 1e-6), 0.0, 1.0);
+  len += lenY * lenY * w;
+}
+
+// One tap of the rotated, stretched Lanczos-2 approximation.
+void easuTap(inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len2,
+             float lob, float clp, vec3 c) {
+  vec2 v = vec2(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x) * len2;
+  float d2 = min(dot(v, v), clp);
+  float wB = 0.4 * d2 - 1.0;
+  float wA = lob * d2 - 1.0;
+  wB *= wB;
+  wA *= wA;
+  wB = 1.5625 * wB - 0.5625;
+  float w = wB * wA;
+  aC += c * w;
+  aW += w;
+}
+
+void main() {
+  vec2 pp = (gl_FragCoord.xy - uOrigin) * (uInSize / uOutSize) - 0.5;
+  vec2 fp = floor(pp);
+  pp -= fp;
+  // 12-tap kernel around f.
+  //    b c
+  //  e f g h
+  //  i j k l
+  //    n o
+  vec3 b = at(fp, vec2( 0.0, -1.0));
+  vec3 c = at(fp, vec2( 1.0, -1.0));
+  vec3 e = at(fp, vec2(-1.0,  0.0));
+  vec3 f = at(fp, vec2( 0.0,  0.0));
+  vec3 g = at(fp, vec2( 1.0,  0.0));
+  vec3 h = at(fp, vec2( 2.0,  0.0));
+  vec3 i = at(fp, vec2(-1.0,  1.0));
+  vec3 j = at(fp, vec2( 0.0,  1.0));
+  vec3 k = at(fp, vec2( 1.0,  1.0));
+  vec3 l = at(fp, vec2( 2.0,  1.0));
+  vec3 n = at(fp, vec2( 0.0,  2.0));
+  vec3 o = at(fp, vec2( 1.0,  2.0));
+  float bL = luma(b), cL = luma(c), eL = luma(e), fL = luma(f), gL = luma(g), hL = luma(h);
+  float iL = luma(i), jL = luma(j), kL = luma(k), lL = luma(l), nL = luma(n), oL = luma(o);
+
+  vec2 dir = vec2(0.0);
+  float len = 0.0;
+  easuSet(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);
+  easuSet(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);
+  easuSet(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);
+  easuSet(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);
+
+  vec2 dir2 = dir * dir;
+  float dirR = dir2.x + dir2.y;
+  bool zro = dirR < 1.0 / 32768.0;
+  dirR = zro ? 1.0 : inversesqrt(dirR);
+  dir.x = zro ? 1.0 : dir.x;
+  dir *= dirR;
+  len *= 0.5;
+  len *= len;
+  float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));
+  vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+  float lob = 0.5 + ((0.25 - 0.04) - 0.5) * len;
+  float clp = 1.0 / lob;
+
+  vec3 min4 = min(min(f, g), min(j, k));
+  vec3 max4 = max(max(f, g), max(j, k));
+  vec3 aC = vec3(0.0);
+  float aW = 0.0;
+  easuTap(aC, aW, vec2( 0.0, -1.0) - pp, dir, len2, lob, clp, b);
+  easuTap(aC, aW, vec2( 1.0, -1.0) - pp, dir, len2, lob, clp, c);
+  easuTap(aC, aW, vec2(-1.0,  1.0) - pp, dir, len2, lob, clp, i);
+  easuTap(aC, aW, vec2( 0.0,  1.0) - pp, dir, len2, lob, clp, j);
+  easuTap(aC, aW, vec2( 0.0,  0.0) - pp, dir, len2, lob, clp, f);
+  easuTap(aC, aW, vec2(-1.0,  0.0) - pp, dir, len2, lob, clp, e);
+  easuTap(aC, aW, vec2( 1.0,  1.0) - pp, dir, len2, lob, clp, k);
+  easuTap(aC, aW, vec2( 2.0,  1.0) - pp, dir, len2, lob, clp, l);
+  easuTap(aC, aW, vec2( 2.0,  0.0) - pp, dir, len2, lob, clp, h);
+  easuTap(aC, aW, vec2( 1.0,  0.0) - pp, dir, len2, lob, clp, g);
+  easuTap(aC, aW, vec2( 1.0,  2.0) - pp, dir, len2, lob, clp, o);
+  easuTap(aC, aW, vec2( 0.0,  2.0) - pp, dir, len2, lob, clp, n);
+  // Normalise, then clamp to the four nearest texels so the negative lobes can't ring.
+  outColor = vec4(min(max4, max(min4, aC / aW)), 1.0);
+}`;
+
+    // RCAS with its noise damping on: the clip is a 1 Mbps h264, and sharpening its block noise
+    // at full strength would bring the blocks out along with the detail.
+    const CLIP_RCAS_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;   // EASU's output, exactly uOutSize big
+uniform vec2 uOrigin;
+uniform vec2 uOutSize;
+uniform float uSharp;     // 2^-stops
+out vec4 outColor;
+
+vec3 at(ivec2 p) { return texelFetch(uSrc, clamp(p, ivec2(0), ivec2(uOutSize) - 1), 0).rgb; }
+float luma(vec3 c) { return c.b * 0.5 + (c.r * 0.5 + c.g); }
+
+void main() {
+  //    b
+  //  d e f
+  //    h
+  ivec2 sp = ivec2(gl_FragCoord.xy - uOrigin);
+  vec3 b = at(sp + ivec2( 0, -1));
+  vec3 d = at(sp + ivec2(-1,  0));
+  vec3 e = at(sp);
+  vec3 f = at(sp + ivec2( 1,  0));
+  vec3 h = at(sp + ivec2( 0,  1));
+  float bL = luma(b), dL = luma(d), eL = luma(e), fL = luma(f), hL = luma(h);
+  float nz = 0.25 * (bL + dL + fL + hL) - eL;
+  float range = max(max(max(bL, dL), max(eL, fL)), hL) - min(min(min(bL, dL), min(eL, fL)), hL);
+  nz = clamp(abs(nz) / max(range, 1e-5), 0.0, 1.0);
+  nz = -0.5 * nz + 1.0;
+  vec3 mn4 = min(min(b, d), min(f, h));
+  vec3 mx4 = max(max(b, d), max(f, h));
+  vec3 hitMin = min(mn4, e) / max(4.0 * mx4, vec3(1e-5));
+  vec3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, vec3(-1e-5));
+  vec3 lobeRGB = max(-hitMin, hitMax);
+  float lobe = max(-(0.25 - 1.0 / 16.0), min(max(max(lobeRGB.r, lobeRGB.g), lobeRGB.b), 0.0)) * uSharp;
+  lobe *= nz;
+  outColor = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0);
+}`;
+
+    // Puts one movie player under the Ending Video Look and keeps it there; returns its setMode.
+    // `canvas` is an .ending-scaler sitting straight over `video`.
+    function createClipScaler(video, canvas) {
+      const scaler = { setMode: () => {} };
+      if (!video || !canvas) return scaler;
+
+      let mode = 'smooth';
+      let gl = null;
+      let broken = false;       // no WebGL2, a shader that won't build, or a lost context: Smooth for good
+      let progs = null;         // { pixel, easu, rcas }
+      let srcTex = null;        // the clip's current frame
+      let frameCtx = null;      // 2D copy of that frame, which is what gets uploaded (see draw)
+      let midTex = null;        // EASU's output, read by RCAS
+      let midFbo = null;
+      let midW = 0, midH = 0;
+      let outW = 0, outH = 0;   // the canvas in device pixels; 0 while the layer is display:none
+      let frameCb = 0, rafId = 0;
+
+      const active = () => mode !== 'smooth' && !broken;
+      const show = (on) => canvas.classList.toggle('is-off', !on);
+
+      function build(fsSrc) {
+        const prog = gl.createProgram();
+        [[gl.VERTEX_SHADER, CLIP_VERTEX_SHADER], [gl.FRAGMENT_SHADER, fsSrc]].forEach(([type, src]) => {
+          const sh = gl.createShader(type);
+          gl.shaderSource(sh, src);
+          gl.compileShader(sh);
+          if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+          gl.attachShader(prog, sh);
+        });
+        gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+        const u = {};
+        ['uSrc', 'uOrigin', 'uInSize', 'uOutSize', 'uSharp'].forEach((name) => {
+          u[name] = gl.getUniformLocation(prog, name);
+        });
+        return { prog, u };
+      }
+
+      function makeTexture() {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return tex;
+      }
+
+      // Built the first time a look other than Smooth is picked. False means stay on Smooth.
+      function setup() {
+        if (gl) return true;
+        if (broken) return false;
+        try {
+          gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false });
+          if (!gl) throw new Error('WebGL2 is not available');
+          progs = { pixel: build(CLIP_PIXEL_SHADER), easu: build(CLIP_EASU_SHADER), rcas: build(CLIP_RCAS_SHADER) };
+          // One triangle past the corners covers the whole viewport.
+          gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(0);
+          gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+          frameCtx = document.createElement('canvas').getContext('2d', { alpha: false });
+          if (!frameCtx) throw new Error('no 2D canvas for the frame copy');
+          srcTex = makeTexture();
+          midTex = makeTexture();
+          midFbo = gl.createFramebuffer();
+          // Video rows arrive top first; gl_FragCoord counts from the bottom.
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+          return true;
+        } catch (err) {
+          console.warn('Ending Video Look: falling back to Smooth -', err);
+          gl = null;
+          broken = true;
+          return false;
+        }
+      }
+
+      function drawPass(p, tex, x, y, w, h, inW, inH) {
+        gl.viewport(x, y, w, h);
+        gl.useProgram(p.prog);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.uniform1i(p.u.uSrc, 0);
+        gl.uniform2f(p.u.uOrigin, x, y);
+        gl.uniform2f(p.u.uOutSize, w, h);
+        if (p.u.uInSize) gl.uniform2f(p.u.uInSize, inW, inH);
+        if (p.u.uSharp) gl.uniform1f(p.u.uSharp, Math.pow(2, -ENDING_SHARPNESS));
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+
+      // The video's current frame, in the current look, letterboxed the way object-fit: contain
+      // would. Quietly does nothing until there is a frame and somewhere to put it.
+      function draw() {
+        if (!active() || !gl || gl.isContextLost()) return;
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (video.readyState < 2 || !vw || !vh || outW < 1 || outH < 1) return;
+        try {
+          if (canvas.width !== outW) canvas.width = outW;
+          if (canvas.height !== outH) canvas.height = outH;
+          const s = Math.min(outW / vw, outH / vh);
+          const w = Math.max(1, Math.round(vw * s));
+          const h = Math.max(1, Math.round(vh * s));
+          const x = Math.floor((outW - w) / 2);
+          const y = Math.floor((outH - h) / 2);
+
+          // Through a 2D canvas rather than texImage2D(video) straight: Chrome's direct video upload
+          // gets the clip's last row of chroma wrong - measured on this clip, the bottom row came up
+          // green (71,155,63 where the picture has 127,131,130), flipped or not - and a hard-edged
+          // look puts that row right on screen. The 2D copy converts it the way the <video> does.
+          const frame = frameCtx.canvas;
+          if (frame.width !== vw) frame.width = vw;
+          if (frame.height !== vh) frame.height = vh;
+          frameCtx.drawImage(video, 0, 0, vw, vh);
+          gl.bindTexture(gl.TEXTURE_2D, srcTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+
+          if (mode === 'sharp') {
+            if (midW !== w || midH !== h) {
+              gl.bindTexture(gl.TEXTURE_2D, midTex);
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, midFbo);
+              gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, midTex, 0);
+              midW = w;
+              midH = h;
+            }
+            gl.bindFramebuffer(gl.FRAMEBUFFER, midFbo);
+            drawPass(progs.easu, srcTex, 0, 0, w, h, vw, vh);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, outW, outH);
+            gl.clearColor(0, 0, 0, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            drawPass(progs.rcas, midTex, x, y, w, h, w, h);
+          } else {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, outW, outH);
+            gl.clearColor(0, 0, 0, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            drawPass(progs.pixel, srcTex, x, y, w, h, vw, vh);
+          }
+          show(true);
+        } catch (err) {
+          console.warn('Ending Video Look: falling back to Smooth -', err);
+          broken = true;
+          disarm();
+          show(false);
+        }
+      }
+
+      // One redraw per frame the video actually presents (24 a second, not the display's 60+),
+      // re-armed from inside itself. Browsers without requestVideoFrameCallback poll on animation
+      // frames while the clip plays.
+      function arm() {
+        if (!active()) return;
+        if (typeof video.requestVideoFrameCallback === 'function') {
+          if (!frameCb) {
+            frameCb = video.requestVideoFrameCallback(() => { frameCb = 0; draw(); arm(); });
+          }
+        } else if (!rafId && !video.paused && !video.ended) {
+          rafId = requestAnimationFrame(() => { rafId = 0; draw(); arm(); });
+        }
+      }
+      function disarm() {
+        if (frameCb && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(frameCb);
+        frameCb = 0;
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+
+      scaler.setMode = (look) => {
+        mode = look;
+        if (active() && !setup()) mode = 'smooth';
+        if (active()) {
+          arm();
+          draw();
+        } else {
+          disarm();
+          show(false);
+        }
+      };
+
+      // The canvas is backed at exactly its on-screen size in device pixels, so the page's
+      // `canvas { image-rendering: pixelated }` has nothing left to scale. Shown again after
+      // display:none, it reports its size back and the frame on hold is redrawn at once - a
+      // resize (which wipes a canvas) redraws the same way.
+      const resized = new ResizeObserver((entries) => {
+        const entry = entries[entries.length - 1];
+        const box = entry.devicePixelContentBoxSize && entry.devicePixelContentBoxSize[0];
+        if (box) {
+          outW = box.inlineSize;
+          outH = box.blockSize;
+        } else {
+          const dpr = window.devicePixelRatio || 1;
+          outW = Math.round(entry.contentRect.width * dpr);
+          outH = Math.round(entry.contentRect.height * dpr);
+        }
+        draw();
+      });
+      try { resized.observe(canvas, { box: 'device-pixel-content-box' }); }
+      catch (_) { resized.observe(canvas); }
+
+      // A fresh clip or a fresh play takes a fresh frame callback, rather than trusting one that was
+      // asked for before the clip loaded.
+      const rearm = () => { disarm(); arm(); };
+      video.addEventListener('loadeddata', () => { rearm(); draw(); });
+      video.addEventListener('seeked', draw);
+      video.addEventListener('play', rearm);
+      // The clip was unloaded (a run left, the History player closed). The canvas stands down so
+      // the next clip never opens on this one's last frame; any pending frame callback went with it.
+      video.addEventListener('emptied', () => {
+        disarm();
+        show(false);
+      });
+      canvas.addEventListener('webglcontextlost', () => {
+        broken = true;
+        disarm();
+        show(false);
+      });
+
+      clipScalers.push(scaler);
+      scaler.setMode(endingLook);
+      return scaler;
+    }
+
     let endingRunId = null;       // the History id everything below belongs to
     let endingClipUrl = null;      // blob: URL of that run's clip, once fetched
     let endingStatus = null;       // the last /api/ending_video_status reply for that run
@@ -3681,6 +4137,7 @@
       fadeEndingAudioOut(endingVideoEl, () => {
         if (endingPhase === 'playing') playScreenMusic('victory');
       });
+      createClipScaler(endingVideoEl, document.getElementById('endingCanvas'));
       endingVideoEl.addEventListener('ended', finishEndingPlayback);
       endingVideoEl.addEventListener('error', () => {
         if (endingPhase === 'playing') finishEndingPlayback();
@@ -10518,6 +10975,7 @@
       fadeEndingAudioOut(endingPlayerVideo, () => {
         if (modalEndingPlayer && !modalEndingPlayer.classList.contains('hidden')) duckMusicForMovie(false);
       });
+      createClipScaler(endingPlayerVideo, document.getElementById('endingPlayerCanvas'));
     }
     if (btnEndingPlayerClose) btnEndingPlayerClose.addEventListener('click', closeEndingPlayer);
     if (btnEndingPlayerOk) btnEndingPlayerOk.addEventListener('click', closeEndingPlayer);

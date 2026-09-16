@@ -491,8 +491,9 @@
 
     /* ---- Ending cutscene (Options > Ending Video) ------------------------
        The clip fills the 4:3 viewport over a black ground - contain, not cover, so nothing the
-       camera framed is cropped off - and is never pixelated: it is the one thing in the
-       viewport that was not rendered at 320x240. */
+       camera framed is cropped off. The <video> itself is always the browser's smooth stretch;
+       Options > Ending Video Look can lay a canvas over it that redraws each frame sharpened or
+       as hard pixels instead (createClipScaler in game.js). */
     #endingCutscene {
       background: #000000;
       overflow: hidden;
@@ -503,6 +504,19 @@
       height: 100%;
       object-fit: contain;
       image-rendering: auto;
+    }
+    /* The look canvas, over the <video> and under the flash. Hidden with visibility rather than
+       display, so it keeps its size (the canvas is backed at exactly that many device pixels) -
+       and `.viewport-frame canvas` forces display:block anyway. */
+    .ending-scaler {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .ending-scaler.is-off {
+      visibility: hidden;
     }
     /* The cut into the clip: a white sheet that is fully up on the first frame and burns off,
        the flash an RPG uses to jump from the fight into its cinematic. Re-armed per play by
@@ -666,8 +680,10 @@
     .hist-movie[data-kind="film"]:disabled {
       opacity: 0.22;
     }
-    /* History's ending movie player: the clip at its own 4:3, never pixelated, on black. */
+    /* History's ending movie player: the clip at its own 4:3 on black, drawn in the same
+       Ending Video Look as the cutscene (the .ending-scaler canvas laid over it). */
     #endingPlayerFrame {
+      position: relative;
       background: #000000;
       aspect-ratio: 4 / 3;
       max-height: 68vh;
@@ -1187,6 +1203,27 @@
                 <span class="text-xs">On</span>
               </button>
             </div>
+
+            <!-- How the movie is drawn - the cutscene and History's player alike, so this row is
+                 never greyed out. The clip is filmed small (512x384) and blown up to fill the
+                 viewport; game.js (setEndingLook / createClipScaler) does that blow-up. -->
+            <label class="text-xs font-bold text-slate-800 mt-1" id="endingLookLabel">
+              Ending Video Look:
+            </label>
+            <div id="endingLookRow" class="flex gap-1.5" role="group" aria-labelledby="endingLookLabel">
+              <button type="button" data-ending-look="smooth" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="The browser's own stretch: soft, the way a small video looks blown up to fill the screen.">
+                <span class="text-xs">Smooth</span>
+              </button>
+              <button type="button" data-ending-look="sharp" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="Upscales the movie to your screen's real pixels with an edge-aware filter and sharpens it (AMD FSR 1). Crisper, and still looks like a movie.">
+                <span class="text-xs">Sharp</span>
+              </button>
+              <button type="button" data-ending-look="pixel" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="No smoothing at all: hard square pixels, like the rest of the dungeon.">
+                <span class="text-xs">Pixel</span>
+              </button>
+            </div>
           </div>
 
           <div class="flex flex-col gap-1.5">
@@ -1318,6 +1355,7 @@
         <div class="px-2">
           <div id="endingPlayerFrame" class="win95-inset">
             <video id="endingPlayerVideo" playsinline preload="auto"></video>
+            <canvas id="endingPlayerCanvas" class="ending-scaler is-off"></canvas>
           </div>
         </div>
 
@@ -1514,6 +1552,7 @@
                  driven by game.js - see beginEndingPlayback. -->
             <div id="endingCutscene" class="absolute inset-0 z-20 hidden">
               <video id="endingVideo" playsinline preload="auto"></video>
+              <canvas id="endingCanvas" class="ending-scaler is-off"></canvas>
               <div id="endingFlash"></div>
             </div>
 
