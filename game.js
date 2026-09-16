@@ -844,13 +844,13 @@
     }
 
     // ---- Screen music (static, generated once, NOT per-dungeon) -------------
-    // Nine more fixed loops alongside the menu one, served from sounds/<name>_music.wav -
-    // see STATIC_MUSIC in server.py:
+    // More fixed loops alongside the menu one, served from sounds/<name>_music.wav - see
+    // STATIC_MUSIC in server.py:
     //   loading  picks up exactly where the intro narration puts it down and carries the
     //            loading screen to the ENTER button
     //   death    under the death box
-    //   victory  under the victory box - six of these, one picked per dungeon style; see
-    //            VICTORY_MUSIC_TRACKS below
+    //   victory  under the victory box - a pool of these (currently two, mid-rework), one
+    //            picked per dungeon style; see VICTORY_MUSIC_TRACKS below
     //   levelup  under the level-up choice box. The odd one out: it plays DURING a run rather
     //            than over a box that ends one, so instead of the dungeon's bed being faded
     //            out under it, the bed is ducked on dungeonMusicBus and handed straight back.
@@ -963,13 +963,13 @@
     }
 
     // ---- The victory pool --------------------------------------------------
-    // Winning does not always sound the same. Six victory loops ship (see the victory block
-    // of STATIC_MUSIC in server.py, which this list mirrors IN ORDER - the index below is an
-    // index into both), and which one scores the victory box is decided by the dungeon's own
-    // typed style rather than by chance:
+    // Winning does not always sound the same. Victory loops ship (see the victory block of
+    // STATIC_MUSIC in server.py, which this list mirrors IN ORDER - the index below is an index
+    // into both), and which one scores the victory box is decided by the dungeon's own typed
+    // style rather than by chance:
     //
-    //     "forest"          -> hash -> 0 -> victory           every forest run, forever
-    //     "haunted mansion" -> hash -> 1 -> victory_fanfare   every haunted mansion run, forever
+    //     "forest" -> hash -> 0 -> victory        every forest run, forever
+    //     "ocean"  -> hash -> 1 -> victory_synth  every ocean run, forever
     //
     // So it feels random when you look across styles, and is completely fixed within one: a
     // brand new forest dungeon months later still ends on the song forest ends on. That is
@@ -982,16 +982,15 @@
     // one silently re-assigns every existing style to a different song, so don't, unless that
     // is what you want.
     //
-    // Slots 3-5 used to be a folk jig, a serene harp piece and grim war drums. They were
-    // swapped for variations of the march and the synthwave track IN PLACE, keeping the list
-    // at six, so every style that already won to slots 0-2 still wins to the same song.
+    // Down to two while it's mid-rework - see server.py's STATIC_MUSIC for what has cycled
+    // through the other four slots and why. A batch of six new candidates, all variations of
+    // the two below, is being auditioned outside the game (generate_victory_candidates /
+    // --gen-victory-candidates in server.py, output in the gitignored sounds/victory_candidates/
+    // - not wired in or served); picks from it become slots 2-5 (or replace these two), each
+    // appended rather than inserted so today's forest/ocean assignment below survives.
     const VICTORY_MUSIC_TRACKS = [
-      'victory',           // 0  warm orchestral march - the original, and the empty-style default
-      'victory_fanfare',   // 1  regal ceremonial horns and bells
-      'victory_synth',     // 2  retro synthwave, the one that isn't an orchestra
-      'victory_2',         // 3  variation of 0, french horn lead
-      'victory_synth_2',   // 4  variation of 2, soaring synth lead over pads
-      'victory_synth_3'    // 5  variation of 2, bubbly chiptune lead
+      'victory',          // 0  warm orchestral march - the original, and the empty-style default
+      'victory_synth'     // 1  retro synthwave, the one that isn't an orchestra
     ];
 
     // Everything that should NOT change the song, removed: case, spacing, the quote marks that

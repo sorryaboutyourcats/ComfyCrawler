@@ -1,5 +1,8 @@
-"""The victory song pool: six loops share the victory box, and which one plays is decided by
-the dungeon's typed style rather than by chance.
+"""The victory song pool: loops share the victory box, and which one plays is decided by the
+dungeon's typed style rather than by chance. Down to two tracks while a batch of six candidates
+is auditioned outside the game (see generate_victory_candidates in server.py) - this test does
+not pin the pool at any particular size, just that game.js and server.py agree on whatever it
+currently is.
 
 Two halves. The first guards the one thing that can break SILENTLY - server.py's STATIC_MUSIC
 and game.js's VICTORY_MUSIC_TRACKS are two hand-maintained copies of the same ordered list,
@@ -37,8 +40,9 @@ if front != back:
          f"    game.js  : {front}\n    server.py: {back}\n"
          f"    (order matters - the hash indexes into it)")
 
-if len(front) != 6:
-    fail(f"expected six victory loops, found {len(front)}: {front}")
+if len(front) < 2:
+    fail(f"expected at least two victory loops (one to fall back to, one to prove the hash "
+         f"can pick a different one), found {len(front)}: {front}")
 
 if front and front[0] != "victory":
     fail(f"slot 0 is {front[0]!r}, but victoryTrackFor falls back to slot 0 for an empty "
@@ -128,16 +132,19 @@ if lo < ideal * 0.6 or hi > ideal * 1.5:
     fail(f"the hash is lumpy over {len(words)} words: {counts} (ideal ~{ideal:.0f} each)")
 
 # The hash is a PROMISE about saved dungeons, so pin a few known answers. If one of these ever
-# changes, every player's forest dungeon has quietly changed its victory song - which is
-# allowed, but only on purpose.
+# changes for a reason other than the pool shrinking or growing, some player's dungeon has
+# quietly changed its victory song - which is allowed, but only on purpose.
 #
-# ocean and ice cave are the two that did change on purpose: they won to victory_folk and
-# victory_grim until slots 3-5 were swapped for variations of the march and the synthwave track.
+# With the pool down to two tracks, most styles collapse onto victory_synth - that is expected
+# (2 buckets, not a bug) and will spread back out as slots are added back. forest and
+# windows95 are kept here specifically because they land on the OTHER bucket, so a change to
+# either value still means something even at this pool size.
 for style, expect in (("forest", "victory"),
-                      ("ocean", "victory_2"),
-                      ("ice cave", "victory_synth_3"),
-                      ("haunted mansion", "victory_fanfare"),
-                      ("candy land", "victory_fanfare")):
+                      ("windows 95", "victory"),
+                      ("ocean", "victory_synth"),
+                      ("ice cave", "victory_synth"),
+                      ("haunted mansion", "victory_synth"),
+                      ("candy land", "victory_synth")):
     if victory_track_for(style) != expect:
         fail(f"{style!r} now wins to {victory_track_for(style)!r}, not {expect!r} - every run "
              f"of that style ever played just changed its ending music")

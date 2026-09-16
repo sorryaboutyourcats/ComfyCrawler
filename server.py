@@ -7552,18 +7552,21 @@ STATIC_MUSIC = {
         "sombre and final, very slow tempo."
     )),
     # ---- The victory pool --------------------------------------------------
-    # Six loops share the victory box instead of one. Which of them plays is decided by the
-    # dungeon's own typed style: game.js hashes that string and indexes VICTORY_MUSIC_TRACKS
+    # In flux: down to two tracks while a batch of six candidate variations of THEM is being
+    # auditioned outside the game (see the victory-candidates note below) - more will be added
+    # back as slots once picks are made. When it's settled, which of them plays is decided by
+    # the dungeon's own typed style: game.js hashes that string and indexes VICTORY_MUSIC_TRACKS
     # with it (see victoryTrackFor there), so every "forest" run ever played wins to the same
-    # song and every "ocean" run wins to a different one - random-feeling across styles,
-    # fixed within one. VICTORY_MUSIC_TRACKS is game.js's copy of these keys IN THIS ORDER;
-    # the two lists have to be edited together, or a new track either never plays (missing
-    # there) or 404s on the loop it asks for (missing here).
+    # song and every "ocean" run wins to a different one - random-feeling across styles, fixed
+    # within one. VICTORY_MUSIC_TRACKS is game.js's copy of these keys IN THIS ORDER; the two
+    # lists have to be edited together, or a new track either never plays (missing there) or
+    # 404s on the loop it asks for (missing here).
     #
-    # Three originals and three variations of them (see STATIC_MUSIC_VARIATIONS below). The
-    # folk jig and the grim war drums were cut from the pool; the serene harp piece was retired
-    # too, but its take is kept on disk as sounds/unused_victory_serene_music.wav. All ninety
-    # seconds, same as the death loop: a box the player sits on for a while, but not forever.
+    # Past pool members cut so far: victory_fanfare (regal ceremonial horns), victory_folk
+    # (tavern jig) and victory_grim (war drums) were removed outright; victory_serene (harp)
+    # was kept but retired, on disk as sounds/unused_victory_serene_music.wav. victory_2 /
+    # victory_synth_2 / victory_synth_3 - variations of the two below - were tried and cut too,
+    # in favour of a proper batch of six to choose from instead of shipping the first attempt.
     #
     # Under the victory box, behind the 'end' sting that fires with it. Triumphant, but a bed
     # rather than a fanfare - a fanfare would fight the sting and then have nowhere to go on
@@ -7573,36 +7576,12 @@ STATIC_MUSIC = {
         "game, proud and resolved, bright brass and swelling strings over a steady confident "
         "march, celebratory and full."
     )),
-    # Ceremony rather than celebration - the hero being honoured in a hall afterwards. The
-    # one track allowed to sound like a fanfare, because it is slow enough to be a bed anyway.
-    "victory_fanfare": (90.0, (
-        "Regal ceremonial fanfare music for a retro 1990s dungeon crawler video game, a royal "
-        "hall honouring the returning hero, bright ringing horns and timpani and ceremonial "
-        "bells over a stately processional, grand and formal, moderate tempo."
-    )),
     # The pool's non-orchestral voice, and the loudest break from the default - a style that
     # lands here gets an ending that sounds like a different game.
     "victory_synth": (90.0, (
         "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
         "punchy analog synth arpeggios and a chiptune lead over a crisp drum machine beat, "
         "upbeat and jubilant, fast tempo."
-    )),
-    # The variations. Each prompt is its source's prompt with the lead voice moved, so the
-    # re-sampled half of the take has somewhere of its own to go.
-    "victory_2": (90.0, (
-        "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler video "
-        "game, proud and soaring, a bold french horn melody and swelling strings over a steady "
-        "confident march with rolling timpani, celebratory and full."
-    )),
-    "victory_synth_2": (90.0, (
-        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
-        "warm analog synth pads and a soaring synth lead melody over a crisp drum machine "
-        "beat, anthemic and jubilant, fast tempo."
-    )),
-    "victory_synth_3": (90.0, (
-        "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
-        "bubbly chiptune arpeggios and a square wave lead over a punchy drum machine beat, "
-        "playful and jubilant, fast tempo."
     )),
     # Under the level-up choice box, which ducks the dungeon bed rather than replacing it and
     # is usually on screen for only a few seconds. Thirty is the shortest loop here on purpose:
@@ -7623,11 +7602,14 @@ STATIC_MUSIC = {
 # and overall shape and rewrites the playing on top. Lower sticks closer to the source.
 # Each source is listed before its variations in STATIC_MUSIC, so --gen-static-audio re-rolls
 # a source first and its variations follow the new take.
-STATIC_MUSIC_VARIATIONS = {
-    "victory_2": ("victory", 0.65),
-    "victory_synth_2": ("victory_synth", 0.65),
-    "victory_synth_3": ("victory_synth", 0.65),
-}
+#
+# Empty for now: nothing has been picked from the six-candidate victory batch yet (see
+# generate_victory_candidates / --gen-victory-candidates below, and sounds/victory_candidates/,
+# gitignored - candidates are rendered with this same init_audio/denoise mechanism but aren't
+# wired in as real STATIC_MUSIC entries until chosen). 0.6-0.65 measured well against
+# victory/victory_synth: enough to read as a different take, not so much that it drifts to an
+# unrelated song or - past ~0.75 on the orchestral source - opens up near-silent patches.
+STATIC_MUSIC_VARIATIONS = {}
 
 READY_CHIME_PROMPT = (
     "A bright cheerful two-note magical chime bell, one clean isolated cue sound announcing "
@@ -7687,6 +7669,86 @@ def generate_static_music_asset(name):
         f.write(data)
     print(f"[{name} music] saved {out_path} ({len(data) / 1024:.0f} KB)")
     return True
+
+
+def generate_victory_candidates():
+    """Renders six candidate victory-box variations - three off victory, three off
+    victory_synth - into sounds/victory_candidates/ (gitignored) for auditioning, rather than
+    guessing and shipping the first attempt (see the STATIC_MUSIC_VARIATIONS note above). None
+    of these are wired into STATIC_MUSIC or served by do_GET. Once some are picked, add them to
+    STATIC_MUSIC and STATIC_MUSIC_VARIATIONS under real names, move the file out of this folder,
+    and delete the rest. Safe to re-run for a fresh batch - it always overwrites the same six
+    filenames rather than piling up takes."""
+    candidates = {
+        "a1_horn": ("victory", 0.65, (
+            "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler "
+            "video game, proud and soaring, a bold french horn melody and swelling strings over "
+            "a steady confident march with rolling timpani, celebratory and full."
+        )),
+        "a2_choir": ("victory", 0.65, (
+            "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler "
+            "video game, grand and ceremonial, a rousing choir chorale and ringing brass over a "
+            "steady confident march, ceremonial and full."
+        )),
+        "a3_strings": ("victory", 0.65, (
+            "Warm triumphant heroic fantasy victory music for a retro 1990s dungeon crawler "
+            "video game, bright and energetic, a soaring string melody over a quicker confident "
+            "march with light brass, celebratory and full."
+        )),
+        "b1_pad": ("victory_synth", 0.65, (
+            "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+            "warm analog synth pads and a soaring synth lead melody over a crisp drum machine "
+            "beat, anthemic and jubilant, fast tempo."
+        )),
+        "b2_chiptune": ("victory_synth", 0.65, (
+            "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+            "bubbly chiptune arpeggios and a square wave lead over a punchy drum machine beat, "
+            "playful and jubilant, fast tempo."
+        )),
+        "b3_bass": ("victory_synth", 0.65, (
+            "Bright retro synthwave victory music for a 1990s video game, neon and electronic, "
+            "a driving bass synth lead with sharp vocoder-like stabs over a hard drum machine "
+            "beat, aggressive and jubilant, fast tempo."
+        )),
+    }
+    payload = {
+        "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
+        "music_clip": {"inputs": {"clip_name": MUSIC_CLIP, "type": "stable_audio", "device": "default"},
+                       "class_type": "CLIPLoader"},
+    }
+    sources = {}
+    seed0 = random.randint(1, 2**31 - 1)
+    for i, (name, (source, denoise, prompt)) in enumerate(candidates.items()):
+        if source not in sources:
+            sources[source] = _static_music_source(source)
+        _music_add_branch(payload, name, prompt + _MUSIC_TAIL, seed0 + i,
+                          init_audio=sources[source], denoise=denoise)
+    try:
+        paths = _krea2_submit_and_collect(payload, list(candidates), timeout=1800, out_key="audio")
+    except Exception as e:
+        print(f"[victory candidates] generation failed ({e})")
+        return False
+
+    out_dir = os.path.join(PROJECT_DIR, "sounds", "victory_candidates")
+    os.makedirs(out_dir, exist_ok=True)
+    ok = 0
+    for name, (source, denoise, prompt) in candidates.items():
+        try:
+            url, problem = _finish_music(paths[name], name)
+        except Exception as e:
+            print(f"[victory candidates] {name}: could not process ({e})")
+            continue
+        if problem:
+            print(f"[victory candidates] {name}: {problem} - skipped, re-run to re-roll it")
+            continue
+        data = base64.b64decode(url.split(",", 1)[1])
+        out_path = os.path.join(out_dir, f"{name}_from_{source}.wav")
+        with open(out_path, "wb") as f:
+            f.write(data)
+        print(f"[victory candidates] saved {out_path} ({len(data) / 1024:.0f} KB)")
+        ok += 1
+    print(f"[victory candidates] {ok}/{len(candidates)} ready in {out_dir}")
+    return ok == len(candidates)
 
 
 def generate_ready_chime_asset():
@@ -10124,5 +10186,7 @@ if __name__ == "__main__":
             generate_static_music_asset(key)
     elif "--gen-ready-chime" in sys.argv:
         generate_ready_chime_asset()
+    elif "--gen-victory-candidates" in sys.argv:
+        generate_victory_candidates()
     else:
         run_server()
