@@ -23,7 +23,7 @@ Everything below is generated for each dungeon, from what you typed:
 Then it's a game:
 
 * **Explore** a grid maze in the style of the Windows 95 3D Maze screensaver, with a minimap. Throw switches to open locked gates.
-* **Fight** in real time: dodge left and right, strike, and block, with a stamina bar keeping you honest. Gain XP and level up.
+* **Fight** in real time: dodge left and right, strike, and block (watch your stamina). Gain XP and level.
 * **Beat the boss** and reach the stairs.
 * **Replay** any dungeon from History - the same art and music on a freshly drawn maze.
 
@@ -159,7 +159,7 @@ Every menu and window works from the keyboard too: arrow keys move the cursor, <
 * **Max Frame Rate** - 24 to 240 FPS.
 * **Sound Generation** - music and sound, sound only, or none (fastest).
 * **Ending Video** - film the ending cutscene (off by default; it adds several minutes), and how it's drawn when blown up to fill the screen: Smooth, Sharp or Pixel.
-* **Screensaver Wait** - how long before the Windows 98 starfield takes over.
+* **Screensaver Wait** - how long before the starfield takes over.
 
 Options are saved by ComfyCrawler itself, so they're the same whichever address you play from.
 
