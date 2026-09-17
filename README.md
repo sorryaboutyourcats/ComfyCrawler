@@ -44,7 +44,7 @@ Then it's a game:
 
 ## 🛠️ Requirements
 
-* **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090 (24 GB)**.
+* **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090**.
 * **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** - required. Its SageAttention patch is also used automatically, when installed, to speed up the ending cutscene.
 * **The models below.** ComfyCrawler checks for every file when it starts and on the setup screen, and lists exactly what's missing and which folder it goes in - so you can start with the required ones and add the rest later.
 
