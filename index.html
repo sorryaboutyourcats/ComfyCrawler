@@ -5,7 +5,6 @@
   <title>ComfyCrawler by sorryaboutyourcats</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/favicon.ico" sizes="any">
-  <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * {
       font-family: "Comic Sans MS", "Comic Sans", cursive, sans-serif !important;
@@ -767,6 +766,10 @@
       box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
     }
   </style>
+  <!-- Compiled Tailwind (npm run tw:build / tw:watch). It sits AFTER the page's own <style>
+       because that's where the play CDN injected its sheet, so utilities still win ties the
+       way they always have. -->
+  <link rel="stylesheet" href="/tailwind.css">
 </head>
 <body>
 
@@ -802,6 +805,22 @@
       </div>
 
       <hr class="border-t border-gray-400 border-b border-white my-0.5">
+
+      <!-- ComfyUI preflight notice. Hidden unless /api/preflight finds a problem: ComfyUI not
+           answering, a model file missing, or the KJNodes node missing. game.js fills the list
+           (renderPreflight) and "Check again" asks again once files are added or ComfyUI is
+           started. The server refuses CREATE by itself for anything required - this is the
+           early warning, not the gate. -->
+      <div id="preflightNotice" class="hidden win95-box p-2 bg-yellow-50 border-2 border-yellow-600 text-xs text-slate-900 flex flex-col gap-1.5" role="status" aria-live="polite">
+        <div class="flex items-center justify-between gap-2">
+          <span id="preflightTitle" class="font-bold"></span>
+          <div class="flex gap-1.5 shrink-0">
+            <button id="btnPreflightSettings" class="win95-btn px-2 py-0.5 text-xs text-black hover:bg-slate-300" title="Set ComfyUI's address or folders by hand">⚙️ ComfyUI settings</button>
+            <button id="btnPreflightRecheck" class="win95-btn px-2 py-0.5 text-xs text-black hover:bg-slate-300" title="Ask ComfyUI again">🔄 Check again</button>
+          </div>
+        </div>
+        <ul id="preflightList" class="flex flex-col gap-0.5 break-words"></ul>
+      </div>
 
       <!-- Mad Libs Style Prompt Input -->
       <div class="win95-box p-4 bg-[#faf9f5] border-2 border-slate-400 flex flex-col gap-4">
@@ -1314,6 +1333,41 @@
             <div class="text-[11px] text-blue-900 font-bold" id="screensaverDelayText" hidden>Starts after 1 minute of idling.</div>
             <!-- Hidden for now - may be shown again later. -->
             <div class="text-[10px] text-slate-500 font-bold" hidden>The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
+          </div>
+
+          <!-- ComfyUI Connection: where ComfyCrawler finds ComfyUI. A blank field is found
+               automatically (server.py ensure_comfy asks the running ComfyUI for its address and
+               folders); a value typed here overrides just that one, and is saved by the server in
+               comfy_settings.json rather than in localStorage, because the server is what
+               connects. An environment variable beats both and greys its field out. Nothing is
+               saved until Apply, Enter in a field, or OK - Auto-detect only empties the fields, so
+               a stray press loses nothing. ✕ and ESC leave edits unsaved, like Cancel.
+               game.js: loadComfySettings / applyComfySettings. -->
+          <div id="comfySettingsSection" class="flex flex-col gap-1.5">
+            <label class="text-xs font-bold text-slate-800" id="comfySettingsLabel">
+              ComfyUI Connection:
+            </label>
+            <div id="comfyStatus" class="win95-input text-[11px] leading-snug text-slate-900 flex flex-col gap-0.5 break-words"
+                 role="status" aria-live="polite" aria-labelledby="comfySettingsLabel">Checking ComfyUI...</div>
+            <label class="text-[11px] font-bold text-slate-700 mt-0.5" for="comfyUrlInput">Address</label>
+            <input id="comfyUrlInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
+                   placeholder="Auto-detect">
+            <label class="text-[11px] font-bold text-slate-700" for="comfyInputDirInput">Input folder</label>
+            <input id="comfyInputDirInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
+                   placeholder="Auto-detect">
+            <label class="text-[11px] font-bold text-slate-700" for="comfyOutputDirInput">Output folder</label>
+            <input id="comfyOutputDirInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
+                   placeholder="Auto-detect">
+            <div class="flex justify-end gap-1.5 mt-0.5">
+              <button type="button" id="btnComfyAuto" class="win95-btn px-3 py-1 text-xs text-black hover:bg-slate-300"
+                      title="Empties the fields so ComfyUI is found automatically. Nothing changes until you press Apply.">
+                Auto-detect
+              </button>
+              <button type="button" id="btnComfyApply" class="win95-btn px-3 py-1 text-xs text-black bg-slate-200 hover:bg-slate-300"
+                      title="Save these and check the connection now">
+                Apply
+              </button>
+            </div>
           </div>
 
           <div class="flex justify-end mt-2">

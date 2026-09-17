@@ -1,4 +1,6 @@
-    const SERVER_URL = "http://127.0.0.1:5555";
+    // Empty = the server that served this page, whatever host and port that is (COMFYCRAWLER_PORT
+    // can move it off 5555). Kept as a hook for a page hosted somewhere else to point at one.
+    const SERVER_URL = "";
 
     const appContainer = document.getElementById('appContainer');
     const screenSetup = document.getElementById('screenSetup');
@@ -1729,12 +1731,32 @@
     try { setEndingLook(localStorage.getItem(ENDING_LOOK_KEY)); }
     catch (_) { setEndingLook('sharp'); }
 
-    btnSettings.addEventListener('click', () => {
+    // `focusTarget` is where the cursor starts - OK normally, the ComfyUI address field when the
+    // setup screen's preflight notice opened it. The ComfyUI section reloads on every open, so
+    // edits left unapplied by ✕ / ESC last time never reappear as if they had been saved.
+    function openSettings(focusTarget) {
       modalSettings.classList.remove('hidden');
-      focusFirstIn(modalSettings, btnSaveSettings);
-    });
+      loadComfySettings();
+      focusFirstIn(modalSettings, focusTarget || btnSaveSettings);
+      if (focusTarget && document.activeElement === focusTarget) {
+        focusTarget.scrollIntoView({ block: 'nearest' });
+      }
+    }
+    btnSettings.addEventListener('click', () => openSettings());
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
-    btnSaveSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
+    // OK applies ComfyUI edits that were never applied; if the server refuses them (a malformed
+    // address, or a run in progress) Options stays open on the reason instead of losing them.
+    btnSaveSettings.addEventListener('click', async () => {
+      if (comfyEditsPending()) {
+        const saved = await applyComfySettings();
+        if (saved === false) {
+          const first = Object.values(comfyFields).find((input) => input && !input.disabled);
+          if (first) { first.focus({ preventScroll: true }); first.scrollIntoView({ block: 'nearest' }); }
+          return;
+        }
+      }
+      modalSettings.classList.add('hidden');
+    });
 
     // About box. Same shape as Options: the ✕, OK, ESC and a click on the darkened menu behind
     // it all back out, and the keyboard cursor starts on OK rather than on the title bar's ✕.
@@ -10211,6 +10233,212 @@ void main() {
         : filming ? ENDING_FILMING_LOCK_TITLE : '';
     }
 
+    // ---- ComfyUI preflight notice --------------------------------------------------------
+    // Asks /api/preflight (comfy_preflight in server.py) whether this machine's ComfyUI can make a
+    // dungeon, and lists what it lacks in the notice under the wizard header. Only an early
+    // warning: the server refuses CREATE on its own when anything required is missing, which is
+    // why nothing here touches CREATE's disabled state (setCreateSettling owns that).
+    const preflightNotice = document.getElementById('preflightNotice');
+    const preflightTitle = document.getElementById('preflightTitle');
+    const preflightList = document.getElementById('preflightList');
+    const btnPreflightRecheck = document.getElementById('btnPreflightRecheck');
+    const btnPreflightSettings = document.getElementById('btnPreflightSettings');
+
+    // The missing models and nodes in a preflight report, one {text, needed} per group or node -
+    // `needed` meaning it blocks CREATE. Shared by the setup notice and Options' status box.
+    function preflightItems(report) {
+      const items = [];
+      for (const g of (report && report.groups) || []) {
+        if (!g.missing || !g.missing.length) continue;
+        const files = g.missing.map((m) => `${m.file} → models/${m.folder}/`).join(', ');
+        items.push(g.required ? { text: `${g.label} (needed): ${files}`, needed: true }
+                              : { text: `${g.label} (optional - without it, ${g.fallback}): ${files}`, needed: false });
+      }
+      for (const n of (report && report.nodes) || []) {
+        if (n.required && !n.present) items.push({ text: `The ${n.name} node (needed): install ${n.pack}`, needed: true });
+      }
+      return items;
+    }
+
+    function renderPreflight(report) {
+      if (!preflightNotice || !preflightList || !preflightTitle) return;
+      let lines = [];
+      let title = '';
+      if (report && report.comfy && report.comfy.error) {
+        title = "⛔ ComfyUI isn't ready";
+        lines.push(report.comfy.error);
+      } else if (report) {
+        lines = preflightItems(report).map((item) => item.text);
+        if (lines.length) {
+          title = report.ready ? '⚠️ Some optional ComfyUI models are missing'
+                               : '⛔ ComfyUI is missing files a dungeon needs';
+        }
+      }
+      preflightTitle.textContent = title;
+      preflightList.replaceChildren(...lines.map((text) => {
+        const li = document.createElement('li');
+        li.textContent = text;
+        return li;
+      }));
+      preflightNotice.classList.toggle('hidden', lines.length === 0);
+    }
+
+    // Not disabled while it asks: a disabled button drops the keyboard focus, and Check again is
+    // usually pressed from the keyboard. A second press during a check is simply ignored.
+    let preflightChecking = false;
+    async function checkPreflight() {
+      if (preflightChecking) return;
+      preflightChecking = true;
+      if (btnPreflightRecheck) btnPreflightRecheck.setAttribute('aria-busy', 'true');
+      let report = null;   // stays null if this server itself didn't answer - nothing to list then
+      try {
+        report = await (await fetch(`${SERVER_URL}/api/preflight`, { cache: 'no-store' })).json();
+      } catch (err) { /* keep null */ }
+      preflightChecking = false;
+      if (btnPreflightRecheck) btnPreflightRecheck.removeAttribute('aria-busy');
+      renderPreflight(report);
+    }
+
+    if (btnPreflightRecheck) btnPreflightRecheck.addEventListener('click', checkPreflight);
+    if (btnPreflightSettings) btnPreflightSettings.addEventListener('click', () => openSettings(comfyFields.url));
+
+    // ---- Options > ComfyUI Connection -------------------------------------------------------
+    // Where ComfyCrawler finds ComfyUI (server.py COMFYUI CONNECTION). A blank field is detected
+    // automatically; a typed value overrides just that one and is saved by the server
+    // (comfy_settings.json), since the server is what connects. Apply - or Enter in a field, or
+    // OK with edits still unapplied - saves and re-checks at once, and the answer lands in the
+    // status box and the setup notice alike. ✕ / ESC leave edits unsaved, like Cancel; the next
+    // open reloads what is really saved.
+    const comfyStatus = document.getElementById('comfyStatus');
+    const comfyFields = {
+      url: document.getElementById('comfyUrlInput'),
+      input_dir: document.getElementById('comfyInputDirInput'),
+      output_dir: document.getElementById('comfyOutputDirInput'),
+    };
+    const btnComfyAuto = document.getElementById('btnComfyAuto');
+    const btnComfyApply = document.getElementById('btnComfyApply');
+    let comfySaved = null;     // what the server last said is saved - what "unapplied edits" compare to
+    let comfyRequest = 0;      // a newer load or apply supersedes a reply still on its way
+
+    function setComfyStatus(lines) {
+      if (!comfyStatus) return;
+      comfyStatus.replaceChildren(...lines.map(([text, cls]) => {
+        const div = document.createElement('div');
+        div.textContent = text;
+        if (cls) div.className = cls;
+        return div;
+      }));
+    }
+
+    // The field values when a load or apply started. A reply only refills a field still holding
+    // that value - with ComfyUI down the check can take seconds, and whatever was typed meanwhile
+    // must not be wiped by the answer to an older question.
+    function comfyFieldSnapshot() {
+      return Object.fromEntries(Object.entries(comfyFields).map(([key, input]) => [key, input ? input.value : '']));
+    }
+
+    function renderComfyView(view, before) {
+      const report = view.preflight;
+      const c = report.comfy;
+      comfySaved = { ...view.settings };
+      const from = (key) => {
+        const source = c.sources && c.sources[key];
+        return source === 'env' ? `set by ${view.env_names[key]}` : source === 'options' ? 'set here' : 'found automatically';
+      };
+      for (const [key, input] of Object.entries(comfyFields)) {
+        if (!input) continue;
+        const pinned = !!view.env[key];
+        input.disabled = pinned;
+        if (pinned || !before || input.value === before[key]) input.value = pinned ? '' : (view.settings[key] || '');
+        const found = !c.error && c.sources && c.sources[key] === 'auto' ? c[key] : null;
+        input.placeholder = pinned ? `Set by ${view.env_names[key]}` : found ? `Auto-detect (found ${found})` : 'Auto-detect';
+        input.title = pinned ? `The ${view.env_names[key]} environment variable sets this, and wins over anything typed here.`
+                             : 'Leave blank to find it automatically.';
+      }
+      if (c.error) {
+        setComfyStatus([[`✖ ${c.error}`, 'text-red-800 font-bold']]);
+      } else {
+        const items = preflightItems(report);
+        setComfyStatus([
+          [`✔ ComfyUI ${c.version || ''} at ${c.url} (${from('url')})`, 'font-bold'],
+          [`Input: ${c.input_dir} (${from('input_dir')})`, ''],
+          [`Output: ${c.output_dir} (${from('output_dir')})`, ''],
+          ...(items.length ? items.map((item) => [`• ${item.text}`, item.needed ? 'text-red-800' : ''])
+                           : [['✔ Every model and node a dungeon uses is installed.', '']]),
+        ]);
+      }
+      renderPreflight(report);
+    }
+
+    async function loadComfySettings() {
+      const mine = ++comfyRequest;
+      const before = comfyFieldSnapshot();
+      setComfyStatus([['Checking ComfyUI...', '']]);
+      try {
+        const view = await (await fetch(`${SERVER_URL}/api/comfy_settings`, { cache: 'no-store' })).json();
+        if (mine === comfyRequest) renderComfyView(view, before);
+      } catch (err) {
+        if (mine === comfyRequest) setComfyStatus([["✖ Couldn't reach the ComfyCrawler server.", 'text-red-800 font-bold']]);
+      }
+    }
+
+    function comfyEditsPending() {
+      if (!comfySaved) return false;
+      return Object.entries(comfyFields).some(([key, input]) =>
+        input && !input.disabled && input.value.trim() !== (comfySaved[key] || ''));
+    }
+
+    // Saves the fields and re-checks. Resolves true when saved (even if ComfyUI then can't be
+    // reached - the status box says so), false when the server refused the values, and undefined
+    // when a newer request took over.
+    async function applyComfySettings() {
+      const mine = ++comfyRequest;
+      const before = comfyFieldSnapshot();
+      const payload = {};
+      for (const [key, input] of Object.entries(comfyFields)) {
+        // A field an environment variable pins keeps whatever Options had saved underneath it.
+        payload[key] = input && !input.disabled ? input.value : ((comfySaved && comfySaved[key]) || '');
+      }
+      setComfyStatus([['Saving and checking ComfyUI...', '']]);
+      try {
+        const res = await fetch(`${SERVER_URL}/api/comfy_settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const view = await res.json();
+        if (mine !== comfyRequest) return undefined;
+        if (!res.ok || !view.success) {
+          // The typed values stay in the fields, so they can be corrected.
+          setComfyStatus([[`✖ ${view.error || 'The server refused the change.'}`, 'text-red-800 font-bold']]);
+          return false;
+        }
+        renderComfyView(view, before);
+        return true;
+      } catch (err) {
+        if (mine !== comfyRequest) return undefined;
+        setComfyStatus([["✖ Couldn't reach the ComfyCrawler server.", 'text-red-800 font-bold']]);
+        return false;
+      }
+    }
+
+    for (const input of Object.values(comfyFields)) {
+      if (!input) continue;
+      input.addEventListener('keydown', (e) => {
+        if (e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
+        e.preventDefault();
+        applyComfySettings();
+      });
+    }
+    if (btnComfyApply) btnComfyApply.addEventListener('click', () => { applyComfySettings(); });
+    if (btnComfyAuto) btnComfyAuto.addEventListener('click', () => {
+      for (const input of Object.values(comfyFields)) {
+        if (input && !input.disabled) input.value = '';
+      }
+      setComfyStatus([['Fields emptied - press Apply to find ComfyUI automatically.', 'font-bold']]);
+      if (btnComfyApply) btnComfyApply.focus({ preventScroll: true });
+    });
+
     // Polls one request at a time (not on an interval) so a slow reply can never stack up,
     // and returns as soon as the server is free. Safe to call whenever CREATE might be
     // pressed; a second call while one is already running is a no-op.
@@ -10391,12 +10619,18 @@ void main() {
           })
         });
 
-        // 409 means a previous run is still being cleared (run_is_settling on the server).
-        // Back out to setup rather than sitting on a progress screen nothing will ever feed,
-        // and let the watcher re-enable CREATE once the server is actually free.
+        // 409 means the server refused to start: a previous run is still being cleared
+        // (run_is_settling), an ending movie is filming, or the preflight found ComfyUI can't
+        // make this dungeon. Back out to setup rather than sitting on a progress screen nothing
+        // will ever feed, and let the watcher re-enable CREATE once the server is actually free.
         if (!startRes.ok) {
           let msg = 'The server is still clearing the previous run - try again in a moment.';
-          try { msg = (await startRes.json()).error || msg; } catch (err) { /* not JSON */ }
+          try {
+            const refusal = await startRes.json();
+            msg = refusal.error || msg;
+            // A preflight refusal carries the whole report - bring the setup notice up to date.
+            if (refusal.preflight) renderPreflight(refusal.preflight);
+          } catch (err) { /* not JSON */ }
           stopGenerationTimers();
           generationInFlight = false;
           resetCrawl();
@@ -12377,6 +12611,8 @@ void main() {
     // ...and the reload-in-the-middle-of-a-movie case: an ending movie asked for from History may
     // still be filming, and CREATE / Fill-in have to come up greyed out until it is done.
     watchEndingJob();
+    // ...and whether this machine's ComfyUI can make a dungeon at all (see checkPreflight).
+    checkPreflight();
     buildDefaultTextures();
     generateAuthentic3DMaze(DIFFICULTIES.medium.grids);
     render3D();

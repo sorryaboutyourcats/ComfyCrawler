@@ -9,3 +9,6 @@ piper_voices/
 sounds/victory_candidates/
 recent_cast_names.json
 recent_cast_names.json.tmp
+comfy_settings.json
+comfy_settings.json.tmp
+node_modules/

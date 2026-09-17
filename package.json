@@ -1,0 +1,12 @@
+{
+  "name": "comfycrawler",
+  "private": true,
+  "description": "Build tooling for ComfyCrawler's stylesheet only - the game itself needs no Node. tailwind.css is committed, so this is only for editing the UI.",
+  "scripts": {
+    "tw:build": "tailwindcss -i tailwind.input.css -o tailwind.css --minify",
+    "tw:watch": "tailwindcss -i tailwind.input.css -o tailwind.css --minify --watch=always --poll"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

@@ -15,6 +15,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import errno
 import http.server
 import socketserver
 import urllib.request
@@ -31,10 +32,15 @@ import subprocess
 import uuid
 import wave
 
-PORT = 5555
+PORT = int(os.environ.get("COMFYCRAWLER_PORT") or 5555)
+
+# Where ComfyUI is and the folders it reads from / writes to. None of this is hardcoded to one
+# machine any more: ensure_comfy() (see COMFYUI CONNECTION below) asks the running ComfyUI and
+# fills these in, and every entry point that talks to ComfyUI calls it first. They stay plain
+# module globals because dozens of call sites read them at call time and the tests swap them.
 COMFY_URL = "http://127.0.0.1:8188"
-COMFY_INPUT_DIR = r"C:\Users\sorryaboutyourcats\AppData\Local\Comfy-Desktop\ComfyUI-Shared\input"
-COMFY_OUTPUT_DIR = r"C:\Users\sorryaboutyourcats\AppData\Local\Comfy-Desktop\ComfyUI-Shared\output"
+COMFY_INPUT_DIR = None
+COMFY_OUTPUT_DIR = None
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSIONS_DIR = os.path.join(PROJECT_DIR, "dungeon_sessions")
 
@@ -42,8 +48,214 @@ SESSIONS_DIR = os.path.join(PROJECT_DIR, "dungeon_sessions")
 # no request can name a directory that isn't one of these two. "sessions" is what the trash can
 # in the History window deletes from; "assets" is where ComfyUI drops the raw renders that every
 # bundle is built out of - nothing reads them back once a run is saved, so that folder is also
-# where a cancelled run's leftovers pile up.
-OPENABLE_FOLDERS = {"sessions": SESSIONS_DIR, "assets": COMFY_OUTPUT_DIR}
+# where a cancelled run's leftovers pile up. Each maps to a global's NAME, looked up when the
+# request arrives - COMFY_OUTPUT_DIR is not known until ensure_comfy() has run.
+OPENABLE_FOLDERS = {"sessions": "SESSIONS_DIR", "assets": "COMFY_OUTPUT_DIR"}
+
+# ---------------------------------------------------------------------------
+# COMFYUI CONNECTION
+# ComfyCrawler reads and writes ComfyUI's input/output folders directly (reference pictures go
+# in, renders come back out), so it has to know where they are. Each of the three values - the
+# address, the input folder, the output folder - comes from the first of these that gives one:
+#   1. an environment variable (COMFY_SETTING_ENV) - for a launcher script that pins it;
+#   2. Options > ComfyUI Connection, saved in comfy_settings.json (load_comfy_settings);
+#   3. the running ComfyUI itself: the first of COMFY_URL_CANDIDATES that answers /system_stats,
+#      then the --input-directory / --output-directory it was launched with (ComfyUI Desktop
+#      passes both), else <base>/input and <base>/output, where <base> is --base-directory or the
+#      folder ComfyUI's own custom_nodes sits in - the same way its folder_paths.py derives them.
+COMFY_URL_CANDIDATES = ("http://127.0.0.1:8188", "http://127.0.0.1:8000")
+COMFY_SETTINGS_PATH = os.path.join(PROJECT_DIR, "comfy_settings.json")
+COMFY_SETTING_ENV = {"url": "COMFYUI_URL", "input_dir": "COMFYUI_INPUT_DIR", "output_dir": "COMFYUI_OUTPUT_DIR"}
+_COMFY_RESOLVED = False
+_COMFY_VERSION = None
+# Where each resolved value came from - "env", "options" or "auto" - so Options can say.
+_COMFY_SOURCES = {"url": None, "input_dir": None, "output_dir": None}
+
+
+def normalize_comfy_url(text):
+    """A typed ComfyUI address as http(s)://host:port, or "" for auto-detect. Forgives a missing
+    http:// and a trailing slash; raises ValueError, worded for the player, on anything else."""
+    text = (text or "").strip().strip('"').strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "http://" + text
+    text = text.rstrip("/")
+    bad = ValueError(f'"{text}" isn\'t a ComfyUI address - it should look like http://127.0.0.1:8188')
+    parts = urllib.parse.urlsplit(text)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
+        raise bad
+    try:
+        parts.port            # a non-numeric or out-of-range port raises here
+    except ValueError:
+        raise bad
+    return text
+
+
+def normalize_comfy_dir(text):
+    """A typed folder, minus the quotes Explorer's "Copy as path" wraps it in - "" for auto-detect.
+    Not checked for existence: comfy_preflight reports a folder that isn't there, right in Options."""
+    text = (text or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return os.path.normpath(text) if text else ""
+
+
+def load_comfy_settings():
+    """What Options > ComfyUI Connection saved: {"url", "input_dir", "output_dir"}, "" meaning
+    auto-detect. A missing or unreadable file is all auto-detect, never an error."""
+    settings = {key: "" for key in COMFY_SETTING_ENV}
+    try:
+        with open(COMFY_SETTINGS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for key in settings:
+                if isinstance(data.get(key), str):
+                    settings[key] = data[key]
+    except (OSError, ValueError):
+        pass
+    return settings
+
+
+def save_comfy_settings(url="", input_dir="", output_dir=""):
+    """Normalise and store Options' ComfyUI overrides; returns what was stored. All three blank
+    deletes the file, so auto-detecting everything leaves nothing behind. Raises ValueError for a
+    malformed address, before anything is written."""
+    settings = {"url": normalize_comfy_url(url), "input_dir": normalize_comfy_dir(input_dir),
+                "output_dir": normalize_comfy_dir(output_dir)}
+    if not any(settings.values()):
+        try:
+            os.remove(COMFY_SETTINGS_PATH)
+        except FileNotFoundError:
+            pass
+        return settings
+    tmp = COMFY_SETTINGS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    os.replace(tmp, COMFY_SETTINGS_PATH)
+    return settings
+
+
+def _comfy_setting(key, saved):
+    """(value, source) for one setting fixed by the environment or by Options; ("", "auto") when
+    neither fixes it and it has to be detected."""
+    env = (os.environ.get(COMFY_SETTING_ENV[key]) or "").strip()
+    if env:
+        return env, "env"
+    if saved.get(key):
+        return saved[key], "options"
+    return "", "auto"
+
+
+class ComfyUnavailable(Exception):
+    """ComfyUI couldn't be reached, or its folders couldn't be found. The message is written for
+    the player, so handlers send it back as-is. `reachable` says whether ComfyUI answered at all."""
+    def __init__(self, message, reachable=False):
+        super().__init__(message)
+        self.reachable = reachable
+
+
+def _comfy_get_json(path, timeout=5, base=None):
+    """GET <base or COMFY_URL><path> and parse the JSON; raises on any failure. The one door the
+    connection and preflight code go through, so the tests can stand a fake ComfyUI behind it."""
+    with urllib.request.urlopen(f"{base or COMFY_URL}{path}", timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _argv_value(argv, flag):
+    """The value given for `flag` in a ComfyUI launch argv, as --flag value or --flag=value."""
+    for i, arg in enumerate(argv):
+        if arg == flag and i + 1 < len(argv):
+            return argv[i + 1]
+        if isinstance(arg, str) and arg.startswith(flag + "="):
+            return arg[len(flag) + 1:]
+    return None
+
+
+def _detect_comfy_dirs(argv, base_url, input_dir="", output_dir=""):
+    """(input_dir, output_dir) for the ComfyUI answering at base_url, launched with argv. A folder
+    passed in (fixed by the environment or Options) is kept; either can come back None when nothing
+    says where it is."""
+    input_dir = input_dir or _argv_value(argv, "--input-directory")
+    output_dir = output_dir or _argv_value(argv, "--output-directory")
+    if not (input_dir and output_dir):
+        base = _argv_value(argv, "--base-directory")
+        if not base:
+            try:
+                nodes = _comfy_get_json("/internal/folder_paths", base=base_url).get("custom_nodes") or []
+                base = os.path.dirname(nodes[0]) if nodes else None
+            except Exception:
+                base = None
+        if base:
+            input_dir = input_dir or os.path.join(base, "input")
+            output_dir = output_dir or os.path.join(base, "output")
+    return input_dir, output_dir
+
+
+def ensure_comfy(refresh=False):
+    """Fill in COMFY_URL / COMFY_INPUT_DIR / COMFY_OUTPUT_DIR (see COMFYUI CONNECTION). Cached
+    once it works; `refresh` asks again anyway - the preflight does on every page load, CREATE and
+    Options change, so a ComfyUI restarted elsewhere is noticed. Raises ComfyUnavailable. Like
+    _sage_attention_available, a failure is never cached: ComfyUI is often started after this
+    server, so the next call just retries. A refresh that fails also forgets the last good answer,
+    so whatever Options was just set to is what every later call is held to."""
+    global _COMFY_RESOLVED
+    if _COMFY_RESOLVED and not refresh:
+        return
+    try:
+        _resolve_comfy()
+    except ComfyUnavailable:
+        _COMFY_RESOLVED = False
+        raise
+
+
+def _resolve_comfy():
+    global COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR, _COMFY_RESOLVED, _COMFY_VERSION
+    saved = load_comfy_settings()
+    fixed_url, url_source = _comfy_setting("url", saved)
+    fixed_url = fixed_url.rstrip("/")
+    stats, url = None, None
+    for candidate in ((fixed_url,) if fixed_url else COMFY_URL_CANDIDATES):
+        try:
+            stats = _comfy_get_json("/system_stats", timeout=3, base=candidate)
+            url = candidate
+            break
+        except Exception:
+            continue
+    if stats is None:
+        if url_source == "env":
+            raise ComfyUnavailable(f"Couldn't reach ComfyUI at {fixed_url} (set by the COMFYUI_URL "
+                                   "environment variable) - is it running?")
+        if url_source == "options":
+            raise ComfyUnavailable(f"Couldn't reach ComfyUI at {fixed_url}, the address set in Options - "
+                                   "is it running, and is that where it is?")
+        raise ComfyUnavailable("Couldn't reach ComfyUI at %s - is it running? If it uses a different "
+                               "address, set it in Options > ComfyUI Connection."
+                               % " or ".join(COMFY_URL_CANDIDATES))
+    system = stats.get("system") or {}
+    fixed_in, in_source = _comfy_setting("input_dir", saved)
+    fixed_out, out_source = _comfy_setting("output_dir", saved)
+    input_dir, output_dir = _detect_comfy_dirs(system.get("argv") or [], url, fixed_in, fixed_out)
+    lost = [d or "(unknown)" for d in (input_dir, output_dir) if not d or not os.path.isdir(d)]
+    if lost:
+        raise ComfyUnavailable(
+            "ComfyUI answered at %s, but its folders aren't on this computer: %s. ComfyCrawler "
+            "reads and writes them directly, so ComfyUI has to run on this computer - or set the "
+            "right folders in Options > ComfyUI Connection." % (url, ", ".join(lost)), reachable=True)
+    if not _COMFY_RESOLVED or (url, input_dir, output_dir) != (COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR):
+        print(f"[comfy] ComfyUI {system.get('comfyui_version') or '?'} at {url} ({url_source}) - "
+              f"input {input_dir} ({in_source}), output {output_dir} ({out_source})")
+    COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR = url, input_dir, output_dir
+    _COMFY_VERSION = system.get("comfyui_version")
+    _COMFY_SOURCES.update(url=url_source, input_dir=in_source, output_dir=out_source)
+    _COMFY_RESOLVED = True
+
+
+# The all-in-one FLUX.1 [schnell] checkpoint behind the wall / floor / ceiling / door / lantern /
+# switch surfaces, and the BiRefNet model every cutout goes through. Named once here so the
+# preflight's list (COMFY_MODEL_GROUPS) can't drift from what the graphs actually load.
+FLUX_SCHNELL_CKPT = "flux1-schnell-fp8.safetensors"
+BIREFNET_MODEL = "birefnet.safetensors"
 
 # v5 "krea2 turbo" engine. A single Qwen-arch diffusion model (no ControlNet / no
 # IPAdapter available for it), so v5 generates ONE clean image per asset instead
@@ -95,7 +307,6 @@ def _gfx_profile(quality):
     return GFX_QUALITY_PROFILES.get(quality, GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT])
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
-os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # File logging. Until this, server.py only ever wrote to its console - so when the
@@ -511,11 +722,13 @@ class ProgressTracker:
             print("[progress] websocket-client not installed - the bar will advance per "
                   "job instead of per step (pip install -r requirements.txt)")
             return
-        url = "%s/ws?clientId=%s" % (COMFY_URL.replace("https://", "wss://").replace("http://", "ws://"),
-                                     COMFY_CLIENT_ID)
         announced = False
         while True:
             ws = None
+            # Rebuilt on every attempt: COMFY_URL is only a guess until ensure_comfy() has asked
+            # the running ComfyUI, which may turn out to be on another port.
+            url = "%s/ws?clientId=%s" % (COMFY_URL.replace("https://", "wss://").replace("http://", "ws://"),
+                                         COMFY_CLIENT_ID)
             try:
                 ws = websocket.create_connection(url, timeout=10)
                 ws.settimeout(None)
@@ -772,7 +985,7 @@ def _reroll_flat_wall(wall_style, tile_px):
     try:
         prefix = f"trio_wr_{int(time.time()*1000)}"
         payload = {
-            "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+            "1": {"inputs": {"ckpt_name": FLUX_SCHNELL_CKPT}, "class_type": "CheckpointLoaderSimple"},
             "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
             "lat": {"inputs": {"width": tile_px, "height": tile_px, "batch_size": 1}, "class_type": "EmptyLatentImage"},
             "pos": {"inputs": {"text": _WALLPAPER_RESCUE.format(wall_style), "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
@@ -866,7 +1079,7 @@ def _reroll_grey_door(door_line, wall_line, tile_px, wall_named=None):
                                      wall=_theme_inline(wall_line),
                                      sign=_door_sign(wall_named))
         payload = {
-            "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+            "1": {"inputs": {"ckpt_name": FLUX_SCHNELL_CKPT}, "class_type": "CheckpointLoaderSimple"},
             "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
             "lat": {"inputs": {"width": tile_px, "height": tile_px, "batch_size": 1}, "class_type": "EmptyLatentImage"},
             "pos": {"inputs": {"text": prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
@@ -1387,7 +1600,7 @@ def generate_enemy_sprites(enemy_style):
         "lora": {"inputs": {"model": ["ckpt", 0], "clip": ["ckpt", 1], "lora_name": "sdxl_lightning_8step_lora.safetensors", "strength_model": 1.0, "strength_clip": 1.0}, "class_type": "LoraLoader"},
         "neg": {"inputs": {"text": negative, "clip": ["lora", 1]}, "class_type": "CLIPTextEncode"},
         "ipa_loader": {"inputs": {"model": ["lora", 0], "preset": "PLUS (high strength)"}, "class_type": "IPAdapterUnifiedLoader"},
-        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        "bg_model": {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"},
         "cn_loader": {"inputs": {"control_net_name": "SDXL\\OpenPoseXL2.safetensors"}, "class_type": "ControlNetLoader"},
 
         "ref_lat": {"inputs": {"width": 768, "height": 768, "batch_size": 1}, "class_type": "EmptyLatentImage"},
@@ -1482,7 +1695,7 @@ def generate_player_sprite_ipadapter(player_style, weapon_style=None):
         "ref_crop": {"inputs": {"image": ["ref_dec", 0], "width": 768, "height": 400, "x": 0, "y": 0}, "class_type": "ImageCrop"},
         "ref_save": {"inputs": {"filename_prefix": prefix_ref, "images": ["ref_dec", 0]}, "class_type": "SaveImage"},
 
-        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        "bg_model": {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"},
         "cn_loader": {"inputs": {"control_net_name": "SDXL\\OpenPoseXL2.safetensors"}, "class_type": "ControlNetLoader"},
     }
 
@@ -2766,7 +2979,7 @@ def generate_flux_all_assets(wall_style, player_style=None, player_image_b64=Non
     print(f"[FLUX Dungeon, Player & Portrait Prompts]\n Wall: {wall_p}\n Portrait: {portrait_prompt}\n Player: {player_prompt}")
 
     prompt_payload = {
-        "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+        "1": {"inputs": {"ckpt_name": FLUX_SCHNELL_CKPT}, "class_type": "CheckpointLoaderSimple"},
         "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
         
         # Wall
@@ -4872,7 +5085,7 @@ def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False,
         "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
         "clip": {"inputs": {"clip_name1": FLUX_T5, "clip_name2": FLUX_CLIP_L, "type": "flux"}, "class_type": "DualCLIPLoader"},
         "vae":  {"inputs": {"vae_name": FLUX_AE}, "class_type": "VAELoader"},
-        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        "bg_model": {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"},
         "load":  {"inputs": {"image": idle_in}, "class_type": "LoadImage"},
         "enc":   {"inputs": {"pixels": ["load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"},
     }
@@ -4999,7 +5212,7 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
         }
 
     payload = {
-        "1": {"inputs": {"ckpt_name": "flux1-schnell-fp8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+        "1": {"inputs": {"ckpt_name": FLUX_SCHNELL_CKPT}, "class_type": "CheckpointLoaderSimple"},
         "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
     }
     payload.update(_surface("w", wall_p))
@@ -5011,7 +5224,7 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
     payload.update(_surface("d", door_p))
 
     # BiRefNet loader - shared by the lantern and the switch cutouts below.
-    payload["bg_model"] = {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"}
+    payload["bg_model"] = {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"}
 
     # Switch is an isolated object (a wall lever), matted onto the wall on the client the same
     # way the lantern is - so it gets its own square canvas + BiRefNet cutout. ONE render, of
@@ -5124,7 +5337,7 @@ def _krea2_loaders():
         "k_unet": {"inputs": {"unet_name": KREA2_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
         "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"}, "class_type": "CLIPLoader"},
         "k_vae": {"inputs": {"vae_name": KREA2_VAE}, "class_type": "VAELoader"},
-        "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+        "bg_model": {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"},
     }
 
 
@@ -8141,7 +8354,7 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
             "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
             "clip": {"inputs": {"clip_name1": FLUX_T5, "clip_name2": FLUX_CLIP_L, "type": "flux"}, "class_type": "DualCLIPLoader"},
             "vae":  {"inputs": {"vae_name": FLUX_AE}, "class_type": "VAELoader"},
-            "bg_model": {"inputs": {"bg_removal_name": "birefnet.safetensors"}, "class_type": "LoadBackgroundRemovalModel"},
+            "bg_model": {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"},
         }
         src = Image.open(walker_path).convert("RGBA")
         for v in wanted:
@@ -9523,6 +9736,12 @@ def start_ending_video_job(session_id, from_run=False, manual=False):
         return {"state": "busy", "percent": 0, "error": None}
     if ending_video_manual_rendering():
         return {"state": "busy", "percent": 0, "error": None}
+    # Only now, past every answer that needs no ComfyUI (a clip already filmed, a busy card): a
+    # History movie button can be the first thing that talks to ComfyUI after a restart.
+    try:
+        ensure_comfy()
+    except ComfyUnavailable as e:
+        return {"state": "failed", "percent": 0, "error": str(e)}
     cancel_ending_video_job(f"replaced by {session_id}")
     job = {"session": session_id, "state": "queued", "percent": 0, "error": None,
            "prompt_id": None, "cancelled": False, "manual": bool(manual)}
@@ -9632,6 +9851,139 @@ def _ending_job_progress(data):
     return True
 
 
+# ---------------------------------------------------------------------------
+# PREFLIGHT
+# What a v6 run needs from this machine's ComfyUI, grouped by what the player loses without it.
+# The folders are the ones ComfyUI checks each loader's filename against when a graph is queued
+# (GET /models/<folder> is that same list), so "present" here means "will pass validation".
+# A required group has no fallback - the sprites, the surfaces and the Kontext portrait job all
+# fail the run outright - so CREATE is refused up front instead of dying minutes in on a bare
+# "HTTP Error 400: Bad Request". Optional groups already degrade on their own (generate_sfx_pack
+# and generate_music_pack never raise; a failed ending never fails the run).
+COMFY_MODEL_GROUPS = [
+    {"label": "Dungeon art & story", "required": True, "fallback": None,
+     "files": [("diffusion_models", KREA2_UNET), ("text_encoders", KREA2_CLIP), ("vae", KREA2_VAE),
+               ("checkpoints", FLUX_SCHNELL_CKPT), ("background_removal", BIREFNET_MODEL)]},
+    {"label": "HUD portraits", "required": True, "fallback": None,
+     "files": [("diffusion_models", KONTEXT_UNET), ("text_encoders", FLUX_T5),
+               ("text_encoders", FLUX_CLIP_L), ("vae", FLUX_AE)]},
+    {"label": "Sound effects", "required": False, "fallback": "procedural sound effects play instead",
+     "files": [("checkpoints", SFX_CKPT), ("text_encoders", SFX_CLIP)]},
+    {"label": "Music", "required": False, "fallback": "dungeons have no music",
+     "files": [("checkpoints", MUSIC_CKPT), ("text_encoders", SFX_CLIP)]},
+    {"label": "Ending video", "required": False, "fallback": "no ending movie can be filmed",
+     "files": [("diffusion_models", ENDING_UNET), ("text_encoders", ENDING_CLIP),
+               ("vae", ENDING_VIDEO_VAE), ("vae", ENDING_AUDIO_VAE)]},
+]
+# Custom nodes the graphs name. SaveImageWithAlpha writes every cutout; the sage attention patch
+# only speeds the ending video up and is wired in only when present (_sage_attention_available).
+COMFY_NODES = [
+    {"name": "SaveImageWithAlpha", "pack": "ComfyUI-KJNodes", "required": True},
+    {"name": "PathchSageAttentionKJ", "pack": "ComfyUI-KJNodes", "required": False},
+]
+
+
+def comfy_preflight():
+    """Everything this machine's ComfyUI can and can't do for a v6 run. Always asks live - a model
+    downloaded a minute ago counts - and never raises. `ready` means a dungeon can be created:
+    ComfyUI answers, its folders are here, and nothing required is missing."""
+    report = {"ready": False,
+              "comfy": {"reachable": False, "url": COMFY_URL, "version": None,
+                        "input_dir": None, "output_dir": None, "sources": None, "error": None},
+              "groups": [], "nodes": []}
+    try:
+        ensure_comfy(refresh=True)
+    except ComfyUnavailable as e:
+        report["comfy"].update(reachable=e.reachable, error=str(e))
+        return report
+    report["comfy"].update(reachable=True, url=COMFY_URL, version=_COMFY_VERSION,
+                           input_dir=COMFY_INPUT_DIR, output_dir=COMFY_OUTPUT_DIR,
+                           sources=dict(_COMFY_SOURCES))
+
+    listed = {}
+    for group in COMFY_MODEL_GROUPS:
+        for folder, _ in group["files"]:
+            if folder not in listed:
+                try:
+                    listed[folder] = set(_comfy_get_json(f"/models/{folder}"))
+                except Exception:
+                    listed[folder] = set()     # an older ComfyUI without that folder has none of it
+        report["groups"].append({
+            "label": group["label"], "required": group["required"], "fallback": group["fallback"],
+            "missing": [{"folder": folder, "file": name} for folder, name in group["files"]
+                        if name not in listed[folder]]})
+
+    for node in COMFY_NODES:
+        try:
+            present = node["name"] in _comfy_get_json(f"/object_info/{node['name']}")
+        except Exception:
+            present = False
+        report["nodes"].append(dict(node, present=present))
+
+    report["ready"] = (not any(g["required"] and g["missing"] for g in report["groups"])
+                       and all(n["present"] for n in report["nodes"] if n["required"]))
+    return report
+
+
+def comfy_settings_view():
+    """Everything Options > ComfyUI Connection shows: what it saved, which fields an environment
+    variable pins (those are greyed out there - the variable wins), and a fresh preflight with the
+    values actually in use and where each came from."""
+    return {"settings": load_comfy_settings(),
+            "env": {key: bool((os.environ.get(name) or "").strip()) for key, name in COMFY_SETTING_ENV.items()},
+            "env_names": dict(COMFY_SETTING_ENV),
+            "candidates": list(COMFY_URL_CANDIDATES),
+            "preflight": comfy_preflight()}
+
+
+def comfy_busy_reason():
+    """Why ComfyUI's connection can't be changed right now, or None. A run or an ending movie in
+    flight keeps talking to the ComfyUI it started on - moving the globals under it would send its
+    later prompts somewhere else, or read its renders out of the wrong folder."""
+    if gen_progress.get("is_generating") or run_is_settling():
+        return "A dungeon is being made - change ComfyUI's connection once it's done."
+    if ending_video_rendering():
+        return "An ending movie is being filmed - change ComfyUI's connection once it's done."
+    return None
+
+
+def preflight_problems(report):
+    """What stops a dungeon being created, as plain lines for the player - [] when ready."""
+    if report["comfy"]["error"]:
+        return [report["comfy"]["error"]]
+    lines = [f"{m['file']}  ->  ComfyUI models/{m['folder']}/  ({g['label']})"
+             for g in report["groups"] if g["required"] for m in g["missing"]]
+    lines += [f"the {n['name']} node  ->  install {n['pack']}"
+              for n in report["nodes"] if n["required"] and not n["present"]]
+    return lines
+
+
+def print_preflight():
+    """The startup checklist in the console (and server.log)."""
+    r = comfy_preflight()
+    c = r["comfy"]
+    if c["error"]:
+        print(f"[preflight] {c['error']}")
+        return
+    print(f"[preflight] ComfyUI {c['version'] or '?'} at {c['url']}")
+    for g in r["groups"]:
+        if not g["missing"]:
+            status = "ok"
+        elif g["required"]:
+            status = "MISSING - dungeons can't be created until these are added"
+        else:
+            status = f"missing - {g['fallback']}"
+        print(f"[preflight]   {g['label']}: {status}")
+        for m in g["missing"]:
+            print(f"[preflight]     {m['file']}  ->  models/{m['folder']}/")
+    for n in r["nodes"]:
+        if not n["present"]:
+            print(f"[preflight]   {n['name']} node ({n['pack']}): "
+                  + ("MISSING - dungeons can't be created" if n["required"] else "not installed (optional)"))
+    print("[preflight] ready - dungeons can be created" if r["ready"]
+          else "[preflight] NOT ready - see above")
+
+
 class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/progress":
@@ -9644,6 +9996,32 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             # on a page that reloaded out of a cancel. See run_is_settling.
             self.wfile.write(json.dumps(dict(gen_progress, settling=run_is_settling()),
                                         ensure_ascii=True).encode("utf-8"))
+            return
+
+        # The setup screen's notice: whether ComfyUI answers and which model files it lacks.
+        # See comfy_preflight - asked on load and by the notice's Check again button.
+        elif self.path == "/api/preflight":
+            payload = json.dumps(comfy_preflight(), ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # Options > ComfyUI Connection, when it opens: saved overrides, env-pinned fields and a
+        # fresh preflight. See comfy_settings_view; the POST of the same path saves.
+        elif self.path == "/api/comfy_settings":
+            payload = json.dumps(comfy_settings_view(), ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
             return
 
         # The History window's listing: meta records only (a name, a date, a 96px thumb),
@@ -9761,6 +10139,21 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
+        # The page's Tailwind utilities, compiled from index.html + game.js (npm run tw:build, or
+        # tw:watch while editing the UI). Committed, so playing needs no Node. No Cache-Control,
+        # same as game.js, so a refresh picks up a rebuild.
+        elif self.path == "/tailwind.css":
+            css_file = os.path.join(PROJECT_DIR, "tailwind.css")
+            if os.path.exists(css_file):
+                with open(css_file, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
         # The tab icon: a cat in CC shades (the lenses are ComfyCrawler's two Cs), drawn
         # as 16x16 pixel art - see the grid in the comment at the top of favicon.svg. The
         # .ico is the same art at 16/32/48 for the bare /favicon.ico a browser asks for on
@@ -9848,6 +10241,33 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                      "error": "An ending movie is being filmed - try again once it is done."},
                     ensure_ascii=True).encode("utf-8"))
                 print("[generate_dungeon] refused - an ending movie from History is filming")
+                return
+            # And the one that saves the most time: a run that can't finish (ComfyUI down, or a
+            # required model or node missing) is refused here with the exact files to add,
+            # instead of failing minutes in on ComfyUI's bare 400. See comfy_preflight.
+            preflight = comfy_preflight()
+            if not preflight["ready"]:
+                try:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    if length:
+                        self.rfile.read(length)
+                except Exception:
+                    pass
+                problems = preflight_problems(preflight)
+                if preflight["comfy"]["error"]:
+                    message = problems[0]
+                else:
+                    message = ("ComfyUI is missing what a dungeon needs:\n\n"
+                               + "\n".join("- " + p for p in problems)
+                               + "\n\nAdd them, then press CREATE again.")
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(
+                    {"success": False, "preflight": preflight, "error": message},
+                    ensure_ascii=True).encode("utf-8"))
+                print("[generate_dungeon] refused - preflight: " + "; ".join(problems))
                 return
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
@@ -9971,8 +10391,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     # Same rule as a new dungeon: a background ending still filming for a run
                     # the player has left would hold this call - and this whole server - behind
                     # minutes of video. It gives way.
+                    ensure_comfy()
                     cancel_ending_video_job("the Fill-in button needs ComfyUI")
                     reply = {"success": True, "fields": generate_fill_in(fields)}
+            except ComfyUnavailable as e:
+                status, reply = 502, {"success": False, "error": str(e)}
             except urllib.error.URLError as e:
                 status, reply = 502, {"success": False, "error": "Couldn't reach ComfyUI - is it running?"}
             except Exception as e:
@@ -10093,6 +10516,32 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
 
+        elif self.path == "/api/comfy_settings":
+            # Options > ComfyUI Connection's Apply (and OK with unapplied edits). Body is
+            # {url, input_dir, output_dir}, "" meaning auto-detect. Saved, then re-checked at
+            # once, so the reply's preflight says whether the new values actually work.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                busy = comfy_busy_reason()
+                if busy:
+                    body, code = {"success": False, "busy": True, "error": busy}, 409
+                else:
+                    save_comfy_settings(str(data.get("url") or ""), str(data.get("input_dir") or ""),
+                                        str(data.get("output_dir") or ""))
+                    body, code = dict(comfy_settings_view(), success=True), 200
+            except ValueError as e:        # a malformed address (json errors are ValueErrors too)
+                body, code = {"success": False, "error": str(e)}, 400
+            except Exception as e:
+                print(f"[comfy] saving settings failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
         elif self.path == "/api/open_folder":
             # The two folder buttons in the History window. The page cannot open a local folder
             # itself, so the server does it with ShellExecute. The body names a KEY, and only a
@@ -10102,10 +10551,20 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
                 which = data.get("which")
-                folder = OPENABLE_FOLDERS.get(which) if isinstance(which, str) else None
-                if folder is None:
+                name = OPENABLE_FOLDERS.get(which) if isinstance(which, str) else None
+                if name == "COMFY_OUTPUT_DIR":
+                    try:
+                        ensure_comfy()    # the assets folder is ComfyUI's, found by asking it
+                    except ComfyUnavailable:
+                        pass              # reported below as a folder that isn't known
+                folder = globals().get(name) if name else None
+                if name is None:
                     body, code = {"success": False,
                                   "error": "There is no folder called %r to open." % (which,)}, 400
+                elif folder is None:
+                    body, code = {"success": False,
+                                  "error": "ComfyUI's output folder isn't known yet - start ComfyUI, "
+                                           "then try again."}, 503
                 elif not os.path.isdir(folder):
                     # The assets folder lives outside the project - a ComfyUI reinstall can move
                     # it out from under us, so say where we looked rather than just failing.
@@ -10181,10 +10640,29 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_server():
+    try:
+        # 127.0.0.1 only: nothing else has ever connected, and a LAN-facing socket is what raises
+        # the Windows Firewall prompt on a first run. Every copy binding the SAME address is also
+        # what makes a second copy fail cleanly - measured on Windows, a 127.0.0.1 bind and a
+        # wildcard ("") bind of one port both succeed side by side, SO_EXCLUSIVEADDRUSE or not.
+        httpd = socketserver.TCPServer(("127.0.0.1", PORT), DungeonHTTPRequestHandler)
+    except OSError as e:
+        # 10048 is Windows' "address in use" (a running copy of this server, or another program);
+        # 10013 is what it says for a port inside a range Windows has reserved.
+        if e.errno == errno.EADDRINUSE or getattr(e, "winerror", None) in (10048, 10013):
+            print(f"Port {PORT} can't be used - ComfyCrawler is probably already running at "
+                  f"http://127.0.0.1:{PORT} (or another program has that port). To run on a "
+                  f"different port, set COMFYCRAWLER_PORT.")
+            print("===== server exit %s =====" % time.strftime("%Y-%m-%d %H:%M:%S"))
+            sys.exit(1)
+        raise
     print(f"Starting ComfyCrawler Trio Server on http://127.0.0.1:{PORT}...")
     PROGRESS.start()
+    # The ComfyUI checklist, off the main thread: when ComfyUI isn't up yet every candidate URL
+    # waits out its timeout, and the page should load meanwhile.
+    threading.Thread(target=print_preflight, daemon=True).start()
     try:
-        with socketserver.TCPServer(("", PORT), DungeonHTTPRequestHandler) as httpd:
+        with httpd:
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("Server stopped (Ctrl+C).")
@@ -10202,6 +10680,8 @@ if __name__ == "__main__":
     # --gen-static-audio does the lot; --gen-<name>-music re-rolls one loop on a fresh seed,
     # which is the flag you actually want when a single track comes back wrong.
     single = [k for k in STATIC_MUSIC if f"--gen-{k}-music" in sys.argv]
+    if any(arg.startswith("--gen-") for arg in sys.argv[1:]):
+        ensure_comfy()   # every --gen- flag renders through ComfyUI; says why if it can't be found
     if "--gen-static-audio" in sys.argv:
         for key in STATIC_MUSIC:
             generate_static_music_asset(key)
