@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <title>ComfyCrawler by sorryaboutyourcats</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon.ico" sizes="any">
   <style>
     * {
       font-family: "Comic Sans MS", "Comic Sans", cursive, sans-serif !important;
@@ -769,7 +769,7 @@
   <!-- Compiled Tailwind (npm run tw:build / tw:watch). It sits AFTER the page's own <style>
        because that's where the play CDN injected its sheet, so utilities still win ties the
        way they always have. -->
-  <link rel="stylesheet" href="/tailwind.css">
+  <link rel="stylesheet" href="tailwind.css">
 </head>
 <body>
 
@@ -781,7 +781,7 @@
       <div class="flex items-center gap-1.5 font-bold">
         <!-- The window icon: the same CC-shades cat as the tab favicon, at its native
              16px so one SVG pixel lands on one CSS pixel. -->
-        <img src="/favicon.svg" alt="" width="16" height="16" class="shrink-0" style="image-rendering: pixelated;">
+        <img src="favicon.svg" alt="" width="16" height="16" class="shrink-0" style="image-rendering: pixelated;">
         <span>ComfyCrawler by sorryaboutyourcats</span>
       </div>
       <div id="titleButtons" class="flex gap-1 text-xs">
@@ -1349,6 +1349,9 @@
             </label>
             <div id="comfyStatus" class="win95-input text-[11px] leading-snug text-slate-900 flex flex-col gap-0.5 break-words"
                  role="status" aria-live="polite" aria-labelledby="comfySettingsLabel">Checking ComfyUI...</div>
+            <!-- The editable part. Hidden when ComfyCrawler runs inside ComfyUI (the custom node):
+                 then it talks to the ComfyUI it runs in, and there is nothing to set. -->
+            <div id="comfySettingsFields" class="flex flex-col gap-1.5">
             <label class="text-[11px] font-bold text-slate-700 mt-0.5" for="comfyUrlInput">Address</label>
             <input id="comfyUrlInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
                    placeholder="Auto-detect">
@@ -1367,6 +1370,7 @@
                       title="Save these and check the connection now">
                 Apply
               </button>
+            </div>
             </div>
           </div>
 
@@ -2095,6 +2099,10 @@
     <canvas id="starfieldCanvas"></canvas>
   </div>
 
+  <!-- The page's saved settings (Options and the like). server.py fills this in as it serves the page
+       (page_with_saved_settings), so game.js can read them synchronously before anything runs; a
+       copy of this file served by anything else keeps the empty {} and game.js uses localStorage. -->
+  <script id="savedSettings" type="application/json">{}</script>
   <script src="game.js"></script>
 </body>
 </html>

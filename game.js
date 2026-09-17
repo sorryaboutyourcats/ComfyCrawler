@@ -1,6 +1,66 @@
-    // Empty = the server that served this page, whatever host and port that is (COMFYCRAWLER_PORT
-    // can move it off 5555). Kept as a hook for a page hosted somewhere else to point at one.
-    const SERVER_URL = "";
+    // Where the API lives, relative to whoever served this page. The standalone server serves it at
+    // the root (any host/port - COMFYCRAWLER_PORT can move it off 5555); inside ComfyUI it's served
+    // at /comfycrawler/, because ComfyUI keeps its own /api/... at the root (comfy_node.py).
+    const SERVER_URL = window.location.pathname.startsWith('/comfycrawler') ? '/comfycrawler' : '';
+
+    // ---- Remembered choices -------------------------------------------------------------------
+    // Options (difficulty, max frame rate, ending video and its look, screensaver wait) and the
+    // quick-ideas shuffle count are saved by the server (server.py PAGE SETTINGS), not only in this
+    // browser: a browser keeps localStorage per address, so the standalone page (127.0.0.1:5555) and
+    // the one inside ComfyUI (:8188/comfycrawler/) would each remember their own - a run played on one
+    // ignored Ending Video being switched on in the other. The server writes its copy into the page
+    // (#savedSettings), so every read below stays synchronous; each change goes back to it, batched
+    // and flushed as the page closes. localStorage stays as a mirror: it answers for a key the server
+    // has nothing for, and that answer is uploaded once, so choices made before this carry over.
+    const prefs = (() => {
+      let saved = {};
+      try {
+        const tag = document.getElementById('savedSettings');
+        const parsed = tag ? JSON.parse(tag.textContent || '{}') : {};
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed;
+      } catch (_) { /* unreadable - this browser's own copy answers instead */ }
+      const values = { ...saved };
+      const unsent = {};
+      let sendTimer = null;
+
+      function send(asBeacon) {
+        if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
+        const keys = Object.keys(unsent);
+        if (!keys.length) return;
+        const body = JSON.stringify(unsent);
+        keys.forEach((k) => { delete unsent[k]; });
+        const url = `${SERVER_URL}/api/settings`;
+        if (asBeacon && navigator.sendBeacon
+            && navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))) return;
+        fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
+          .catch(() => { /* no server (a copy of the page served elsewhere) - localStorage has it */ });
+      }
+      function queue(key, value) {
+        unsent[key] = value;
+        if (!sendTimer) sendTimer = setTimeout(() => send(false), 400);   // a slider fires per step
+      }
+      window.addEventListener('pagehide', () => send(true));
+
+      return {
+        get(key) {
+          if (Object.prototype.hasOwnProperty.call(values, key)) {
+            try { if (localStorage.getItem(key) !== values[key]) localStorage.setItem(key, values[key]); }
+            catch (_) { /* storage disabled - the server's copy is what counts anyway */ }
+            return values[key];
+          }
+          let local = null;
+          try { local = localStorage.getItem(key); } catch (_) { /* storage disabled */ }
+          if (local !== null) { values[key] = local; queue(key, local); }
+          return local;
+        },
+        set(key, value) {
+          const text = String(value);
+          values[key] = text;
+          try { localStorage.setItem(key, text); } catch (_) { /* storage disabled or full */ }
+          queue(key, text);
+        },
+      };
+    })();
 
     const appContainer = document.getElementById('appContainer');
     const screenSetup = document.getElementById('screenSetup');
@@ -1570,11 +1630,9 @@
       const btn = e.target.closest('.difficulty-btn');
       if (!btn) return;
       setDifficulty(btn.dataset.difficulty);
-      try { localStorage.setItem(DIFFICULTY_KEY, selectedDifficulty); }
-      catch (_) { /* storage disabled or full - the pick just won't stick */ }
+      prefs.set(DIFFICULTY_KEY, selectedDifficulty);
     });
-    try { setDifficulty(localStorage.getItem(DIFFICULTY_KEY)); }
-    catch (_) { setDifficulty(selectedDifficulty); }
+    setDifficulty(prefs.get(DIFFICULTY_KEY));
 
     // Last Attack Frame's Off / On / Quick / Flip / Mixed row, drawn like the difficulty row: the
     // pick stays pressed in, and like difficulty it sticks across reloads - it is a way of playing
@@ -1623,8 +1681,7 @@
         const btn = e.target.closest('.last-attack-frame-btn');
         if (!btn) return;
         setLastAttackFrame(btn.dataset.lastAttackFrame);
-        try { localStorage.setItem(LAST_ATTACK_FRAME_KEY, lastAttackFrameMode); }
-        catch (_) { /* storage disabled or full - the pick just won't stick */ }
+        prefs.set(LAST_ATTACK_FRAME_KEY, lastAttackFrameMode);
       });
     }
     // Off/On/Quick/Flip are hidden from the settings row for now - Mixed is the only mode on
@@ -1666,10 +1723,8 @@
     }
 
     function saveEndingOptions() {
-      try {
-        localStorage.setItem(ENDING_VIDEO_KEY, endingVideoOn ? 'on' : 'off');
-        if (ENDING_BACKGROUND_OFFERED) localStorage.setItem(ENDING_BACKGROUND_KEY, endingBackgroundOn ? 'on' : 'off');
-      } catch (_) { /* storage disabled or full - the pick just won't stick */ }
+      prefs.set(ENDING_VIDEO_KEY, endingVideoOn ? 'on' : 'off');
+      if (ENDING_BACKGROUND_OFFERED) prefs.set(ENDING_BACKGROUND_KEY, endingBackgroundOn ? 'on' : 'off');
     }
 
     if (endingVideoRow) {
@@ -1691,10 +1746,8 @@
         saveEndingOptions();
       });
     }
-    try {
-      endingVideoOn = localStorage.getItem(ENDING_VIDEO_KEY) === 'on';
-      endingBackgroundOn = ENDING_BACKGROUND_OFFERED && localStorage.getItem(ENDING_BACKGROUND_KEY) === 'on';
-    } catch (_) { /* no storage - both stay Off */ }
+    endingVideoOn = prefs.get(ENDING_VIDEO_KEY) === 'on';
+    endingBackgroundOn = ENDING_BACKGROUND_OFFERED && prefs.get(ENDING_BACKGROUND_KEY) === 'on';
     paintEndingOptionRows();
 
     // Ending Video Look: Smooth / Sharp / Pixel - how both movie players blow the small clip up to
@@ -1724,12 +1777,10 @@
         const btn = e.target.closest('.ending-look-btn');
         if (!btn || btn.disabled) return;
         setEndingLook(btn.dataset.endingLook);
-        try { localStorage.setItem(ENDING_LOOK_KEY, endingLook); }
-        catch (_) { /* storage disabled or full - the pick just won't stick */ }
+        prefs.set(ENDING_LOOK_KEY, endingLook);
       });
     }
-    try { setEndingLook(localStorage.getItem(ENDING_LOOK_KEY)); }
-    catch (_) { setEndingLook('sharp'); }
+    setEndingLook(prefs.get(ENDING_LOOK_KEY));
 
     // `focusTarget` is where the cursor starts - OK normally, the ComfyUI address field when the
     // setup screen's preflight notice opened it. The ComfyUI section reloads on every open, so
@@ -2193,15 +2244,12 @@
     const SECRET_IDEA_DEFAULT_UNLOCK_AT = 42;
 
     function loadShuffleIdeasCount() {
-      try {
-        const n = parseInt(localStorage.getItem(SHUFFLE_IDEAS_COUNT_KEY), 10);
-        return Number.isNaN(n) || n < 0 ? 0 : n;
-      } catch (_) { return 0; }
+      const n = parseInt(prefs.get(SHUFFLE_IDEAS_COUNT_KEY), 10);
+      return Number.isNaN(n) || n < 0 ? 0 : n;
     }
 
     function saveShuffleIdeasCount(n) {
-      try { localStorage.setItem(SHUFFLE_IDEAS_COUNT_KEY, String(n)); }
-      catch (_) { /* storage disabled or full - nothing we can do about it */ }
+      prefs.set(SHUFFLE_IDEAS_COUNT_KEY, String(n));
     }
 
     let shuffleIdeasCount = loadShuffleIdeasCount();
@@ -10281,6 +10329,10 @@ void main() {
         return li;
       }));
       preflightNotice.classList.toggle('hidden', lines.length === 0);
+      // Inside ComfyUI (the custom node) there's no connection to set, so no shortcut to it.
+      if (btnPreflightSettings) {
+        btnPreflightSettings.classList.toggle('hidden', !!(report && report.comfy && report.comfy.embedded));
+      }
     }
 
     // Not disabled while it asks: a disabled button drops the keyboard focus, and Check again is
@@ -10315,6 +10367,7 @@ void main() {
       input_dir: document.getElementById('comfyInputDirInput'),
       output_dir: document.getElementById('comfyOutputDirInput'),
     };
+    const comfySettingsFields = document.getElementById('comfySettingsFields');
     const btnComfyAuto = document.getElementById('btnComfyAuto');
     const btnComfyApply = document.getElementById('btnComfyApply');
     let comfySaved = null;     // what the server last said is saved - what "unapplied edits" compare to
@@ -10341,9 +10394,12 @@ void main() {
       const report = view.preflight;
       const c = report.comfy;
       comfySaved = { ...view.settings };
+      // Running inside ComfyUI: the fields and buttons have nothing to change, so only the status shows.
+      if (comfySettingsFields) comfySettingsFields.classList.toggle('hidden', !!view.embedded);
       const from = (key) => {
         const source = c.sources && c.sources[key];
-        return source === 'env' ? `set by ${view.env_names[key]}` : source === 'options' ? 'set here' : 'found automatically';
+        return source === 'comfyui' ? 'running inside ComfyUI'
+             : source === 'env' ? `set by ${view.env_names[key]}` : source === 'options' ? 'set here' : 'found automatically';
       };
       for (const [key, input] of Object.entries(comfyFields)) {
         if (!input) continue;
@@ -12530,20 +12586,15 @@ void main() {
     }
 
     function loadScreensaverStop() {
-      try {
-        const raw = localStorage.getItem(SCREENSAVER_STOP_KEY);
-        if (raw === null) return SCREENSAVER_DEFAULT_STOP;
-        const i = parseInt(raw, 10);
-        return (Number.isNaN(i) || i < 0 || i >= SCREENSAVER_STOPS.length)
-          ? SCREENSAVER_DEFAULT_STOP : i;
-      } catch (_) {
-        return SCREENSAVER_DEFAULT_STOP;
-      }
+      const raw = prefs.get(SCREENSAVER_STOP_KEY);
+      if (raw === null) return SCREENSAVER_DEFAULT_STOP;
+      const i = parseInt(raw, 10);
+      return (Number.isNaN(i) || i < 0 || i >= SCREENSAVER_STOPS.length)
+        ? SCREENSAVER_DEFAULT_STOP : i;
     }
 
     function saveScreensaverStop(idx) {
-      try { localStorage.setItem(SCREENSAVER_STOP_KEY, String(clampScreensaverStop(idx))); }
-      catch (_) { /* storage disabled or full - nothing we can do about it */ }
+      prefs.set(SCREENSAVER_STOP_KEY, String(clampScreensaverStop(idx)));
     }
 
     function applyScreensaverStop(idx) {
@@ -12561,17 +12612,12 @@ void main() {
     const maxFpsValue = document.getElementById('maxFpsValue');
 
     function loadFpsCap() {
-      try {
-        const raw = localStorage.getItem(FPS_CAP_KEY);
-        return raw === null ? DEFAULT_FPS_CAP : clampFpsCap(raw);
-      } catch (_) {
-        return DEFAULT_FPS_CAP;
-      }
+      const raw = prefs.get(FPS_CAP_KEY);
+      return raw === null ? DEFAULT_FPS_CAP : clampFpsCap(raw);
     }
 
     function saveFpsCap(v) {
-      try { localStorage.setItem(FPS_CAP_KEY, String(clampFpsCap(v))); }
-      catch (_) { /* storage disabled or full - nothing we can do about it */ }
+      prefs.set(FPS_CAP_KEY, String(clampFpsCap(v)));
     }
 
     function showFpsCap(v) {

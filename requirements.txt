@@ -1,9 +1,8 @@
+# What ComfyCrawler needs, both inside ComfyUI (ComfyUI-Manager installs this file) and standalone.
 # Real per-step progress: ComfyUI only pushes node/sampler progress over its websocket,
 # so without this the bar advances once per completed job instead of continuously.
 websocket-client>=1.7
 imageio-ffmpeg>=0.4.9
 pillow>=10.0
 numpy>=1.24
-# Local neural TTS for the intro narration, CPU-only (no VRAM contention with ComfyUI).
-# Voice models live in piper_voices/ - see server.py PIPER_VOICES_DIR.
-piper-tts>=1.8.0
+# The intro narration's text-to-speech is separate - see requirements-narration.txt.

@@ -8,7 +8,9 @@ import numpy as np
 import sys
 import re
 import io
-if sys.platform == "win32":
+# Only a plain console stream: inside ComfyUI, stdout is its LogInterceptor (a TextIOWrapper
+# SUBCLASS), and re-encoding that would change ComfyUI's own log output, not just ours.
+if sys.platform == "win32" and type(sys.stdout) is io.TextIOWrapper:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
@@ -68,8 +70,13 @@ COMFY_SETTINGS_PATH = os.path.join(PROJECT_DIR, "comfy_settings.json")
 COMFY_SETTING_ENV = {"url": "COMFYUI_URL", "input_dir": "COMFYUI_INPUT_DIR", "output_dir": "COMFYUI_OUTPUT_DIR"}
 _COMFY_RESOLVED = False
 _COMFY_VERSION = None
-# Where each resolved value came from - "env", "options" or "auto" - so Options can say.
+# Where each resolved value came from - "env", "options", "auto" or "comfyui" - so Options can say.
 _COMFY_SOURCES = {"url": None, "input_dir": None, "output_dir": None}
+# Set by the custom node (__init__.py) when ComfyCrawler runs INSIDE ComfyUI: {"url": its own
+# loopback address, "input_dir" / "output_dir": callables into its folder_paths}. None when this
+# file is the standalone server. Embedded, none of the three sources above apply - ComfyUI is
+# right here and says exactly where its folders are - and Options' connection section is hidden.
+COMFY_EMBEDDED = None
 
 
 def normalize_comfy_url(text):
@@ -147,6 +154,78 @@ def _comfy_setting(key, saved):
     return "", "auto"
 
 
+# ---------------------------------------------------------------------------
+# PAGE SETTINGS
+# The page's remembered choices - Options (difficulty, max frame rate, ending video and its look,
+# screensaver wait) and the quick-ideas shuffle count - kept here rather than only in the browser.
+# A browser keeps localStorage per address, so the standalone page (127.0.0.1:5555) and the one
+# served inside ComfyUI (127.0.0.1:8188/comfycrawler/) would each remember their own - a run
+# played on one ignored Ending Video being switched on in the other. The page still mirrors them
+# to localStorage (game.js `prefs`), and uploads its own the first time it meets a server that
+# has none, so choices made before this existed carry over. Values are strings, like
+# localStorage's; keys are game.js's own `comfycrawler.*` names. The node points
+# PAGE_SETTINGS_PATH beside its saved dungeons (comfy_node.install), so both share one file.
+PAGE_SETTINGS_PATH = os.path.join(PROJECT_DIR, "page_settings.json")
+PAGE_SETTING_PREFIX = "comfycrawler."
+PAGE_SETTINGS_MAX_KEYS = 64
+PAGE_SETTING_MAX_CHARS = 1000
+# The <script> index.html carries for the settings; the server fills it in as the page is served,
+# so every read in game.js stays synchronous. A copy served by anything else keeps the empty {}.
+SAVED_SETTINGS_TAG = b'<script id="savedSettings" type="application/json">{}</script>'
+_PAGE_SETTINGS_LOCK = threading.Lock()
+
+
+def load_page_settings():
+    """The saved page settings as {key: string}. A missing or unreadable file is no settings."""
+    try:
+        with open(PAGE_SETTINGS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items()
+            if isinstance(k, str) and k.startswith(PAGE_SETTING_PREFIX) and isinstance(v, str)}
+
+
+def save_page_settings(changes):
+    """Merge {key: string, or None to forget it} into the saved settings; returns them all. Raises
+    ValueError, before writing anything, for anything that isn't one of the page's own settings.
+    Re-read under the lock right before writing, so a change sent by the other address in between
+    is kept rather than overwritten."""
+    if not isinstance(changes, dict):
+        raise ValueError("Settings must be an object of name: value.")
+    for key, value in changes.items():
+        if not (isinstance(key, str) and key.startswith(PAGE_SETTING_PREFIX) and len(key) <= 100):
+            raise ValueError(f"{key!r} isn't a ComfyCrawler setting.")
+        if value is not None and not (isinstance(value, str) and len(value) <= PAGE_SETTING_MAX_CHARS):
+            raise ValueError(f"The value for {key!r} must be text of at most {PAGE_SETTING_MAX_CHARS} characters.")
+    with _PAGE_SETTINGS_LOCK:
+        settings = load_page_settings()
+        for key, value in changes.items():
+            if value is None:
+                settings.pop(key, None)
+            else:
+                settings[key] = value
+        if len(settings) > PAGE_SETTINGS_MAX_KEYS:
+            raise ValueError("Too many settings.")
+        os.makedirs(os.path.dirname(PAGE_SETTINGS_PATH) or ".", exist_ok=True)
+        tmp = PAGE_SETTINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2, sort_keys=True)
+        os.replace(tmp, PAGE_SETTINGS_PATH)
+    return settings
+
+
+def page_with_saved_settings(html_bytes):
+    """index.html with the saved settings written into its #savedSettings tag. Every "<" is escaped,
+    so no value can close the script element early."""
+    payload = json.dumps(load_page_settings(), ensure_ascii=True).replace("<", "\\u003c")
+    return html_bytes.replace(
+        SAVED_SETTINGS_TAG,
+        b'<script id="savedSettings" type="application/json">' + payload.encode("ascii") + b"</script>", 1)
+
+
 class ComfyUnavailable(Exception):
     """ComfyUI couldn't be reached, or its folders couldn't be found. The message is written for
     the player, so handlers send it back as-is. `reachable` says whether ComfyUI answered at all."""
@@ -209,8 +288,31 @@ def ensure_comfy(refresh=False):
         raise
 
 
+def _resolve_embedded_comfy():
+    """_resolve_comfy inside ComfyUI: the address and folders come from ComfyUI itself. It still
+    asks /system_stats, both for the version and because the node loads before ComfyUI listens -
+    a call that early fails like any unreachable ComfyUI, and the next one retries."""
+    global COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR, _COMFY_RESOLVED, _COMFY_VERSION
+    url = COMFY_EMBEDDED["url"]
+    try:
+        stats = _comfy_get_json("/system_stats", timeout=3, base=url)
+    except Exception:
+        raise ComfyUnavailable(f"ComfyUI isn't answering at {url} yet - it may still be starting up.")
+    input_dir, output_dir = COMFY_EMBEDDED["input_dir"](), COMFY_EMBEDDED["output_dir"]()
+    system = stats.get("system") or {}
+    if not _COMFY_RESOLVED or (url, input_dir, output_dir) != (COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR):
+        print(f"[comfy] running inside ComfyUI {system.get('comfyui_version') or '?'} at {url} - "
+              f"input {input_dir}, output {output_dir}")
+    COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR = url, input_dir, output_dir
+    _COMFY_VERSION = system.get("comfyui_version")
+    _COMFY_SOURCES.update(url="comfyui", input_dir="comfyui", output_dir="comfyui")
+    _COMFY_RESOLVED = True
+
+
 def _resolve_comfy():
     global COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR, _COMFY_RESOLVED, _COMFY_VERSION
+    if COMFY_EMBEDDED:
+        return _resolve_embedded_comfy()
     saved = load_comfy_settings()
     fixed_url, url_source = _comfy_setting("url", saved)
     fixed_url = fixed_url.rstrip("/")
@@ -306,7 +408,9 @@ def _gfx_profile(quality):
     """Resolve a Graphics Quality name to its resolution profile, falling back to normal."""
     return GFX_QUALITY_PROFILES.get(quality, GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT])
 
-os.makedirs(SESSIONS_DIR, exist_ok=True)
+# SESSIONS_DIR is NOT created here at import: inside ComfyUI the node first decides where it goes
+# (comfy_node.choose_data_dir), and making the default one first would always win that choice.
+# run_server() and the node each create it once it's settled.
 
 # ---------------------------------------------------------------------------
 # File logging. Until this, server.py only ever wrote to its console - so when the
@@ -9888,7 +9992,7 @@ def comfy_preflight():
     downloaded a minute ago counts - and never raises. `ready` means a dungeon can be created:
     ComfyUI answers, its folders are here, and nothing required is missing."""
     report = {"ready": False,
-              "comfy": {"reachable": False, "url": COMFY_URL, "version": None,
+              "comfy": {"reachable": False, "url": COMFY_URL, "version": None, "embedded": bool(COMFY_EMBEDDED),
                         "input_dir": None, "output_dir": None, "sources": None, "error": None},
               "groups": [], "nodes": []}
     try:
@@ -9929,7 +10033,8 @@ def comfy_settings_view():
     """Everything Options > ComfyUI Connection shows: what it saved, which fields an environment
     variable pins (those are greyed out there - the variable wins), and a fresh preflight with the
     values actually in use and where each came from."""
-    return {"settings": load_comfy_settings(),
+    return {"embedded": bool(COMFY_EMBEDDED),
+            "settings": load_comfy_settings(),
             "env": {key: bool((os.environ.get(name) or "").strip()) for key, name in COMFY_SETTING_ENV.items()},
             "env_names": dict(COMFY_SETTING_ENV),
             "candidates": list(COMFY_URL_CANDIDATES),
@@ -9985,11 +10090,46 @@ def print_preflight():
 
 
 class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def _refuse_cross_site(self):
+        """Refuse a request some other website made from inside the player's browser. Without this,
+        any page they visited could POST (a text/plain body needs no CORS preflight) to delete
+        saved dungeons, start a generation or open folders, or read the History. The same rule as
+        ComfyUI's own origin middleware: the browser says cross-site, or the Origin it sends isn't
+        this server. Requests with neither header (curl, the tests) aren't from a web page and pass.
+        Skipped inside ComfyUI, whose middleware already applied it and whose CORS setting decides.
+        True when it answered 403 - the caller just returns."""
+        if COMFY_EMBEDDED:
+            return False
+        site = (self.headers.get("Sec-Fetch-Site") or "").lower()
+        origin = self.headers.get("Origin")
+        refused = site == "cross-site"
+        if not refused and origin:
+            refused = origin == "null" or (urllib.parse.urlsplit(origin).netloc.lower()
+                                           != (self.headers.get("Host") or "").lower())
+        if not refused:
+            return False
+        print(f"[security] refused a cross-site {self.command} {self.path.split('?')[0]} "
+              f"(Origin: {origin or '-'}, Sec-Fetch-Site: {site or '-'})")
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if length:
+                self.rfile.read(length)
+        except Exception:
+            pass
+        payload = json.dumps({"success": False, "error": "Cross-site request refused."}).encode("utf-8")
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+        return True
+
     def do_GET(self):
+        if self._refuse_cross_site():
+            return
         if self.path == "/api/progress":
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             # `settling` rides along rather than living in gen_progress because it is derived
             # from thread liveness, not written by the run - it is what keeps CREATE disabled
@@ -10005,7 +10145,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
@@ -10018,7 +10157,18 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # The page's saved settings (see PAGE SETTINGS). The page itself gets them written into
+        # index.html; this is for anything else that wants to read them.
+        elif self.path == "/api/settings":
+            payload = json.dumps({"settings": load_page_settings()}, ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
@@ -10032,7 +10182,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
@@ -10049,7 +10198,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(os.path.getsize(bundle_path)))
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 with open(bundle_path, "rb") as f:
@@ -10057,7 +10205,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_response(404)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"success": False,
                                          "error": "That saved dungeon is gone."},
@@ -10073,7 +10220,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
@@ -10087,7 +10233,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
@@ -10104,14 +10249,12 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "video/mp4")
                 self.send_header("Content-Length", str(os.path.getsize(clip)))
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 with open(clip, "rb") as f:
                     shutil.copyfileobj(f, self.wfile)
                 return
             self.send_response(404)
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             return
 
@@ -10119,9 +10262,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             html_file = os.path.join(PROJECT_DIR, "index.html")
             if os.path.exists(html_file):
                 with open(html_file, "rb") as f:
-                    content = f.read()
+                    content = page_with_saved_settings(f.read())
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                # The saved settings are written into the page, so a cached copy would carry stale ones.
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
@@ -10201,6 +10346,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         global GEN_THREAD, _RUN_EPOCH
+        if self._refuse_cross_site():
+            return
 
         if self.path == "/api/generate_dungeon":
             # The page disables CREATE while /api/progress reports settling, so this is the
@@ -10215,7 +10362,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     pass
                 self.send_response(409)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps(
                     {"success": False, "settling": True,
@@ -10234,7 +10380,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     pass
                 self.send_response(409)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps(
                     {"success": False, "busy": True,
@@ -10262,7 +10407,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                + "\n\nAdd them, then press CREATE again.")
                 self.send_response(409)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps(
                     {"success": False, "preflight": preflight, "error": message},
@@ -10328,7 +10472,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": True, "message": f"{mode} generation started"}, ensure_ascii=True).encode("utf-8"))
 
@@ -10361,7 +10504,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     self.wfile.write(json.dumps({"success": False, "error": str(e)},
                                                 ensure_ascii=True).encode("utf-8"))
@@ -10404,7 +10546,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps(reply, ensure_ascii=True).encode("utf-8"))
             except Exception:
@@ -10429,7 +10570,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10448,7 +10588,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"state": "failed", "percent": 0, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10469,7 +10608,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10490,7 +10628,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10511,7 +10648,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10524,7 +10660,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
                 busy = comfy_busy_reason()
-                if busy:
+                if COMFY_EMBEDDED:
+                    # Nothing to set: inside ComfyUI, ComfyCrawler talks to the ComfyUI it runs in.
+                    body, code = {"success": False, "embedded": True,
+                                  "error": "ComfyUI's connection is fixed when ComfyCrawler runs inside ComfyUI."}, 409
+                elif busy:
                     body, code = {"success": False, "busy": True, "error": busy}, 409
                 else:
                     save_comfy_settings(str(data.get("url") or ""), str(data.get("input_dir") or ""),
@@ -10537,7 +10677,25 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/settings":
+            # A changed setting from the page (game.js `prefs`), batched: body is {key: value}, a
+            # null value forgetting that key. Also the beacon the page sends as it closes, so an
+            # empty or unreadable body is answered, not raised.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                body, code = {"success": True, "settings": save_page_settings(data)}, 200
+            except ValueError as e:        # not the page's own settings (json errors are ValueErrors too)
+                body, code = {"success": False, "error": str(e)}, 400
+            except Exception as e:
+                print(f"[settings] saving failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10584,7 +10742,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
@@ -10622,7 +10779,6 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": True, "dropped": dropped},
                                             ensure_ascii=True).encode("utf-8"))
@@ -10632,10 +10788,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
     def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # The page is same-origin and never preflights. This no longer grants CORS - it only
+        # answers, and a cross-site preflight is refused like everything else.
+        if self._refuse_cross_site():
+            return
+        self.send_response(204)
         self.end_headers()
 
 
@@ -10657,6 +10814,7 @@ def run_server():
             sys.exit(1)
         raise
     print(f"Starting ComfyCrawler Trio Server on http://127.0.0.1:{PORT}...")
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
     PROGRESS.start()
     # The ComfyUI checklist, off the main thread: when ComfyUI isn't up yet every candidate URL
     # waits out its timeout, and the page should load meanwhile.
