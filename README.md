@@ -1,71 +1,184 @@
 # 🏰 ComfyCrawler
 
-> **A nostalgic Windows 95 style 3D dungeon crawler powered by ComfyUI, FLUX.1 [schnell], MiniMax H3, and RTX Video Super Resolution.**
+**A Windows 95 3D Maze–style dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the music and the story. Then you walk in and fight your way to the stairs.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Comfy Registry](https://img.shields.io/badge/Comfy_Registry-comfycrawler-blue)](https://registry.comfy.org/nodes/comfycrawler)
 
-**ComfyCrawler** turns natural language descriptions into interactive, walkable 3D escape rooms with the authentic Windows 95 3D Maze Screensaver aesthetic.
+![Rusty Fork, a truck-robot farmer, squares up to Doom Grubgulch, a many-headed cow, in a cornfield maze](screenshots/rusty-fork-vs-grubgulch.png)
 
 ---
 
-## ✨ Features
+## ✨ What you get
 
-* 🧙‍♂️ **Prompt-Driven Dungeons**: Type any visual theme (*e.g., "Windows 95", "Cyber Neon", "Mossy Stone", "Candy Cane"*) and watch the world generate before your eyes with automated retro prompt enhancement.
-* ⚡ **Triple Engine Modes**:
-  * **`v3 FLUX.1 [schnell]` (Recommended)**: Powered by Google's T5-XXL language model + 12B parameter Flow Matching DiT. Generates a matching 3-surface texture set (**Walls, Ceiling, and Floor**) in a single pass with snappy **350ms** retro movement and zero hallucinations.
-  * **`v2 texture`**: Synthesizes high-res material textures with MiniMax H3 in a 3D raycaster.
-  * **`v1 video` (Pre-Rendered FMV Clips)**: Generates 8 frame-chained 1.5s AI video clips with native reverse playback using MiniMax H3 diffusion.
-* 🔊 **Generated Sound Effects** (`v6`): Stable Audio 3 Small-SFX writes the game's foley from the same typed styles the art comes from - the footstep matches the floor, the swing matches the weapon, and the death cries match the hero and the foe. Eight one-shots per dungeon, with a procedural Web Audio bank standing in for anything that fails.
-* 🏆 **A Victory Song Per Style**: five different win themes share the victory window - an orchestral march, retro synthwave, and three more variations picked from a wider audition. Which one plays is decided by the dungeon style you typed, not by chance: every *forest* run you ever play ends on the same song, every *ocean* run ends on a different one, and capitalisation, spacing and punctuation don't count - so the ending music becomes part of what a style *is*, the way its walls are.
-* 🎬 **Ending Cutscene** (`v6`, off by default): switch on **Ending Video** in Options and MiniMax H3 films the hero landing the final blow on the boss, the stairs out glowing at the end of the corridor, and a victory cheer. The run's own hero sprite, HUD portrait, boss and textures go in as reference pictures and its battle music as a reference track for the score. It plays the moment the boss's health runs out and holds its last frame under the victory window. It is filmed at 512×384 on the loading screen. Every run in **History** has a movie button too: it plays the ending of a dungeon you have beaten, and films one for a dungeon that never got one.
-* 🖥️ **Authentic Windows 95 UI**: Classic beveled grey window styling, dynamic 3-space minimap (`[ 1 ] ⟷ [ 2 ] ⟷ [ 3 ]`), D-pad controls, and real-time progress HUD.
-* 🚀 **Hardware Accelerated**: RTX Video Super Resolution (2x Ultra) + SageAttention integration for ultra-fast generation.
+Everything below is generated for each dungeon, from what you typed:
+
+* 🧱 **The dungeon** - wall, floor, ceiling, door, lantern and switch textures in your style (FLUX.1 [schnell]).
+* 🦸 **Your hero** - a battle sprite with swing, block, hurt and walk frames (Krea 2 turbo), plus a HUD portrait that grimaces when you're hit (FLUX.1 Kontext).
+* 👾 **Your foes** - walkers, flyers and a boss, each designed and named to fit the theme (Krea 2 turbo, Qwen3-VL).
+* 📜 **A story** - a location, a cast of names and an opening crawl (Qwen3-VL), read aloud if narration is installed (Piper).
+* 🔊 **Sound and music** - footsteps that match the floor, swings that match the weapon, and explore and battle music (Stable Audio 3). A victory song is picked by your dungeon's style.
+* 🎬 **An ending cutscene** *(optional)* - the hero landing the final blow on the boss, filmed from the run's own characters, textures and music (MiniMax H3).
+
+Then it's a game:
+
+* **Explore** a grid maze in the style of the Windows 95 3D Maze screensaver, with a minimap. Throw switches to open locked gates.
+* **Fight** in real time: dodge left and right, strike, and block, with a stamina bar keeping you honest. Gain XP and level up.
+* **Beat the boss** and reach the stairs.
+* **Replay** any dungeon from History - the same art and music on a freshly drawn maze.
+
+## 🖼️ Screenshots
+
+| | |
+| :---: | :---: |
+| ![The Typist fights a RAM Ghost in a red-brick Windows 95 maze](screenshots/typist-vs-ram-ghost.png) | ![Exploring a corridor of anime murals toward the exit stairs](screenshots/anime-corridor-stairs.png) |
+| *A Windows 95 maze: The Typist vs a RAM Ghost* | *Exploring toward the exit stairs* |
+| ![A watermelon warrior faces the Blueberry Blade in an orange-slice maze](screenshots/watermelon-vs-blueberry-blade.png) | ![Smokey the Bear with a fire extinguisher faces a Charmander grunt](screenshots/smokey-vs-charmander.png) |
+| *A fruit dungeon, mid wind-up* | *Named characters work too* |
+| ![Mario with a Yoshi hammer faces a Bowser grunt](screenshots/mario-vs-bowser.png) | ![The opening crawl for "3rd Floor Pizza Hut", in yellow text on black](screenshots/opening-crawl.png) |
+| *Quoted names become that exact character* | *Every dungeon opens with its story* |
+| ![The Dungeon Creation Wizard with four filled-in blanks](screenshots/creation-wizard.png) | ![The History window listing saved dungeons with Start, Prompts, movie, favorite and delete buttons](screenshots/history.png) |
+| *The Dungeon Creation Wizard* | *History: replay a dungeon, reuse its prompts, watch its ending* |
+
+---
+
+## 🛠️ Requirements
+
+* **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090 (24 GB)**, where a dungeon at High quality takes about **5 minutes** and the ending cutscene adds about **3½ minutes**.
+* **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** - required. Its SageAttention patch is also used automatically, when installed, to speed up the ending cutscene.
+* **The models below.** ComfyCrawler checks for every file when it starts and on the setup screen, and lists exactly what's missing and which folder it goes in - so you can start with the required ones and add the rest later.
+
+### Models
+
+**Required - about 50 GB**
+
+| File | Put it in `ComfyUI/models/…` | Size |
+| :--- | :--- | ---: |
+| [krea2_turbo_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors) | `diffusion_models/` | 12.2 GB |
+| [qwen3vl_4b_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors) | `text_encoders/` | 4.9 GB |
+| [qwen_image_vae.safetensors](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors) | `vae/` | 0.2 GB |
+| [flux1-schnell-fp8.safetensors](https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors) | `checkpoints/` | 16.1 GB |
+| [birefnet.safetensors](https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors) | `background_removal/` | 0.4 GB |
+| [flux1-dev-kontext_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI/resolve/main/split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors) | `diffusion_models/` | 11.1 GB |
+| [t5xxl_fp8_e4m3fn.safetensors](https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors) | `text_encoders/` | 4.6 GB |
+| [clip_l.safetensors](https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors) | `text_encoders/` | 0.2 GB |
+| [ae.safetensors](https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors) | `vae/` | 0.3 GB |
+
+**Sound effects and music - 5.3 GB** *(optional: without them you get procedural sound effects and no music)*
+
+| File | Put it in `ComfyUI/models/…` | Size | Used for |
+| :--- | :--- | ---: | :--- |
+| [stable_audio_3_small_sfx.safetensors](https://huggingface.co/Comfy-Org/stable-audio-3/resolve/main/checkpoints/stable_audio_3_small_sfx.safetensors) | `checkpoints/` | 2.1 GB | sound effects |
+| [stable_audio_3_small_sfx_base.safetensors](https://huggingface.co/Comfy-Org/stable-audio-3/resolve/main/checkpoints/stable_audio_3_small_sfx_base.safetensors) | `checkpoints/` | 2.1 GB | music |
+| [t5gemma_b_b_ul2.safetensors](https://huggingface.co/Comfy-Org/stable-audio-3/resolve/main/text_encoders/t5gemma_b_b_ul2.safetensors) | `text_encoders/` | 1.1 GB | both |
+
+**Ending cutscene - 39.6 GB** *(optional: only needed with Options › Ending Video turned on)*
+
+| File | Put it in `ComfyUI/models/…` | Size |
+| :--- | :--- | ---: |
+| [minimax_h3_ref2va_pruned_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors) | `diffusion_models/` | 19.5 GB |
+| [qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors) | `text_encoders/` | 14.6 GB |
+| [minimax_h3_video_vae_fp16.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors) | `vae/` | 4.9 GB |
+| [minimax_h3_audio_vae_fp32.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors) | `vae/` | 0.6 GB |
+
+---
+
+## 📦 Install
+
+### From ComfyUI-Manager
+
+Open **Manager › Custom Nodes Manager**, search for **ComfyCrawler**, install, and restart ComfyUI.
+
+### By hand
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/sorryaboutyourcats/ComfyCrawler.git
+path/to/ComfyUI/python -m pip install -r ComfyCrawler/requirements.txt
+```
+
+Use the Python that runs ComfyUI (for ComfyUI Desktop, the one in its `.venv`), then restart ComfyUI.
+
+### Play
+
+Any of these opens the game:
+
+* ComfyUI's menu › **ComfyCrawler › Open ComfyCrawler**
+* the **ComfyCrawler** button in ComfyUI's top bar
+* **http://127.0.0.1:8188/comfycrawler/** (use your ComfyUI's port if it isn't 8188)
+
+ComfyCrawler adds no nodes to the graph - it's a page ComfyUI serves.
+
+### Narration *(optional)*
+
+The opening crawl is read aloud by [Piper](https://github.com/rhasspy/piper), which runs on the CPU. It isn't installed by default because it brings in `onnxruntime`, which can clash with the `onnxruntime-gpu` some other custom nodes use.
+
+1. `path/to/ComfyUI/python -m pip install -r requirements-narration.txt` (from the ComfyCrawler folder)
+2. Download both files of each voice into a `piper_voices` folder inside ComfyCrawler:
+   * `en_GB-alan-medium` - [.onnx](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx) and [.onnx.json](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json)
+   * `en_US-kristin-medium` - [.onnx](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium/en_US-kristin-medium.onnx) and [.onnx.json](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium/en_US-kristin-medium.onnx.json)
+3. Restart ComfyUI.
+
+### Standalone server *(instead of the custom node)*
+
+ComfyCrawler can also run as its own small server beside a running ComfyUI:
+
+```bash
+git clone https://github.com/sorryaboutyourcats/ComfyCrawler.git
+cd ComfyCrawler
+pip install -r requirements.txt -r requirements-narration.txt
+python server.py
+```
+
+Then open **http://127.0.0.1:5555**. On Windows, `start-server.bat` does the same and keeps the log window open.
+
+ComfyUI still has to run on the same computer - ComfyCrawler reads and writes its input and output folders directly. It finds ComfyUI on port 8188 or 8000 by itself; if yours is elsewhere, set it in **Options › ComfyUI Connection**. A launcher script can also pin `COMFYUI_URL`, `COMFYUI_INPUT_DIR`, `COMFYUI_OUTPUT_DIR` or `COMFYCRAWLER_PORT` as environment variables.
 
 ---
 
 ## 🎮 Controls
 
-| Action | Keyboard | D-Pad Button |
+| | Keyboard | On screen |
 | :--- | :--- | :--- |
-| **Move Forward** | <kbd>W</kbd> or <kbd>▲</kbd> | ▲ Button |
-| **Move Backward** | <kbd>S</kbd> or <kbd>▼</kbd> | ▼ Button |
-| **Rotate Left 90°** | <kbd>A</kbd> or <kbd>◀</kbd> | ◀ Button |
-| **Rotate Right 90°** | <kbd>D</kbd> or <kbd>▶</kbd> | ▶ Button |
+| **Exploring** | | |
+| Move forward / back | <kbd>W</kbd> <kbd>S</kbd> or <kbd>↑</kbd> <kbd>↓</kbd> | ▲ ▼ |
+| Turn left / right | <kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd> | ↺ ↻ |
+| Use (throw a switch) | <kbd>Space</kbd> or <kbd>Enter</kbd> | USE |
+| Menu | <kbd>Esc</kbd> | ✕ |
+| **In battle** | | |
+| Step aside | hold <kbd>A</kbd> / <kbd>D</kbd> or <kbd>←</kbd> / <kbd>→</kbd> | ⬅ ➡ |
+| Strike | <kbd>W</kbd> or <kbd>↑</kbd> | ⚔️ |
+| Block | hold <kbd>S</kbd> or <kbd>↓</kbd> | 🛡️ |
+
+Every menu and window works from the keyboard too: arrow keys move the cursor, <kbd>Enter</kbd> picks, <kbd>Esc</kbd> backs out.
+
+## ⚙️ Options
+
+* **Difficulty** - Easy, Medium or Hard: 33, 66 or 111 corridors, with foes getting 25% or 60% more health on the harder two.
+* **Graphics** - High, Medium or Low generation resolution. Lower is faster.
+* **Max Frame Rate** - 24 to 240 FPS.
+* **Sound Generation** - music and sound, sound only, or none (fastest).
+* **Ending Video** - film the ending cutscene (off by default; it adds several minutes), and how it's drawn when blown up to fill the screen: Smooth, Sharp or Pixel.
+* **Screensaver Wait** - how long before the Windows 98 starfield takes over.
+
+Options are saved by ComfyCrawler itself, so they're the same whichever address you play from.
+
+## 📜 History
+
+Every dungeon you make is saved. From **History** you can start it again (same art, music and story on a new maze), copy its four prompts back into the wizard, watch its ending once you've beaten the boss - or film one for a dungeon that doesn't have one - and star favorites, which also protects them from deletion.
+
+Saved dungeons live in ComfyUI's `user/comfycrawler/` folder when ComfyCrawler is installed as a node, and in `dungeon_sessions/` beside `server.py` for the standalone server.
 
 ---
 
-## 🛠️ Quickstart
+## 🧑‍💻 Development
 
-### Prerequisites
-1. [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 0.34.2+ running locally on port `8188` with `flux1-schnell-fp8.safetensors` in `models/checkpoints/`.
-2. Python 3.10+ installed.
-3. For `v6` sound effects, from [Comfy-Org/stable-audio-3](https://huggingface.co/Comfy-Org/stable-audio-3):
-   * `checkpoints/stable_audio_3_small_sfx.safetensors` (2.3 GB) -> `models/checkpoints/`
-   * `text_encoders/t5gemma_b_b_ul2.safetensors` (1.2 GB) -> `models/text_encoders/`
+* **Tests** are plain scripts: `python tests/test_story_names.py`, and so on - each prints `all … checks passed` or exits non-zero. `tests/test_node_routes.py` needs `aiohttp`, so run that one with ComfyUI's Python.
+* **Styles** are Tailwind 3.4.17, compiled into the committed `tailwind.css`. After adding a Tailwind class to `index.html` or `game.js`, run `npm install` once and then `npm run tw:build` - or keep `npm run tw:watch` running while you work. `tests/test_tailwind_fresh.py` catches a forgotten rebuild.
+* **Layout:** `server.py` is the whole backend (generation pipeline and HTTP API); `index.html` and `game.js` are the whole game; `comfy_node.py` and `__init__.py` run the same server inside ComfyUI.
 
-   Optional: without them a v6 dungeon still generates and plays, using procedural sounds instead.
-4. For the `v6` ending cutscene, from [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3):
-   * `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` (21 GB) -> `models/diffusion_models/`
-   * `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` (15.7 GB) -> `models/text_encoders/`
-   * `vae/minimax_h3_video_vae_fp16.safetensors` and `vae/minimax_h3_audio_vae_fp32.safetensors` -> `models/vae/`
+## 📄 License and credits
 
-   Optional: only needed with Ending Video turned on. [KJNodes](https://github.com/kijai/ComfyUI-KJNodes) with SageAttention installed is used automatically when present.
+ComfyCrawler is [MIT licensed](LICENSE). The models it uses are not part of it and each has its own license - FLUX.1 Kontext [dev], for one, is non-commercial - so check them before using what you make commercially.
 
-### Installation
-```bash
-git clone https://github.com/sorryaboutyourcats/ComfyCrawler.git
-cd ComfyCrawler
-pip install -r requirements.txt
-```
-
-### Launch Server
-```bash
-python server.py
-```
-Open `http://127.0.0.1:5555` in any modern web browser to play!
-
----
-
-## 📜 License
-MIT License.
+Made by **[sorryaboutyourcats](https://github.com/sorryaboutyourcats)** together with **Claude** (Anthropic), in Claude Code.
