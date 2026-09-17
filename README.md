@@ -38,7 +38,7 @@ Then it's a game:
 | ![Mario with a Yoshi hammer faces a Bowser grunt](screenshots/mario-vs-bowser.png) | ![The opening crawl for "3rd Floor Pizza Hut", in yellow text on black](screenshots/opening-crawl.png) |
 | *Quoted names become that exact character* | *Every dungeon opens with its story* |
 | ![The Dungeon Creation Wizard with four filled-in blanks](screenshots/creation-wizard.png) | ![The History window listing saved dungeons with Start, Prompts, movie, favorite and delete buttons](screenshots/history.png) |
-| *The Dungeon Creation Wizard* | *History: replay a dungeon, reuse its prompts, watch its ending* |
+| *The Dungeon Creation Wizard* | *Replay a dungeon, reuse its prompts, watch its ending* |
 
 ---
 
