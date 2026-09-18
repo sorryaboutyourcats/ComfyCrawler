@@ -233,10 +233,13 @@ def page_with_saved_settings(html_bytes):
 
 class ComfyUnavailable(Exception):
     """ComfyUI couldn't be reached, or its folders couldn't be found. The message is written for
-    the player, so handlers send it back as-is. `reachable` says whether ComfyUI answered at all."""
-    def __init__(self, message, reachable=False):
+    the player, so handlers send it back as-is. `reachable` says whether ComfyUI answered at all;
+    `restart` that restarting ComfyUI's server is the fix (see _comfy_system_stats), which is what
+    puts the Restart ComfyUI button in front of the player instead of leaving them to find it."""
+    def __init__(self, message, reachable=False, restart=False):
         super().__init__(message)
         self.reachable = reachable
+        self.restart = restart
 
 
 def _comfy_get_json(path, timeout=5, base=None):
@@ -244,6 +247,26 @@ def _comfy_get_json(path, timeout=5, base=None):
     connection and preflight code go through, so the tests can stand a fake ComfyUI behind it."""
     with urllib.request.urlopen(f"{base or COMFY_URL}{path}", timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _comfy_system_stats(url, timeout=3):
+    """/system_stats for the connection code, with the two ways it fails told apart.
+
+    Nothing listening is a ComfyUI that isn't up yet - wait, or start it. ComfyUI answering with a
+    500 is the one that looks the same from here but isn't: /system_stats asks the graphics card how
+    much memory it has, and once the computer has slept, that call raises inside ComfyUI's process
+    for good ("CUDA error: unknown error"). Its web server carries on answering everything else, so
+    the queue looks healthy, but the CUDA context is gone and every render would fail too. Nothing
+    ComfyUI or ComfyCrawler can do in that process brings it back - only starting ComfyUI's server
+    again - so the message says that instead of telling the player to keep waiting."""
+    try:
+        return _comfy_get_json("/system_stats", timeout=timeout, base=url)
+    except urllib.error.HTTPError as e:
+        raise ComfyUnavailable(
+            f"ComfyUI is running at {url}, but it has lost its link to the graphics card - this is "
+            "what putting the computer to sleep does to it, and dungeons would fail the same way. "
+            "Restarting ComfyUI's server fixes it; nothing else needs restarting.",
+            reachable=True, restart=True) from e
 
 
 def _argv_value(argv, flag):
@@ -340,7 +363,9 @@ def _resolve_embedded_comfy():
     global COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR, _COMFY_RESOLVED, _COMFY_VERSION
     url = COMFY_EMBEDDED["url"]
     try:
-        stats = _comfy_get_json("/system_stats", timeout=3, base=url)
+        stats = _comfy_system_stats(url)
+    except ComfyUnavailable:
+        raise                     # it answered, and said something worth passing on unchanged
     except Exception:
         raise ComfyUnavailable(f"ComfyUI isn't answering at {url} yet - it may still be starting up.")
     input_dir, output_dir = COMFY_EMBEDDED["input_dir"](), COMFY_EMBEDDED["output_dir"]()
@@ -361,15 +386,19 @@ def _resolve_comfy():
     saved = load_comfy_settings()
     fixed_url, url_source = _comfy_setting("url", saved)
     fixed_url = fixed_url.rstrip("/")
-    stats, url = None, None
+    stats, url, answered_badly = None, None, None
     for candidate in ((fixed_url,) if fixed_url else COMFY_URL_CANDIDATES):
         try:
-            stats = _comfy_get_json("/system_stats", timeout=3, base=candidate)
+            stats = _comfy_system_stats(candidate)
             url = candidate
             break
+        except ComfyUnavailable as e:
+            answered_badly = answered_badly or e     # a ComfyUI that IS there, with a broken GPU
         except Exception:
             continue
     if stats is None:
+        if answered_badly:
+            raise answered_badly
         if url_source == "env":
             raise ComfyUnavailable(f"Couldn't reach ComfyUI at {fixed_url} (set by the COMFYUI_URL "
                                    "environment variable) - is it running?")
@@ -10066,12 +10095,15 @@ def comfy_preflight():
     ComfyUI answers, its folders are here, and nothing required is missing."""
     report = {"ready": False,
               "comfy": {"reachable": False, "url": COMFY_URL, "version": None, "embedded": bool(COMFY_EMBEDDED),
-                        "input_dir": None, "output_dir": None, "sources": None, "error": None},
+                        "input_dir": None, "output_dir": None, "sources": None, "error": None,
+                        # True when restarting ComfyUI's server is the fix, so the setup screen and
+                        # the sidebar panel can offer that rather than describe it.
+                        "restart": False},
               "groups": [], "nodes": []}
     try:
         ensure_comfy(refresh=True)
     except ComfyUnavailable as e:
-        report["comfy"].update(reachable=e.reachable, error=str(e))
+        report["comfy"].update(reachable=e.reachable, error=str(e), restart=e.restart)
         return report
     report["comfy"].update(reachable=True, url=COMFY_URL, version=_COMFY_VERSION,
                            input_dir=COMFY_INPUT_DIR, output_dir=COMFY_OUTPUT_DIR,

@@ -176,5 +176,105 @@ ck(not result["success"] and result.get("busy") and "Ending video is downloading
 
 ck(srv.server_busy_reason() is None, "with nothing running there should be no reason to refuse a reload")
 
+# ---- a ComfyUI that answers but has lost the graphics card (what sleeping the computer does) ----
+# Its web server is fine, so this looks like a healthy ComfyUI from everywhere except /system_stats,
+# where every GPU query in that process now raises. Telling the player to wait would be wrong: only
+# restarting ComfyUI's server clears it.
+import urllib.error
+
+def gpu_gone(path, timeout=5, base=None):
+    if path == "/system_stats":
+        raise urllib.error.HTTPError(f"{base or srv.COMFY_URL}{path}", 500, "Internal Server Error", {}, None)
+    raise AssertionError(path)
+
+srv.COMFY_EMBEDDED = {"url": "http://127.0.0.1:8188", "input_dir": lambda: IN_DIR, "output_dir": lambda: OUT_DIR}
+srv._comfy_get_json = gpu_gone
+try:
+    srv.ensure_comfy(refresh=True)
+    ck(False, "embedded: a ComfyUI answering 500 should raise")
+except srv.ComfyUnavailable as e:
+    ck(e.restart and e.reachable, "embedded: a 500 from /system_stats is reachable and wants a restart")
+    ck("graphics card" in str(e) and "sleep" in str(e) and "starting up" not in str(e),
+       f"embedded: the message should name the real cause, got {str(e)!r}")
+with contextlib.redirect_stdout(io.StringIO()):
+    report = srv.comfy_preflight()
+ck(report["comfy"]["restart"] is True and not report["ready"],
+   "the preflight report carries the restart flag, so the sidebar can offer the button")
+
+srv.COMFY_EMBEDDED = None
+srv._COMFY_RESOLVED = False
+try:
+    srv.ensure_comfy(refresh=True)
+    ck(False, "standalone: a ComfyUI answering 500 should raise")
+except srv.ComfyUnavailable as e:
+    ck(e.restart and "graphics card" in str(e), "standalone: the same ComfyUI is diagnosed the same way")
+    ck("is it running?" not in str(e), "standalone: it IS running - don't ask whether it is")
+report = None
+
+# ---- the Restart ComfyUI button ----
+reboots = []
+def fake_urlopen(req, timeout=None):
+    reboots.append((req.get_method(), req.full_url, req.headers.get("Content-type")))
+    raise OSError("connection reset - it is going down")
+
+import urllib.request
+real_urlopen = urllib.request.urlopen
+urllib.request.urlopen = fake_urlopen
+srv.COMFY_URL = "http://127.0.0.1:8188"
+srv._comfy_get_json = lambda path, timeout=5, base=None: {"exec_info": {"queue_remaining": 0}}
+
+srv.gen_progress["is_generating"] = True
+try:
+    result = cn.restart_comfyui(srv)
+finally:
+    srv.gen_progress["is_generating"] = False
+ck(not result["success"] and result.get("busy") and not reboots,
+   f"a restart during a run is refused before anything is rebooted, got {result}")
+
+srv._comfy_get_json = lambda path, timeout=5, base=None: {"exec_info": {"queue_remaining": 2}}
+result = cn.restart_comfyui(srv)
+ck(not result["success"] and not reboots, f"a restart with ComfyUI's own queue busy is refused, got {result}")
+
+srv._comfy_get_json = lambda path, timeout=5, base=None: {"exec_info": {"queue_remaining": 0}}
+result = cn.restart_comfyui(srv)
+ck(result == {"success": True, "how": "manager"}, f"Manager's reboot is what gets pressed, got {result}")
+ck(reboots == [("POST", "http://127.0.0.1:8188/api/v2/manager/reboot", "application/json")],
+   f"the current Manager's reboot is a POST, and not as a form content type (its CSRF gate), got {reboots}")
+
+# No Manager: every reboot route 404s, and ComfyCrawler asks before restarting the process itself.
+reboots.clear()
+def no_manager(req, timeout=None):
+    reboots.append(req.full_url)
+    raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+urllib.request.urlopen = no_manager
+result = cn.restart_comfyui(srv)
+ck(not result["success"] and result.get("needs_confirm") and "Manager isn't installed" in result["error"],
+   f"without Manager the first press asks rather than acts, got {result}")
+ck(len(reboots) == len(cn.MANAGER_REBOOTS), f"every Manager spelling is tried, got {reboots}")
+
+# Manager there but refusing (--listen raises its security level): no reboot to ride on, so the
+# panel is offered the same do-it-ourselves confirm, worded for what actually happened.
+def manager_says_no(req, timeout=None):
+    raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
+urllib.request.urlopen = manager_says_no
+result = cn.restart_comfyui(srv)
+ck(not result["success"] and result.get("needs_confirm") and "security level" in result["error"],
+   f"a Manager that refuses should say so and still offer the restart, got {result}")
+urllib.request.urlopen = no_manager      # back to "no Manager here", for the confirmed press
+
+timers = []
+real_timer = cn.threading.Timer
+cn.threading.Timer = lambda delay, fn: type("T", (), {"start": lambda self: timers.append((delay, fn))})()
+try:
+    result = cn.restart_comfyui(srv, confirmed=True)
+finally:
+    cn.threading.Timer = real_timer
+    urllib.request.urlopen = real_urlopen
+ck(result == {"success": True, "how": "self"}, f"a confirmed restart goes ahead, got {result}")
+ck(len(timers) == 1 and timers[0][1] is cn._exec_restart and timers[0][0] > 0,
+   "the process is replaced AFTER the reply has been written, not during it")
+ck(srv.server_busy_reason() is None, "the restart checks left nothing running")
+
+
 print("FAIL" if fails else "all node-shim checks passed")
 sys.exit(1 if fails else 0)

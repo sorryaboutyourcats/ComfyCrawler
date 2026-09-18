@@ -1237,13 +1237,18 @@
             <label class="text-xs font-bold text-slate-800" for="maxFpsSlider">
               Max Frame Rate: <span id="maxFpsValue" class="text-blue-900">60 FPS</span>
             </label>
-            <input id="maxFpsSlider" class="win95-slider" type="range" min="24" max="240" step="1" value="60"
+            <!-- Notched, not free: the slider walks a fixed list of the frame rates monitors
+                 actually run at (FPS_STOPS in game.js) instead of every number between them, so
+                 it lands on 144 rather than 143. min/max are STOP INDICES - game.js sets them
+                 from the list's length - and the value shown in the label above is the stop's
+                 own FPS. -->
+            <input id="maxFpsSlider" class="win95-slider" type="range" min="0" max="10" step="1" value="4"
                    aria-describedby="maxFpsHint" />
-            <!-- Ends only. The track is linear over 24-240, so evenly spaced tick labels would
-                 sit nowhere near the values they name - and the readout in the label above
-                 already shows the exact number while you drag. -->
+            <!-- Ends only. The stops are evenly spaced on the track but not in FPS (12 to 24 is
+                 one notch, so is 144 to 200), so labelling every notch would crowd the row -
+                 and the readout in the label above already names the stop while you drag. -->
             <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
-              <span>24</span><span>240</span>
+              <span>12</span><span>240</span>
             </div>
             <!-- Hidden for now - may be shown again later. -->
             <div class="text-[10px] text-slate-500 font-bold" id="maxFpsHint" hidden>
@@ -1253,66 +1258,78 @@
             </div>
           </div>
 
-          <div id="soundModeRow" class="flex flex-col gap-1.5">
-            <label class="text-xs font-bold text-slate-800">
-              Sound Generation:
-            </label>
-            <select id="soundModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-              <option value="music_and_sound" selected>Generated music and sound</option>
-              <option value="sound_only">Generated sound (no music)</option>
-              <option value="skip">Skip sound generation</option>
-            </select>
-            <!-- Hidden for now - may be shown again later. -->
-            <div class="text-[10px] text-slate-500 font-bold" hidden>Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+          <!-- Sound Generation and Ending Video sit side by side: two dropdowns, one row. Both
+               are "how much extra does creating this dungeon do", so they read as a pair - and
+               a <select> each keeps the row short enough that the options list does not need
+               scrolling to reach the ComfyUI fields below. Stacks back to one column on a
+               narrow window. -->
+          <div class="flex flex-col sm:flex-row gap-1.5 sm:gap-2">
+            <div id="soundModeRow" class="flex flex-col gap-1.5 flex-1 min-w-0">
+              <label class="text-xs font-bold text-slate-800" for="soundModeSelect">
+                Sound Generation:
+              </label>
+              <select id="soundModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                <option value="music_and_sound" selected>Generated music and sound</option>
+                <option value="sound_only">Generated sound (no music)</option>
+                <option value="skip">Skip sound generation</option>
+              </select>
+              <!-- Hidden for now - may be shown again later. -->
+              <div class="text-[10px] text-slate-500 font-bold" hidden>Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+            </div>
+
+            <!-- Ending Video: a MiniMax H3 cutscene of the boss going down, filmed from the run's own
+                 hero, boss, textures and battle music, played the moment the boss's health runs out
+                 and held on its last frame under the victory box. A dropdown next to Sound
+                 Generation, because the two read as a pair - both are "how much more work does
+                 creating this dungeon do" - and because the arrow keys walk a <select> as happily
+                 as they walked the Off/On row it replaces. game.js (setEndingVideo) remembers the
+                 pick across reloads. Defaults to Off.
+
+                 The second row moves the render off the loading screen and into the background
+                 while the run is played - and only means anything with the dropdown On, so game.js
+                 greys it out while that is Off. It is hidden and forced Off for now (see its own
+                 comment below), which is why it lives outside the two-column row: nothing of it
+                 shows. -->
+            <div id="endingVideoCol" class="flex flex-col gap-1.5 flex-1 min-w-0">
+              <label class="text-xs font-bold text-slate-800" for="endingVideoSelect">
+                Ending Video:
+              </label>
+              <select id="endingVideoSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                <option value="on"
+                        title="Films a cutscene of your hero beating the boss, scored from the dungeon's battle music. It plays the moment the boss runs out of health. Filming it makes creating a dungeon take a lot longer.">Generated ending video</option>
+                <option value="off" selected
+                        title="No cutscene. Beat the boss, walk the last stretch to the stairs, and the dungeon is escaped.">No ending video</option>
+              </select>
+            </div>
           </div>
 
-          <!-- Ending Video: a MiniMax H3 cutscene of the boss going down, filmed from the run's own
-               hero, boss, textures and battle music, played the moment the boss's health runs out
-               and held on its last frame under the victory box. The second row moves the render
-               off the loading screen and into the background while the run is played - and only
-               means anything with the first row On, so game.js greys it out while that is Off.
-               That second row is hidden and forced Off for now (see its own comment below).
-               Rows of buttons like the difficulty row rather than checkboxes, so the arrow keys
-               walk across them; game.js (setEndingVideo / setEndingBackground) keeps each pick
-               pressed in and remembers both across reloads. Both default to Off. -->
-          <div class="flex flex-col gap-1.5">
-            <label class="text-xs font-bold text-slate-800" id="endingVideoLabel">
-              Ending Video:
+          <!-- Render Ending While Playing is hidden for now and forced Off - the cutscene is
+               always filmed on the loading screen. The row is left here, wired up and all, so
+               dropping the `hidden` below (and ENDING_BACKGROUND_OFFERED in game.js) brings it
+               back. May be shown again later. -->
+          <div class="flex flex-col gap-1.5 hidden">
+            <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
+              Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
             </label>
-            <div id="endingVideoRow" class="flex gap-1.5" role="group" aria-labelledby="endingVideoLabel">
-              <button type="button" data-ending-video="off" class="ending-video-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="No cutscene. Beat the boss, walk the last stretch to the stairs, and the dungeon is escaped.">
+            <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
+              <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
                 <span class="text-xs">Off</span>
               </button>
-              <button type="button" data-ending-video="on" class="ending-video-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="Films a cutscene of your hero beating the boss, scored from the dungeon's battle music. It plays the moment the boss runs out of health. Filming it makes creating a dungeon take a lot longer.">
+              <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                      title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
                 <span class="text-xs">On</span>
               </button>
             </div>
+          </div>
 
-            <!-- Render Ending While Playing is hidden for now and forced Off - the cutscene is
-                 always filmed on the loading screen. The row is left here, wired up and all, so
-                 dropping the `hidden` below (and ENDING_BACKGROUND_OFFERED in game.js) brings it
-                 back. May be shown again later. -->
-            <div class="flex flex-col gap-1.5 hidden">
-              <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
-                Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
-              </label>
-              <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
-                <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                        title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
-                  <span class="text-xs">Off</span>
-                </button>
-                <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                        title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
-                  <span class="text-xs">On</span>
-                </button>
-              </div>
-            </div>
-
-            <!-- How the movie is drawn - the cutscene and History's player alike, so this row is
-                 never greyed out. The clip is filmed small (512x384) and blown up to fill the
-                 viewport; game.js (setEndingLook / createClipScaler) does that blow-up. -->
+          <!-- Ending Video Look - how the movie is blown up from the 512x384 it is filmed at to
+               fill the viewport (the cutscene and History's player alike). Hidden for now and
+               forced to Pixel, which matches the hard square pixels the rest of the dungeon is
+               drawn with; the row is left here, wired up, so dropping the `hidden` below (and
+               ENDING_LOOK_OFFERED in game.js) brings the choice back. May be shown again later.
+               game.js (setEndingLook / createClipScaler) does the blow-up. -->
+          <div class="flex flex-col gap-1.5 hidden">
             <label class="text-xs font-bold text-slate-800 mt-1" id="endingLookLabel">
               Ending Video Look:
             </label>
@@ -1586,7 +1603,7 @@
         </div>
 
         <div class="px-3 text-[11px] text-slate-700 font-bold">
-          Dungeons you have already made. Starting one skips generation completely &ndash; the same
+          Dungeons you've made. Starting one skips generation completely &ndash; same
           hero, foes, art and narration, on a freshly drawn maze at your current difficulty.
         </div>
 

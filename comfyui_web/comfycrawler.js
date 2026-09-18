@@ -87,6 +87,9 @@ function createPanel(root) {
   let job = { group: null, state: "idle" };
   let note = "";            // the last thing that happened, shown under the buttons
   let confirmingCancel = null;   // a group label, while its Cancel is asking "sure?"
+  // null, or how far the Restart ComfyUI button has got: "ask" (are you sure?), "force" (no
+  // ComfyUI-Manager - shall ComfyCrawler do it itself?), "going" (waiting for it to come back).
+  let restart = null;
   let timer = null;
   let stopped = false;
   let lastShape = "";       // rebuild only when the rows actually change, so focus survives a poll
@@ -199,8 +202,82 @@ function createPanel(root) {
       report && report.comfy && report.comfy.error,
       report && report.ready,
       groups.map((g) => [g.label, g.missing.length, g.missing_bytes]),
-      job.group, job.state, confirmingCancel,
+      job.group, job.state, confirmingCancel, restart,
     ]);
+  }
+
+  // ---- Restart ComfyUI ----
+  // The fix for the state server.py's _comfy_system_stats describes: after the computer sleeps,
+  // ComfyUI keeps answering but has lost the graphics card, and only starting its server again
+  // brings it back. ComfyUI's own top-bar circular arrow doesn't do that - it refreshes node
+  // definitions - which is exactly why this button is here, next to the error that asks for it.
+  async function doRestart(confirmed) {
+    setNote("Asking ComfyUI to restart…");
+    render(true);
+    const { status, data } = await postJSON("/comfycrawler/node/restart_comfyui", { confirmed });
+    if (status === 404) {
+      restart = null;
+      setNote("This ComfyUI is running an older ComfyCrawler, which has no restart. Stop and start "
+              + "ComfyUI's server yourself.");
+    } else if (data && data.needs_confirm) {
+      restart = "force";
+      setNote(data.error);
+    } else if (!data || !data.success) {
+      restart = null;
+      setNote((data && data.error) || "ComfyUI wouldn't restart - see its log.");
+    } else {
+      restart = "going";
+      setNote("ComfyUI is restarting. This panel picks up again on its own; if it hasn't in a "
+              + "minute or two, start ComfyUI yourself.");
+      waitForComfyUI();
+    }
+    render(true);
+  }
+
+  // It goes away before it comes back, so a failed fetch is the expected middle - only an answer
+  // ends the wait. Two minutes is longer than a cold ComfyUI start with every custom node loading.
+  async function waitForComfyUI() {
+    const deadline = Date.now() + 120000;
+    let wasDown = false;
+    while (!stopped && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      if (stopped) return;
+      try {
+        const res = await fetch(url("/api/system_stats"), { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));   // up again, but still no graphics card
+        if (wasDown) {
+          restart = null;
+          setNote("ComfyUI is back. Reload this browser tab if anything looks stale.");
+          await refresh();
+          return;
+        }
+      } catch (err) {
+        wasDown = true;     // it has gone down: from here, the next good answer is the new one
+      }
+    }
+    if (stopped) return;
+    restart = null;
+    setNote("ComfyUI hasn't come back on its own - start it again, then reload this tab.");
+    render(true);
+  }
+
+  function restartButtons() {
+    if (restart === "going") {
+      return [el("span", "font-size:11px;opacity:0.8;align-self:center;", "⟲ Restarting ComfyUI…")];
+    }
+    if (restart) {
+      const go = button(restart === "force" ? "Restart anyway" : "Yes, restart ComfyUI",
+        "Start ComfyUI's server again", () => doRestart(restart === "force"), true);
+      go.dataset.autofocus = "1";
+      return [button("Not now", "Leave ComfyUI running", () => { restart = null; setNote(""); render(true); }), go];
+    }
+    return [button("⟲ Restart ComfyUI", "Start ComfyUI's server again - the fix when it has lost "
+      + "the graphics card, which is what sleeping the computer does to it", () => {
+        restart = "ask";
+        setNote("Restarting ComfyUI stops ComfyCrawler with it and both come back together. "
+                + "Saved dungeons are files on disk and aren't touched.");
+        render(true);
+      })];
   }
 
   function render(force) {
@@ -220,6 +297,11 @@ function createPanel(root) {
       statusBox.append(el("div", "opacity:0.7;", "Asking ComfyCrawler…"));
     } else if (report.comfy && report.comfy.error) {
       statusBox.append(el("div", "color:var(--error-text,#f77);", `⛔ ${report.comfy.error}`));
+      if (report.comfy.restart) {
+        statusBox.append(el("div", "font-size:11px;opacity:0.8;margin-top:4px;",
+          "Use ⟲ Restart ComfyUI below. ComfyUI's own ↻ button only refreshes node definitions, "
+          + "which won't clear this."));
+      }
     } else {
       statusBox.append(el("div", "", `ComfyUI ${report.comfy.version || "?"} — ${report.ready ? "✔ ready to make dungeons" : "⛔ missing something a dungeon needs"}`));
       const badNode = (report.nodes || []).filter((n) => n.required && !n.present);
@@ -250,6 +332,7 @@ function createPanel(root) {
         setNote("");
         await refresh();
       }),
+      ...restartButtons(),
       button("⟳ Reload server.py", "Pick up an updated ComfyCrawler without restarting ComfyUI", async () => {
         setNote("Reloading…");
         const { data } = await postJSON("/comfycrawler/node/reload", {});
@@ -260,6 +343,10 @@ function createPanel(root) {
       }),
     );
     noteBox.textContent = note;
+    // The confirm replaces the button that was just pressed, so move focus onto it - otherwise a
+    // keyboard press lands on nothing and the question can't be answered without the mouse.
+    const focusMe = actionBox.querySelector("[data-autofocus]");
+    if (focusMe) focusMe.focus();
   }
 
   async function refresh() {

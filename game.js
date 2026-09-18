@@ -350,8 +350,14 @@
     // Three loops draw the viewport - the main combatFrame, and the move/turn tweens in
     // animate3D and animateBump - but only ever one of them per frame, so they share this one
     // budget rather than each keeping their own (which would let a tween draw at 2x the cap).
-    const MIN_FPS_CAP = 24;
-    const MAX_FPS_CAP = 240;
+    //
+    // The cap is picked from a fixed list of NOTCHES rather than a free number: the rates
+    // monitors and recordings actually run at, from a 12fps crawl for a very slow machine up to
+    // 240. A free slider spent most of its travel on numbers nobody wants (143, 187) and made
+    // the ones they do want hard to land on, so the slider walks these stops one at a time.
+    // Anything else - an older saved value, a hand-edited one - is snapped to the nearest stop
+    // by clampFpsCap, so there is only ever one set of rates in play.
+    const FPS_STOPS = [12, 24, 30, 45, 60, 90, 120, 144, 200, 222, 240];
     const DEFAULT_FPS_CAP = 60;
     const FPS_CAP_KEY = 'comfycrawler.maxFps';
     let maxFps = DEFAULT_FPS_CAP;
@@ -373,10 +379,22 @@
       return true;
     }
 
+    // Snaps to the nearest notch rather than clamping to a range: the slider only ever hands
+    // over a stop, but a saved value from before the stops existed (or an fps typed into
+    // localStorage by hand) still has to land on one.
     function clampFpsCap(v) {
-      const n = Math.round(Number(v));
+      const n = Number(v);
       if (!Number.isFinite(n)) return DEFAULT_FPS_CAP;
-      return Math.max(MIN_FPS_CAP, Math.min(MAX_FPS_CAP, n));
+      let best = FPS_STOPS[0];
+      for (const stop of FPS_STOPS) {
+        if (Math.abs(stop - n) < Math.abs(best - n)) best = stop;
+      }
+      return best;
+    }
+
+    // Which notch an fps sits on - the slider's own value, since the track is indices.
+    function fpsStopIndex(v) {
+      return FPS_STOPS.indexOf(clampFpsCap(v));
     }
 
     function applyFpsCap(v) {
@@ -1688,11 +1706,12 @@
     // offer, so it's forced here rather than read back from a stored pick made before that.
     setLastAttackFrame('mixed');
 
-    // Ending Video's two Off / On rows - see the ENDING CUTSCENE section for what they drive. Both
-    // default to Off and, like difficulty, stick across reloads: a refresh that quietly turned the
-    // cutscene off would cost a whole generation made without it. The second row (film it in the
-    // background while playing) is greyed out while the first is Off, since it has nothing to
-    // move off the loading screen - but it keeps its own pick for when the cutscene comes back on.
+    // Ending Video's dropdown and the Off / On row under it - see the ENDING CUTSCENE section for
+    // what they drive. Both default to Off and, like difficulty, stick across reloads: a refresh
+    // that quietly turned the cutscene off would cost a whole generation made without it. The
+    // row (film it in the background while playing) is greyed out while the dropdown is Off,
+    // since it has nothing to move off the loading screen - but it keeps its own pick for when
+    // the cutscene comes back on.
     // ...except that the background row is hidden and forced Off for now (index.html holds the
     // row behind a `hidden`), so every cutscene is filmed on the loading screen. Flip this back
     // to true to offer it again: the row reappears, the stored pick is read back, and picks start
@@ -1701,24 +1720,24 @@
     const ENDING_BACKGROUND_OFFERED = false;
     const ENDING_VIDEO_KEY = 'comfycrawler.endingVideo';
     const ENDING_BACKGROUND_KEY = 'comfycrawler.endingVideoBackground';
-    const endingVideoRow = document.getElementById('endingVideoRow');
+    const endingVideoSelect = document.getElementById('endingVideoSelect');
     const endingBackgroundRow = document.getElementById('endingBackgroundRow');
     const endingBackgroundLabel = document.getElementById('endingBackgroundLabel');
     let endingVideoOn = false;
     let endingBackgroundOn = false;
 
     function paintEndingOptionRows() {
-      const paintRow = (row, key, on, disabled) => {
-        if (!row) return;
-        row.querySelectorAll('button').forEach((btn) => {
-          const picked = (btn.dataset[key] === 'on') === on;
+      if (endingVideoSelect) endingVideoSelect.value = endingVideoOn ? 'on' : 'off';
+      // The background row is still a row of buttons - it is hidden, so it was never worth
+      // turning into a second dropdown alongside the first.
+      if (endingBackgroundRow) {
+        endingBackgroundRow.querySelectorAll('button').forEach((btn) => {
+          const picked = (btn.dataset.endingBackground === 'on') === endingBackgroundOn;
           btn.classList.toggle('is-selected', picked);
           btn.setAttribute('aria-pressed', picked ? 'true' : 'false');
-          btn.disabled = disabled;
+          btn.disabled = !endingVideoOn;
         });
-      };
-      paintRow(endingVideoRow, 'endingVideo', endingVideoOn, false);
-      paintRow(endingBackgroundRow, 'endingBackground', endingBackgroundOn, !endingVideoOn);
+      }
       if (endingBackgroundLabel) endingBackgroundLabel.classList.toggle('opacity-50', !endingVideoOn);
     }
 
@@ -1727,11 +1746,9 @@
       if (ENDING_BACKGROUND_OFFERED) prefs.set(ENDING_BACKGROUND_KEY, endingBackgroundOn ? 'on' : 'off');
     }
 
-    if (endingVideoRow) {
-      endingVideoRow.addEventListener('click', (e) => {
-        const btn = e.target.closest('.ending-video-btn');
-        if (!btn || btn.disabled) return;
-        endingVideoOn = btn.dataset.endingVideo === 'on';
+    if (endingVideoSelect) {
+      endingVideoSelect.addEventListener('change', () => {
+        endingVideoOn = endingVideoSelect.value === 'on';
         paintEndingOptionRows();
         saveEndingOptions();
       });
@@ -1751,17 +1768,26 @@
     paintEndingOptionRows();
 
     // Ending Video Look: Smooth / Sharp / Pixel - how both movie players blow the small clip up to
-    // fill the screen (see createClipScaler). Sharp is the default. Each player's scaler registers
-    // itself in clipScalers when it is built further down, and takes the current pick then; a
-    // change here reaches every one of them at once, mid-play included.
+    // fill the screen (see createClipScaler). Each player's scaler registers itself in clipScalers
+    // when it is built further down, and takes the current pick then; a change here reaches every
+    // one of them at once, mid-play included.
+    //
+    // The row is hidden for now (index.html holds it behind a `hidden`) and every clip is drawn
+    // Pixel: hard square pixels, the same way the rest of the dungeon is drawn, so the cutscene
+    // does not arrive looking like it came from a different game. Flip ENDING_LOOK_OFFERED back
+    // to true to offer the choice again - the row reappears, the stored pick is read back, and
+    // picks start being saved once more. While it is false the stored pick is left untouched, so
+    // an earlier Smooth or Sharp is still there when the option returns.
+    const ENDING_LOOK_OFFERED = false;
     const ENDING_LOOK_KEY = 'comfycrawler.endingVideoLook';
     const ENDING_LOOKS = ['smooth', 'sharp', 'pixel'];
+    const ENDING_LOOK_DEFAULT = 'pixel';
     const endingLookRow = document.getElementById('endingLookRow');
     const clipScalers = [];
-    let endingLook = 'sharp';
+    let endingLook = ENDING_LOOK_DEFAULT;
 
     function setEndingLook(look) {
-      endingLook = ENDING_LOOKS.includes(look) ? look : 'sharp';
+      endingLook = ENDING_LOOKS.includes(look) ? look : ENDING_LOOK_DEFAULT;
       if (endingLookRow) {
         endingLookRow.querySelectorAll('.ending-look-btn').forEach((btn) => {
           const picked = btn.dataset.endingLook === endingLook;
@@ -1776,11 +1802,12 @@
       endingLookRow.addEventListener('click', (e) => {
         const btn = e.target.closest('.ending-look-btn');
         if (!btn || btn.disabled) return;
+        if (!ENDING_LOOK_OFFERED) return;
         setEndingLook(btn.dataset.endingLook);
         prefs.set(ENDING_LOOK_KEY, endingLook);
       });
     }
-    setEndingLook(prefs.get(ENDING_LOOK_KEY));
+    setEndingLook(ENDING_LOOK_OFFERED ? prefs.get(ENDING_LOOK_KEY) : ENDING_LOOK_DEFAULT);
 
     // Sound Generation: music+sound / sound only / none (index.html #soundModeSelect). Unlike the
     // other options here, this one had no saved key until model downloads needed somewhere to
@@ -8291,15 +8318,26 @@ void main() {
       // other is. A maze too short for planGates to gate at all (gatePlan null - none of 112000
       // measured at 33 to 111 grids were) is let through, since no reroll would give it
       // a door. The attempt cap is only a backstop; at ~0.5% a second reroll is already rare.
+      //
+      // The same loop throws away a carve whose exit hallway leaves the boss nowhere to stand:
+      // findExitGuardSpot wants a straight run of five to put the guard in the middle of, and
+      // about 1% of hallways bend or run out before they offer one. That is a property of where
+      // relocateExit could tunnel rather than of the maze the player walks, so a fresh carve
+      // fixes it. Measured over 1200 dungeons a side it rerolls 1.4% of Easy carves, 1.3% of
+      // Medium and 0.9% of Hard, none of them ever ran out of attempts, and the boss came out
+      // with its five tiles on every one of the 3600.
       for (let attempt = 1; ; attempt++) {
         const gatePlan = carveAndGateMaze(cellRows, cellCols, targetCells);
         const reachable = _flood(startRoom, (x, y) => MAP[y][x] === 0);
-        if (!gatePlan || !reachable.has(_tileKey(exitRoom.x, exitRoom.y))) break;
+        const ungated = gatePlan && reachable.has(_tileKey(exitRoom.x, exitRoom.y));
+        const cramped = !findExitGuardSpot().roomy;
+        const why = ungated ? 'boss reachable without a door' : 'no straight hallway for the boss';
+        if (!ungated && !cramped) break;
         if (attempt >= MAZE_BUILD_ATTEMPTS) {
-          console.info(`[maze] still no door before the boss after ${attempt} attempts - keeping it`);
+          console.info(`[maze] ${why} after ${attempt} attempts - keeping it`);
           break;
         }
-        console.info(`[maze] attempt ${attempt}: boss reachable without a door - carving a new maze`);
+        console.info(`[maze] attempt ${attempt}: ${why} - carving a new maze`);
       }
 
       // Add Lanterns to Walls - never beside a door or switch (see _nearGateOrSwitch above).
@@ -8486,8 +8524,127 @@ void main() {
     // nearest the stairs - deep enough into the corridor that the player fights it with hallway
     // both in front and behind, rather than backing into the stairwell mid-swing, and far
     // enough that beating it still leaves the walk down to the stairs to make. MAZE.exitHallCells
-    // is what guarantees there are three unbranching tiles back there to count off.
+    // is what guarantees there are three unbranching tiles back there to count off, and
+    // findExitGuardSpot is free to count off more than three when the third tile is a corner.
     const BOSS_TILES_FROM_EXIT = 3;
+    // How far back the walk is allowed to go looking for a tile that satisfies the rule below.
+    // Only ever used when the tile three back does not - a hallway that turns a corner there -
+    // and the walk still stops at the first fork, so a deeper guard is no less unavoidable.
+    const BOSS_MAX_TILES_FROM_EXIT = 8;
+
+    // The boss never stands on a corner, and never in a stub: it stands in the middle of a
+    // straight run of five, with two floor tiles to its left AND right, or two above AND below.
+    // A corner puts a wall a step from its shoulder, which on a foe markerScaleFor draws half
+    // again as large as anything else reads as the boss wedged into the masonry, and it leaves
+    // the player nowhere to sidestep the charge - the one attack that takes the whole telegraph
+    // bar. Five tiles of hallway is the room that fight wants.
+    function bossHasHallwayRoom(x, y) {
+      const open = (ax, ay) => ay > 0 && ay < MAP_HEIGHT - 1 && ax > 0 && ax < MAP_WIDTH - 1
+                               && MAP[ay][ax] === 0;
+      const run = (dx, dy) => open(x + dx, y + dy) && open(x + dx * 2, y + dy * 2);
+      return (run(-1, 0) && run(1, 0)) || (run(0, -1) && run(0, 1));
+    }
+
+    // Walks the exit hallway back from the stairs and says where the one guard stands.
+    //
+    // The guard stands BOSS_TILES_FROM_EXIT tiles back rather than on the stairs' doorstep, so
+    // the fight happens in the corridor with the stairwell in sight at the end of it, and
+    // beating the boss still leaves the last stretch to walk instead of dropping the player
+    // into the stairs out of its reach.
+    //
+    // Walked one tile at a time, and it stops at the first fork. Every step back is only
+    // unavoidable while it is still the ONLY way through: past a junction the player could
+    // round the boss and reach the stairs by the other branch. relocateExit sizes the hallway
+    // off the same constant, so the walk always has its three tiles to give - measured over 1200
+    // dungeons a side, the shortest it ever ran was four, and on most it ran the full eight -
+    // and the early exit is what keeps the guard unavoidable rather than merely deep if that
+    // ever stops being true.
+    //
+    // It carries on PAST the third tile, as far as BOSS_MAX_TILES_FROM_EXIT, so every tile the
+    // guard could legally stand on is on the table before one is picked. bossHasHallwayRoom
+    // then does the picking: the shallowest tile at or past BOSS_TILES_FROM_EXIT with a straight
+    // run of five around it. On a hallway that carved straight that is the third tile itself,
+    // leaving the fight exactly where it has always been; one that turned a corner there hands
+    // the boss the next tile down that did not, rather than standing it in the corner. Measured
+    // over 1200 dungeons a side, the guard lands on the third or fourth tile 54% of the time on
+    // Easy, 62% on Medium and 67% on Hard, and six or eight tiles back on most of the rest.
+    //
+    // Reads MAP directly and counts only floor - a door is not somewhere a guard is stood - so
+    // the same question can be asked twice: once by generateAuthentic3DMaze, to throw away a
+    // carve that left the boss no hallway at all, and once by placeEnemyMarkers to place it.
+    // Returns { spot, hall, roomy }: the guard's tile, the stretch from the stairs back through
+    // it that nothing else may stand in, and whether that tile satisfies the rule or is the
+    // last-ditch pick below.
+    function findExitGuardSpot() {
+      const open = (x, y) => y > 0 && y < MAP_HEIGHT - 1 && x > 0 && x < MAP_WIDTH - 1
+                             && MAP[y][x] === 0;
+      const isStart = (p) => p.x === startRoom.x && p.y === startRoom.y;
+      const nbrs = (p) => _ORTHO.map((d) => ({ x: p.x + d.dx, y: p.y + d.dy }))
+        .filter((q) => open(q.x, q.y));
+      // The spawn tile is excluded on the off chance a small maze puts the two next to each
+      // other - being ambushed by the boss before taking a step is not a fight, it is a wall.
+      const approaches = nbrs(exitRoom).filter((p) => !isStart(p));
+      // There is exactly one of these: the stairs sit at the dead end of the hallway
+      // relocateExit carved them, so there is one way in by construction. The sort below is
+      // belt and braces for the degenerate map where that carve found nowhere to go at all -
+      // the one guard then takes the approach the player reaches FIRST, the way in they will
+      // actually walk, rather than a random one. Doors count as passable there for the same
+      // reason relocateExit floods with them open: the player will have opened them by the
+      // time they are this deep.
+      if (approaches.length > 1) {
+        const fromStart = _flood(startRoom, (x, y) => MAP[y][x] === 0 || MAP[y][x] === 3);
+        const walkDist = (p) => {
+          const e = fromStart.get(_tileKey(p.x, p.y));
+          return e ? e.dist : Infinity;
+        };
+        approaches.sort((a, b) => walkDist(a) - walkDist(b));
+      }
+
+      const walked = [];
+      const seen = new Set([_tileKey(exitRoom.x, exitRoom.y)]);
+      if (approaches.length) {
+        let cur = approaches[0];
+        walked.push(cur);
+        seen.add(_tileKey(cur.x, cur.y));
+        for (let step = 2; step <= BOSS_MAX_TILES_FROM_EXIT; step++) {
+          const onward = nbrs(cur).filter((q) => !seen.has(_tileKey(q.x, q.y)) && !isStart(q));
+          if (onward.length !== 1) break;      // fork, or nothing behind it - the hallway ends
+          cur = onward[0];
+          walked.push(cur);
+          seen.add(_tileKey(cur.x, cur.y));
+        }
+      }
+
+      // walked[i] is i+1 tiles from the stairs. The shallowest roomy tile at or past the usual
+      // depth wins; failing that the deepest roomy tile IN FRONT of it, for the ~2% of hallways
+      // whose only straight five is the stretch nearest the stairs. Standing the guard two back
+      // is closer than the fight wants to be, but it is still the corridor, still the one way
+      // in, and still five tiles of room - all of which a corner three back is not.
+      let spot = null, shallowRoomy = null;
+      for (let i = 0; i < walked.length; i++) {
+        if (!bossHasHallwayRoom(walked[i].x, walked[i].y)) continue;
+        if (i >= BOSS_TILES_FROM_EXIT - 1) { spot = walked[i]; break; }
+        shallowRoomy = walked[i];
+      }
+      if (!spot) spot = shallowRoomy;
+      const roomy = !!spot;
+      // Last ditch, for a maze with no straight five anywhere behind the stairs:
+      // generateAuthentic3DMaze rerolls those, but its attempt cap can run out - and an
+      // unavoidable guard in a bend still beats no guard at all.
+      if (!spot && walked.length) spot = walked[Math.min(BOSS_TILES_FROM_EXIT, walked.length) - 1];
+
+      // Everything from the stairs back to and including the guard's own tile is the guarded
+      // stretch. Tiles the walk explored BEHIND it are not part of it - they are ordinary
+      // corridor, and a roamer is welcome to them (MARKER_MIN_SPACING keeps it off the boss's
+      // shoulder).
+      const hall = [{ x: exitRoom.x, y: exitRoom.y }];
+      for (const p of walked) {
+        hall.push(p);
+        if (p === spot) break;
+      }
+      return { spot, hall, roomy };
+    }
+
     function placeEnemyMarkers() {
       enemyMarkers = [];
       activeMarker = null;
@@ -8495,7 +8652,6 @@ void main() {
 
       const target = Math.max(4, Math.min(14, Math.round(passagesList.length * 0.16)));
       const far = (a, bx, by) => Math.abs(a.x - bx) + Math.abs(a.y - by);
-      const walkable = new Set(passagesList.map(p => `${p.x},${p.y}`));
       const push = (x, y, variant) => {
         const m = { x, y, variant, alive: true, phase: Math.random() * Math.PI * 2 };
         enemyMarkers.push(m);
@@ -8503,9 +8659,8 @@ void main() {
       };
 
       // Walking distance from the spawn tile, doors counted as passable (the player will have
-      // opened them by the time they are out this far). Used twice below: to pick which
-      // approach the exit guard stands in, and to order the roamers so the ones the player
-      // meets FIRST can be held back to the two plain foes.
+      // opened them by the time they are out this far). Used below to order the roamers, so the
+      // ones the player meets FIRST can be held back to the two plain foes.
       const fromStart = _flood(startRoom, (x, y) => MAP[y][x] === 0 || MAP[y][x] === 3);
       const walkDist = (p) => {
         const e = fromStart.get(_tileKey(p.x, p.y));
@@ -8515,50 +8670,11 @@ void main() {
       // --- The exit guard. ONE boss, because relocateExit hands us an Exit that is a dead end:
       // a single corridor reaches the stairs, so a single foe standing in it cannot be walked
       // around. It is visible from down that corridor because markerScaleFor draws it half
-      // again as large as anything else.
-      // The spawn tile is excluded on the off chance a small maze puts the two next to each
-      // other - being ambushed by the boss before taking a step is not a fight, it is a wall.
-      const nbrs = p => [{ x: p.x + 1, y: p.y }, { x: p.x - 1, y: p.y },
-                         { x: p.x, y: p.y + 1 }, { x: p.x, y: p.y - 1 }]
-        .filter(q => walkable.has(`${q.x},${q.y}`));
-      const isStart = p => p.x === startRoom.x && p.y === startRoom.y;
-      const approaches = nbrs(exitRoom).filter(p => !isStart(p));
-      // There is exactly one of these: the stairs sit at the dead end of the hallway
-      // relocateExit carved them, so there is one way in by construction. The branch below is
-      // belt and braces for the degenerate map where that carve found nowhere to go at all -
-      // the one guard then takes the approach the player reaches FIRST, the way in they will
-      // actually walk, rather than a random one. Doors count as passable here for the same
-      // reason relocateExit floods with them open: the player will have opened them by the
-      // time they are this deep.
-      if (approaches.length > 1) {
-        approaches.sort((a, b) => walkDist(a) - walkDist(b));
-      }
-
-      // The guard stands BOSS_TILES_FROM_EXIT tiles back down the hallway rather than on the
-      // stairs' doorstep, so the fight happens in the corridor with the stairwell in sight at
-      // the end of it, and beating the boss still leaves the last stretch to walk instead of
-      // dropping the player into the stairs out of its reach.
-      //
-      // Walked one tile at a time, and it stops early at the first fork. Every step back is
-      // only unavoidable while it is still the ONLY way through: past a junction the player
-      // could round the boss and reach the stairs by the other branch. relocateExit sizes the
-      // hallway off this same constant, so the walk runs the full three - measured, on every
-      // one of 4200 dungeons across the three difficulties - and the early exit is what keeps
-      // the guard unavoidable rather than merely deep if it ever does not.
-      const exitHallTiles = new Set([_tileKey(exitRoom.x, exitRoom.y)]);
-      if (approaches.length) {
-        let cur = approaches[0], spot = cur;
-        exitHallTiles.add(_tileKey(cur.x, cur.y));
-        for (let step = 2; step <= BOSS_TILES_FROM_EXIT; step++) {
-          const onward = nbrs(cur).filter(q =>
-            !exitHallTiles.has(_tileKey(q.x, q.y)) && !isStart(q));
-          if (onward.length !== 1) break;      // fork, or nothing behind it - hold here
-          cur = onward[0];
-          exitHallTiles.add(_tileKey(cur.x, cur.y));
-          spot = cur;
-        }
-        push(spot.x, spot.y, 'boss');
-      }
+      // again as large as anything else. findExitGuardSpot walks that corridor and picks the
+      // tile - see it for where in the hallway the boss ends up and why.
+      const guard = findExitGuardSpot();
+      const exitHallTiles = new Set(guard.hall.map((p) => _tileKey(p.x, p.y)));
+      if (guard.spot) push(guard.spot.x, guard.spot.y, 'boss');
 
       // --- The roaming foes fill the rest of the maze around them. exitHallTiles is every tile
       // from the stairs back to and including the boss's, and none of it is up for grabs: a
@@ -12920,15 +13036,23 @@ void main() {
     }
 
     if (maxFpsSlider) {
-      maxFpsSlider.min = String(MIN_FPS_CAP);
-      maxFpsSlider.max = String(MAX_FPS_CAP);
+      // The slider's value is a FPS_STOPS index, not an fps - that is what makes it notched:
+      // every position on the track is one of the rates, and dragging steps between them
+      // instead of sliding through the numbers in between.
+      maxFpsSlider.min = '0';
+      maxFpsSlider.max = String(FPS_STOPS.length - 1);
+      maxFpsSlider.step = '1';
       const startFps = loadFpsCap();
-      maxFpsSlider.value = String(startFps);
-      maxFpsSlider.addEventListener('input', () => {
-        showFpsCap(maxFpsSlider.value);
-        saveFpsCap(maxFpsSlider.value);
-      });
+      maxFpsSlider.value = String(fpsStopIndex(startFps));
+      const showSliderFps = () => {
+        const fps = FPS_STOPS[Number(maxFpsSlider.value)] || DEFAULT_FPS_CAP;
+        showFpsCap(fps);
+        saveFpsCap(fps);
+        maxFpsSlider.setAttribute('aria-valuetext', `${fps} FPS`);
+      };
+      maxFpsSlider.addEventListener('input', showSliderFps);
       showFpsCap(startFps);
+      maxFpsSlider.setAttribute('aria-valuetext', `${maxFps} FPS`);
     } else {
       applyFpsCap(loadFpsCap());
     }
