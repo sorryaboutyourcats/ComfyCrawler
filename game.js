@@ -2281,8 +2281,14 @@
       const rows = [...new Set(tops)].sort((a, b) => a - b);
       // One row, two rows, or the menu is off screen entirely (every offsetTop reads 0, so this
       // collapses to a single row and nothing is touched) - either way there is nothing to trim.
-      if (rows.length <= 2) return;
-      btns.forEach((b, i) => { if (tops[i] > rows[1]) b.classList.add('hidden'); });
+      if (rows.length > 2) btns.forEach((b, i) => { if (tops[i] > rows[1]) b.classList.add('hidden'); });
+      // The CSS clip that stops the untrimmed list from flashing on first paint (see
+      // .quick-ideas-preflash-clip in index.html) has done its job the moment real .hidden
+      // classes are in place - drop it so it can't clip a legitimately tall row later (e.g. a
+      // long label wrapping to two lines). Every reshuffle from here on is one synchronous
+      // unhide-measure-rehide with nothing in between for the browser to paint, so there's
+      // nothing left for the clip to guard against.
+      row.classList.remove('quick-ideas-preflash-clip');
     }
 
     // ---- Secret quick ideas: unlocked one at a time after enough dice rolls --------

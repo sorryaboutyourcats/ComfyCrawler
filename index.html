@@ -810,6 +810,20 @@
       border-bottom: 2px solid #808080;
       box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
     }
+    /* All ~35 Quick ideas ship visible in the markup below (trimQuickIdeasToTwoRows in game.js
+       hides everything past two rows, but only once it runs). On a fresh page load the browser
+       can lay out and paint this screen - full untrimmed list and all - before that script,
+       parsed last, ever executes, so the window would flash tall and then snap short. This caps
+       the row's height to two rows' worth from first paint (same math trimQuickIdeasToTwoRows
+       uses: two 1.75rem buttons - text-xs line-height 1rem + py-1's 0.5rem + the 0.25rem
+       win95-btn border - plus the row's own gap-2, pt-2.5 and border-t) so nothing taller than
+       that is ever visible. game.js drops this class right after its first trim; every later
+       reshuffle is one synchronous unhide-measure-rehide with no paint in between, so it can't
+       flash again. */
+    .quick-ideas-preflash-clip {
+      overflow: hidden;
+      max-height: 4.75rem;
+    }
   </style>
   <!-- Compiled Tailwind (npm run tw:build / tw:watch). It sits AFTER the page's own <style>
        because that's where the play CDN injected its sheet, so utilities still win ties the
@@ -981,7 +995,7 @@
                 id="enemyPromptInput"
                 class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors disabled:opacity-40 disabled:bg-slate-200 disabled:cursor-not-allowed"
                 value=""
-                placeholder='fill in enemy... or "Billy" the cat'
+                placeholder='fill in enemy... or "Name" the cat'
               />
               <span class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
                 ENEMY
@@ -1007,7 +1021,7 @@
         <!-- Quick Presets - game.js reshuffles these on every visit to the menu (Windows 95 pinned
              first) and trims them to the two rows that fit. 🎲 rerolls the lot, Windows 95 included.
              The label and 🎲 are not .preset-btn, so the shuffle leaves them where they are. -->
-        <div id="quickIdeasRow" class="flex gap-2 mt-1 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300">
+        <div id="quickIdeasRow" class="flex gap-2 mt-1 flex-wrap items-center pt-2.5 border-t border-dashed border-slate-300 quick-ideas-preflash-clip">
           <span class="text-xs text-slate-600 font-bold">Quick ideas:</span>
           <button id="btnShuffleIdeas" type="button" class="win95-btn text-xs px-1.5 py-1 flex items-center" title="Shuffle the quick ideas - a fresh handful every click">
             <span>🎲</span>
