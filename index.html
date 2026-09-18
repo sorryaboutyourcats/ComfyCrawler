@@ -1208,7 +1208,7 @@
     <div id="modalSettings" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
       <!-- The dialog scrolls rather than overflowing: with the screen saver row added, the
            four sections are taller than a short window and the OK button was falling off. -->
-      <div class="win95-box w-full max-w-md p-1 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div class="win95-box w-full max-w-lg p-1 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div class="win95-title flex items-center justify-between mb-2">
           <span>⚙️ Options</span>
           <button id="btnCloseSettings" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
@@ -1435,8 +1435,24 @@
             <label class="text-xs font-bold text-slate-800" id="comfySettingsLabel">
               ComfyUI Connection:
             </label>
-            <div id="comfyStatus" class="win95-input text-[11px] leading-snug text-slate-900 flex flex-col gap-0.5 break-words"
-                 role="status" aria-live="polite" aria-labelledby="comfySettingsLabel">Checking ComfyUI...</div>
+            <!-- The headline of whatever the check found, on one line, with ▼ to open the rest.
+                 Both halves are a fixed height - the summary is a single truncated line, and the
+                 report pane under it is a fixed-height scroller holding everything below that
+                 headline - so neither "Checking ComfyUI..." turning into the finished report nor
+                 opening the report changes how tall this dialog is. -->
+            <div id="comfyStatus" class="win95-input text-[11px] leading-snug text-slate-900 flex flex-col">
+              <div class="flex items-center gap-1.5">
+                <div id="comfyStatusSummary" class="flex-1 min-w-0 truncate"
+                     role="status" aria-live="polite" aria-labelledby="comfySettingsLabel">Checking ComfyUI...</div>
+                <button type="button" id="btnComfyDetails" class="win95-btn shrink-0 px-1.5 text-[10px] leading-none text-black"
+                        aria-expanded="false" aria-controls="comfyStatusDetails"
+                        title="Show the full ComfyUI report">▼</button>
+              </div>
+              <!-- .scroll-pane so the arrow keys scroll the report instead of walking past it
+                   (the same way the About box's wall of text works). -->
+              <div id="comfyStatusDetails" class="scroll-pane mt-1 h-28 overflow-y-auto flex flex-col gap-0.5 break-words hidden"
+                   tabindex="0" role="region" aria-label="Full ComfyUI report"></div>
+            </div>
             <!-- The editable part. Hidden when ComfyCrawler runs inside ComfyUI (the custom node):
                  then it talks to the ComfyUI it runs in, and there is nothing to set. -->
             <div id="comfySettingsFields" class="flex flex-col gap-1.5">

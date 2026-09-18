@@ -10895,7 +10895,9 @@ void main() {
     // OK with edits still unapplied - saves and re-checks at once, and the answer lands in the
     // status box and the setup notice alike. ✕ / ESC leave edits unsaved, like Cancel; the next
     // open reloads what is really saved.
-    const comfyStatus = document.getElementById('comfyStatus');
+    const comfyStatusSummary = document.getElementById('comfyStatusSummary');
+    const comfyStatusDetails = document.getElementById('comfyStatusDetails');
+    const btnComfyDetails = document.getElementById('btnComfyDetails');
     const comfyFields = {
       url: document.getElementById('comfyUrlInput'),
       input_dir: document.getElementById('comfyInputDirInput'),
@@ -10908,14 +10910,48 @@ void main() {
     let comfySaved = null;     // what the server last said is saved - what "unapplied edits" compare to
     let comfyRequest = 0;      // a newer load or apply supersedes a reply still on its way
 
+    // The first line is the headline and is all that shows collapsed; the report pane below it
+    // holds the rest, so opening it repeats nothing. Both keep their height whatever the check is
+    // doing - a headline with nothing under it still gets a pane, so the dialog never moves.
+    const COMFY_SUMMARY_CLASS = 'flex-1 min-w-0 truncate';
+
     function setComfyStatus(lines) {
-      if (!comfyStatus) return;
-      comfyStatus.replaceChildren(...lines.map(([text, cls]) => {
+      const [summaryText, summaryCls] = lines[0] || ['', ''];
+      if (comfyStatusSummary) {
+        comfyStatusSummary.textContent = summaryText;
+        comfyStatusSummary.className = summaryCls ? `${COMFY_SUMMARY_CLASS} ${summaryCls}` : COMFY_SUMMARY_CLASS;
+        comfyStatusSummary.title = summaryText;
+      }
+      if (!comfyStatusDetails) return;
+      const rest = lines.slice(1);
+      // A headline too long for its one line has to stay readable somewhere, so when it clips the
+      // pane carries it in full. Refusals are the long ones, and they are the ones that explain
+      // how to put it right. A headline that fits is never repeated.
+      if (comfyStatusSummary && comfyStatusSummary.clientWidth
+          && comfyStatusSummary.scrollWidth > comfyStatusSummary.clientWidth) {
+        rest.unshift([summaryText, summaryCls]);
+      }
+      if (!rest.length) rest.push(['No further detail.', 'text-slate-500']);
+      comfyStatusDetails.replaceChildren(...rest.map(([text, cls]) => {
         const div = document.createElement('div');
         div.textContent = text;
         if (cls) div.className = cls;
         return div;
       }));
+    }
+
+    function setComfyDetailsOpen(open) {
+      if (!comfyStatusDetails || !btnComfyDetails) return;
+      comfyStatusDetails.classList.toggle('hidden', !open);
+      btnComfyDetails.textContent = open ? '▲' : '▼';
+      btnComfyDetails.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btnComfyDetails.title = open ? 'Hide the full ComfyUI report' : 'Show the full ComfyUI report';
+    }
+
+    if (btnComfyDetails) {
+      btnComfyDetails.addEventListener('click', () => {
+        setComfyDetailsOpen(btnComfyDetails.getAttribute('aria-expanded') !== 'true');
+      });
     }
 
     // The field values when a load or apply started. A reply only refills a field still holding

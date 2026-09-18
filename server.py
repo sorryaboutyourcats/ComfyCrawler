@@ -188,6 +188,12 @@ PAGE_SETTING_MAX_CHARS = 1000
 # The <script> index.html carries for the settings; the server fills it in as the page is served,
 # so every read in game.js stays synchronous. A copy served by anything else keeps the empty {}.
 SAVED_SETTINGS_TAG = b'<script id="savedSettings" type="application/json">{}</script>'
+# Whether ComfyUI Connection's editable fields start out shown. Left as-is (shown) they used to
+# flash tall and then shrink on embedded's very first open: game.js only learns COMFY_EMBEDDED
+# once /api/comfy_settings answers, so the fields rendered before hiding themselves a beat later.
+# COMFY_EMBEDDED is known synchronously at serve time, so the "hidden" class is written straight
+# into the markup here instead - the fields never appear in the first place when embedded.
+COMFY_SETTINGS_FIELDS_TAG = b'<div id="comfySettingsFields" class="flex flex-col gap-1.5">'
 _PAGE_SETTINGS_LOCK = threading.Lock()
 
 
@@ -234,12 +240,18 @@ def save_page_settings(changes):
 
 
 def page_with_saved_settings(html_bytes):
-    """index.html with the saved settings written into its #savedSettings tag. Every "<" is escaped,
-    so no value can close the script element early."""
+    """index.html with the saved settings written into its #savedSettings tag (every "<" escaped,
+    so no value can close the script element early) and, when running embedded, the ComfyUI
+    Connection fields already marked hidden - see COMFY_SETTINGS_FIELDS_TAG."""
     payload = json.dumps(load_page_settings(), ensure_ascii=True).replace("<", "\\u003c")
-    return html_bytes.replace(
+    html_bytes = html_bytes.replace(
         SAVED_SETTINGS_TAG,
         b'<script id="savedSettings" type="application/json">' + payload.encode("ascii") + b"</script>", 1)
+    if COMFY_EMBEDDED:
+        html_bytes = html_bytes.replace(
+            COMFY_SETTINGS_FIELDS_TAG,
+            b'<div id="comfySettingsFields" class="flex flex-col gap-1.5 hidden">', 1)
+    return html_bytes
 
 
 class ComfyUnavailable(Exception):
