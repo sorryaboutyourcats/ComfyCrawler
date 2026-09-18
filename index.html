@@ -741,12 +741,11 @@
       outline-offset: 1px;
       background: #efefef;
     }
-    /* One line saying what a profile link actually leads to - sits outside the <a> (below it),
-       since it isn't part of the link: the anchor stays the one focusable, clickable, full-width
-       row the arrow-key walker and hover/focus styling above are built around. */
-    .about-link-detail {
-      padding: 0 3px;
-      font-size: 11px;
+    /* A short parenthetical next to a link's own name - .about-link makes everything inside it
+       bold, so this opts back out. Inline, inside the <a>, unlike the model list's .about-file:
+       it reads as part of the same line, not a technical detail underneath it. */
+    .about-link-aside {
+      font-weight: normal;
       color: #374151;
     }
     /* The model filenames under each entry in the About box's parts list. A line of their own,
@@ -1501,7 +1500,6 @@
                 <span class="text-slate-800 shrink-0">This game</span>
                 <span class="about-url">github.com/sorryaboutyourcats/ComfyCrawler</span>
               </a>
-              <p class="about-link-detail">Source code, the README, and every release &ndash; the repository this whole game is built from.</p>
             </div>
           </div>
 
@@ -1524,8 +1522,8 @@
           <div class="flex flex-col gap-1">
             <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🛠️ How it was made</div>
             <p class="text-[11px] text-slate-800">
-              Written by <strong>sorryaboutyourcats</strong> together with <strong>Claude</strong>
-              (Anthropic), in Claude&nbsp;Code on Opus&nbsp;5. One Python server and one JavaScript
+              Written by <strong>sorryaboutyourcats</strong> together with <strong>Claude</strong>,
+              in Claude&nbsp;Code on Opus&nbsp;5. One Python server and one JavaScript
               file, no build step and no framework beyond Tailwind off a CDN.
             </p>
             <p class="text-[11px] text-slate-800">
@@ -1534,11 +1532,6 @@
               counting pixels on real renders rather than by taste &ndash; foes used to draw at 4% of
               their canvas until &ldquo;fill the frame&rdquo; replaced &ldquo;small, with a large
               margin&rdquo;.
-            </p>
-            <p class="text-[11px] text-slate-700">
-              No MCP servers were in that loop either &ndash; just the repository, the running game
-              driven through a headless browser, and ComfyUI&rsquo;s own HTTP API for looking at what
-              it had just drawn.
             </p>
           </div>
 
@@ -1653,16 +1646,13 @@
                 <span class="select-none">🐱</span>
                 <span class="text-slate-800 shrink-0">Mow Meow</span>
                 <span class="about-url">store.steampowered.com/app/3529400</span>
+                <span class="about-link-aside">(you're a cat, and you mow catnip)</span>
               </a>
-              <p class="about-link-detail">Their other game, also solo &ndash; a multiplayer catnip-mowing
-                sim on Steam with ragdoll cat physics and up to 20 players.</p>
               <a class="about-link" href="https://instagram.com/sorryaboutyourcats" target="_blank" rel="noopener noreferrer">
                 <span class="select-none">📷</span>
                 <span class="text-slate-800 shrink-0">Instagram</span>
                 <span class="about-url">instagram.com/sorryaboutyourcats</span>
               </a>
-              <p class="about-link-detail">Screenshots, clips and behind-the-scenes posts from this game,
-                Mow Meow, and whatever they're building next.</p>
             </div>
           </div>
         </div>
