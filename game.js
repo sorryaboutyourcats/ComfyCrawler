@@ -1868,6 +1868,7 @@
       btnAbout.addEventListener('click', () => {
         modalAbout.classList.remove('hidden');
         focusFirstIn(modalAbout, btnAboutOk);
+        refreshAboutModels();     // "what is on this disk" is only true if it was just asked
       });
       modalAbout.addEventListener('click', (e) => {
         if (e.target === modalAbout) closeAbout();
@@ -10489,6 +10490,7 @@ void main() {
         return li;
       }));
       renderModelGroups(report);
+      renderAboutModels(report);
       preflightNotice.classList.toggle('hidden', lines.length === 0 && !anyMissing);
       // Inside ComfyUI (the custom node) there's no connection to set, so no shortcut to it.
       if (btnPreflightSettings) {
@@ -10758,6 +10760,127 @@ void main() {
         raiseSoundMode(satisfied('Sound effects') ? (satisfied('Music') ? 2 : 1) : 0);
       }
     }
+
+    // ---- About > What is on this disk -------------------------------------------------------
+    // The parts list in the About box, made checkable: every file COMFY_MODEL_GROUPS names,
+    // whether this machine's ComfyUI can actually see it, and the folder it belongs in. Reads
+    // the same /api/preflight report the setup notice does - the report now carries `files` per
+    // group, not only `missing` - so a download finishing on the main menu repaints this too.
+    // Nothing here downloads: the setup panel owns that, and the note under the heading says so.
+    const aboutModelsList = document.getElementById('aboutModelsList');
+    const btnAboutModelsRecheck = document.getElementById('btnAboutModelsRecheck');
+
+    function renderAboutModels(report) {
+      if (!aboutModelsList) return;
+      const groups = (report && report.groups) || [];
+      if (!groups.length) {
+        const line = document.createElement('div');
+        line.className = 'text-[11px] font-bold text-orange-800';
+        line.textContent = report ? "ComfyUI didn't say what it has - press Check again."
+                                  : "ComfyCrawler's own server didn't answer, so nothing could be checked.";
+        aboutModelsList.replaceChildren(line);
+        return;
+      }
+      const rows = groups.map(buildAboutModelGroup);
+      // Every file in every group reads "not checked" when ComfyUI can't be reached - accurate,
+      // but five of those in a row with no reason looks exactly like a stuck button. Say why,
+      // above the list, using the same error the setup notice already shows.
+      if (report.comfy && report.comfy.reachable === false) {
+        const banner = document.createElement('div');
+        banner.className = 'win95-box p-1.5 bg-white/60 text-[11px] font-bold text-orange-800';
+        banner.textContent = '⛔ ' + (report.comfy.error || "ComfyUI can't be reached right now.")
+          + ' Folders below still open - the checkmarks just can’t be verified until it answers.';
+        rows.unshift(banner);
+      }
+      aboutModelsList.replaceChildren(...rows);
+    }
+
+    // One COMFY_MODEL_GROUPS group: its name, a tally, and a row per file. `present` is null
+    // when ComfyUI never answered - then the tally says so rather than calling every file
+    // missing, which would be a lie about the disk.
+    function buildAboutModelGroup(g) {
+      const box = document.createElement('div');
+      box.className = 'flex flex-col gap-0.5';
+      const files = g.files || [];
+      const checked = files.some((f) => f.present === true || f.present === false);
+      const here = files.filter((f) => f.present === true).length;
+
+      const head = document.createElement('div');
+      head.className = 'flex items-baseline justify-between gap-2';
+      const label = document.createElement('span');
+      label.className = 'text-[11px] font-black text-slate-900';
+      label.textContent = g.label;
+      head.appendChild(label);
+      const tally = document.createElement('span');
+      tally.className = 'text-[10px] font-bold shrink-0 '
+        + (!checked ? 'text-slate-500' : here === files.length ? 'text-green-800' : 'text-orange-800');
+      tally.textContent = !checked ? 'not checked'
+                        : here === files.length ? 'all here'
+                        : `${here} of ${files.length} here`;
+      head.appendChild(tally);
+      box.appendChild(head);
+
+      const sub = document.createElement('div');
+      sub.className = 'text-[10px] font-bold text-slate-600';
+      sub.textContent = g.required ? 'Needed - a dungeon cannot be made without these.'
+                                   : `Optional - without it, ${g.fallback}.`;
+      box.appendChild(sub);
+
+      for (const f of files) box.appendChild(buildAboutModelRow(f));
+      return box;
+    }
+
+    // A file, as a button onto the folder it belongs in - present or not, since "where would it
+    // go?" is the question a missing one raises. openServerFolder takes a KEY, so what travels is
+    // "model:diffusion_models" plus the filename, never a path (server.py MODEL_FOLDER_NAMES /
+    // MODEL_FILES_BY_FOLDER) - the filename is what lets the server open the search path that
+    // actually holds THIS file when its folder type has more than one.
+    function buildAboutModelRow(f) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'about-model text-[11px]' + (f.present === false ? ' is-missing' : '');
+
+      const tick = document.createElement('span');
+      tick.className = 'select-none';
+      tick.textContent = f.present === true ? '✅' : f.present === false ? '❌' : '❔';
+      row.appendChild(tick);
+
+      const name = document.createElement('span');
+      name.className = 'about-model-file';
+      name.textContent = f.file;
+      row.appendChild(name);
+
+      const size = document.createElement('span');
+      size.className = 'about-model-size';
+      size.textContent = historySizeText(f.bytes);
+      row.appendChild(size);
+
+      // The real directory when ComfyUI named one (extra_model_paths.yaml can move it), else the
+      // stock layout, which is where it would land anyway.
+      const dir = document.createElement('span');
+      dir.className = 'about-model-dir';
+      dir.textContent = f.dir || `models/${f.folder}/`;
+      row.appendChild(dir);
+
+      const where = f.dir || `ComfyUI's ${f.folder} folder`;
+      row.title = f.present === false ? `Missing. Open ${where}, where it goes.`
+                : f.present === true ? `Installed. Open ${where}.`
+                : `Open ${where}.`;
+      row.addEventListener('click', () => openServerFolder(`model:${f.folder}`, f.file));
+      return row;
+    }
+
+    // The box asks for itself every time it opens: the last report can be minutes old, or from
+    // before a download finished. Paints what is already known first so the list is never blank
+    // while the check is in flight.
+    async function refreshAboutModels() {
+      renderAboutModels(lastPreflightReport);
+      if (btnAboutModelsRecheck) btnAboutModelsRecheck.setAttribute('aria-busy', 'true');
+      await checkPreflight();          // renderPreflight repaints this list when it lands
+      if (btnAboutModelsRecheck) btnAboutModelsRecheck.removeAttribute('aria-busy');
+    }
+
+    if (btnAboutModelsRecheck) btnAboutModelsRecheck.addEventListener('click', refreshAboutModels);
 
     // ---- Options > ComfyUI Connection -------------------------------------------------------
     // Where ComfyCrawler finds ComfyUI (server.py COMFYUI CONNECTION). A blank field is detected
@@ -12064,20 +12187,27 @@ void main() {
         + (size ? '  ·  ' + size + ' on disk' : '');
     }
 
-    // The two folder buttons in the footer. A browser cannot open a local directory, so the
-    // server runs ShellExecute for us - and it takes a KEY ('sessions' or 'assets'), never a
-    // path, so this can only ever reach the two folders server.py names in OPENABLE_FOLDERS.
+    // The two folder buttons in the footer, and every model row in the About window. A browser
+    // cannot open a local directory, so the server runs ShellExecute for us - and it takes a KEY
+    // ('sessions' or 'assets'), never a path, so this can only ever reach the two folders
+    // server.py names in OPENABLE_FOLDERS, or (with `file`) one of a model folder's own search
+    // paths - see MODEL_FOLDER_NAMES / MODEL_FILES_BY_FOLDER there.
     //
     // 'sessions' is dungeon_sessions/, one folder per saved run - the same folder the trash can
     // deletes from. 'assets' is the ComfyUI output folder, where the raw renders land; nothing
     // reads those back once a bundle is saved, so that is also where an abandoned run's
     // leftovers sit. Neither button deletes anything: they just open the window.
-    async function openServerFolder(which) {
+    //
+    // `file` names which file a "model:<folder>" row is for - a folder type can search more than
+    // one directory (extra_model_paths.yaml, ComfyUI Desktop's shared-models base), and the file
+    // can live in a different one than the first, so the server needs to know which file to open
+    // the REAL directory for rather than always the primary one.
+    async function openServerFolder(which, file) {
       try {
         const res = await fetch(`${SERVER_URL}/api/open_folder`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ which })
+          body: JSON.stringify(file ? { which, file } : { which })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) {

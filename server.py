@@ -46,13 +46,24 @@ COMFY_OUTPUT_DIR = None
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSIONS_DIR = os.path.join(PROJECT_DIR, "dungeon_sessions")
 
-# The only folders /api/open_folder will open. A KEY comes in over the wire, never a path, so
-# no request can name a directory that isn't one of these two. "sessions" is what the trash can
-# in the History window deletes from; "assets" is where ComfyUI drops the raw renders that every
-# bundle is built out of - nothing reads them back once a run is saved, so that folder is also
-# where a cancelled run's leftovers pile up. Each maps to a global's NAME, looked up when the
-# request arrives - COMFY_OUTPUT_DIR is not known until ensure_comfy() has run.
+# The two folders /api/open_folder will open by name. A KEY comes in over the wire, never a path,
+# so no request can name a directory of its own. "sessions" is what the trash can in the History
+# window deletes from; "assets" is where ComfyUI drops the raw renders that every bundle is built
+# out of - nothing reads them back once a run is saved, so that folder is also where a cancelled
+# run's leftovers pile up. Each maps to a global's NAME, looked up when the request arrives -
+# COMFY_OUTPUT_DIR is not known until ensure_comfy() has run. (The About window's model rows send
+# a second kind of key, "model:<folder>", whitelisted by MODEL_FOLDER_NAMES further down.)
 OPENABLE_FOLDERS = {"sessions": "SESSIONS_DIR", "assets": "COMFY_OUTPUT_DIR"}
+
+
+def _open_folder_now(folder):
+    """Show `folder` in Explorer. Fire and forget: this server takes one request at a time, so
+    waiting on Explorer here would stall the progress poll queued behind it."""
+    try:
+        os.startfile(folder)
+    except Exception:
+        subprocess.Popen(["explorer", os.path.normpath(folder)])
+    print(f"[folder] opened {folder}")
 
 # ---------------------------------------------------------------------------
 # COMFYUI CONNECTION
@@ -307,36 +318,75 @@ def _detect_comfy_dirs(argv, base_url, input_dir="", output_dir=""):
     return input_dir, output_dir
 
 
-def _detect_comfy_model_dir(base_url, folder_name, base_dir, fixed_root=""):
-    """Absolute directory this machine's ComfyUI reads `folder_name` models from (e.g.
-    "diffusion_models", "checkpoints") - where a download has to land to be found. `fixed_root`
-    (Options' Models folder override, or COMFYUI_MODELS_DIR) names the models ROOT directly and
-    skips asking ComfyUI. Otherwise tries ComfyUI's own /internal/folder_paths for this folder type
-    directly - the exact directory it would save a new file to, honouring extra_model_paths.yaml -
-    and falls back to <base_dir>/models/<folder_name>, the standard ComfyUI layout (`base_dir` is
-    whatever _comfy_base_dir found). None when nothing says."""
+def _detect_comfy_model_dirs(base_url, folder_name, base_dir, fixed_root=""):
+    """Every directory this machine's ComfyUI searches for `folder_name` models (e.g.
+    "diffusion_models", "checkpoints"), in the order it searches them. `fixed_root` (Options'
+    Models folder override, or COMFYUI_MODELS_DIR) names the models ROOT directly and skips asking
+    ComfyUI - there is only ever one directory then. Otherwise tries ComfyUI's own
+    /internal/folder_paths for this folder type - which honours extra_model_paths.yaml and can name
+    more than one directory - and falls back to <base_dir>/models/<folder_name>, the standard
+    ComfyUI layout (`base_dir` is whatever _comfy_base_dir found). Empty when nothing says."""
     if fixed_root:
-        return os.path.join(fixed_root, folder_name)
+        return [os.path.join(fixed_root, folder_name)]
     try:
         paths = _comfy_get_json("/internal/folder_paths", base=base_url).get(folder_name) or []
         if paths:
-            return paths[0]
+            return list(paths)
     except Exception:
         pass
-    return os.path.join(base_dir, "models", folder_name) if base_dir else None
+    return [os.path.join(base_dir, "models", folder_name)] if base_dir else []
+
+
+def comfy_model_dirs(folder_name):
+    """Every directory this machine's ComfyUI searches for `folder_name` models, in order - not
+    just the one a new download lands in (comfy_model_dir). extra_model_paths.yaml and ComfyUI
+    Desktop's shared-models base both commonly add a second, and a given file can genuinely live
+    in that one rather than the first - see comfy_model_file_dir, which is what the About window
+    uses to show the directory a file is ACTUALLY in. Call after ensure_comfy()."""
+    if COMFY_EMBEDDED:
+        try:
+            if "model_dirs" in COMFY_EMBEDDED:
+                return list(COMFY_EMBEDDED["model_dirs"](folder_name))
+            # An older comfy_node.py's COMFY_EMBEDDED only ever had "model_dir" (one directory) -
+            # "Reload server.py" can leave that running against a newer server.py, so fall back to
+            # it as a single-item list rather than breaking every model directory lookup.
+            single = COMFY_EMBEDDED["model_dir"](folder_name)
+            return [single] if single else []
+        except Exception:
+            return []
+    fixed_root, _source = _comfy_setting("models_dir", load_comfy_settings())
+    return _detect_comfy_model_dirs(COMFY_URL, folder_name, _COMFY_BASE_DIR, fixed_root)
 
 
 def comfy_model_dir(folder_name):
-    """Absolute directory this machine's ComfyUI reads `folder_name` models from, or None when it
-    can't be determined. Call after ensure_comfy() (embedded mode asks ComfyUI's own folder_paths
-    module in-process; standalone mode uses _detect_comfy_model_dir - see there)."""
-    if COMFY_EMBEDDED:
+    """The one directory a NEW `folder_name` download lands in - always the first ComfyUI
+    searches, matching what folder_paths.get_folder_paths()[0] and a plain download destination
+    have always meant here. For where an EXISTING file actually sits, use comfy_model_file_dir
+    instead: a folder type can have more than one search directory, and the file need not be in
+    this one. None when it can't be determined. Call after ensure_comfy()."""
+    dirs = comfy_model_dirs(folder_name)
+    return dirs[0] if dirs else None
+
+
+def comfy_model_file_dir(folder_name, filename, dirs=None):
+    """The directory among `folder_name`'s search paths that actually holds `filename` on disk,
+    or the primary one (comfy_model_dir's answer - where a download would land) when none of them
+    do. ComfyCrawler and the ComfyUI it talks to always run on the same machine (see the About
+    window's "nothing leaves" line), so this is a plain, cheap os.path.isfile check per candidate
+    rather than another round trip to ComfyUI - and it is the only way to tell which directory a
+    file is really in when a folder type has more than one, which is ordinary with
+    extra_model_paths.yaml or ComfyUI Desktop's shared-models layout. `dirs` reuses an already
+    fetched comfy_model_dirs() list when checking several files in the same folder type - pass it
+    to skip asking ComfyUI again. Call after ensure_comfy()."""
+    if dirs is None:
+        dirs = comfy_model_dirs(folder_name)
+    for d in dirs:
         try:
-            return COMFY_EMBEDDED["model_dir"](folder_name)
+            if d and os.path.isfile(os.path.join(d, filename)):
+                return d
         except Exception:
-            return None
-    fixed_root, _source = _comfy_setting("models_dir", load_comfy_settings())
-    return _detect_comfy_model_dir(COMFY_URL, folder_name, _COMFY_BASE_DIR, fixed_root)
+            continue
+    return dirs[0] if dirs else None
 
 
 def ensure_comfy(refresh=False):
@@ -10081,12 +10131,54 @@ MODEL_DOWNLOADS = {
     ENDING_VIDEO_VAE: {"url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors", "size": 4_900_000_000},
     ENDING_AUDIO_VAE: {"url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors", "size": 600_000_000},
 }
+# Every model folder the groups above name, and the only ones an /api/open_folder key may reach.
+# Derived from COMFY_MODEL_GROUPS so the two cannot drift: a request sends "model:<folder>" - a
+# key out of this set, never a path - and the directory behind it is whichever of that folder's
+# search paths actually holds the file named in the request's "file" field (comfy_model_file_dir).
+MODEL_FOLDER_NAMES = frozenset(folder for g in COMFY_MODEL_GROUPS for folder, _ in g["files"])
+# Which filenames are legitimate for a given folder - so a request's optional "file" field (which
+# of that folder's search paths to actually open) is checked against real filenames rather than
+# trusted outright. It only ever picks among directories ComfyUI itself already named, never a
+# path of its own, but a filename that could contain "../" has no business reaching os.path.join
+# unchecked either.
+MODEL_FILES_BY_FOLDER = {folder: {n for g in COMFY_MODEL_GROUPS for f, n in g["files"] if f == folder}
+                         for folder in MODEL_FOLDER_NAMES}
+
 # Custom nodes the graphs name. SaveImageWithAlpha writes every cutout; the sage attention patch
 # only speeds the ending video up and is wired in only when present (_sage_attention_available).
 COMFY_NODES = [
     {"name": "SaveImageWithAlpha", "pack": "ComfyUI-KJNodes", "required": True},
     {"name": "PathchSageAttentionKJ", "pack": "ComfyUI-KJNodes", "required": False},
 ]
+
+
+def _preflight_group_files(group, listed=None, dirlists=None):
+    """One group's files as the About window lists them: [{folder, file, present, dir, bytes}].
+    `present` is None when ComfyUI never answered, so the window can say "unknown" instead of
+    claiming a file is missing. `dir` is resolved per FILE, not per folder: a folder type commonly
+    has more than one search path (extra_model_paths.yaml, ComfyUI Desktop's shared-models base),
+    and a file can live in the second one while the first sits empty - showing that first one
+    regardless would send the player to open an empty folder for a file that IS installed.
+    `dirlists` is a per-call cache of each folder's candidate directories, so comfy_model_dirs() is
+    asked once per folder rather than once per file; the per-file disk check itself is cheap and
+    always run fresh. `dirlists=None` (the unreachable-ComfyUI path) skips resolving directories
+    at all rather than sending 17 requests to a ComfyUI that has already failed to answer once."""
+    rows = []
+    for folder, name in group["files"]:
+        if dirlists is None:
+            file_dir = None
+        else:
+            if folder not in dirlists:
+                try:
+                    dirlists[folder] = comfy_model_dirs(folder)
+                except Exception:
+                    dirlists[folder] = []
+            file_dir = comfy_model_file_dir(folder, name, dirs=dirlists[folder])
+        rows.append({"folder": folder, "file": name,
+                     "present": (name in listed.get(folder, set())) if listed is not None else None,
+                     "dir": file_dir,
+                     "bytes": MODEL_DOWNLOADS.get(name, {}).get("size", 0)})
+    return rows
 
 
 def comfy_preflight():
@@ -10104,12 +10196,18 @@ def comfy_preflight():
         ensure_comfy(refresh=True)
     except ComfyUnavailable as e:
         report["comfy"].update(reachable=e.reachable, error=str(e), restart=e.restart)
+        # Nothing can be checked, but the About window still lists what a full install holds -
+        # every file with present=None and no folder, i.e. "unknown", never "missing". `missing`
+        # stays empty so the setup screen keeps saying only that ComfyUI isn't answering.
+        report["groups"] = [{"label": g["label"], "required": g["required"], "fallback": g["fallback"],
+                             "missing": [], "missing_bytes": 0, "files": _preflight_group_files(g)}
+                            for g in COMFY_MODEL_GROUPS]
         return report
     report["comfy"].update(reachable=True, url=COMFY_URL, version=_COMFY_VERSION,
                            input_dir=COMFY_INPUT_DIR, output_dir=COMFY_OUTPUT_DIR,
                            sources=dict(_COMFY_SOURCES))
 
-    listed = {}
+    listed, dirs = {}, {}
     for group in COMFY_MODEL_GROUPS:
         for folder, _ in group["files"]:
             if folder not in listed:
@@ -10122,7 +10220,10 @@ def comfy_preflight():
         report["groups"].append({
             "label": group["label"], "required": group["required"], "fallback": group["fallback"],
             "missing": missing,
-            "missing_bytes": sum(MODEL_DOWNLOADS.get(m["file"], {}).get("size", 0) for m in missing)})
+            "missing_bytes": sum(MODEL_DOWNLOADS.get(m["file"], {}).get("size", 0) for m in missing),
+            # Every file, installed or not, with the directory it belongs in - the About window's
+            # parts list reads this one; the setup screen only ever reads `missing`.
+            "files": _preflight_group_files(group, listed, dirs)})
 
     for node in COMFY_NODES:
         try:
@@ -10654,16 +10755,23 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # The tab icon: a cat in CC shades (the lenses are ComfyCrawler's two Cs), drawn
         # as 16x16 pixel art - see the grid in the comment at the top of favicon.svg. The
         # .ico is the same art at 16/32/48 for the bare /favicon.ico a browser asks for on
-        # its own, and for bookmarks/shortcuts that ignore SVG.
-        elif self.path in ("/favicon.svg", "/favicon.ico"):
+        # its own, and for bookmarks/shortcuts that ignore SVG. icon.png is the same art
+        # upscaled to 400x400 (pyproject.toml's Registry icon) - also served here so the
+        # ComfyUI sidebar tab can use it at a size favicon.ico's 48px doesn't cover.
+        elif self.path in ("/favicon.svg", "/favicon.ico", "/icon.png"):
             name = self.path.lstrip("/")
             icon_file = os.path.join(PROJECT_DIR, name)
             if os.path.exists(icon_file):
                 with open(icon_file, "rb") as f:
                     content = f.read()
                 self.send_response(200)
-                self.send_header("Content-Type",
-                                 "image/svg+xml" if name.endswith(".svg") else "image/x-icon")
+                if name.endswith(".svg"):
+                    content_type = "image/svg+xml"
+                elif name.endswith(".png"):
+                    content_type = "image/png"
+                else:
+                    content_type = "image/x-icon"
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(content)))
                 self.send_header("Cache-Control", "max-age=86400")
                 self.end_headers()
@@ -11089,41 +11197,78 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         elif self.path == "/api/open_folder":
-            # The two folder buttons in the History window. The page cannot open a local folder
-            # itself, so the server does it with ShellExecute. The body names a KEY, and only a
-            # key - the path it maps to comes from OPENABLE_FOLDERS, so nothing a request says
-            # can widen this past those two directories.
+            # The two folder buttons in the History window, and every model row in the About
+            # window. The page cannot open a local folder itself, so the server does it with
+            # ShellExecute. The body names a KEY, and only a key: either one of OPENABLE_FOLDERS'
+            # two, or "model:<folder>" where <folder> is one of the model folders the graphs
+            # actually load from (MODEL_FOLDER_NAMES), plus an optional "file" - the specific
+            # filename that row is for, checked against MODEL_FILES_BY_FOLDER. No request can name
+            # a path: both fields only ever pick among directories ComfyUI itself already named.
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
                 which = data.get("which")
-                name = OPENABLE_FOLDERS.get(which) if isinstance(which, str) else None
-                if name == "COMFY_OUTPUT_DIR":
-                    try:
-                        ensure_comfy()    # the assets folder is ComfyUI's, found by asking it
-                    except ComfyUnavailable:
-                        pass              # reported below as a folder that isn't known
-                folder = globals().get(name) if name else None
+                model_folder = (which[6:] if isinstance(which, str) and which.startswith("model:")
+                                else None)
+                model_file = data.get("file")
+                if not (isinstance(model_file, str)
+                        and model_file in MODEL_FILES_BY_FOLDER.get(model_folder, ())):
+                    model_file = None      # absent, or not a real file of this folder - ignored
+                if model_folder is not None:
+                    # A models folder can have more than one search path (extra_model_paths.yaml,
+                    # ComfyUI Desktop's shared-models base), and a given file can live in any of
+                    # them - comfy_model_file_dir finds the one that actually holds it, rather than
+                    # always the first, which can be a different, empty directory. Without a
+                    # recognised filename (e.g. the folder itself, or an older page), that's what
+                    # comfy_model_dir already meant: the primary search path, where a new download
+                    # would land.
+                    name = "model" if model_folder in MODEL_FOLDER_NAMES else None
+                    folder = None
+                    if name:
+                        try:
+                            ensure_comfy()
+                        except ComfyUnavailable:
+                            pass          # reported below as a folder that isn't known
+                        folder = (comfy_model_file_dir(model_folder, model_file) if model_file
+                                 else comfy_model_dir(model_folder))
+                else:
+                    name = OPENABLE_FOLDERS.get(which) if isinstance(which, str) else None
+                    if name == "COMFY_OUTPUT_DIR":
+                        try:
+                            ensure_comfy()    # the assets folder is ComfyUI's, found by asking it
+                        except ComfyUnavailable:
+                            pass              # reported below as a folder that isn't known
+                    folder = globals().get(name) if name else None
                 if name is None:
                     body, code = {"success": False,
                                   "error": "There is no folder called %r to open." % (which,)}, 400
                 elif folder is None:
                     body, code = {"success": False,
-                                  "error": "ComfyUI's output folder isn't known yet - start ComfyUI, "
-                                           "then try again."}, 503
+                                  "error": ("ComfyUI's %s folder isn't known yet - start ComfyUI, "
+                                            "then try again." % (model_folder or "output",))}, 503
+                elif not os.path.isdir(folder) and name == "model":
+                    # ComfyUI only makes a models subfolder once something puts a file there, so
+                    # the folder a MISSING model belongs in is often missing too - and that is the
+                    # one a player most wants shown. Open the nearest parent that does exist (the
+                    # models root, normally) rather than dead-ending on "not there"; `wanted` says
+                    # which folder was asked for, since it isn't the one that opened.
+                    here = folder
+                    while here and not os.path.isdir(here):
+                        parent = os.path.dirname(here)
+                        here = parent if parent and parent != here else None
+                    if not here:
+                        body, code = {"success": False, "path": folder,
+                                      "error": "That folder is not there: %s" % folder}, 404
+                    else:
+                        _open_folder_now(here)
+                        body, code = {"success": True, "path": here, "wanted": folder}, 200
                 elif not os.path.isdir(folder):
                     # The assets folder lives outside the project - a ComfyUI reinstall can move
                     # it out from under us, so say where we looked rather than just failing.
                     body, code = {"success": False, "path": folder,
                                   "error": "That folder is not there: %s" % folder}, 404
                 else:
-                    # Fire and forget, both of them: this server takes one request at a time, so
-                    # waiting on Explorer here would stall the progress poll behind it.
-                    try:
-                        os.startfile(folder)
-                    except Exception:
-                        subprocess.Popen(["explorer", os.path.normpath(folder)])
-                    print(f"[folder] opened {folder}")
+                    _open_folder_now(folder)
                     body, code = {"success": True, "path": folder}, 200
             except Exception as e:
                 print(f"[folder] open failed ({e})")

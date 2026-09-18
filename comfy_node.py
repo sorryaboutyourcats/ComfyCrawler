@@ -143,14 +143,6 @@ def make_routes(web, srv, executor, routes=None, prefix=PREFIX):
         result = await asyncio.get_running_loop().run_in_executor(executor, reload_server, srv)
         return web.json_response(result, status=200 if result.get("success") else 409)
 
-    # Same reason as reload: this one answers, THEN takes the server it is running on down.
-    @routes.post(prefix + "/node/restart_comfyui")
-    async def comfycrawler_restart_comfyui(request):
-        body = await request.json() if request.can_read_body else {}
-        result = await asyncio.get_running_loop().run_in_executor(
-            executor, restart_comfyui, srv, bool(body.get("confirmed")))
-        return web.json_response(result, status=200 if result.get("success") else 409)
-
     @routes.route("*", prefix + "/{tail:.*}")
     async def comfycrawler_request(request):
         tail = request.match_info.get("tail", "")
@@ -199,7 +191,12 @@ def _point_at_comfyui(srv):
                           "output_dir": folder_paths.get_output_directory,
                           # A model download's target directory: ComfyUI's own resolver, so it
                           # already honours the user's extra_model_paths.yaml.
-                          "model_dir": lambda folder: (folder_paths.get_folder_paths(folder) or [None])[0]}
+                          "model_dir": lambda folder: (folder_paths.get_folder_paths(folder) or [None])[0],
+                          # Every directory ComfyUI searches for `folder`, in order - not just the
+                          # first. extra_model_paths.yaml and ComfyUI Desktop's shared-models base
+                          # both add more than one, and a model can genuinely live in the second
+                          # rather than the first - see comfy_model_file_dir in server.py.
+                          "model_dirs": lambda folder: list(folder_paths.get_folder_paths(folder) or [])}
     srv.COMFY_URL = url
     data_dir = choose_data_dir(srv.PROJECT_DIR, folder_paths.get_user_directory())
     srv.SESSIONS_DIR = os.path.join(data_dir, "dungeon_sessions")
@@ -239,112 +236,6 @@ def reload_server(srv):
     _point_at_comfyui(srv)
     print("[ComfyCrawler] server.py reloaded")
     return {"success": True}
-
-
-# ---------------------------------------------------------------------------
-# RESTARTING COMFYUI
-# Sleep leaves ComfyUI's process with a dead CUDA context (see server.py's _comfy_system_stats):
-# it keeps answering, but nothing can render again until its server is started afresh. That is not
-# ComfyCrawler's own state to fix, and the button people reach for - ComfyUI's top-bar circular
-# arrow - only refreshes node definitions, so the sidebar panel offers a real restart here.
-#
-# ComfyUI-Manager's reboot is the one that is meant to be used and knows how this install was
-# launched (Desktop included), so it is always tried first. Without it there is nothing to ask, and
-# ComfyCrawler restarts the process itself the way Manager does - re-running ComfyUI's own command
-# line in place. That one can leave a ComfyUI started by an unusual launcher shut rather than
-# restarted, so it never happens on the first press: the panel says so and asks again.
-
-# How ComfyUI-Manager's own Restart is pressed, newest spelling first. The current one is a POST
-# that refuses form content types (its CSRF gate), which is why the request always says JSON; the
-# two GETs are what older Managers still answer.
-MANAGER_REBOOTS = (("POST", "/api/v2/manager/reboot"),
-                   ("GET", "/api/manager/reboot"),
-                   ("GET", "/manager/reboot"))
-
-
-def _comfy_idle(srv):
-    """Nothing queued or running in ComfyUI itself, as far as it will say. A ComfyUI too broken to
-    answer counts as idle - being unable to ask is not a reason to refuse the fix."""
-    try:
-        return not (srv._comfy_get_json("/prompt", timeout=3).get("exec_info") or {}).get("queue_remaining")
-    except Exception:
-        return True
-
-
-def _manager_reboot(srv):
-    """Press ComfyUI-Manager's reboot, if it is installed and will do it. True when it has been
-    pressed - the reply never arrives, because the process goes down mid-request, so a dropped
-    connection or a timeout IS the success case. False when no Manager answers any of the spellings.
-    A string when Manager is there but said no (its security level), for the panel to pass on."""
-    import urllib.error
-    import urllib.request
-
-    for method, path in MANAGER_REBOOTS:
-        req = urllib.request.Request(srv.COMFY_URL + path, method=method,
-                                     data=b"" if method == "POST" else None,
-                                     headers={"Content-Type": "application/json"})
-        try:
-            urllib.request.urlopen(req, timeout=5)
-            return True
-        except urllib.error.HTTPError as e:
-            if e.code in (404, 405):
-                continue            # not this spelling - try an older one
-            if e.code == 403:
-                return ("ComfyUI-Manager is installed but won't restart ComfyUI at this security "
-                        "level. ComfyCrawler can restart the server itself instead, by re-running "
-                        "ComfyUI's command line - an unusual launcher may need starting by hand "
-                        "afterwards.")
-            return True             # it answered as its own process was being taken down
-        except Exception:
-            return True             # connection dropped mid-reply: it is going down
-    return False
-
-
-def _exec_restart():
-    """Start ComfyUI's own command line again in place of this process - what ComfyUI-Manager does
-    when its Restart is pressed. Runs a moment after the reply has been written, so the panel is
-    told what is about to happen before the server that would tell it stops existing."""
-    import sys
-
-    try:
-        sys.stdout.flush()
-        sys.stderr.flush()
-    except Exception:
-        pass
-    try:
-        if sys.platform.startswith("win"):
-            # Windows rebuilds one command line out of these, so anything with a space in it (every
-            # ComfyUI Desktop path) has to carry its own quotes.
-            os.execv(sys.executable, [f'"{sys.executable}"'] + [f'"{a}"' for a in sys.argv])
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception:
-        print("[ComfyCrawler] couldn't restart ComfyUI - start it again by hand:")
-        traceback.print_exc()
-
-
-def restart_comfyui(srv, confirmed=False):
-    """Restart the ComfyUI this is running inside (the sidebar's Restart ComfyUI button).
-    ComfyCrawler goes down with it and comes back with it; saved dungeons are files on disk and are
-    untouched. Refused while either side is part-way through something, because both would be lost:
-    a restart during a run leaves half a dungeon and half a download."""
-    busy = srv.server_busy_reason()
-    if busy:
-        return {"success": False, "busy": True, "error": f"Not while {busy} - wait for it to finish."}
-    if not _comfy_idle(srv):
-        return {"success": False, "busy": True,
-                "error": "ComfyUI is working on something of its own - let its queue finish first."}
-    pressed = _manager_reboot(srv)
-    if pressed is True:
-        return {"success": True, "how": "manager"}
-    if not confirmed:
-        return {"success": False, "needs_confirm": True,
-                "error": pressed if isinstance(pressed, str) else
-                         "ComfyUI-Manager isn't installed here, so ComfyCrawler would restart "
-                         "ComfyUI's server itself by re-running its command line. That works for a "
-                         "normally launched ComfyUI, but an unusual launcher may need starting by "
-                         "hand afterwards."}
-    threading.Timer(0.6, _exec_restart).start()
-    return {"success": True, "how": "self"}
 
 
 def install(srv, prompt_server):

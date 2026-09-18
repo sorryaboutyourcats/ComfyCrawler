@@ -198,6 +198,44 @@ art = next(g for g in r["groups"] if g["label"] == "Dungeon art & story")
 ck(not r["ready"] and {"folder": "background_removal", "file": srv.BIREFNET_MODEL} in art["missing"],
    "a folder listing that fails should report its files missing")
 
+# ---- the About window's parts list: every file, not only the missing ones ----
+# The setup screen reads `missing`; the About window reads `files`, which has to carry the
+# installed ones too (with where they live) or the window can only ever say what is absent.
+models = {f: set(v) for f, v in ALL_MODELS.items()}
+models["checkpoints"].discard(srv.SFX_CKPT)
+reset(argv=DESKTOP_ARGV, models=models,
+      model_dirs={"checkpoints": [os.path.join(TMP, "elsewhere", "ckpts")]})
+r = srv.comfy_preflight()
+for g, want in zip(r["groups"], srv.COMFY_MODEL_GROUPS):
+    ck([(f["folder"], f["file"]) for f in g["files"]] == list(want["files"]),
+       f'{g["label"]}: files lists every entry of the group, in order')
+sfx = next(g for g in r["groups"] if g["label"] == "Sound effects")
+byname = {f["file"]: f for f in sfx["files"]}
+ck(byname[srv.SFX_CKPT]["present"] is False, "a file ComfyUI hasn't got reads present False")
+ck(byname[srv.SFX_CLIP]["present"] is True, "a file it has reads present True")
+ck(byname[srv.SFX_CKPT]["dir"] == os.path.join(TMP, "elsewhere", "ckpts"),
+   "the folder is the one ComfyUI actually reads that type from, not the stock guess")
+ck(byname[srv.SFX_CKPT]["bytes"] == srv.MODEL_DOWNLOADS[srv.SFX_CKPT]["size"],
+   "each file carries its size, so the list can say how big the gap is")
+
+# Unreachable: every file still listed, but nothing may be CALLED missing - "we couldn't ask"
+# and "you haven't got it" are different answers, and only one of them is true here.
+reset(up=())
+r = srv.comfy_preflight()
+ck([g["label"] for g in r["groups"]] == [g["label"] for g in srv.COMFY_MODEL_GROUPS],
+   "an unreachable ComfyUI still lists the groups a full install holds")
+every = [f for g in r["groups"] for f in g["files"]]
+ck(every and all(f["present"] is None and f["dir"] is None for f in every),
+   "with nothing to ask, present and dir are unknown rather than False")
+ck(all(not g["missing"] for g in r["groups"]),
+   "nothing is reported missing when it could not be checked")
+
+# ---- /api/open_folder's model keys: a whitelist, never a path ----
+ck(srv.MODEL_FOLDER_NAMES == {folder for g in srv.COMFY_MODEL_GROUPS for folder, _ in g["files"]},
+   "the openable model folders are exactly the ones the groups name")
+for bad in ("loras", "..", "../../Windows", "", "C:/Windows"):
+    ck(bad not in srv.MODEL_FOLDER_NAMES, f"{bad!r} is not an openable model folder")
+
 # ---- Options > ComfyUI Connection: normalising what was typed ----
 ck(srv.normalize_comfy_url("") == "" and srv.normalize_comfy_url("   ") == "", "blank address = auto-detect")
 ck(srv.normalize_comfy_url("127.0.0.1:8189") == "http://127.0.0.1:8189", "a bare host:port gets http://")
@@ -316,10 +354,59 @@ srv.COMFY_EMBEDDED = {"model_dir": _raise}
 ck(srv.comfy_model_dir("vae") is None, "embedded mode swallows a resolver that raises rather than crashing")
 srv.COMFY_EMBEDDED = None
 
+# ---- comfy_model_dirs / comfy_model_file_dir: a folder type with more than one search path ----
+# ComfyUI Desktop's shared-models layout and extra_model_paths.yaml both commonly give a folder
+# type two or more directories, and a file can genuinely be in the second while the first is
+# empty - /models/<folder> (what `present` reads) checks every one of them, but comfy_model_dir
+# only ever named the first. This is the bug the About window hit: a green checkmark pointing at
+# an empty folder because the file was actually in the SECOND directory.
+FIRST_DIR = mkdirs("shared_models", "unet_a")     # empty - stands in for an empty shared folder
+SECOND_DIR = mkdirs("shared_models", "unet_b")
+REAL_FILE = "krea2_turbo_fp8_scaled.safetensors"
+with open(os.path.join(SECOND_DIR, REAL_FILE), "wb") as fh:
+    fh.write(b"x")
+
+reset(argv=["main.py"], custom_nodes=[os.path.join(BASE, "custom_nodes")],
+      model_dirs={"diffusion_models": [FIRST_DIR, SECOND_DIR]})
+srv.ensure_comfy()
+ck(srv.comfy_model_dirs("diffusion_models") == [FIRST_DIR, SECOND_DIR],
+   "comfy_model_dirs names every search path ComfyUI gave, in order")
+ck(srv.comfy_model_dir("diffusion_models") == FIRST_DIR,
+   "comfy_model_dir (a download's destination) still means the first, unchanged")
+ck(srv.comfy_model_file_dir("diffusion_models", REAL_FILE) == SECOND_DIR,
+   "comfy_model_file_dir finds the directory the file is ACTUALLY in, even when it isn't the first")
+ck(srv.comfy_model_file_dir("diffusion_models", "nowhere.safetensors") == FIRST_DIR,
+   "a file in neither directory falls back to the first - where a download would land")
+ck(srv.comfy_model_file_dir("diffusion_models", REAL_FILE, dirs=[FIRST_DIR, SECOND_DIR]) == SECOND_DIR,
+   "a pre-fetched dirs list is used as-is rather than asking ComfyUI again")
+
+# The About window's own report reflects this: `dir` for the real file is the second directory,
+# not the first (which comfy_model_dir alone would have said, and which is empty).
+models = {f: set(v) for f, v in ALL_MODELS.items()}
+reset(argv=["main.py"], custom_nodes=[os.path.join(BASE, "custom_nodes")], models=models,
+      model_dirs={"diffusion_models": [FIRST_DIR, SECOND_DIR]})
+r = srv.comfy_preflight()
+art = next(g for g in r["groups"] if g["label"] == "Dungeon art & story")
+row = next(f for f in art["files"] if f["file"] == REAL_FILE)
+ck(row["present"] is True and row["dir"] == SECOND_DIR,
+   "the About window opens the directory that actually holds the file, not just the first one")
+
+# Embedded mode: the same, through COMFY_EMBEDDED's "model_dirs" (comfy_node.py's real key).
+srv.COMFY_EMBEDDED = {"model_dirs": lambda folder: [FIRST_DIR, SECOND_DIR] if folder == "diffusion_models" else []}
+ck(srv.comfy_model_dirs("diffusion_models") == [FIRST_DIR, SECOND_DIR], "embedded mode: the full list, in order")
+ck(srv.comfy_model_file_dir("diffusion_models", REAL_FILE) == SECOND_DIR,
+   "embedded mode: the real directory is found the same way")
+# An older comfy_node.py whose COMFY_EMBEDDED never got "model_dirs" (see the comment on
+# comfy_model_dirs) - falls back to the one directory "model_dir" names, not an empty list.
+srv.COMFY_EMBEDDED = {"model_dir": lambda folder: f"/embedded/{folder}"}
+ck(srv.comfy_model_dirs("vae") == ["/embedded/vae"],
+   "an embedded dict with only model_dir still gives comfy_model_dirs one directory to work with")
+srv.COMFY_EMBEDDED = None
+
 # ---- the handler: /api/preflight, and CREATE refused before any run starts ----
 models = {f: set(v) for f, v in ALL_MODELS.items()}
 models["checkpoints"].discard(srv.FLUX_SCHNELL_CKPT)
-reset(argv=DESKTOP_ARGV, models=models)
+reset(argv=DESKTOP_ARGV, models=models, model_dirs={"diffusion_models": [FIRST_DIR, SECOND_DIR]})
 httpd = srv.socketserver.TCPServer(("127.0.0.1", 0), srv.DungeonHTTPRequestHandler)
 httpd.RequestHandlerClass.log_message = lambda *a, **k: None   # keep the test output readable
 port = httpd.server_address[1]
@@ -342,6 +429,59 @@ try:
            "the refusal text names the missing file and its folder")
         ck(refusal.get("preflight", {}).get("ready") is False, "the refusal carries the report for the page")
     ck(not srv.gen_progress["is_generating"], "a refused CREATE must not start a run")
+
+    # ---- /api/open_folder: what the About window's model rows send ----
+    # An accepted key genuinely opens an Explorer window (os.startfile/subprocess.Popen), which a
+    # test has no business doing wholesale - _open_folder_now is swapped out below to record what
+    # it was asked to open instead of actually opening it, so the resolved PATH can still be
+    # checked. What matters throughout: a request cannot name a directory - it sends
+    # "model:<folder>", optionally with "file", and anything outside MODEL_FOLDER_NAMES /
+    # MODEL_FILES_BY_FOLDER is turned away or ignored, never trusted as a path.
+    opened = []
+    real_open_now = srv._open_folder_now
+    srv._open_folder_now = lambda folder: opened.append(folder)
+
+    def post_open(which, file=None):
+        payload = {"which": which}
+        if file is not None:
+            payload["file"] = file
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/open_folder", method="POST",
+                                     data=json.dumps(payload).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode("utf-8"))
+
+    for which in ("model:loras", "model:", "model:..", "model:../../Windows",
+                  "model:C:/Windows", "model:models/vae", "models:vae", "nonsense"):
+        code, body = post_open(which)
+        ck(code == 400 and body.get("success") is False,
+           f"open_folder must refuse {which!r} (got {code} {body!r})")
+
+    # This is the actual bug: a folder type with two search paths, where the real file is in the
+    # SECOND one. Without "file", or with one that doesn't belong to this folder, the primary
+    # (first) directory is opened, same as before - it's empty, but it's what a download would
+    # fill. With the real filename, the directory that genuinely holds it is opened instead.
+    opened.clear()
+    code, body = post_open("model:diffusion_models")
+    ck(code == 200 and body.get("path") == FIRST_DIR,
+       f"no file named: the primary search path opens, got {code} {body!r}")
+    opened.clear()
+    code, body = post_open("model:diffusion_models", file="not_one_of_these.safetensors")
+    ck(code == 200 and body.get("path") == FIRST_DIR,
+       f"an unrecognised file is ignored, same as none given, got {code} {body!r}")
+    opened.clear()
+    code, body = post_open("model:diffusion_models", file=srv.SFX_CKPT)
+    ck(code == 200 and body.get("path") == FIRST_DIR,
+       f"a real file that belongs to a DIFFERENT folder is ignored too, got {code} {body!r}")
+    opened.clear()
+    code, body = post_open("model:diffusion_models", file=REAL_FILE)
+    ck(code == 200 and body.get("path") == SECOND_DIR and opened == [SECOND_DIR],
+       f"the real filename opens the directory that actually holds it, got {code} {body!r}, opened={opened}")
+
+    srv._open_folder_now = real_open_now
 
     # ---- /api/comfy_settings: view, save, bad address, refused mid-run ----
     def post_settings(payload):

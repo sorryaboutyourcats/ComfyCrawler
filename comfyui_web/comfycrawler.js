@@ -8,6 +8,18 @@ const url = (path) => new URL(path, window.location.origin).href;
 const openComfyCrawler = () => {
   window.open(url("/comfycrawler/"), "_blank", "noopener");
 };
+const GITHUB_URL = "https://github.com/sorryaboutyourcats/ComfyCrawler";
+
+// registerSidebarTab's `icon` becomes an <i class="{icon} side-bar-button-icon">, sized by
+// font-size alone - so a plain CSS class with a background-image stands in for a PrimeIcons glyph,
+// letting the tab use the upscaled favicon (icon.png) instead of a generic compass icon.
+const iconStyle = document.createElement("style");
+iconStyle.textContent = `.comfycrawler-sidebar-icon {
+  display: inline-block; width: 1em; height: 1em;
+  background-image: url("${url("/comfycrawler/icon.png")}");
+  background-size: contain; background-position: center; background-repeat: no-repeat;
+}`;
+document.head.appendChild(iconStyle);
 
 app.registerExtension({
   name: "ComfyCrawler.OpenButton",
@@ -87,9 +99,6 @@ function createPanel(root) {
   let job = { group: null, state: "idle" };
   let note = "";            // the last thing that happened, shown under the buttons
   let confirmingCancel = null;   // a group label, while its Cancel is asking "sure?"
-  // null, or how far the Restart ComfyUI button has got: "ask" (are you sure?), "force" (no
-  // ComfyUI-Manager - shall ComfyCrawler do it itself?), "going" (waiting for it to come back).
-  let restart = null;
   let timer = null;
   let stopped = false;
   let lastShape = "";       // rebuild only when the rows actually change, so focus survives a poll
@@ -103,7 +112,17 @@ function createPanel(root) {
   const groupBox = el("div", "display:flex;flex-direction:column;gap:8px;");
   const actionBox = el("div", "display:flex;flex-wrap:wrap;gap:6px;");
   const noteBox = el("div", "font-size:11px;opacity:0.75;line-height:1.4;white-space:pre-wrap;");
-  root.append(statusBox, groupBox, actionBox, noteBox);
+  const footer = el("div", "margin-top:auto;padding-top:8px;border-top:1px solid var(--border-color,#4e4e4e);");
+  const githubLink = document.createElement("a");
+  githubLink.href = GITHUB_URL;
+  githubLink.target = "_blank";
+  githubLink.rel = "noopener";
+  githubLink.textContent = "ComfyCrawler on GitHub";
+  githubLink.style.cssText = "color:var(--fg-color,#ddd);opacity:0.75;font-size:11px;text-decoration:none;";
+  githubLink.addEventListener("mouseenter", () => { githubLink.style.textDecoration = "underline"; });
+  githubLink.addEventListener("mouseleave", () => { githubLink.style.textDecoration = "none"; });
+  footer.append(githubLink);
+  root.append(statusBox, groupBox, actionBox, noteBox, footer);
 
   const setNote = (text) => { note = text; noteBox.textContent = text; };
 
@@ -202,82 +221,8 @@ function createPanel(root) {
       report && report.comfy && report.comfy.error,
       report && report.ready,
       groups.map((g) => [g.label, g.missing.length, g.missing_bytes]),
-      job.group, job.state, confirmingCancel, restart,
+      job.group, job.state, confirmingCancel,
     ]);
-  }
-
-  // ---- Restart ComfyUI ----
-  // The fix for the state server.py's _comfy_system_stats describes: after the computer sleeps,
-  // ComfyUI keeps answering but has lost the graphics card, and only starting its server again
-  // brings it back. ComfyUI's own top-bar circular arrow doesn't do that - it refreshes node
-  // definitions - which is exactly why this button is here, next to the error that asks for it.
-  async function doRestart(confirmed) {
-    setNote("Asking ComfyUI to restart…");
-    render(true);
-    const { status, data } = await postJSON("/comfycrawler/node/restart_comfyui", { confirmed });
-    if (status === 404) {
-      restart = null;
-      setNote("This ComfyUI is running an older ComfyCrawler, which has no restart. Stop and start "
-              + "ComfyUI's server yourself.");
-    } else if (data && data.needs_confirm) {
-      restart = "force";
-      setNote(data.error);
-    } else if (!data || !data.success) {
-      restart = null;
-      setNote((data && data.error) || "ComfyUI wouldn't restart - see its log.");
-    } else {
-      restart = "going";
-      setNote("ComfyUI is restarting. This panel picks up again on its own; if it hasn't in a "
-              + "minute or two, start ComfyUI yourself.");
-      waitForComfyUI();
-    }
-    render(true);
-  }
-
-  // It goes away before it comes back, so a failed fetch is the expected middle - only an answer
-  // ends the wait. Two minutes is longer than a cold ComfyUI start with every custom node loading.
-  async function waitForComfyUI() {
-    const deadline = Date.now() + 120000;
-    let wasDown = false;
-    while (!stopped && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 2000));
-      if (stopped) return;
-      try {
-        const res = await fetch(url("/api/system_stats"), { cache: "no-store" });
-        if (!res.ok) throw new Error(String(res.status));   // up again, but still no graphics card
-        if (wasDown) {
-          restart = null;
-          setNote("ComfyUI is back. Reload this browser tab if anything looks stale.");
-          await refresh();
-          return;
-        }
-      } catch (err) {
-        wasDown = true;     // it has gone down: from here, the next good answer is the new one
-      }
-    }
-    if (stopped) return;
-    restart = null;
-    setNote("ComfyUI hasn't come back on its own - start it again, then reload this tab.");
-    render(true);
-  }
-
-  function restartButtons() {
-    if (restart === "going") {
-      return [el("span", "font-size:11px;opacity:0.8;align-self:center;", "⟲ Restarting ComfyUI…")];
-    }
-    if (restart) {
-      const go = button(restart === "force" ? "Restart anyway" : "Yes, restart ComfyUI",
-        "Start ComfyUI's server again", () => doRestart(restart === "force"), true);
-      go.dataset.autofocus = "1";
-      return [button("Not now", "Leave ComfyUI running", () => { restart = null; setNote(""); render(true); }), go];
-    }
-    return [button("⟲ Restart ComfyUI", "Start ComfyUI's server again - the fix when it has lost "
-      + "the graphics card, which is what sleeping the computer does to it", () => {
-        restart = "ask";
-        setNote("Restarting ComfyUI stops ComfyCrawler with it and both come back together. "
-                + "Saved dungeons are files on disk and aren't touched.");
-        render(true);
-      })];
   }
 
   function render(force) {
@@ -298,9 +243,12 @@ function createPanel(root) {
     } else if (report.comfy && report.comfy.error) {
       statusBox.append(el("div", "color:var(--error-text,#f77);", `⛔ ${report.comfy.error}`));
       if (report.comfy.restart) {
+        // ComfyCrawler used to offer a button that tried this itself - unreliable enough
+        // (ComfyUI-Manager's security level, an unusual launcher, ComfyUI Desktop's own process
+        // wrapper) that it now just says what fixes it and leaves the doing to the player.
         statusBox.append(el("div", "font-size:11px;opacity:0.8;margin-top:4px;",
-          "Use ⟲ Restart ComfyUI below. ComfyUI's own ↻ button only refreshes node definitions, "
-          + "which won't clear this."));
+          "Stop ComfyUI and start it again yourself. Its own ↻ button only refreshes node "
+          + "definitions and won't clear this."));
       }
     } else {
       statusBox.append(el("div", "", `ComfyUI ${report.comfy.version || "?"} — ${report.ready ? "✔ ready to make dungeons" : "⛔ missing something a dungeon needs"}`));
@@ -332,7 +280,6 @@ function createPanel(root) {
         setNote("");
         await refresh();
       }),
-      ...restartButtons(),
       button("⟳ Reload server.py", "Pick up an updated ComfyCrawler without restarting ComfyUI", async () => {
         setNote("Reloading…");
         const { data } = await postJSON("/comfycrawler/node/reload", {});
@@ -388,7 +335,7 @@ app.registerExtension({
     let teardown = null;
     app.extensionManager.registerSidebarTab({
       id: "comfycrawler",
-      icon: "pi pi-compass",
+      icon: "comfycrawler-sidebar-icon",
       title: "ComfyCrawler",
       tooltip: "ComfyCrawler: models, downloads and the game",
       type: "custom",
