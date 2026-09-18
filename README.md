@@ -46,7 +46,7 @@ Then it's a game:
 
 * **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090 (24 GB)**, where a dungeon at High quality takes about **5 minutes** and the ending cutscene adds about **3½ minutes**.
 * **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** - required. Its SageAttention patch is also used automatically, when installed, to speed up the ending cutscene.
-* **The models below.** ComfyCrawler checks for every file when it starts and on the setup screen, and lists exactly what's missing and which folder it goes in - so you can start with the required ones and add the rest later.
+* **The models below.** ComfyCrawler checks for every file when it starts and on the setup screen, and can download whichever ones are missing straight into the right folder - so you don't have to find and place them by hand. Required and optional are shown separately, so you can start with just the required ones and add the rest (sound, music, the ending cutscene) later; finishing an optional group turns on the Option it unlocks by itself.
 
 ### Models
 
@@ -105,9 +105,12 @@ Any of these opens the game:
 
 * ComfyUI's menu › **ComfyCrawler › Open ComfyCrawler**
 * the **ComfyCrawler** button in ComfyUI's top bar
+* the **ComfyCrawler** panel in ComfyUI's sidebar
 * **http://127.0.0.1:8188/comfycrawler/** (use your ComfyUI's port if it isn't 8188)
 
-ComfyCrawler adds no nodes to the graph - it's a page ComfyUI serves.
+ComfyCrawler adds no nodes to the graph - it's a page ComfyUI serves. The sidebar panel shows what
+your ComfyUI still needs, downloads any missing models, and can reload an updated ComfyCrawler
+without restarting ComfyUI.
 
 ### Narration *(optional)*
 

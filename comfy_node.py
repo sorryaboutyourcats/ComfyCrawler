@@ -135,6 +135,14 @@ def make_routes(web, srv, executor, routes=None, prefix=PREFIX):
     async def comfycrawler_redirect(request):
         raise web.HTTPFound(prefix + "/" + (f"?{request.query_string}" if request.query_string else ""))
 
+    # Ahead of the catch-all below, and deliberately NOT forwarded into server.py: this is the one
+    # request that re-imports that module, so it can't be served by it. aiohttp matches in
+    # registration order, so being first is what keeps it out of the catch-all.
+    @routes.post(prefix + "/node/reload")
+    async def comfycrawler_reload(request):
+        result = await asyncio.get_running_loop().run_in_executor(executor, reload_server, srv)
+        return web.json_response(result, status=200 if result.get("success") else 409)
+
     @routes.route("*", prefix + "/{tail:.*}")
     async def comfycrawler_request(request):
         tail = request.match_info.get("tail", "")
@@ -169,19 +177,21 @@ def _announce(srv, url):
     srv.print_preflight()
 
 
-def install(srv, prompt_server):
-    """Wire server.py into the running ComfyUI. Called once from __init__.py at node load."""
-    from concurrent.futures import ThreadPoolExecutor
-
+def _point_at_comfyui(srv):
+    """Point server.py's globals at the ComfyUI this is running inside, and return (url, tls).
+    Split out of install() because reload_server has to apply it again: reloading re-runs
+    server.py's module body, which resets every one of these to its standalone default."""
     import folder_paths
-    from aiohttp import web
     from comfy.cli_args import args
 
     tls = bool(getattr(args, "tls_keyfile", None) and getattr(args, "tls_certfile", None))
     url = loopback_url(args.listen, args.port, tls)
     srv.COMFY_EMBEDDED = {"url": url,
                           "input_dir": folder_paths.get_input_directory,
-                          "output_dir": folder_paths.get_output_directory}
+                          "output_dir": folder_paths.get_output_directory,
+                          # A model download's target directory: ComfyUI's own resolver, so it
+                          # already honours the user's extra_model_paths.yaml.
+                          "model_dir": lambda folder: (folder_paths.get_folder_paths(folder) or [None])[0]}
     srv.COMFY_URL = url
     data_dir = choose_data_dir(srv.PROJECT_DIR, folder_paths.get_user_directory())
     srv.SESSIONS_DIR = os.path.join(data_dir, "dungeon_sessions")
@@ -189,6 +199,47 @@ def install(srv, prompt_server):
     # Beside the saved dungeons, so a checkout run both ways shares one set of Options.
     srv.PAGE_SETTINGS_PATH = os.path.join(data_dir, "page_settings.json")
     os.makedirs(srv.SESSIONS_DIR, exist_ok=True)
+    return url, tls
+
+
+def reload_server(srv):
+    """Re-import server.py in place, so an edited checkout reaches a running ComfyUI without
+    restarting it (the Reload button in ComfyCrawler's sidebar panel). Works because the route
+    registered below forwards into whatever srv holds *now*: importlib.reload re-executes the
+    module body into that same module object, so the closure needs no rewiring and ComfyUI's own
+    route table never changes.
+
+    Only server.py. Edits to this file or __init__.py still need a real ComfyUI restart, and so do
+    edits to ProgressTracker - its socket thread is carried across rather than started twice."""
+    import importlib
+
+    busy = srv.server_busy_reason()
+    if busy:
+        return {"success": False, "busy": True, "error": f"Not while {busy} - wait for it to finish."}
+    progress = srv.PROGRESS      # one socket thread, already running; the new module body makes a fresh one
+    try:
+        importlib.reload(srv)
+    except Exception as e:
+        print(f"[ComfyCrawler] reload failed:\n{traceback.format_exc()}")
+        return {"success": False, "error": f"{type(e).__name__}: {e}"}
+    # Cached against id(srv), which reload doesn't change - so without this, forwarded requests
+    # would keep using a handler subclass built from the OLD routes.
+    _handler_classes.clear()
+    # reload() re-executes into the same module __dict__, so the carried-over tracker's globals
+    # are the new ones; keeping it avoids a second websocket writing the same progress.
+    srv.PROGRESS = progress
+    _point_at_comfyui(srv)
+    print("[ComfyCrawler] server.py reloaded")
+    return {"success": True}
+
+
+def install(srv, prompt_server):
+    """Wire server.py into the running ComfyUI. Called once from __init__.py at node load."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from aiohttp import web
+
+    url, tls = _point_at_comfyui(srv)
 
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ComfyCrawler")
     make_routes(web, srv, executor, routes=prompt_server.routes)

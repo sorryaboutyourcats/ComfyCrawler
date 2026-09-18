@@ -67,11 +67,16 @@ OPENABLE_FOLDERS = {"sessions": "SESSIONS_DIR", "assets": "COMFY_OUTPUT_DIR"}
 #      folder ComfyUI's own custom_nodes sits in - the same way its folder_paths.py derives them.
 COMFY_URL_CANDIDATES = ("http://127.0.0.1:8188", "http://127.0.0.1:8000")
 COMFY_SETTINGS_PATH = os.path.join(PROJECT_DIR, "comfy_settings.json")
-COMFY_SETTING_ENV = {"url": "COMFYUI_URL", "input_dir": "COMFYUI_INPUT_DIR", "output_dir": "COMFYUI_OUTPUT_DIR"}
+COMFY_SETTING_ENV = {"url": "COMFYUI_URL", "input_dir": "COMFYUI_INPUT_DIR", "output_dir": "COMFYUI_OUTPUT_DIR",
+                     "models_dir": "COMFYUI_MODELS_DIR"}
 _COMFY_RESOLVED = False
 _COMFY_VERSION = None
 # Where each resolved value came from - "env", "options", "auto" or "comfyui" - so Options can say.
 _COMFY_SOURCES = {"url": None, "input_dir": None, "output_dir": None}
+# ComfyUI's own root folder (the one with models/, input/, output/, custom_nodes/) - set by
+# _resolve_comfy alongside COMFY_INPUT_DIR/COMFY_OUTPUT_DIR, for comfy_model_dir's fallback when
+# neither Options nor ComfyUI's own /internal/folder_paths says where a model folder lives.
+_COMFY_BASE_DIR = None
 # Set by the custom node (__init__.py) when ComfyCrawler runs INSIDE ComfyUI: {"url": its own
 # loopback address, "input_dir" / "output_dir": callables into its folder_paths}. None when this
 # file is the standalone server. Embedded, none of the three sources above apply - ComfyUI is
@@ -124,12 +129,12 @@ def load_comfy_settings():
     return settings
 
 
-def save_comfy_settings(url="", input_dir="", output_dir=""):
-    """Normalise and store Options' ComfyUI overrides; returns what was stored. All three blank
+def save_comfy_settings(url="", input_dir="", output_dir="", models_dir=""):
+    """Normalise and store Options' ComfyUI overrides; returns what was stored. All four blank
     deletes the file, so auto-detecting everything leaves nothing behind. Raises ValueError for a
     malformed address, before anything is written."""
     settings = {"url": normalize_comfy_url(url), "input_dir": normalize_comfy_dir(input_dir),
-                "output_dir": normalize_comfy_dir(output_dir)}
+                "output_dir": normalize_comfy_dir(output_dir), "models_dir": normalize_comfy_dir(models_dir)}
     if not any(settings.values()):
         try:
             os.remove(COMFY_SETTINGS_PATH)
@@ -251,6 +256,20 @@ def _argv_value(argv, flag):
     return None
 
 
+def _comfy_base_dir(argv, base_url):
+    """ComfyUI's own root directory (the one with models/, input/, output/, custom_nodes/) - from
+    --base-directory, or else asking ComfyUI's own /internal/folder_paths where its custom_nodes
+    live. None when neither says."""
+    base = _argv_value(argv, "--base-directory")
+    if not base:
+        try:
+            nodes = _comfy_get_json("/internal/folder_paths", base=base_url).get("custom_nodes") or []
+            base = os.path.dirname(nodes[0]) if nodes else None
+        except Exception:
+            base = None
+    return base
+
+
 def _detect_comfy_dirs(argv, base_url, input_dir="", output_dir=""):
     """(input_dir, output_dir) for the ComfyUI answering at base_url, launched with argv. A folder
     passed in (fixed by the environment or Options) is kept; either can come back None when nothing
@@ -258,17 +277,43 @@ def _detect_comfy_dirs(argv, base_url, input_dir="", output_dir=""):
     input_dir = input_dir or _argv_value(argv, "--input-directory")
     output_dir = output_dir or _argv_value(argv, "--output-directory")
     if not (input_dir and output_dir):
-        base = _argv_value(argv, "--base-directory")
-        if not base:
-            try:
-                nodes = _comfy_get_json("/internal/folder_paths", base=base_url).get("custom_nodes") or []
-                base = os.path.dirname(nodes[0]) if nodes else None
-            except Exception:
-                base = None
+        base = _comfy_base_dir(argv, base_url)
         if base:
             input_dir = input_dir or os.path.join(base, "input")
             output_dir = output_dir or os.path.join(base, "output")
     return input_dir, output_dir
+
+
+def _detect_comfy_model_dir(base_url, folder_name, base_dir, fixed_root=""):
+    """Absolute directory this machine's ComfyUI reads `folder_name` models from (e.g.
+    "diffusion_models", "checkpoints") - where a download has to land to be found. `fixed_root`
+    (Options' Models folder override, or COMFYUI_MODELS_DIR) names the models ROOT directly and
+    skips asking ComfyUI. Otherwise tries ComfyUI's own /internal/folder_paths for this folder type
+    directly - the exact directory it would save a new file to, honouring extra_model_paths.yaml -
+    and falls back to <base_dir>/models/<folder_name>, the standard ComfyUI layout (`base_dir` is
+    whatever _comfy_base_dir found). None when nothing says."""
+    if fixed_root:
+        return os.path.join(fixed_root, folder_name)
+    try:
+        paths = _comfy_get_json("/internal/folder_paths", base=base_url).get(folder_name) or []
+        if paths:
+            return paths[0]
+    except Exception:
+        pass
+    return os.path.join(base_dir, "models", folder_name) if base_dir else None
+
+
+def comfy_model_dir(folder_name):
+    """Absolute directory this machine's ComfyUI reads `folder_name` models from, or None when it
+    can't be determined. Call after ensure_comfy() (embedded mode asks ComfyUI's own folder_paths
+    module in-process; standalone mode uses _detect_comfy_model_dir - see there)."""
+    if COMFY_EMBEDDED:
+        try:
+            return COMFY_EMBEDDED["model_dir"](folder_name)
+        except Exception:
+            return None
+    fixed_root, _source = _comfy_setting("models_dir", load_comfy_settings())
+    return _detect_comfy_model_dir(COMFY_URL, folder_name, _COMFY_BASE_DIR, fixed_root)
 
 
 def ensure_comfy(refresh=False):
@@ -310,7 +355,7 @@ def _resolve_embedded_comfy():
 
 
 def _resolve_comfy():
-    global COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR, _COMFY_RESOLVED, _COMFY_VERSION
+    global COMFY_URL, COMFY_INPUT_DIR, COMFY_OUTPUT_DIR, _COMFY_RESOLVED, _COMFY_VERSION, _COMFY_BASE_DIR
     if COMFY_EMBEDDED:
         return _resolve_embedded_comfy()
     saved = load_comfy_settings()
@@ -335,6 +380,7 @@ def _resolve_comfy():
                                "address, set it in Options > ComfyUI Connection."
                                % " or ".join(COMFY_URL_CANDIDATES))
     system = stats.get("system") or {}
+    _COMFY_BASE_DIR = _comfy_base_dir(system.get("argv") or [], url)
     fixed_in, in_source = _comfy_setting("input_dir", saved)
     fixed_out, out_source = _comfy_setting("output_dir", saved)
     input_dir, output_dir = _detect_comfy_dirs(system.get("argv") or [], url, fixed_in, fixed_out)
@@ -9979,6 +10025,33 @@ COMFY_MODEL_GROUPS = [
      "files": [("diffusion_models", ENDING_UNET), ("text_encoders", ENDING_CLIP),
                ("vae", ENDING_VIDEO_VAE), ("vae", ENDING_AUDIO_VAE)]},
 ]
+# Where to download each file COMFY_MODEL_GROUPS names, and its size in bytes - copied from the
+# README's Requirements table (keep both in sync; the drift guard below checks every
+# COMFY_MODEL_GROUPS file has an entry here). Size is advisory only - it feeds the disk-space check
+# and the progress bar's fallback total when a server doesn't send Content-Length - never
+# load-bearing for correctness.
+MODEL_DOWNLOADS = {
+    # Dungeon art & story
+    KREA2_UNET: {"url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors", "size": 12_200_000_000},
+    KREA2_CLIP: {"url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors", "size": 4_900_000_000},
+    KREA2_VAE: {"url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors", "size": 200_000_000},
+    FLUX_SCHNELL_CKPT: {"url": "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors", "size": 16_100_000_000},
+    BIREFNET_MODEL: {"url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors", "size": 400_000_000},
+    # HUD portraits
+    KONTEXT_UNET: {"url": "https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI/resolve/main/split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors", "size": 11_100_000_000},
+    FLUX_T5: {"url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors", "size": 4_600_000_000},
+    FLUX_CLIP_L: {"url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors", "size": 200_000_000},
+    FLUX_AE: {"url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors", "size": 300_000_000},
+    # Sound effects / Music - SFX_CLIP is shared by both groups, one entry covers it
+    SFX_CKPT: {"url": "https://huggingface.co/Comfy-Org/stable-audio-3/resolve/main/checkpoints/stable_audio_3_small_sfx.safetensors", "size": 2_100_000_000},
+    MUSIC_CKPT: {"url": "https://huggingface.co/Comfy-Org/stable-audio-3/resolve/main/checkpoints/stable_audio_3_small_sfx_base.safetensors", "size": 2_100_000_000},
+    SFX_CLIP: {"url": "https://huggingface.co/Comfy-Org/stable-audio-3/resolve/main/text_encoders/t5gemma_b_b_ul2.safetensors", "size": 1_100_000_000},
+    # Ending video
+    ENDING_UNET: {"url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors", "size": 19_500_000_000},
+    ENDING_CLIP: {"url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "size": 14_600_000_000},
+    ENDING_VIDEO_VAE: {"url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors", "size": 4_900_000_000},
+    ENDING_AUDIO_VAE: {"url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors", "size": 600_000_000},
+}
 # Custom nodes the graphs name. SaveImageWithAlpha writes every cutout; the sage attention patch
 # only speeds the ending video up and is wired in only when present (_sage_attention_available).
 COMFY_NODES = [
@@ -10012,10 +10085,12 @@ def comfy_preflight():
                     listed[folder] = set(_comfy_get_json(f"/models/{folder}"))
                 except Exception:
                     listed[folder] = set()     # an older ComfyUI without that folder has none of it
+        missing = [{"folder": folder, "file": name} for folder, name in group["files"]
+                   if name not in listed[folder]]
         report["groups"].append({
             "label": group["label"], "required": group["required"], "fallback": group["fallback"],
-            "missing": [{"folder": folder, "file": name} for folder, name in group["files"]
-                        if name not in listed[folder]]})
+            "missing": missing,
+            "missing_bytes": sum(MODEL_DOWNLOADS.get(m["file"], {}).get("size", 0) for m in missing)})
 
     for node in COMFY_NODES:
         try:
@@ -10027,6 +10102,225 @@ def comfy_preflight():
     report["ready"] = (not any(g["required"] and g["missing"] for g in report["groups"])
                        and all(n["present"] for n in report["nodes"] if n["required"]))
     return report
+
+
+# ---------------------------------------------------------------------------
+# MODEL DOWNLOADS
+# One background download job at a time, app-wide (these are multi-GB files - two at once just
+# halves bandwidth to both). Started per COMFY_MODEL_GROUPS group from the setup screen; downloads
+# every file that group is still missing, straight into ComfyUI's own models folders. Modeled on
+# the ending-video job above: a lock, a singleton job dict, a state machine, a daemon thread, and a
+# view function the API polls.
+_MODEL_DOWNLOAD_LOCK = threading.Lock()
+_MODEL_DOWNLOAD_JOB = None
+MODEL_DOWNLOAD_CHUNK = 1 << 20              # 1 MiB
+MODEL_DOWNLOAD_FREE_MARGIN = 2_000_000_000  # keep this much free beyond the download itself
+
+
+class ModelDownloadCancelled(Exception):
+    """Raised inside the download loop to unwind out to _run_model_download_job on Cancel."""
+
+
+def _format_bytes(n):
+    """A byte count the way the player would write it - "12.2 GB", "340 MB" - for space errors."""
+    n = float(n)
+    for unit in ("bytes", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1000
+
+
+def _download_job_view(job):
+    return {"group": job["group"], "state": job["state"], "file": job["file"],
+            "file_index": job["file_index"], "file_count": job["file_count"],
+            "percent": job["percent"], "bytes_done": job["group_bytes_done"] + job["bytes_done"],
+            "bytes_total": job["group_bytes_total"], "error": job["error"]}
+
+
+def model_download_job_view():
+    """The one model download running app-wide, for the setup screen to poll: {group, state, file,
+    file_index, file_count, percent, bytes_done, bytes_total, error}. {state: "idle", ...} when
+    there isn't one. A finished job keeps reporting its last state, like ending_video_job_view, so a
+    slow poll still sees how it ended."""
+    job = _MODEL_DOWNLOAD_JOB
+    if not job:
+        return {"group": None, "state": "idle", "file": None, "file_index": 0, "file_count": 0,
+                "percent": 0, "bytes_done": 0, "bytes_total": 0, "error": None}
+    return _download_job_view(job)
+
+
+def _check_download_space(missing):
+    """None if there's room to download `missing` ([(folder, name), ...]); else an error string for
+    the player. Grouped per target directory, since one group's files (diffusion_models,
+    text_encoders, vae, ...) can be sent to different drives by extra_model_paths.yaml."""
+    needed = {}
+    for folder, name in missing:
+        target = comfy_model_dir(folder)
+        if not target:
+            return f"ComfyUI hasn't said where its {folder} models folder is."
+        have = 0
+        part = os.path.join(target, name + ".part")
+        if os.path.exists(part):
+            have = os.path.getsize(part)
+        size = MODEL_DOWNLOADS.get(name, {}).get("size", 0)
+        needed[target] = needed.get(target, 0) + max(size - have, 0)
+    for target, bytes_needed in needed.items():
+        probe = target if os.path.isdir(target) else (os.path.dirname(target) or target)
+        try:
+            free = shutil.disk_usage(probe).free
+        except OSError:
+            continue   # can't check yet (the drive isn't there) - let the download itself fail
+        if free < bytes_needed + MODEL_DOWNLOAD_FREE_MARGIN:
+            return (f"Not enough free space in {target}: this needs about "
+                    f"{_format_bytes(bytes_needed)} more, only {_format_bytes(free)} is free.")
+    return None
+
+
+def start_model_download_job(group_label):
+    """Start downloading a COMFY_MODEL_GROUPS group's still-missing files. Idempotent for the group
+    already downloading; "busy" for a different one already running. Missing files are recomputed
+    fresh here from ComfyUI's own listing - not from a client-held report - so a file the player
+    already placed by hand, or that another group's download already fetched (SFX_CLIP is shared by
+    Sound effects and Music), is never re-downloaded."""
+    global _MODEL_DOWNLOAD_JOB
+    group = next((g for g in COMFY_MODEL_GROUPS if g["label"] == group_label), None)
+    if group is None:
+        return {"group": group_label, "state": "failed", "file": None, "file_index": 0,
+                "file_count": 0, "percent": 0, "bytes_done": 0, "bytes_total": 0,
+                "error": f"There is no model group called {group_label!r}."}
+    with _MODEL_DOWNLOAD_LOCK:
+        job = _MODEL_DOWNLOAD_JOB
+        if job and job["state"] in ("queued", "downloading"):
+            if job["group"] == group_label:
+                return _download_job_view(job)
+            return {"group": job["group"], "state": "busy", "file": None, "file_index": 0,
+                    "file_count": 0, "percent": 0, "bytes_done": 0, "bytes_total": 0,
+                    "error": f"Already downloading {job['group']}."}
+    try:
+        ensure_comfy()
+    except ComfyUnavailable as e:
+        return {"group": group_label, "state": "failed", "file": None, "file_index": 0,
+                "file_count": 0, "percent": 0, "bytes_done": 0, "bytes_total": 0, "error": str(e)}
+    listed, missing = {}, []
+    for folder, name in group["files"]:
+        if folder not in listed:
+            try:
+                listed[folder] = set(_comfy_get_json(f"/models/{folder}"))
+            except Exception:
+                listed[folder] = set()
+        if name not in listed[folder]:
+            missing.append((folder, name))
+    if not missing:
+        return {"group": group_label, "state": "done", "file": None, "file_index": 0,
+                "file_count": 0, "percent": 100, "bytes_done": 0, "bytes_total": 0, "error": None}
+    space_error = _check_download_space(missing)
+    if space_error:
+        return {"group": group_label, "state": "failed", "file": None, "file_index": 0,
+                "file_count": len(missing), "percent": 0, "bytes_done": 0, "bytes_total": 0,
+                "error": space_error}
+    job = {"group": group_label, "state": "queued", "files": missing, "file_index": 0,
+           "file": missing[0][1], "file_count": len(missing), "bytes_done": 0,
+           "bytes_total": MODEL_DOWNLOADS.get(missing[0][1], {}).get("size", 0),
+           "group_bytes_done": 0,
+           "group_bytes_total": sum(MODEL_DOWNLOADS.get(n, {}).get("size", 0) for _, n in missing),
+           "percent": 0, "error": None, "cancelled": False}
+    with _MODEL_DOWNLOAD_LOCK:
+        _MODEL_DOWNLOAD_JOB = job
+    threading.Thread(target=_run_model_download_job, args=(job,), daemon=True).start()
+    return _download_job_view(job)
+
+
+def cancel_model_download_job(group_label=None):
+    """Stop the running download - only the one for `group_label`, when given. True if there was
+    one to stop. Returns straight away; the worker notices within one chunk (<=1MiB) and leaves its
+    .part file in place for a later resume - cancelling is not deleting."""
+    with _MODEL_DOWNLOAD_LOCK:
+        job = _MODEL_DOWNLOAD_JOB
+        if not job or job["state"] not in ("queued", "downloading"):
+            return False
+        if group_label is not None and job["group"] != group_label:
+            return False
+        job["cancelled"] = True
+        job["state"] = "cancelled"
+    return True
+
+
+def _run_model_download_job(job):
+    try:
+        for i, (folder, name) in enumerate(job["files"]):
+            if job["cancelled"]:
+                raise ModelDownloadCancelled("stopped before this file started")
+            job["state"] = "downloading"
+            job["file_index"], job["file"] = i, name
+            job["bytes_done"] = 0
+            job["bytes_total"] = MODEL_DOWNLOADS.get(name, {}).get("size", 0)
+            _download_one_model(job, folder, name)
+            job["group_bytes_done"] += job["bytes_total"]
+            job["percent"] = int(100 * job["group_bytes_done"] / max(job["group_bytes_total"], 1))
+        job["state"] = "done"
+    except ModelDownloadCancelled as e:
+        job["state"] = "cancelled"
+        print(f"[download] {job['group']} stopped ({e})")
+    except Exception as e:
+        job["state"] = "cancelled" if job["cancelled"] else "failed"
+        job["error"] = str(e)
+        print(f"[download] {job['group']} {job['state']} ({e})")
+
+
+def _download_one_model(job, folder, name):
+    """Stream one file from MODEL_DOWNLOADS into ComfyUI's models folder, resuming a `.part` left
+    from an earlier attempt via HTTP Range. Only renamed into place once every byte is down - a
+    crash or cancel always leaves either the finished file or a resumable .part, never a half-write
+    ComfyUI might try to load."""
+    target_dir = comfy_model_dir(folder)
+    if not target_dir:
+        raise RuntimeError(f"ComfyUI hasn't said where its {folder} models folder is.")
+    os.makedirs(target_dir, exist_ok=True)
+    final_path = os.path.join(target_dir, name)
+    if os.path.exists(final_path):
+        job["bytes_done"] = job["bytes_total"]
+        return
+    part_path = final_path + ".part"
+    offset = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+    url = MODEL_DOWNLOADS[name]["url"]
+    resp = urllib.request.urlopen(
+        urllib.request.Request(url, headers={"Range": f"bytes={offset}-"} if offset else {}), timeout=60)
+    try:
+        if offset and resp.status != 206:
+            # The server ignored Range - a resume would corrupt the file, so start clean instead.
+            resp.close()
+            offset = 0
+            resp = urllib.request.urlopen(urllib.request.Request(url), timeout=60)
+        content_range = resp.headers.get("Content-Range")
+        content_length = resp.headers.get("Content-Length")
+        if resp.status == 206 and content_range and "/" in content_range:
+            total = int(content_range.rsplit("/", 1)[1])
+        elif content_length:
+            total = (offset if resp.status == 206 else 0) + int(content_length)
+        else:
+            total = job["bytes_total"]
+        job["bytes_total"] = total or job["bytes_total"]
+        with open(part_path, "r+b" if offset else "wb") as f:
+            if offset:
+                f.seek(offset)
+                f.truncate()
+            job["bytes_done"] = offset
+            while True:
+                if job["cancelled"]:
+                    raise ModelDownloadCancelled(f"stopped partway through {name}")
+                chunk = resp.read(MODEL_DOWNLOAD_CHUNK)
+                if not chunk:
+                    break
+                f.write(chunk)
+                job["bytes_done"] += len(chunk)
+                job["percent"] = int(100 * (job["group_bytes_done"] + job["bytes_done"])
+                                     / max(job["group_bytes_total"], 1))
+    finally:
+        resp.close()
+    if job["bytes_total"] and job["bytes_done"] != job["bytes_total"]:
+        raise RuntimeError(f"{name} downloaded {job['bytes_done']} bytes, expected "
+                           f"{job['bytes_total']} - try again.")
+    os.replace(part_path, final_path)
 
 
 def comfy_settings_view():
@@ -10049,6 +10343,20 @@ def comfy_busy_reason():
         return "A dungeon is being made - change ComfyUI's connection once it's done."
     if ending_video_rendering():
         return "An ending movie is being filmed - change ComfyUI's connection once it's done."
+    return None
+
+
+def server_busy_reason():
+    """What long-running work is in flight right now, as a phrase, or None. The custom node's
+    Reload button asks before re-importing this module: reloading re-runs the module body, and a
+    thread still part-way through a job would be left writing to state nothing reads any more."""
+    if gen_progress.get("is_generating") or run_is_settling():
+        return "a dungeon is being made"
+    if ending_video_rendering():
+        return "an ending movie is being filmed"
+    job = _MODEL_DOWNLOAD_JOB
+    if job and job["state"] in ("queued", "downloading"):
+        return f"{job['group']} is downloading"
     return None
 
 
@@ -10230,6 +10538,18 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # buttons it greys out come back the moment it is done (see ending_video_job_view).
         elif self.path == "/api/ending_video_job":
             payload = json.dumps(ending_video_job_view(), ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # The one model-file download running app-wide, whichever group it's for - polled by the
+        # setup screen's Download buttons while one is going. See model_download_job_view.
+        elif self.path == "/api/model_download_job":
+            payload = json.dumps(model_download_job_view(), ensure_ascii=True).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -10612,6 +10932,42 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
             return
 
+        elif self.path == "/api/model_download_start":
+            # A Download button on the setup screen. Body is {group}, one of COMFY_MODEL_GROUPS'
+            # labels. The reply is model_download_job_view's shape, plus "busy" when a different
+            # group is already downloading (the page asks again once that one finishes).
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                body, code = start_model_download_job(str(data.get("group") or "")), 200
+            except Exception as e:
+                print(f"[download] start failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/model_download_cancel":
+            # The Cancel confirm box on a downloading group. Body is {group}; only that group's
+            # download is stopped, and "stopped" says whether there was one - it may have finished
+            # while the question was on screen.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                group_label = data.get("group")
+                stopped = bool(group_label) and cancel_model_download_job(group_label)
+                body, code = {"success": True, "stopped": stopped}, 200
+            except Exception as e:
+                print(f"[download] cancel failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
         elif self.path == "/api/history_beaten":
             # The boss of a saved run just went down. Body is {id}. Recorded once and never
             # cleared - it is what unlocks that run's ending movie in the History window.
@@ -10668,7 +11024,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     body, code = {"success": False, "busy": True, "error": busy}, 409
                 else:
                     save_comfy_settings(str(data.get("url") or ""), str(data.get("input_dir") or ""),
-                                        str(data.get("output_dir") or ""))
+                                        str(data.get("output_dir") or ""), str(data.get("models_dir") or ""))
                     body, code = dict(comfy_settings_view(), success=True), 200
             except ValueError as e:        # a malformed address (json errors are ValueErrors too)
                 body, code = {"success": False, "error": str(e)}, 400

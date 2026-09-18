@@ -2,7 +2,8 @@
 
 Installed into ComfyUI's custom_nodes, ComfyCrawler is served by ComfyUI itself at
 http://127.0.0.1:8188/comfycrawler/ (on whatever port ComfyUI uses) and adds an "Open ComfyCrawler"
-entry to ComfyUI's menu. It adds no nodes to the graph. The game is server.py - the same file the
+entry to ComfyUI's menu, an action-bar button and a sidebar panel (models, downloads, and a reload
+for an updated checkout). It adds no nodes to the graph. The game is server.py - the same file the
 standalone server (`python server.py`) runs - wired into ComfyUI by comfy_node.install.
 """
 

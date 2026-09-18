@@ -1782,6 +1782,31 @@
     }
     setEndingLook(prefs.get(ENDING_LOOK_KEY));
 
+    // Sound Generation: music+sound / sound only / none (index.html #soundModeSelect). Unlike the
+    // other options here, this one had no saved key until model downloads needed somewhere to
+    // record "the player unlocked a louder mode" - see raiseSoundMode, which model-group downloads
+    // call once their files are in place.
+    const SOUND_MODE_KEY = 'comfycrawler.soundMode';
+    const SOUND_MODES = ['skip', 'sound_only', 'music_and_sound'];
+    if (soundModeSelect && SOUND_MODES.includes(prefs.get(SOUND_MODE_KEY))) {
+      soundModeSelect.value = prefs.get(SOUND_MODE_KEY);
+    }
+    if (soundModeSelect) {
+      soundModeSelect.addEventListener('change', () => prefs.set(SOUND_MODE_KEY, soundModeSelect.value));
+    }
+
+    // Raises Sound Generation to at least `rank` (0 skip / 1 sound_only / 2 music_and_sound) -
+    // never lowers it. Called when a model download unlocks a level the player hadn't already
+    // reached, so finishing "Sound effects" or "Music" from the setup screen turns sound on
+    // without a trip to Options - see onDownloadJobFinished.
+    function raiseSoundMode(rank) {
+      if (!soundModeSelect) return;
+      const current = Math.max(0, SOUND_MODES.indexOf(soundModeSelect.value));
+      if (rank <= current) return;
+      soundModeSelect.value = SOUND_MODES[rank];
+      prefs.set(SOUND_MODE_KEY, soundModeSelect.value);
+    }
+
     // `focusTarget` is where the cursor starts - OK normally, the ComfyUI address field when the
     // setup screen's preflight notice opened it. The ComfyUI section reloads on every open, so
     // edits left unapplied by ✕ / ESC last time never reappear as if they had been saved.
@@ -10168,9 +10193,9 @@ void main() {
     // Which dialog the arrow keys belong to right now, innermost first: the two confirm
     // boxes sit on top of the window that opened them, so they win while they are up.
     function topmostOpenDialog() {
-      const stack = [modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm, modalHistoryConfirm,
-                     modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm, modalHistory,
-                     modalSettings, modalAbout];
+      const stack = [modalDownloadStopConfirm, modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm,
+                     modalHistoryConfirm, modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm,
+                     modalHistory, modalSettings, modalAbout];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -10291,9 +10316,14 @@ void main() {
     const preflightList = document.getElementById('preflightList');
     const btnPreflightRecheck = document.getElementById('btnPreflightRecheck');
     const btnPreflightSettings = document.getElementById('btnPreflightSettings');
+    const preflightRequired = document.getElementById('preflightRequired');
+    const preflightRequiredList = document.getElementById('preflightRequiredList');
+    const preflightOptional = document.getElementById('preflightOptional');
+    const preflightOptionalList = document.getElementById('preflightOptionalList');
 
     // The missing models and nodes in a preflight report, one {text, needed} per group or node -
-    // `needed` meaning it blocks CREATE. Shared by the setup notice and Options' status box.
+    // `needed` meaning it blocks CREATE. Used by Options' status box; the setup notice itself now
+    // gets its model-group lines from the downloadable rows below (renderModelGroups) instead.
     function preflightItems(report) {
       const items = [];
       for (const g of (report && report.groups) || []) {
@@ -10308,16 +10338,30 @@ void main() {
       return items;
     }
 
+    // Just the missing-required-node lines - the setup notice's plain-list part, now that missing
+    // model files get their own downloadable rows instead of a text line.
+    function requiredNodeProblems(report) {
+      const items = [];
+      for (const n of (report && report.nodes) || []) {
+        if (n.required && !n.present) items.push({ text: `The ${n.name} node (needed): install ${n.pack}`, needed: true });
+      }
+      return items;
+    }
+
+    let lastPreflightReport = null;
+
     function renderPreflight(report) {
       if (!preflightNotice || !preflightList || !preflightTitle) return;
+      lastPreflightReport = report;
       let lines = [];
       let title = '';
+      const anyMissing = !!(report && report.groups && report.groups.some((g) => g.missing && g.missing.length));
       if (report && report.comfy && report.comfy.error) {
         title = "⛔ ComfyUI isn't ready";
         lines.push(report.comfy.error);
       } else if (report) {
-        lines = preflightItems(report).map((item) => item.text);
-        if (lines.length) {
+        lines = requiredNodeProblems(report).map((item) => item.text);
+        if (lines.length || anyMissing) {
           title = report.ready ? '⚠️ Some optional ComfyUI models are missing'
                                : '⛔ ComfyUI is missing files a dungeon needs';
         }
@@ -10328,7 +10372,8 @@ void main() {
         li.textContent = text;
         return li;
       }));
-      preflightNotice.classList.toggle('hidden', lines.length === 0);
+      renderModelGroups(report);
+      preflightNotice.classList.toggle('hidden', lines.length === 0 && !anyMissing);
       // Inside ComfyUI (the custom node) there's no connection to set, so no shortcut to it.
       if (btnPreflightSettings) {
         btnPreflightSettings.classList.toggle('hidden', !!(report && report.comfy && report.comfy.embedded));
@@ -10339,7 +10384,7 @@ void main() {
     // usually pressed from the keyboard. A second press during a check is simply ignored.
     let preflightChecking = false;
     async function checkPreflight() {
-      if (preflightChecking) return;
+      if (preflightChecking) return lastPreflightReport;
       preflightChecking = true;
       if (btnPreflightRecheck) btnPreflightRecheck.setAttribute('aria-busy', 'true');
       let report = null;   // stays null if this server itself didn't answer - nothing to list then
@@ -10349,10 +10394,254 @@ void main() {
       preflightChecking = false;
       if (btnPreflightRecheck) btnPreflightRecheck.removeAttribute('aria-busy');
       renderPreflight(report);
+      return report;
     }
 
     if (btnPreflightRecheck) btnPreflightRecheck.addEventListener('click', checkPreflight);
     if (btnPreflightSettings) btnPreflightSettings.addEventListener('click', () => openSettings(comfyFields.url));
+
+    // ---- Model downloads --------------------------------------------------------------------
+    // One group (COMFY_MODEL_GROUPS label) downloading at a time, app-wide - see server.py's
+    // MODEL_DOWNLOADS / start_model_download_job. downloadJob mirrors endingJob's shape and
+    // "keeps reporting its last state" convention (see watchEndingJob above); {state: 'idle'}
+    // means nothing is running.
+    let downloadJob = { group: null, state: 'idle', file: null, file_index: 0, file_count: 0,
+                        percent: 0, bytes_done: 0, bytes_total: 0, error: null };
+    let downloadJobWatchTimer = null;
+    let downloadJobWatchSeq = 0;
+    const DOWNLOAD_JOB_POLL_MS = 1000;   // finer than the ending-video job's - a byte counter is live
+
+    function downloadJobActive(job) {
+      const j = job || downloadJob;
+      return j.state === 'queued' || j.state === 'downloading';
+    }
+
+    // One row per COMFY_MODEL_GROUPS group with something missing, or whose download is active /
+    // just failed / was cancelled (a finished, satisfied group renders no row, same as one that
+    // was never missing anything). Split into the Required / Optional extras sections so the two
+    // are visually obvious rather than one flat list.
+    function renderModelGroups(report) {
+      if (!preflightRequired || !preflightOptional || !preflightRequiredList || !preflightOptionalList) return;
+      const requiredRows = [];
+      const optionalRows = [];
+      for (const g of (report && report.groups) || []) {
+        const jobHere = downloadJob.group === g.label ? downloadJob : null;
+        const showJob = !!jobHere && (downloadJobActive(jobHere) || jobHere.state === 'failed' || jobHere.state === 'cancelled');
+        if (!g.missing.length && !showJob) continue;
+        (g.required ? requiredRows : optionalRows).push(buildModelGroupRow(g, showJob ? jobHere : null));
+      }
+      preflightRequiredList.replaceChildren(...requiredRows);
+      preflightOptionalList.replaceChildren(...optionalRows);
+      preflightRequired.classList.toggle('hidden', requiredRows.length === 0);
+      preflightOptional.classList.toggle('hidden', optionalRows.length === 0);
+    }
+
+    function buildModelGroupRow(g, job) {
+      const li = document.createElement('li');
+      li.className = 'win95-box p-1.5 bg-white/60 flex flex-col gap-1';
+
+      const head = document.createElement('div');
+      head.className = 'flex items-center justify-between gap-2';
+      const label = document.createElement('span');
+      label.className = 'font-bold';
+      label.textContent = g.required ? g.label : `${g.label} — without it, ${g.fallback}`;
+      head.appendChild(label);
+
+      const active = !!job && downloadJobActive(job);
+      const btn = document.createElement('button');
+      btn.className = 'win95-btn px-2 py-0.5 text-[11px] text-black hover:bg-slate-300'
+        + (active ? '' : ' bg-slate-200');
+      if (active) {
+        btn.textContent = 'Cancel';
+        btn.addEventListener('click', () => askStopModelDownload(g.label, btn));
+      } else {
+        const sizeText = historySizeText(g.missing_bytes);
+        btn.textContent = (job && job.state === 'failed' ? 'Try Again' : 'Download') + (sizeText ? ` — ${sizeText}` : '');
+        btn.disabled = downloadJobActive() && downloadJob.group !== g.label;
+        btn.title = btn.disabled ? `Already downloading ${downloadJob.group}.` : '';
+        btn.addEventListener('click', () => startModelDownload(g.label));
+      }
+      head.appendChild(btn);
+      li.appendChild(head);
+
+      if (job) {
+        const detail = document.createElement('div');
+        detail.className = 'text-[11px] text-slate-700 flex items-center justify-between gap-2';
+        const text = document.createElement('span');
+        text.className = 'truncate flex-1 min-w-0';
+        text.textContent = job.state === 'failed' ? (job.error || 'The download failed.')
+                          : job.state === 'cancelled' ? 'Stopped — Download picks up where this left off.'
+                          : job.file ? `${job.file} (${job.file_index + 1}/${job.file_count})` : '';
+        detail.appendChild(text);
+        if (active) {
+          const pct = document.createElement('strong');
+          pct.textContent = `${job.percent || 0}%`;
+          detail.appendChild(pct);
+        }
+        li.appendChild(detail);
+        if (active) {
+          const trough = document.createElement('div');
+          trough.className = 'win95-inset h-2.5 p-0.5 overflow-hidden';
+          trough.style.background = '#c0c0c0';
+          const fill = document.createElement('div');
+          fill.className = 'h-full';
+          fill.style.background = '#000080';
+          fill.style.width = `${Math.max(0, Math.min(100, job.percent || 0))}%`;
+          trough.appendChild(fill);
+          li.appendChild(trough);
+        }
+      }
+      return li;
+    }
+
+    async function startModelDownload(groupLabel) {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/model_download_start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ group: groupLabel }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 404) {
+          // The page is newer than the server behind it: downloading arrived in an update this
+          // ComfyUI (or server.py) hasn't loaded yet - page files are refresh-only, the server isn't.
+          const embedded = !!(lastPreflightReport && lastPreflightReport.comfy && lastPreflightReport.comfy.embedded);
+          throw new Error(embedded
+            ? 'This ComfyUI is still running an older ComfyCrawler. Restart ComfyUI to pick up the update.'
+            : "ComfyCrawler's server is still running an older version. Restart server.py to pick up the update.");
+        }
+        if (data && data.state === 'busy') {
+          alert(data.error || 'Already downloading something else - wait for it to finish first.');
+        } else if (data && data.state === 'failed') {
+          // A refusal the server answered 200 for - no disk space, ComfyUI gone, no such group.
+          // Nothing lands in the job, so the row can't show it; say it here or it vanishes.
+          throw new Error(data.error || 'The server could not start it.');
+        } else if (!res.ok && !(data && data.state)) {
+          throw new Error((data && data.error) || 'The server refused.');
+        }
+      } catch (err) {
+        console.error('Model download start error:', err);
+        alert('Could not start that download.\n\n' + err.message);
+      }
+      watchDownloadJob();
+    }
+
+    // "Cancel" on a downloading group - an in-page confirm box, not confirm(), same as Stop
+    // Filming above: the .part file is kept either way, but a misclick shouldn't throw away
+    // network time on a multi-GB file without asking.
+    const modalDownloadStopConfirm = document.getElementById('modalDownloadStopConfirm');
+    const downloadStopName = document.getElementById('downloadStopName');
+    const downloadStopText = document.getElementById('downloadStopText');
+    const btnDownloadStopClose = document.getElementById('btnDownloadStopClose');
+    const btnDownloadStopKeep = document.getElementById('btnDownloadStopKeep');
+    const btnDownloadStopGo = document.getElementById('btnDownloadStopGo');
+    let downloadStopPending = null;   // {group, btn} while the box is asking about a download
+
+    function askStopModelDownload(groupLabel, btn) {
+      if (!modalDownloadStopConfirm) return;
+      downloadStopPending = { group: groupLabel, btn: btn || null };
+      if (downloadStopName) downloadStopName.textContent = groupLabel;
+      modalDownloadStopConfirm.classList.remove('hidden');
+      paintStopModelDownload();
+      focusFirstIn(modalDownloadStopConfirm, btnDownloadStopKeep);
+    }
+
+    // Keeps the box's progress line current while it is up, and takes it down on its own if the
+    // download it is asking about stops being active - it finished, or failed - since there is
+    // then nothing left to stop.
+    function paintStopModelDownload() {
+      if (!downloadStopPending || !modalDownloadStopConfirm
+          || modalDownloadStopConfirm.classList.contains('hidden')) return;
+      if (!(downloadJobActive() && downloadJob.group === downloadStopPending.group)) {
+        closeStopModelDownload();
+        return;
+      }
+      if (!downloadStopText) return;
+      const pct = Math.max(0, Math.min(99, downloadJob.percent || 0));
+      downloadStopText.textContent = `It is ${pct}% done. The part already downloaded is kept, so `
+        + 'pressing Download again picks up where this left off.';
+    }
+
+    function closeStopModelDownload() {
+      const wasOpen = modalDownloadStopConfirm && !modalDownloadStopConfirm.classList.contains('hidden');
+      const back = downloadStopPending && downloadStopPending.btn;
+      downloadStopPending = null;
+      if (modalDownloadStopConfirm) modalDownloadStopConfirm.classList.add('hidden');
+      if (!wasOpen) return;
+      if (back && back.isConnected && !back.disabled) back.focus({ preventScroll: true });
+    }
+
+    async function confirmStopModelDownload() {
+      const pending = downloadStopPending;
+      if (!pending) { closeStopModelDownload(); return; }
+      try {
+        const res = await fetch(`${SERVER_URL}/api/model_download_cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ group: pending.group }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || 'The server refused.');
+      } catch (err) {
+        console.error('Stop download error:', err);
+        alert('Could not stop that download.\n\n' + err.message);
+      }
+      closeStopModelDownload();
+      watchDownloadJob();
+    }
+
+    if (btnDownloadStopClose) btnDownloadStopClose.addEventListener('click', closeStopModelDownload);
+    if (btnDownloadStopKeep) btnDownloadStopKeep.addEventListener('click', closeStopModelDownload);
+    if (btnDownloadStopGo) btnDownloadStopGo.addEventListener('click', confirmStopModelDownload);
+    if (modalDownloadStopConfirm) {
+      modalDownloadStopConfirm.addEventListener('click', (e) => {
+        if (e.target === modalDownloadStopConfirm) closeStopModelDownload();
+      });
+    }
+
+    // Follows the one model download until it stops being active, then puts the row back and (on
+    // a clean finish) lets onDownloadJobFinished auto-enable whatever Option it just unlocked.
+    // Started at page load (a reload mid-download) and by every Download press.
+    async function watchDownloadJob() {
+      if (downloadJobWatchTimer) { clearTimeout(downloadJobWatchTimer); downloadJobWatchTimer = null; }
+      const seq = ++downloadJobWatchSeq;
+      let next = null;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/model_download_job`);
+        next = await res.json();
+      } catch (err) {
+        next = null;   // server away for a moment
+      }
+      if (seq !== downloadJobWatchSeq) return;   // a newer check is already on its way
+      const before = downloadJob;
+      if (next) downloadJob = next;
+      if (downloadJobActive(before) && !downloadJobActive()) {
+        onDownloadJobFinished(downloadJob);
+      }
+      paintStopModelDownload();
+      renderModelGroups(lastPreflightReport);
+      if (next ? downloadJobActive() : downloadJobActive(before)) {
+        downloadJobWatchTimer = setTimeout(watchDownloadJob, DOWNLOAD_JOB_POLL_MS);
+      }
+    }
+
+    // The actual point of this feature: finishing an optional group's download turns on the
+    // Option it unlocks, so the player doesn't have to find it in Options themselves.
+    async function onDownloadJobFinished(job) {
+      if (job.state !== 'done') { checkPreflight(); return; }
+      const report = await checkPreflight();
+      const satisfied = (label) => {
+        const g = report && report.groups && report.groups.find((x) => x.label === label);
+        return !!g && g.missing.length === 0;
+      };
+      if (job.group === 'Ending video' && !endingVideoOn) {
+        endingVideoOn = true;
+        paintEndingOptionRows();
+        saveEndingOptions();
+      } else if (job.group === 'Sound effects' || job.group === 'Music') {
+        raiseSoundMode(satisfied('Sound effects') ? (satisfied('Music') ? 2 : 1) : 0);
+      }
+    }
 
     // ---- Options > ComfyUI Connection -------------------------------------------------------
     // Where ComfyCrawler finds ComfyUI (server.py COMFYUI CONNECTION). A blank field is detected
@@ -10366,6 +10655,7 @@ void main() {
       url: document.getElementById('comfyUrlInput'),
       input_dir: document.getElementById('comfyInputDirInput'),
       output_dir: document.getElementById('comfyOutputDirInput'),
+      models_dir: document.getElementById('comfyModelsDirInput'),
     };
     const comfySettingsFields = document.getElementById('comfySettingsFields');
     const btnComfyAuto = document.getElementById('btnComfyAuto');
@@ -12078,6 +12368,10 @@ void main() {
         // Backing out means carrying on generating / reading.
         e.preventDefault();
         closeLoadingExitConfirm();
+      } else if (modalDownloadStopConfirm && !modalDownloadStopConfirm.classList.contains('hidden')) {
+        // Backing out means Keep Downloading.
+        e.preventDefault();
+        closeStopModelDownload();
       } else if (modalEndingStopConfirm && !modalEndingStopConfirm.classList.contains('hidden')) {
         // Backing out means Keep Filming.
         e.preventDefault();
@@ -12657,6 +12951,8 @@ void main() {
     // ...and the reload-in-the-middle-of-a-movie case: an ending movie asked for from History may
     // still be filming, and CREATE / Fill-in have to come up greyed out until it is done.
     watchEndingJob();
+    // ...and a model download still going from before a reload.
+    watchDownloadJob();
     // ...and whether this machine's ComfyUI can make a dungeon at all (see checkPreflight).
     checkPreflight();
     buildDefaultTextures();

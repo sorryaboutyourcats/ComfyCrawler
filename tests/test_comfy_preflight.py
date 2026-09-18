@@ -35,8 +35,11 @@ ALL_NODES = {"SaveImageWithAlpha", "PathchSageAttentionKJ"}
 
 
 def fake_comfy(up=("http://127.0.0.1:8188",), argv=(), custom_nodes=(), models=None,
-               nodes=ALL_NODES, broken_folders=()):
-    """A stand-in for _comfy_get_json: answers only at the URLs in `up`."""
+               nodes=ALL_NODES, broken_folders=(), model_dirs=None):
+    """A stand-in for _comfy_get_json: answers only at the URLs in `up`. `model_dirs` adds
+    folder-type keys (e.g. {"diffusion_models": ["X"]}) to the /internal/folder_paths answer,
+    alongside custom_nodes - real ComfyUI may or may not expose these; comfy_model_dir prefers
+    them when present and falls back to <base>/models/<folder> when not."""
     models = ALL_MODELS if models is None else models
     calls = []
     def get(path, timeout=5, base=None):
@@ -47,7 +50,7 @@ def fake_comfy(up=("http://127.0.0.1:8188",), argv=(), custom_nodes=(), models=N
         if path == "/system_stats":
             return {"system": {"argv": list(argv), "comfyui_version": "0.34.2"}}
         if path == "/internal/folder_paths":
-            return {"custom_nodes": list(custom_nodes)}
+            return {"custom_nodes": list(custom_nodes), **(model_dirs or {})}
         if path.startswith("/models/"):
             folder = path[len("/models/"):]
             if folder in broken_folders:
@@ -62,7 +65,7 @@ def fake_comfy(up=("http://127.0.0.1:8188",), argv=(), custom_nodes=(), models=N
 
 
 def reset(**kw):
-    for k in ("COMFYUI_URL", "COMFYUI_INPUT_DIR", "COMFYUI_OUTPUT_DIR"):
+    for k in ("COMFYUI_URL", "COMFYUI_INPUT_DIR", "COMFYUI_OUTPUT_DIR", "COMFYUI_MODELS_DIR"):
         os.environ.pop(k, None)
     if os.path.exists(srv.COMFY_SETTINGS_PATH):
         os.remove(srv.COMFY_SETTINGS_PATH)
@@ -213,7 +216,8 @@ ck(srv.normalize_comfy_dir("") == "", "blank folder = auto-detect")
 # ---- saving and loading; all blank removes the file; a corrupt file is all auto ----
 reset()
 saved = srv.save_comfy_settings(url="127.0.0.1:8189", input_dir=f'"{BASE_IN}"')
-ck(saved == {"url": "http://127.0.0.1:8189", "input_dir": os.path.normpath(BASE_IN), "output_dir": ""},
+ck(saved == {"url": "http://127.0.0.1:8189", "input_dir": os.path.normpath(BASE_IN), "output_dir": "",
+             "models_dir": ""},
    "save returns the normalised values")
 ck(srv.load_comfy_settings() == saved, "load returns what was saved")
 srv.save_comfy_settings()
@@ -225,7 +229,8 @@ except ValueError:
     ck(not os.path.exists(srv.COMFY_SETTINGS_PATH), "a refused address writes nothing")
 with open(srv.COMFY_SETTINGS_PATH, "w", encoding="utf-8") as f:
     f.write("{not json")
-ck(srv.load_comfy_settings() == {"url": "", "input_dir": "", "output_dir": ""}, "a corrupt file reads as auto-detect")
+ck(srv.load_comfy_settings() == {"url": "", "input_dir": "", "output_dir": "", "models_dir": ""},
+   "a corrupt file reads as auto-detect")
 
 # ---- precedence: env > Options > auto-detect, per value, with the source reported ----
 reset(up=("http://127.0.0.1:8189",), argv=DESKTOP_ARGV)
@@ -269,6 +274,47 @@ src = open(spec.origin, encoding="utf-8").read()
 for name in (srv.FLUX_SCHNELL_CKPT, srv.BIREFNET_MODEL):
     ck(src.count(f'"{name}"') == 1, f"{name} should be spelled out once (its constant), not inline in a graph")
 ck(all(hasattr(srv, v) for v in srv.OPENABLE_FOLDERS.values()), "every OPENABLE_FOLDERS entry must name a real global")
+for g in srv.COMFY_MODEL_GROUPS:
+    for folder, name in g["files"]:
+        ck(name in srv.MODEL_DOWNLOADS, f"{name} (in {g['label']!r}) has no MODEL_DOWNLOADS entry to download it from")
+for name, info in srv.MODEL_DOWNLOADS.items():
+    ck(info["url"].startswith("https://huggingface.co/") and info["url"].endswith("/" + name),
+       f"{name}'s URL should be a Hugging Face link ending in its own filename")
+    ck(isinstance(info["size"], int) and info["size"] > 0, f"{name}'s size should be a positive number of bytes")
+
+# ---- comfy_model_dir: where a downloaded file has to land ----
+reset(argv=["main.py"], custom_nodes=[os.path.join(BASE, "custom_nodes")])
+srv.ensure_comfy()
+ck(srv.comfy_model_dir("diffusion_models") == os.path.join(BASE, "models", "diffusion_models"),
+   "with no override and ComfyUI silent about it, models/<folder> under the detected base is used")
+
+reset(argv=["main.py"], custom_nodes=[os.path.join(BASE, "custom_nodes")],
+      model_dirs={"diffusion_models": [os.path.join(BASE, "elsewhere")]})
+srv.ensure_comfy()
+ck(srv.comfy_model_dir("diffusion_models") == os.path.join(BASE, "elsewhere"),
+   "ComfyUI's own /internal/folder_paths answer for this folder type wins over the base/models guess")
+ck(srv.comfy_model_dir("vae") == os.path.join(BASE, "models", "vae"),
+   "a folder type ComfyUI didn't answer for still falls back to base/models/<folder>")
+
+reset(argv=["main.py"], custom_nodes=[os.path.join(BASE, "custom_nodes")])
+srv.save_comfy_settings(models_dir=BASE_OUT)
+srv.ensure_comfy()
+ck(srv.comfy_model_dir("checkpoints") == os.path.join(BASE_OUT, "checkpoints"),
+   "a Models folder override in Options names the root directly and skips asking ComfyUI")
+
+reset(argv=["main.py"], custom_nodes=[os.path.join(BASE, "custom_nodes")])
+os.environ["COMFYUI_MODELS_DIR"] = BASE_OUT
+srv.ensure_comfy()
+ck(srv.comfy_model_dir("vae") == os.path.join(BASE_OUT, "vae"), "COMFYUI_MODELS_DIR overrides the same way")
+os.environ.pop("COMFYUI_MODELS_DIR", None)
+
+# ---- comfy_model_dir in embedded mode: asks COMFY_EMBEDDED directly, never raises ----
+srv.COMFY_EMBEDDED = {"model_dir": lambda folder: f"/embedded/{folder}"}
+ck(srv.comfy_model_dir("vae") == "/embedded/vae", "embedded mode asks COMFY_EMBEDDED's own resolver")
+def _raise(folder): raise KeyError(folder)
+srv.COMFY_EMBEDDED = {"model_dir": _raise}
+ck(srv.comfy_model_dir("vae") is None, "embedded mode swallows a resolver that raises rather than crashing")
+srv.COMFY_EMBEDDED = None
 
 # ---- the handler: /api/preflight, and CREATE refused before any run starts ----
 models = {f: set(v) for f, v in ALL_MODELS.items()}
@@ -311,7 +357,8 @@ try:
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/comfy_settings", timeout=15) as resp:
         view = json.loads(resp.read().decode("utf-8"))
     ck(set(view) >= {"settings", "env", "env_names", "candidates", "preflight"}, "GET returns the full view")
-    ck(view["env"] == {"url": False, "input_dir": False, "output_dir": False}, "no env pins in the test")
+    ck(view["env"] == {"url": False, "input_dir": False, "output_dir": False, "models_dir": False},
+       "no env pins in the test")
 
     code, body = post_settings({"url": "127.0.0.1:8000", "input_dir": "", "output_dir": ""})
     ck(code == 200 and body.get("success"), f"saving an address should succeed, got {code}")

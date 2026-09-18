@@ -155,5 +155,26 @@ ck(cn.choose_data_dir(repo, user) == os.path.join(user, "comfycrawler"), "a fres
 os.makedirs(os.path.join(repo, "dungeon_sessions"))
 ck(cn.choose_data_dir(repo, user) == repo, "a checkout that already has dungeon_sessions keeps using it")
 
+# ---- reload_server refuses while work is in flight ----
+# The refusal has to come before anything is re-imported, so this half runs without ComfyUI. The
+# reload itself needs folder_paths/comfy.cli_args and is covered by actually pressing the button.
+srv.gen_progress["is_generating"] = True
+try:
+    result = cn.reload_server(srv)
+finally:
+    srv.gen_progress["is_generating"] = False
+ck(result == {"success": False, "busy": True, "error": "Not while a dungeon is being made - wait for it to finish."},
+   f"a reload during a run should be refused, unchanged, got {result}")
+
+srv._MODEL_DOWNLOAD_JOB = {"group": "Ending video", "state": "downloading"}
+try:
+    result = cn.reload_server(srv)
+finally:
+    srv._MODEL_DOWNLOAD_JOB = None
+ck(not result["success"] and result.get("busy") and "Ending video is downloading" in result["error"],
+   f"a reload during a model download should be refused and name the group, got {result}")
+
+ck(srv.server_busy_reason() is None, "with nothing running there should be no reason to refuse a reload")
+
 print("FAIL" if fails else "all node-shim checks passed")
 sys.exit(1 if fails else 0)

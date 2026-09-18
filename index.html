@@ -820,6 +820,18 @@
           </div>
         </div>
         <ul id="preflightList" class="flex flex-col gap-0.5 break-words"></ul>
+        <!-- Downloadable groups, built by renderModelGroups (game.js) from /api/preflight's
+             report - one row per COMFY_MODEL_GROUPS group with something missing, each with its
+             own Download/Cancel button and inline progress. preflightList above stays for problems
+             a download can't fix (ComfyUI unreachable, a missing custom node). -->
+        <div id="preflightRequired" class="hidden flex flex-col gap-1">
+          <div class="font-bold text-[11px] uppercase tracking-wide text-slate-700">Required</div>
+          <ul id="preflightRequiredList" class="flex flex-col gap-1"></ul>
+        </div>
+        <div id="preflightOptional" class="hidden flex flex-col gap-1">
+          <div class="font-bold text-[11px] uppercase tracking-wide text-slate-700">Optional extras</div>
+          <ul id="preflightOptionalList" class="flex flex-col gap-1"></ul>
+        </div>
       </div>
 
       <!-- Mad Libs Style Prompt Input -->
@@ -1361,6 +1373,9 @@
             <label class="text-[11px] font-bold text-slate-700" for="comfyOutputDirInput">Output folder</label>
             <input id="comfyOutputDirInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
                    placeholder="Auto-detect">
+            <label class="text-[11px] font-bold text-slate-700" for="comfyModelsDirInput">Models folder</label>
+            <input id="comfyModelsDirInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
+                   placeholder="Auto-detect" title="Only needed if downloading models from the setup screen can't find the right folder by itself">
             <div class="flex justify-end gap-1.5 mt-0.5">
               <button type="button" id="btnComfyAuto" class="win95-btn px-3 py-1 text-xs text-black hover:bg-slate-300"
                       title="Empties the fields so ComfyUI is found automatically. Nothing changes until you press Apply.">
@@ -1708,6 +1723,35 @@
           </button>
           <button id="btnEndingStopGo" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
             Stop Filming
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- "Cancel" on a downloading model group. The group name and progress line are filled in by
+         askStopModelDownload / paintStopModelDownload in game.js. -->
+    <div id="modalDownloadStopConfirm" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>⚠️ Stop Downloading?</span>
+          <button id="btnDownloadStopClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div class="text-3xl leading-none select-none">📥</div>
+          <div class="flex flex-col gap-1 min-w-0">
+            <p class="text-xs font-black text-slate-900">Stop this download?</p>
+            <p id="downloadStopName" class="text-xs font-bold text-blue-900 break-words"></p>
+            <p id="downloadStopText" class="text-[11px] text-slate-700"></p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnDownloadStopKeep" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Keep Downloading
+          </button>
+          <button id="btnDownloadStopGo" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
+            Stop
           </button>
         </div>
       </div>
