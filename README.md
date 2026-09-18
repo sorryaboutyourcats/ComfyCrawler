@@ -1,6 +1,6 @@
 # 🏰 ComfyCrawler
 
-**A Windows 95 3D Maze–style dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the music and the story. Then you walk in and fight your way to the stairs.
+**A Windows 95 3D Maze–style dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the music and the story. Then you walk in and fight your way to the boss.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Comfy Registry](https://img.shields.io/badge/Comfy_Registry-comfycrawler-blue)](https://registry.comfy.org/nodes/comfycrawler)
@@ -23,7 +23,7 @@ Everything below is generated for each dungeon, from what you typed:
 Then it's a game:
 
 * **Explore** a grid maze in the style of the Windows 95 3D Maze screensaver, with a minimap. Throw switches to open locked gates.
-* **Fight** in real time: dodge left and right, strike, and block, with a stamina bar keeping you honest. Gain XP and level up.
+* **Fight** in real time: dodge left and right, strike, and block (watch your stamina). Gain XP and level.
 * **Beat the boss** and reach the stairs.
 * **Replay** any dungeon from History - the same art and music on a freshly drawn maze.
 
@@ -38,13 +38,13 @@ Then it's a game:
 | ![Mario with a Yoshi hammer faces a Bowser grunt](screenshots/mario-vs-bowser.png) | ![The opening crawl for "3rd Floor Pizza Hut", in yellow text on black](screenshots/opening-crawl.png) |
 | *Quoted names become that exact character* | *Every dungeon opens with its story* |
 | ![The Dungeon Creation Wizard with four filled-in blanks](screenshots/creation-wizard.png) | ![The History window listing saved dungeons with Start, Prompts, movie, favorite and delete buttons](screenshots/history.png) |
-| *The Dungeon Creation Wizard* | *History: replay a dungeon, reuse its prompts, watch its ending* |
+| *The Dungeon Creation Wizard* | *Replay a dungeon, reuse its prompts, watch its ending* |
 
 ---
 
 ## 🛠️ Requirements
 
-* **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090 (24 GB)**, where a dungeon at High quality takes about **5 minutes** and the ending cutscene adds about **3½ minutes**.
+* **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090**.
 * **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** - required. Its SageAttention patch is also used automatically, when installed, to speed up the ending cutscene.
 * **The models below.** ComfyCrawler checks for every file when it starts and on the setup screen, and can download whichever ones are missing straight into the right folder - so you don't have to find and place them by hand. Required and optional are shown separately, so you can start with just the required ones and add the rest (sound, music, the ending cutscene) later; finishing an optional group turns on the Option it unlocks by itself.
 
@@ -157,12 +157,12 @@ Every menu and window works from the keyboard too: arrow keys move the cursor, <
 
 ## ⚙️ Options
 
-* **Difficulty** - Easy, Medium or Hard: 33, 66 or 111 corridors, with foes getting 25% or 60% more health on the harder two.
+* **Difficulty** - Easy, Medium or Hard: ~33, ~66 or ~111 corridors, with foes getting 25% or 60% more health on the harder two.
 * **Graphics** - High, Medium or Low generation resolution. Lower is faster.
 * **Max Frame Rate** - 24 to 240 FPS.
 * **Sound Generation** - music and sound, sound only, or none (fastest).
-* **Ending Video** - film the ending cutscene (off by default; it adds several minutes), and how it's drawn when blown up to fill the screen: Smooth, Sharp or Pixel.
-* **Screensaver Wait** - how long before the Windows 98 starfield takes over.
+* **Ending Video** - film the ending cutscene (off by default; it adds several minutes).
+* **Screensaver Wait** - how long before the starfield takes over.
 
 Options are saved by ComfyCrawler itself, so they're the same whichever address you play from.
 
