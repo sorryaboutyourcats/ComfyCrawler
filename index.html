@@ -122,6 +122,16 @@
       outline: 2px dotted #000080;
       outline-offset: -4px;
     }
+    /* .win95-input (Options' three dropdowns and its ComfyUI Connection text fields) sets its
+       own outline: none below to drop the browser's default ring, but nothing ever drew a
+       replacement - so walking onto one with the arrow keys left no visible cue at all, unlike
+       every button around it. Same navy dotted rectangle, just outward: these have no bevel for
+       an inward ring to sit inside the way a button's does. */
+    #modalSettings select:focus-visible,
+    #modalSettings input:focus-visible {
+      outline: 2px dotted #000080;
+      outline-offset: 1px;
+    }
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
       color: white;

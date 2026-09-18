@@ -1834,13 +1834,16 @@
       prefs.set(SOUND_MODE_KEY, soundModeSelect.value);
     }
 
-    // `focusTarget` is where the cursor starts - OK normally, the ComfyUI address field when the
-    // setup screen's preflight notice opened it. The ComfyUI section reloads on every open, so
-    // edits left unapplied by ✕ / ESC last time never reappear as if they had been saved.
+    // `focusTarget` is where the cursor starts - the current difficulty button normally (the
+    // dialog's first real choice, and a keyboard player wants to see where they already are, not
+    // land on OK), the ComfyUI address field when the setup screen's preflight notice opened it.
+    // The ComfyUI section reloads on every open, so edits left unapplied by ✕ / ESC last time
+    // never reappear as if they had been saved.
     function openSettings(focusTarget) {
       modalSettings.classList.remove('hidden');
       loadComfySettings();
-      focusFirstIn(modalSettings, focusTarget || btnSaveSettings);
+      const currentDifficultyBtn = difficultyRow.querySelector('.difficulty-btn.is-selected');
+      focusFirstIn(modalSettings, focusTarget || currentDifficultyBtn || btnSaveSettings);
       if (focusTarget && document.activeElement === focusTarget) {
         focusTarget.scrollIntoView({ block: 'nearest' });
       }
@@ -2346,6 +2349,11 @@
     });
 
     shuffleQuickIdeas();
+
+    // Land the cursor in STYLE on first paint, same as a Quick idea click or a History
+    // "Prompts" apply does further down - a keyboard player can start typing, or arrow
+    // straight into CHARACTER/WEAPON/ENEMY, with no click needed first.
+    if (wallPromptInput) wallPromptInput.focus({ preventScroll: true });
 
     // ==========================================
     // VALBRACE REAL-TIME COMBAT ENGINE (v5)
@@ -10322,15 +10330,35 @@ void main() {
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
+    // Enter opens a focused, closed <select>'s own list by hand, with showPicker() - browsers
+    // bind that to Space or a click, not Enter, and Enter is the only key left free once the
+    // arrow keys no longer do (below). Nothing here handles a second Enter to close it: measured
+    // directly (a document-capture keydown logger, added and pulled again), once that list is
+    // genuinely open the browser stops dispatching keydown at all - not Enter, Escape or the
+    // arrows reach the page - so there is never a second one for this to see. It reappears, the
+    // list already closed, the moment the browser's own Enter/Escape/click ends it.
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
+      if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      const active = document.activeElement;
+      if (!active || active.tagName !== 'SELECT' || !active.showPicker) return;
+      e.preventDefault();
+      try { active.showPicker(); } catch (_) { /* not a user gesture - stays focused, closed */ }
+    });
+
     window.addEventListener('keydown', (e) => {
       const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.code];
       if (!dir) return;
       if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;   // word-jump / select stay native
 
       const el = document.activeElement;
-      // A dropdown and a slider both own the arrow keys outright - stepping the value IS
-      // what they are for, so focus only leaves them by Tab or a click.
-      if (el && (el.tagName === 'SELECT' || (el.tagName === 'INPUT' && el.type === 'range'))) return;
+      // A dropdown's arrows walk to the next control now, same as everything else below - Enter
+      // (above) is how its own list opens instead. Nothing needs to check for that list actually
+      // being open: while it is, the browser never dispatches keydown at all (see the comment on
+      // the Enter listener), so this line is simply never reached until it has already closed.
+      // A slider only owns Left/Right that way; Up/Down fall through to the walk too, so the
+      // cursor can move off a slider onto the one above or below it.
+      if (el && el.tagName === 'INPUT' && el.type === 'range' && (dir === 'left' || dir === 'right')) return;
       // A pane of text that scrolls inside itself (the About box) owns the arrows the same way,
       // but only until it runs out of text: at the top one more ArrowUp steps off it, at the
       // bottom one more ArrowDown does, so the cursor is never trapped in the prose.
@@ -10361,7 +10389,13 @@ void main() {
 
       if (screenSetup.classList.contains('hidden')) return;
       e.preventDefault();
-      moveFocusIn(screenSetup, dir);
+      // The title bar's ? / □ / ✕ sit outside screenSetup in the DOM - appContainer is their
+      // common root with it - so the walk widens to appContainer to reach them. That root also
+      // covers the loading and game screens, but each is hidden by its own class whenever this
+      // one shows, so nothing of theirs enters the list. focusFirstIn still skips the title bar
+      // for the very first press, same as it already does opening any dialog.
+      if (!appContainer.contains(el)) focusFirstIn(appContainer);
+      else moveFocusIn(appContainer, dir);
     });
 
     // A refresh mid-generation used to be silently destructive in both directions: the page
