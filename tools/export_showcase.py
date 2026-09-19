@@ -28,6 +28,12 @@ SOUND_WHITELIST = ("start.wav", "button.wav", "end.wav", "ready.wav") \
 
 STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png"]
 
+# The page's typeface, referenced by index.html's own @font-face as fonts/<name>. Shipped with
+# the export for the same reason tailwind.css is: a visitor's phone has no Comic Sans, and
+# without these the stack falls through to the device's sans instead of a font CDN's.
+# OFL.txt travels with them - the SIL license requires the copyright notice be distributed.
+FONT_FILES = ["ComicNeue-Regular.woff2", "ComicNeue-Bold.woff2", "OFL.txt"]
+
 # Matches server.py's own SAVED_SETTINGS_TAG byte-for-byte - this script does the same
 # insert-before-the-tag trick page_with_saved_settings() does per request, just once, at
 # export time, to turn on SHOWCASE_MODE in game.js.
@@ -105,6 +111,14 @@ def export_showcase(out_dir, ids_path):
         src_file = os.path.join(REPO_DIR, filename)
         if os.path.exists(src_file):
             shutil.copy2(src_file, os.path.join(out_dir, filename))
+
+    fonts_src = os.path.join(REPO_DIR, "fonts")
+    fonts_dest = os.path.join(out_dir, "fonts")
+    os.makedirs(fonts_dest, exist_ok=True)
+    for filename in FONT_FILES:
+        src_file = os.path.join(fonts_src, filename)
+        if os.path.exists(src_file):
+            shutil.copy2(src_file, os.path.join(fonts_dest, filename))
 
     sounds_src = os.path.join(REPO_DIR, "sounds")
     sounds_dest = os.path.join(out_dir, "sounds")

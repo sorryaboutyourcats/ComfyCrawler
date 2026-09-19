@@ -11813,7 +11813,16 @@ void main() {
     // What a tile does NOT carry is Use Prompts and the trash can: three buttons is what fits
     // over a picture this size, and both of those live one click away in the list view.
     const HISTORY_VIEW_KEY = 'comfycrawler.historyView';
-    let historyView = prefs.get(HISTORY_VIEW_KEY) === 'tiles' ? 'tiles' : 'list';
+    // No stored choice yet (a fresh browser, or one predating this key) defaults to tiles on a
+    // phone - a list row's date/size/quality line either gets cut to a few characters or wraps
+    // the row onto two lines at this width (see the max-width: 760px .hist-row override), while
+    // a tile is just a picture, which is what a screen this narrow reads fastest. Once the
+    // visitor picks a view explicitly (setHistoryView, below) that choice sticks regardless of
+    // width, same as it always has.
+    const storedHistoryView = prefs.get(HISTORY_VIEW_KEY);
+    let historyView = storedHistoryView === 'tiles' ? 'tiles'
+      : storedHistoryView === 'list' ? 'list'
+      : (window.matchMedia && window.matchMedia('(max-width: 760px)').matches) ? 'tiles' : 'list';
 
     // Where a run's card picture lives: an endpoint on the live server, which draws it on the
     // first request and keeps it beside the bundle, or the plain file tools/export_showcase.py
@@ -11989,12 +11998,17 @@ void main() {
       fav.hidden = true;
       badges.appendChild(fav);
       art.appendChild(badges);
+      tile.appendChild(art);
 
-      // The three actions, over the bottom of the picture. Built here rather than shared with
-      // buildHistoryRow because only the classes and the handlers are common - a row's buttons
-      // are labelled ("▶ Start") and sized to sit in a line of text, a tile's are glyphs sized
-      // to sit on an image - but they carry the same .hist-* classes, so the paint functions
-      // and the filming repaint drive either one.
+      // The three actions: overlaid on the bottom of the picture on desktop, in their own row
+      // below it on a phone (see the .hist-tile grid-area rules in index.html - both are the
+      // same DOM, just placed differently). A sibling of art rather than nested inside it, so
+      // art's own overflow:hidden (there to clip the blurred loading placeholder) can't clip
+      // this along with it once it's no longer confined to the picture's box. Built here rather
+      // than shared with buildHistoryRow because only the classes and the handlers are common -
+      // a row's buttons are labelled ("▶ Start") and sized to sit in a line of text, a tile's
+      // are glyphs sized to sit on an image - but they carry the same .hist-* classes, so the
+      // paint functions and the filming repaint drive either one.
       const acts = document.createElement('div');
       acts.className = 'hist-tile__acts';
 
@@ -12025,8 +12039,7 @@ void main() {
       btnMovie.addEventListener('click', () => historyMovieAction(entry, btnMovie));
       acts.appendChild(btnMovie);
 
-      art.appendChild(acts);
-      tile.appendChild(art);
+      tile.appendChild(acts);
 
       const cap = document.createElement('div');
       cap.className = 'hist-tile__cap';

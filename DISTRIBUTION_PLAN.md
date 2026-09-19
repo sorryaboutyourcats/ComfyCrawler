@@ -168,7 +168,22 @@ Work:
    server. (Also dropped: the History row's Prompts button, and the
    quit-confirm box's own separate "Erase Current Run" — both are either a
    doorway back into generation or a second delete path.)
-5. Nice to have: ~~build Tailwind once instead of loading the CDN's dev
+5. ~~Make it work on a phone.~~ **Done.** A public link gets opened on a
+   phone whether or not the page expects one, and this one did not: with no
+   `<meta name="viewport">` a phone laid the page out at 980px and shrank the
+   result, and the game screen put a 220px sidebar beside the viewport at any
+   width. Fixed in `index.html`'s own stylesheet (nothing new to build or
+   serve): the viewport meta, a `max-width: 760px` block that stacks the
+   sidebar under the dungeon view and breaks each gallery row onto two lines,
+   a `max-height: 780px` block that budgets the view by height for shorter
+   phones, `pointer: coarse` tap sizes, and a landscape block.
+6. ~~Ship the typeface.~~ **Done.** The font stack ended in the generic
+   `cursive`, which is a real font on desktop Windows and a handwriting
+   script on every phone — so the whole UI read as calligraphy there. Comic
+   Neue (SIL OFL) now ships in `fonts/`, served by `server.py`'s whitelisted
+   `/fonts/` route and copied into the export, so no device is asked for a
+   font it hasn't got and nothing depends on a font CDN.
+7. Nice to have: ~~build Tailwind once instead of loading the CDN's dev
    build~~ (done separately, before this); shrink the 62 MB of WAVs in
    `sounds/` (not done — the export script's sound whitelist keeps the
    footprint to what `/sounds/` actually serves, but the WAVs themselves are

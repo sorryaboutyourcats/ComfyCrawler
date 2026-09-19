@@ -2,13 +2,58 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Without this a phone lays the page out at 980px and shrinks the result to fit, which is
+       why every button and label used to arrive too small to read or press. viewport-fit=cover
+       lets the teal ground run under a notch; the window itself stays inside the safe area
+       (see body's padding below). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ComfyCrawler by sorryaboutyourcats</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="icon" href="favicon.ico" sizes="any">
   <style>
+    /* The page's typeface, shipped with it rather than asked of the device. The old stack
+       named "Comic Sans MS" and fell through to the generic `cursive`, which is a real font
+       on desktop Windows and a HANDWRITING SCRIPT on every phone - Snell Roundhand on iOS,
+       Dancing Script on Android - so the whole UI read as calligraphy there, not as the
+       comic-book look it is drawing. Comic Neue (SIL OFL, fonts/OFL.txt) is the same shape
+       in an open font, so every device now renders the page identically and nothing depends
+       on a CDN. The subset is latin-only on purpose: the arrows and emoji the buttons use
+       (▲ ↺ ⚔️ 🛡️) are outside unicode-range, so the browser keeps drawing those from the
+       system font, as it did before. */
+    @font-face {
+      font-family: "Comic Neue";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("fonts/ComicNeue-Regular.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+                     U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2212, U+2215,
+                     U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "Comic Neue";
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+      src: url("fonts/ComicNeue-Bold.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+                     U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2212, U+2215,
+                     U+FEFF, U+FFFD;
+    }
     * {
-      font-family: "Comic Sans MS", "Comic Sans", cursive, sans-serif !important;
+      /* No `cursive` in this stack, ever - that keyword is what turned the phone build into
+         handwriting. The last resort is the device's own sans-serif, which is wrong but
+         legible; ui-rounded picks up Apple's rounded face on the way past. */
+      font-family: "Comic Neue", "Comic Sans MS", "Comic Sans", ui-rounded, sans-serif !important;
       box-sizing: border-box !important;
+    }
+    /* Desktop (mouse, not touch) gets the real Comic Sans MS instead of the bundled Comic Neue
+       substitute - touch devices are excluded because that's exactly the "Comic Sans MS" ->
+       cursive fallback chain that turned into a handwriting script on phones, see above. */
+    @media (pointer: fine) and (hover: hover) {
+      * {
+        font-family: "Comic Sans MS", "Comic Sans", "Comic Neue", ui-rounded, sans-serif !important;
+      }
     }
     html, body {
       width: 100%;
@@ -18,12 +63,25 @@
       overflow: hidden;
       background: #008080;
     }
+    /* Mobile browsers count the collapsing URL bar out of dvh but not out of vh, so 100% /
+       100vh leaves the bottom row of whatever is on screen under the chrome. Only applied
+       where the unit is supported, so desktop behaviour is untouched. */
+    @supports (height: 100dvh) {
+      html, body { height: 100dvh; }
+    }
     body {
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: center;
       padding: 12px;
+      /* Keeps the window clear of a notch / home indicator when viewport-fit=cover lets the
+         teal ground run behind them. env() is 0 everywhere else, so this is a no-op on
+         desktop and on phones without cutouts. */
+      padding-top: max(12px, env(safe-area-inset-top));
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+      padding-left: max(12px, env(safe-area-inset-left));
+      padding-right: max(12px, env(safe-area-inset-right));
     }
     .hidden {
       display: none !important;
@@ -264,6 +322,21 @@
       #crawlStage { perspective: none; height: auto; min-height: 200px; overflow: visible; }
       #crawlPending { position: relative; padding: 24px; }
     }
+    /* Same static block on a phone, but reached by screen width rather than the setting
+       above - see machine-reports-reduced-motion in project memory: the dev box used to test
+       this always reports prefers-reduced-motion: reduce, which is NOT representative of a
+       real visitor's phone, so that media query can't be trusted as a mobile signal. The tilted
+       Star Wars crawl also has nowhere near enough width to work with once the window is
+       phone-sized. 760px matches the phone breakpoint the rest of this stylesheet uses. */
+    @media (max-width: 760px) {
+      #crawlText.rolling { animation: none; }
+      #crawlText { position: relative; top: 0; left: 0; width: 100%; transform: none;
+                   padding: 16px 20px; }
+      #crawlViewport { position: relative; inset: auto; overflow: visible;
+                       -webkit-mask-image: none; mask-image: none; }
+      #crawlStage { perspective: none; height: auto; min-height: 200px; overflow: visible; }
+      #crawlPending { position: relative; padding: 24px; }
+    }
     #btnEnterDungeon:disabled {
       color: #808080;
       text-shadow: 1px 1px #ffffff;
@@ -416,6 +489,240 @@
       flex-direction: column !important;
       gap: 4px !important;
       width: 220px !important;
+    }
+
+    /* ---- Phones -----------------------------------------------------------
+       Everything above assumes a window wide enough to put a 220px sidebar BESIDE the
+       viewport. A phone in portrait has about 390px of width in total, so below this
+       breakpoint the game window stops being a desktop window: the sidebar drops under the
+       viewport, the minimap and the status box share a row down there, and the D-pad takes
+       the full width at a size a thumb can actually hit. 760px is where the side-by-side
+       layout (270px of sidebar + gutters + a viewport worth looking at) stops fitting. */
+    @media (max-width: 760px) {
+      body {
+        padding: 6px;
+        padding-top: max(6px, env(safe-area-inset-top));
+        padding-bottom: max(6px, env(safe-area-inset-bottom));
+        padding-left: max(6px, env(safe-area-inset-left));
+        padding-right: max(6px, env(safe-area-inset-right));
+      }
+      /* All three window modes give up their max-width and simply fill the screen - a 760px
+         cap on a 390px screen just leaves the window at 95% of nothing. */
+      #appContainer.mode-setup,
+      #appContainer.mode-progress,
+      #appContainer.mode-game {
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: none !important;
+      }
+      #screenSetup, #screenShowcase { padding: 0.5rem !important; }
+      #screenProgress { padding: 0.75rem !important; }
+
+      /* Gallery header: castle + title + blurb on line one, the view toggle and Options on
+         line two. Side by side at this width the blurb gets a ~150px column and wraps four
+         deep, which costs more height than the second row does. */
+      .showcase-header { flex-wrap: wrap !important; gap: 0.5rem !important; }
+      .showcase-header > :nth-child(2) { flex: 1 1 100% !important; order: 1; }
+      .showcase-header > :nth-child(1) { order: 0; }
+      .showcase-header > :nth-child(3) { order: 2; }
+      .showcase-header > :nth-child(4) { order: 3; margin-left: auto; }
+
+      /* Room to scroll: 64vh of list plus a two-line header fits a desktop window, but on a
+         phone the surrounding chrome is a bigger share of the screen. */
+      #showcaseList { max-height: 62dvh !important; }
+      #historyList { max-height: 56dvh !important; }
+      #modalSettings > div, #modalHistory > div { max-height: 94dvh !important; }
+      #modalSettings, #modalHistory,
+      #modalHistoryConfirm, #modalLeaveRunConfirm,
+      #modalQuitConfirm, #modalEraseConfirm { padding: 0.5rem !important; }
+
+      /* A dungeon row is thumbnail | name+cast+details | Start | movie | star, which needs
+         about 560px to read. At 390 the name gets cut to three characters, so the row breaks
+         in two: picture and writing on line one, the buttons on line two with Start taking
+         the slack. Costs about 30px of height per row and buys back the whole title. */
+      /* :not(.hist-tile) throughout - a tile carries .hist-row too (it is the same run, drawn
+         the other way) and is a column, which none of this applies to. */
+      .hist-row:not(.hist-tile) {
+        flex-wrap: wrap !important;
+        row-gap: 0.3rem !important;
+      }
+      /* 3.5rem = the 3rem thumbnail (w-12) plus the row's gap-2 - so the writing fills line
+         one exactly and everything after it is pushed onto line two. */
+      .hist-row:not(.hist-tile) > .flex-col { flex: 1 1 calc(100% - 3.5rem) !important; }
+      .hist-row:not(.hist-tile) .hist-start { flex: 1 1 auto !important; }
+
+      /* One 190px-minimum tile per row on a phone is a poster, not a list. Two fit. */
+      .hist-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important; }
+      /* The narrower per-tile action-button sizing for this width lives further down the
+         stylesheet, in its own block alongside the rest of the phone tile layout - it has to
+         come after .hist-tile__acts button's desktop rule to actually win the cascade. */
+
+      .game-layout { flex-direction: column !important; }
+      /* Width-driven now instead of height-driven: the frame is as wide as the window and
+         aspect-ratio gives it its height, so the clamp against 100vh (which assumed the
+         sidebar was taking the width, not the height) no longer applies. */
+      .viewport-frame {
+        height: auto !important;
+        width: 100% !important;
+      }
+      .sidebar-wrapper {
+        width: 100% !important;
+        flex-direction: row !important;
+        flex-wrap: wrap !important;
+        align-items: stretch !important;
+        gap: 4px !important;
+      }
+      /* Minimap and status side by side, D-pad on its own full-width row under them - the
+         three stacked would push the controls off the bottom of a phone screen. */
+      .sidebar-wrapper > :nth-child(1) { flex: 1 1 38% !important; min-width: 0 !important; }
+      .sidebar-wrapper > :nth-child(2) { flex: 1 1 58% !important; min-width: 0 !important; }
+      .sidebar-wrapper > :nth-child(3) { flex: 1 0 100% !important; }
+    }
+
+    /* Touch targets. Apple and Google both put the floor at ~44px; the D-pad was already
+       exactly 44, which is the minimum rather than a comfortable size for the one control
+       the player holds the phone to use. Keyed on the pointer, not the width, so a tablet
+       gets them too and a narrow desktop window does not. */
+    @media (pointer: coarse) {
+      .dpad-btn {
+        width: 56px !important;
+        height: 56px !important;
+        min-width: 56px !important;
+        min-height: 56px !important;
+        max-width: 56px !important;
+        max-height: 56px !important;
+        font-size: 20px;
+      }
+      #dpadGrid { width: auto !important; }
+      .combat-btn { height: 68px; }
+      /* The window chrome and the small icon buttons in the dungeon lists (movie, star,
+         trash) are drawn at desktop sizes; give them a pressable height without changing
+         how wide they are, which is what keeps those rows from reflowing. */
+      #titleButtons button { min-height: 32px; min-width: 32px; }
+      /* In battle this line is a list of keys to press ("A/D to move, W to strike"),
+         which is four lines of wrong advice on a device with no keyboard - and out of
+         battle it labels a D-pad as a D-pad. */
+      #controlsHeader { display: none !important; }
+      .hist-row button, #showcaseList button, .hist-tile__acts button { min-height: 34px; }
+    }
+
+    /* Short phones (anything from a 640px-tall Android up to an iPhone SE's 667). The stacked
+       layout above fits a 844px screen with room to spare and runs off the bottom of these, so
+       the window stops being width-driven and budgets by height instead: the dungeon view
+       takes whatever the rest of the window leaves, and the rest of the window gets smaller.
+       The 4:3 cap is the wrapper's, not the frame's, so the location bar under the view stays
+       exactly as wide as the view. 420px is the measured height of everything else at these
+       widths (title bar, location bar, minimap/status row, D-pad, padding and gaps) with the
+       two shrinks below applied (403px measured at 360x640), rounded up for slack. */
+    @media (max-width: 760px) and (max-height: 780px) {
+      .viewport-wrapper {
+        flex: 0 0 auto !important;
+        width: min(100%, calc((100dvh - 420px) * 4 / 3)) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+      .viewport-frame { width: 100% !important; height: auto !important; }
+      /* The portrait is the single tallest thing in the status box, and it is a picture of
+         the hero's face - it reads fine at 80px. */
+      .doom-face-frame { width: 5rem !important; height: 5rem !important; }
+      /* Back to the 44px floor from the 56px comfort size - still a legal tap target, and
+         three rows of it is 36px less D-pad. */
+      .dpad-btn {
+        width: 46px !important; height: 46px !important;
+        min-width: 46px !important; min-height: 46px !important;
+        max-width: 46px !important; max-height: 46px !important;
+      }
+      .sidebar-wrapper > :nth-child(3) { min-height: 0 !important; }
+    }
+
+    /* Two-thumb split on a phone: the D-pad under the left thumb, USE under the right, so a
+       hand doesn't have to let go of USE just to sidestep through a doorway. In a fight the
+       same split carries over - strafe (left thumb) opposite attack/block (right thumb),
+       since strafing is the closest thing this game has to movement mid-combat. Placement
+       only, via grid-area - a named CSS Grid area can put a child anywhere regardless of its
+       position in the DOM, so game.js's getElementById calls and its four spacer <div>s
+       (there to balance the original plus-shaped D-pad) don't need to change at all.
+       A second `max-width: 760px` block on purpose: it has to land after the `pointer: coarse`
+       block above, whose own #dpadGrid width wins any earlier tie by source order alone. */
+    @media (max-width: 760px) {
+      #dpadGrid {
+        width: 100% !important;
+        grid-template-columns: auto auto auto 1fr auto;
+        grid-template-rows: auto auto;
+        grid-template-areas:
+          ".    up    .     .    ."
+          "left down  right .    use";
+        justify-items: center;
+        align-items: center;
+      }
+      #btnUp     { grid-area: up; }
+      #btnDown   { grid-area: down; }
+      #btnLeft   { grid-area: left; }
+      #btnRight  { grid-area: right; }
+      #btnAction { grid-area: use; }
+
+      /* Strafe left/right as one tall button apiece, not stacked to match attack/block - a
+         thumb resting on the left edge shouldn't have to travel up or down to tell which
+         one it's over. Each spans both rows (grid-area repeats its own name down both rows
+         of the template below); attack/block keep their stack in a column beside them,
+         narrower apiece since there are two of them sharing that column's width. */
+      #battleActionBar {
+        grid-template-columns: 1fr 1fr 2fr;
+        grid-template-rows: 1fr 1fr;
+        grid-template-areas:
+          "dodgeL dodgeR attack"
+          "dodgeL dodgeR block";
+      }
+      #btnCombatDodgeL, #btnCombatDodgeR {
+        /* .combat-btn's own height (62-68px) is sized for a stacked half; override it so
+           each button stretches to fill its full two-row area instead of sitting pinned to
+           the top with dead grey space under it. */
+        height: auto !important;
+      }
+      #btnCombatDodgeL { grid-area: dodgeL; }
+      #btnCombatDodgeR { grid-area: dodgeR; }
+      #btnCombatAttack { grid-area: attack; }
+      #btnCombatBlock  { grid-area: block; }
+    }
+
+    /* Phone in landscape: plenty of width, almost no height. Keep the desktop side-by-side
+       layout (the media query above has already let go at >760px) but let the viewport
+       shrink below the 260px floor the clamp sets, which on a 390px-tall screen would push
+       the location bar off the bottom. */
+    @media (max-height: 520px) and (orientation: landscape) {
+      body { padding: 4px; }
+      #appContainer.mode-game { max-height: calc(100dvh - 8px) !important; }
+      .viewport-frame {
+        height: clamp(120px, calc(100dvh - 96px), calc((100vw - 364px) * 0.75)) !important;
+      }
+      /* The sidebar here is height-starved, not width-starved - a phone on its side has 844px
+         of width and barely 330px of column - so it stops being one tall stack and becomes
+         two: minimap over status box on the left, the D-pad beside them spanning both rows.
+         That is the difference between the controls being on screen and being clipped off the
+         bottom of the window. */
+      .sidebar-wrapper {
+        width: 330px !important;
+        display: grid !important;
+        grid-template-columns: 1fr 156px !important;
+        /* Second row takes the slack so the status box and the D-pad reach the bottom of the
+           window, level with the location bar under the dungeon view. */
+        grid-template-rows: auto 1fr !important;
+      }
+      .sidebar-wrapper > :nth-child(1) { grid-area: 1 / 1 / 2 / 2; }
+      .sidebar-wrapper > :nth-child(2) { grid-area: 2 / 1 / 3 / 2; }
+      .sidebar-wrapper > :nth-child(3) { grid-area: 1 / 2 / 3 / 3; }
+      .sidebar-wrapper > div { min-height: 0 !important; }
+      .doom-face-frame { width: 3.5rem !important; height: 3.5rem !important; }
+      /* The map keeps its 180x105 shape and simply gets drawn smaller - height-capped, with
+         the width following from it, so it stays centred in its frame. */
+      #minimapCanvas { max-height: 62px !important; width: auto !important; margin: 0 auto; }
+      .dpad-btn {
+        width: 42px !important; height: 42px !important;
+        min-width: 42px !important; min-height: 42px !important;
+        max-width: 42px !important; max-height: 42px !important;
+        font-size: 15px;
+      }
+      .combat-btn { height: 46px; font-size: 18px; }
     }
 
     /* ---- Screen saver: Windows 98 "Starfield Simulation" ------------------
@@ -713,15 +1020,22 @@
     }
     .hist-grid > :not(.hist-tile) { grid-column: 1 / -1; }
 
+    /* A grid, not a flex column, so the actions strip can share the picture's own cell (grid-
+       area: art on both .hist-tile__art and .hist-tile__acts, below) and overlay its bottom
+       edge without position:absolute - which is what lets a phone give the strip its OWN row
+       instead, just by naming it a separate area, with no risk of it clipping against art's
+       overflow:hidden. See the @media (max-width: 760px) override further down. */
     .hist-tile {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-areas: "art" "cap";
+      grid-template-rows: auto auto;
       padding: 3px;
       min-width: 0;
     }
     /* The card at the game's own 4:3, on black - a tile with no card yet (an older run whose
        picture is still being drawn) shows its dark frame rather than collapsing. */
     .hist-tile__art {
+      grid-area: art;
       position: relative;
       aspect-ratio: 4 / 3;
       background: #000000;
@@ -755,10 +1069,23 @@
        star it, watch or film its ending. They are always in the DOM and only faded out, never
        display:none - the arrow keys walk what is on screen (focusablesIn in game.js), and a
        button that is not there cannot be reached by keyboard at all. :focus-within is what
-       makes the keyboard cursor bring the strip up, the same way the mouse does. */
+       makes the keyboard cursor bring the strip up, the same way the mouse does.
+       grid-area: art - the same area .hist-tile__art claims above, not position:absolute - so
+       it shares the picture's cell and sits over its bottom edge (align-self: end) without
+       needing art to stay its positioned ancestor. That's what lets a phone move it into a
+       separate "acts" row of its own lower down, by re-pointing one grid-area name. */
     .hist-tile__acts {
-      position: absolute;
-      inset: auto 0 0 0;
+      grid-area: art;
+      align-self: end;
+      justify-self: stretch;
+      /* Positioned (even with no offsets set) rather than static, on purpose: art's own <img>
+         is position:absolute, and a positioned box always paints above a plain in-flow one
+         regardless of DOM order - without this, the picture painted over the strip instead
+         of the other way around, despite acts coming later in the markup and sitting at the
+         right place on screen. relative + no offsets changes nothing about where this box
+         lays out; it only puts it in the same "positioned" paint bucket as the picture, where
+         DOM order (acts after art) then correctly decides who's on top. */
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -806,6 +1133,7 @@
        marqueed - at four tiles to a row almost every line would overflow, and a grid of moving
        text is unreadable. The date, size, quality and music live in the tile's own tooltip. */
     .hist-tile__cap {
+      grid-area: cap;
       padding: 0.25rem 0.15rem 0.1rem;
       min-width: 0;
     }
@@ -830,6 +1158,42 @@
     #screenShowcase .hist-tile__acts button:focus-visible {
       outline: 2px dotted #000080;
       outline-offset: 0;
+    }
+
+    /* Tiles on a phone: the actions strip moves off the picture into a row of its own below
+       it instead of overlaying the bottom of it - at tile sizes this small (two to a row, see
+       the .hist-grid override above) that strip was covering most of the hero's portrait, the
+       one thing a tile exists to show. Re-pointing grid-area from "art" (shared with the
+       picture, and overlaid via align-self: end) to a new "acts" row is the whole change -
+       same elements, same classes, nothing for game.js to know about. A separate block so it
+       lands after the base .hist-tile rules above and actually wins the cascade (equal
+       specificity, no !important either side - it just has to come later in the file). */
+    @media (max-width: 760px) {
+      .hist-tile {
+        grid-template-areas: "art" "acts" "cap";
+        grid-template-rows: auto auto auto;
+      }
+      .hist-tile__acts {
+        grid-area: acts;
+        align-self: stretch;
+        justify-self: stretch;
+        /* Was there to keep the buttons readable over whatever the picture behind them
+           looked like; with a plain grey win95-box ground instead of a photo, it's just a
+           dark bar. */
+        background: none;
+        /* No hover on a device this narrow (see @media (hover: none) above, which already
+           covers a real phone) - but a mouse-driven browser window resized down this far
+           should not show an empty strip until it happens to be hovered either. */
+        opacity: 1;
+      }
+      /* Two tiles to a row leaves less width per button than the desktop three-glyph strip
+         was sized for - narrower than the dead-on-arrival attempt at this same rule used to
+         sit earlier in this stylesheet, before .hist-tile__acts button's un-prefixed desktop
+         rule (later in the file, equal specificity) was quietly winning it every time. */
+      .hist-tile__acts button {
+        min-width: 1.6rem;
+        padding: 0.15rem 0.25rem;
+      }
     }
 
     /* History's ending movie player: the clip at its own 4:3 on black, drawn in the same
@@ -2201,7 +2565,10 @@
          Rows are built by buildHistoryRow() - the same function the History modal uses - via
          renderShowcaseList() in game.js. -->
     <div id="screenShowcase" class="p-3 flex flex-col gap-3 hidden">
-      <div class="flex items-center gap-3">
+      <!-- showcase-header is a hook for the phone stylesheet only: below 760px this row drops
+           its controls onto a second line instead of squeezing the blurb into a four-line
+           column beside them. -->
+      <div class="showcase-header flex items-center gap-3">
         <div class="text-3xl">🏰</div>
         <div class="flex-1 min-w-0">
           <h2 class="font-bold text-base text-slate-900">ComfyCrawler</h2>
@@ -2412,7 +2779,9 @@
             </div>
             <div class="flex items-center gap-2">
               <!-- Doom-Style Face Portrait -->
-              <div class="win95-inset bg-black p-0.5 w-28 h-28 flex-shrink-0 flex items-center justify-center overflow-hidden">
+              <!-- doom-face-frame is a hook for the phone stylesheet, which shrinks this
+                   112px square on short screens to buy the dungeon view its height back. -->
+              <div class="doom-face-frame win95-inset bg-black p-0.5 w-28 h-28 flex-shrink-0 flex items-center justify-center overflow-hidden">
                 <canvas id="doomFaceCanvas" width="132" height="132" class="w-full h-full pixelated"></canvas>
               </div>
               <!-- HP & Stamina Bars -->

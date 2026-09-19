@@ -11073,6 +11073,24 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
+        # The page's typeface (Comic Neue, SIL OFL - see fonts/OFL.txt), shipped with the app
+        # so it renders the same on a phone as on this machine and needs no font CDN. Same
+        # whitelisted shape as /sounds/ below: basename only, and only these two files.
+        elif self.path.startswith("/fonts/"):
+            name = os.path.basename(self.path)
+            if name in ("ComicNeue-Regular.woff2", "ComicNeue-Bold.woff2"):
+                font_file = os.path.join(PROJECT_DIR, "fonts", name)
+                if os.path.exists(font_file):
+                    with open(font_file, "rb") as f:
+                        content = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "font/woff2")
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Cache-Control", "max-age=604800")
+                    self.end_headers()
+                    self.wfile.write(content)
+                    return
+
         # The static UI sounds (start / button / end), the four screen music loops, and the
         # loading-complete chime. Unlike the gameplay foley these do not change with the
         # theme, so they were generated once (see generate_static_music_asset /
