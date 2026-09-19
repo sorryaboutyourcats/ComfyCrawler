@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 dungeon_sessions/
+showcase/
 server.log
 server.log.1
 .DS_Store

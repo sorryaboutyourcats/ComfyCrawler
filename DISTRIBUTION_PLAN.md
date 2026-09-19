@@ -143,6 +143,12 @@ different levels of effort.
 
 ### D1 — Play saved dungeons on a website (easy, ~1 day)
 
+**Done.** A `SHOWCASE_MODE` flag (`window.COMFYCRAWLER_SHOWCASE`, read once
+near the top of `game.js`) gates the differences; `tools/export_showcase.py`
+produces the static folder from a curated `tools/showcase_ids.txt`. See that
+script and the flag's call sites in `game.js` for the mechanism. Original
+scope, for reference:
+
 A static site (e.g. GitHub Pages) that plays back saved `bundle.json` files.
 No server, no Python, no GPU — just files.
 
@@ -150,8 +156,8 @@ Why it works: `game.js` already renders a bundle by reading one JSON blob
 with embedded data URIs. The site only needs to serve files.
 
 Work:
-1. Make `SERVER_URL` relative instead of hardcoded to
-   `http://127.0.0.1:5555`.
+1. ~~Make `SERVER_URL` relative instead of hardcoded to
+   `http://127.0.0.1:5555`.~~ Already was, going in.
 2. Replace `/api/history` with a static manifest file, and
    `/api/history_bundle` with the bundle files themselves served as static
    assets — same format the page already reads.
@@ -159,9 +165,14 @@ Work:
    (today it's server-side; each visitor needs their own "beaten" state so
    the movie button's spoiler lock still means something).
 4. Hide CREATE, delete, and open-folder — none of those make sense without a
-   server.
-5. Nice to have: build Tailwind once instead of loading the CDN's dev
-   build; shrink the 62 MB of WAVs in `sounds/`.
+   server. (Also dropped: the History row's Prompts button, and the
+   quit-confirm box's own separate "Erase Current Run" — both are either a
+   doorway back into generation or a second delete path.)
+5. Nice to have: ~~build Tailwind once instead of loading the CDN's dev
+   build~~ (done separately, before this); shrink the 62 MB of WAVs in
+   `sounds/` (not done — the export script's sound whitelist keeps the
+   footprint to what `/sounds/` actually serves, but the WAVs themselves are
+   still uncompressed).
 
 Free hosting (e.g. GitHub Pages) comfortably covers this: ~60 dungeons fits
 in a 1 GB site cap, and a 100 GB/month traffic cap covers roughly 6,000

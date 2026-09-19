@@ -3,6 +3,12 @@
     // at /comfycrawler/, because ComfyUI keeps its own /api/... at the root (comfy_node.py).
     const SERVER_URL = window.location.pathname.startsWith('/comfycrawler') ? '/comfycrawler' : '';
 
+    // Set only by tools/export_showcase.py, which splices a `window.COMFYCRAWLER_SHOWCASE = true;`
+    // script tag into its copy of index.html ahead of game.js. Gates the no-backend showcase
+    // export: no CREATE, no delete, saved-dungeon list from a static manifest instead of the
+    // server, favorite/beaten kept in this browser's own localStorage instead of meta.json.
+    const SHOWCASE_MODE = window.COMFYCRAWLER_SHOWCASE === true;
+
     // ---- Remembered choices -------------------------------------------------------------------
     // Options (difficulty, max frame rate, ending video and its look, screensaver wait) and the
     // quick-ideas shuffle count are saved by the server (server.py PAGE SETTINGS), not only in this
@@ -27,6 +33,8 @@
         if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
         const keys = Object.keys(unsent);
         if (!keys.length) return;
+        // No server to mirror to in the showcase export - localStorage above is the whole store.
+        if (SHOWCASE_MODE) { keys.forEach((k) => { delete unsent[k]; }); return; }
         const body = JSON.stringify(unsent);
         keys.forEach((k) => { delete unsent[k]; });
         const url = `${SERVER_URL}/api/settings`;
@@ -66,6 +74,7 @@
     const screenSetup = document.getElementById('screenSetup');
     const screenProgress = document.getElementById('screenProgress');
     const screenGame = document.getElementById('screenGame');
+    const screenShowcase = document.getElementById('screenShowcase');
     const modalSettings = document.getElementById('modalSettings');
     const victoryModal = document.getElementById('victoryModal');
     const btnPlayAgain = document.getElementById('btnPlayAgain');
@@ -194,6 +203,8 @@
     const btnHistoryOk = document.getElementById('btnHistoryOk');
     const historySimilarOnly = document.getElementById('historySimilarOnly');
     const historySimilarOnlyLabel = document.getElementById('historySimilarOnlyLabel');
+    const showcaseList = document.getElementById('showcaseList');
+    const showcaseFootNote = document.getElementById('showcaseFootNote');
     const btnOpenSessionsFolder = document.getElementById('btnOpenSessionsFolder');
     const btnOpenAssetsFolder = document.getElementById('btnOpenAssetsFolder');
     const modalHistoryConfirm = document.getElementById('modalHistoryConfirm');
@@ -1396,6 +1407,32 @@
       btnMaximize.textContent = document.fullscreenElement ? "❐" : "□";
     });
 
+    // True at the base "nothing playing" screen - Setup normally, or the Showcase gallery in
+    // SHOWCASE_MODE, which never shows Setup at all. A handful of spots elsewhere used to read
+    // screenSetup's own hidden class directly as a stand-in for "no run is active"; those now
+    // call this instead so they keep working with either base screen.
+    function atBaseScreen() {
+      return SHOWCASE_MODE
+        ? !!(screenShowcase && !screenShowcase.classList.contains('hidden'))
+        : !screenSetup.classList.contains('hidden');
+    }
+
+    // Putting the base screen back up, and clearing it on the way out to the loading screen.
+    // Hiding Setup alone is not enough in SHOWCASE_MODE - Setup is already hidden there, so the
+    // gallery would sit on screen behind the loading readout.
+    function showBaseScreen() {
+      if (SHOWCASE_MODE) {
+        if (screenShowcase) screenShowcase.classList.remove('hidden');
+      } else {
+        screenSetup.classList.remove('hidden');
+      }
+    }
+
+    function hideBaseScreen() {
+      screenSetup.classList.add('hidden');
+      if (screenShowcase) screenShowcase.classList.add('hidden');
+    }
+
     function openSetupScreen() {
       resetTabTitle();
       screenGame.classList.add('hidden');
@@ -1426,10 +1463,14 @@
       stopConfetti();
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
-      screenSetup.classList.remove('hidden');
+      showBaseScreen();
+      if (SHOWCASE_MODE) {
+        refreshHistory();        // re-read the manifest so a just-played run's beaten/favorite shows
+      } else {
+        shuffleQuickIdeas();     // fresh Quick idea order on every return to the menu
+      }
       if (titleButtons) titleButtons.classList.remove('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
-      shuffleQuickIdeas();     // fresh Quick idea order on every return to the menu
       returnToMenuMusic();     // win, lose, or quit - the dungeon's music stops, menu fades in
     }
 
@@ -1763,7 +1804,14 @@
         saveEndingOptions();
       });
     }
-    endingVideoOn = prefs.get(ENDING_VIDEO_KEY) === 'on';
+    // In the showcase export every clip is already rendered and free to play - unlike the live
+    // app, where this defaults off because filming one costs ~200s of GPU time per run. Only
+    // defaults on when this visitor has never touched the setting themselves; an explicit choice
+    // (their own localStorage, from before or from Options) still wins either way.
+    {
+      const savedEndingVideo = prefs.get(ENDING_VIDEO_KEY);
+      endingVideoOn = savedEndingVideo !== null ? savedEndingVideo === 'on' : SHOWCASE_MODE;
+    }
     endingBackgroundOn = ENDING_BACKGROUND_OFFERED && prefs.get(ENDING_BACKGROUND_KEY) === 'on';
     paintEndingOptionRows();
 
@@ -1841,7 +1889,7 @@
     // never reappear as if they had been saved.
     function openSettings(focusTarget) {
       modalSettings.classList.remove('hidden');
-      loadComfySettings();
+      if (!SHOWCASE_MODE) loadComfySettings();   // section is hidden there anyway - nothing to check
       const currentDifficultyBtn = difficultyRow.querySelector('.difficulty-btn.is-selected');
       focusFirstIn(modalSettings, focusTarget || currentDifficultyBtn || btnSaveSettings);
       if (focusTarget && document.activeElement === focusTarget) {
@@ -1849,6 +1897,8 @@
       }
     }
     btnSettings.addEventListener('click', () => openSettings());
+    const btnShowcaseSettings = document.getElementById('btnShowcaseSettings');
+    if (btnShowcaseSettings) btnShowcaseSettings.addEventListener('click', () => openSettings());
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     // OK applies ComfyUI edits that were never applied; if the server refuses them (a malformed
     // address, or a run in progress) Options stays open on the reason instead of losing them.
@@ -1871,7 +1921,9 @@
       btnAbout.addEventListener('click', () => {
         modalAbout.classList.remove('hidden');
         focusFirstIn(modalAbout, btnAboutOk);
-        refreshAboutModels();     // "what is on this disk" is only true if it was just asked
+        // Section is hidden there anyway - nothing to check, and checkPreflight() has no server
+        // to ask in this export.
+        if (!SHOWCASE_MODE) refreshAboutModels();
       });
       modalAbout.addEventListener('click', (e) => {
         if (e.target === modalAbout) closeAbout();
@@ -4159,6 +4211,10 @@ void main() {
         const entry = historyEntries.find(e => e.id === id);
         if (entry) entry.beaten = true;
       }
+      if (SHOWCASE_MODE) {
+        showcaseState.setBeaten(id);
+        return;
+      }
       fetch(`${SERVER_URL}/api/history_beaten`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4211,10 +4267,27 @@ void main() {
     // A run is starting (enterDungeon): find out whether it has a clip or one on the way. Asks the
     // server to start filming one when the background option is on and it has none - that covers
     // a History replay of a run made without it, and a fresh run whose render the server lost.
+    // Where a run's ending clip actually lives: an endpoint on the live server, or the plain file
+    // tools/export_showcase.py copied next to that dungeon's bundle.
+    function endingClipSrc(id) {
+      return SHOWCASE_MODE
+        ? `dungeons/${encodeURIComponent(id)}/ending.mp4`
+        : `${SERVER_URL}/api/ending_video?id=${encodeURIComponent(id)}`;
+    }
+
     function prepareEndingCutscene() {
       resetEndingCutscene();
       if (!endingVideoOn || !currentRunHistoryId) return;
       endingRunId = currentRunHistoryId;
+      // Nothing to poll in the showcase export: no server to film a clip, so this dungeon either
+      // shipped with one or never gets one. pollEndingStatus there would 404, land on its
+      // 'unknown' branch, and keep re-asking for the rest of the run.
+      if (SHOWCASE_MODE) {
+        const entry = Array.isArray(historyEntries)
+          ? historyEntries.find(e => e.id === endingRunId) : null;
+        if (entry && entry.has_ending_video) loadEndingClip(endingRunId);
+        return;
+      }
       pollEndingStatus(endingRunId, endingBackgroundOn);
     }
 
@@ -4254,7 +4327,7 @@ void main() {
     async function loadEndingClip(id) {
       if (endingClipUrl) return;
       try {
-        const res = await fetch(`${SERVER_URL}/api/ending_video?id=${encodeURIComponent(id)}`);
+        const res = await fetch(endingClipSrc(id));
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const blob = await res.blob();
         if (id !== endingRunId || endingClipUrl) return;
@@ -4269,7 +4342,7 @@ void main() {
         console.warn('Ending cutscene could not be loaded:', err);
         // Asked again through the status poll rather than straight back at the file, so a clip
         // that has genuinely gone (its run deleted) settles on "missing" instead of looping here.
-        if (id === endingRunId && !endingPollTimer) {
+        if (!SHOWCASE_MODE && id === endingRunId && !endingPollTimer) {
           endingPollTimer = setTimeout(() => pollEndingStatus(id, false), ENDING_POLL_MS);
         }
       }
@@ -10387,13 +10460,14 @@ void main() {
         return;
       }
 
-      if (screenSetup.classList.contains('hidden')) return;
+      if (!atBaseScreen()) return;
       e.preventDefault();
-      // The title bar's ? / □ / ✕ sit outside screenSetup in the DOM - appContainer is their
-      // common root with it - so the walk widens to appContainer to reach them. That root also
-      // covers the loading and game screens, but each is hidden by its own class whenever this
-      // one shows, so nothing of theirs enters the list. focusFirstIn still skips the title bar
-      // for the very first press, same as it already does opening any dialog.
+      // The title bar's ? / □ / ✕ sit outside screenSetup (or, in SHOWCASE_MODE, screenShowcase)
+      // in the DOM - appContainer is their common root with it - so the walk widens to
+      // appContainer to reach them. That root also covers the loading and game screens, but each
+      // is hidden by its own class whenever this one shows, so nothing of theirs enters the list.
+      // focusFirstIn still skips the title bar for the very first press, same as it already does
+      // opening any dialog.
       if (!appContainer.contains(el)) focusFirstIn(appContainer);
       else moveFocusIn(appContainer, dir);
     });
@@ -11224,6 +11298,7 @@ void main() {
     }
 
     btnCreate.addEventListener('click', async () => {
+      if (SHOWCASE_MODE) return;   // no server to generate anything with in this export
       const wallStyle = wallPromptInput.value.trim() || "Windows 95";
       // A quoted name ("alley pond park") is a server-side marker, not display text - strip it
       // here so a fallback title (used only when the story itself has no location) never shows a
@@ -11378,6 +11453,86 @@ void main() {
     // renderHistoryList: scroll that run's row into view and flash it. Only on the way in - a
     // later rebuild (after a delete, say) leaves the list where the player left it.
     let historyRevealCurrent = false;
+
+    // ---- SHOWCASE_MODE: per-visitor favorite/beaten, kept in this browser instead of on a
+    // server that does not exist in this export. Overwrites the manifest's own favorite/beaten
+    // on every load (see applyShowcaseOverlay) rather than merging, so a visitor never inherits
+    // progress the curator made while testing - the whole point of "beaten" gating the ending
+    // movie's spoiler lock is that it means YOU beat it.
+    const showcaseState = (() => {
+      const KEY = 'comfycrawler.showcase.v1';
+      function readAll() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(KEY) || '{}');
+          return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+        } catch (_) { return {}; }
+      }
+      function writeAll(all) {
+        try { localStorage.setItem(KEY, JSON.stringify(all)); }
+        catch (_) { /* private mode, full, etc. - state just won't survive a reload */ }
+      }
+      return {
+        get(id) {
+          const rec = readAll()[id];
+          return { favorite: !!(rec && rec.favorite), beaten: !!(rec && rec.beaten) };
+        },
+        setFavorite(id, favorite) {
+          const all = readAll();
+          all[id] = { ...(all[id] || {}), favorite: !!favorite };
+          writeAll(all);
+          return !!favorite;
+        },
+        setBeaten(id) {
+          const all = readAll();
+          all[id] = { ...(all[id] || {}), beaten: true };   // never unset, same rule the server follows
+          writeAll(all);
+        },
+      };
+    })();
+
+    // Stamps this browser's own favorite/beaten over whatever the manifest shipped with -
+    // unconditionally, never merged in only when localStorage has nothing. The manifest's
+    // values are the curator's own (quite possibly "beaten" on every entry, from testing before
+    // publishing), and a merge that let those through would defeat the spoiler lock for every
+    // visitor on arrival.
+    function applyShowcaseOverlay(entries) {
+      if (!Array.isArray(entries)) return;
+      entries.forEach(entry => {
+        const local = showcaseState.get(entry.id);
+        entry.favorite = local.favorite;
+        entry.beaten = local.beaten;
+      });
+    }
+
+    // The showcase gallery is screenShowcase's landing list - the same rows History builds,
+    // just rendered inline as the first thing a visitor sees instead of behind a modal. Kept
+    // separate from renderHistoryList rather than folding a mode flag into it: that function
+    // also carries the "Similar only" filter and the scroll-to-current-run behaviour, both
+    // meaningless with no live run or mad-lib draft to compare against.
+    function renderShowcaseList() {
+      if (!showcaseList) return;
+      if (!Array.isArray(historyEntries) || !historyEntries.length) {
+        showcaseList.innerHTML = '';
+        const msg = document.createElement('div');
+        msg.className = 'text-xs text-slate-500 font-bold text-center py-8 px-4';
+        msg.textContent = historyEntries === null
+          ? 'Could not load the saved dungeons.'
+          : 'No dungeons in this showcase yet.';
+        showcaseList.appendChild(msg);
+        if (showcaseFootNote) showcaseFootNote.textContent = '';
+        return;
+      }
+      showcaseList.innerHTML = '';
+      historyEntries.forEach(entry => showcaseList.appendChild(buildHistoryRow(entry)));
+      requestAnimationFrame(() => {
+        showcaseList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
+      });
+      if (showcaseFootNote) {
+        const favorites = historyEntries.filter(e => e.favorite).length;
+        showcaseFootNote.textContent = historyEntries.length + ' dungeon' + (historyEntries.length === 1 ? '' : 's')
+          + (favorites ? '  ·  ' + favorites + ' favorite' + (favorites === 1 ? '' : 's') : '');
+      }
+    }
 
     function historyTitleOf(entry) {
       return ((entry && (entry.location || entry.wall_style)) || 'Unnamed Dungeon').trim();
@@ -11571,18 +11726,21 @@ void main() {
       // The other half of a row: take the four things the player typed to make this dungeon
       // back to the menu instead of replaying it as it was. Sits between Start and the trash can
       // so the row reads info -> the two ways to use this dungeon -> delete, keeping the
-      // destructive button last.
-      const btnPrompts = document.createElement('button');
-      btnPrompts.type = 'button';
-      btnPrompts.className = 'hist-prompts win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
-      btnPrompts.textContent = '📋 Prompts';
-      // The same typed words the thumbnail's tooltip lists, under a line saying what the
-      // button does with them - this button IS the typed words, so showing them is the label.
-      btnPrompts.title = 'Put what was typed to make this dungeon back on the main menu,'
-        + ' ready to change a word and CREATE again.'
-        + (promptBits.length ? '\n\n' + promptBits.join('\n') : '');
-      btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
-      row.appendChild(btnPrompts);
+      // destructive button last. Pointless in SHOWCASE_MODE - there is no main menu to send them
+      // to, and no CREATE to use them with.
+      if (!SHOWCASE_MODE) {
+        const btnPrompts = document.createElement('button');
+        btnPrompts.type = 'button';
+        btnPrompts.className = 'hist-prompts win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
+        btnPrompts.textContent = '📋 Prompts';
+        // The same typed words the thumbnail's tooltip lists, under a line saying what the
+        // button does with them - this button IS the typed words, so showing them is the label.
+        btnPrompts.title = 'Put what was typed to make this dungeon back on the main menu,'
+          + ' ready to change a word and CREATE again.'
+          + (promptBits.length ? '\n\n' + promptBits.join('\n') : '');
+        btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
+        row.appendChild(btnPrompts);
+      }
 
       // The run's ending movie: plays it once the run has been beaten, films it if the run never
       // got one. What it will do right now - and why it won't - is in its tooltip, drawn by
@@ -11603,11 +11761,15 @@ void main() {
       btnStar.addEventListener('click', () => toggleHistoryFavorite(entry, row));
       row.appendChild(btnStar);
 
-      const btnTrash = document.createElement('button');
-      btnTrash.type = 'button';
-      btnTrash.className = 'hist-trash win95-btn w-10 px-0 py-1.5 text-xs shrink-0 hover:bg-red-200';
-      btnTrash.addEventListener('click', () => askDeleteHistory(entry));
-      row.appendChild(btnTrash);
+      // No server to ask permission of, and nowhere to send the delete either - dropped
+      // entirely in SHOWCASE_MODE rather than disabled, the same treatment as Prompts above.
+      if (!SHOWCASE_MODE) {
+        const btnTrash = document.createElement('button');
+        btnTrash.type = 'button';
+        btnTrash.className = 'hist-trash win95-btn w-10 px-0 py-1.5 text-xs shrink-0 hover:bg-red-200';
+        btnTrash.addEventListener('click', () => askDeleteHistory(entry));
+        row.appendChild(btnTrash);
+      }
 
       paintHistoryFavorite(row, entry);
       paintHistoryMovie(row, entry);
@@ -11690,6 +11852,12 @@ void main() {
 
     async function toggleHistoryFavorite(entry, row) {
       if (!entry) return;
+      if (SHOWCASE_MODE) {
+        entry.favorite = showcaseState.setFavorite(entry.id, !entry.favorite);
+        paintHistoryFavorite(row, entry);
+        renderHistoryFootNote();
+        return;
+      }
       try {
         const res = await fetch(`${SERVER_URL}/api/history_favorite`, {
           method: 'POST',
@@ -11732,6 +11900,15 @@ void main() {
     async function toggleVictoryFavorite() {
       if (!currentRunHistoryId) return;
       const wasFavorite = currentRunFavorite;
+      if (SHOWCASE_MODE) {
+        currentRunFavorite = showcaseState.setFavorite(currentRunHistoryId, !wasFavorite);
+        if (Array.isArray(historyEntries)) {
+          const entry = historyEntries.find(e => e.id === currentRunHistoryId);
+          if (entry) entry.favorite = currentRunFavorite;
+        }
+        paintVictoryFavorite();
+        return;
+      }
       try {
         const res = await fetch(`${SERVER_URL}/api/history_favorite`, {
           method: 'POST',
@@ -11798,6 +11975,13 @@ void main() {
               title: "Watch this dungeon's ending movie." }
           : { kind: 'locked', disabled: true, label: '🎬',
               title: 'This dungeon has an ending movie - beat its boss to unlock it.' };
+      }
+      // No server to film one on, so the button is just inert instead of offering an action that
+      // would 404. Every dungeon tools/export_showcase.py has copied so far has a clip already,
+      // but a future export is not guaranteed to.
+      if (SHOWCASE_MODE) {
+        return { kind: 'none', disabled: true, label: '🎬',
+                 title: 'This dungeon has no ending movie.' };
       }
       // Another render this button must not replace: one the player asked for, or the background
       // render of the run they are standing in. (A background render for a run they have left
@@ -11945,6 +12129,7 @@ void main() {
     // Follows the one render outside a run until it is done, then puts everything back. Started
     // at page load (a reload in the middle of one), when History opens, and by a row's button.
     async function watchEndingJob() {
+      if (SHOWCASE_MODE) return;   // no server to ask, and nothing in an export can be filming
       if (endingJobWatchTimer) { clearTimeout(endingJobWatchTimer); endingJobWatchTimer = null; }
       const seq = ++endingJobWatchSeq;
       let next = null;
@@ -12051,7 +12236,7 @@ void main() {
       focusFirstIn(modalEndingPlayer, btnEndingPlayerOk);
       duckMusicForMovie(true);
       try {
-        const res = await fetch(`${SERVER_URL}/api/ending_video?id=${encodeURIComponent(entry.id)}`);
+        const res = await fetch(endingClipSrc(entry.id));
         if (!res.ok) throw new Error(res.status === 404 ? 'It is not on disk any more.' : 'HTTP ' + res.status);
         const blob = await res.blob();
         if (seq !== endingPlayerSeq) return;   // closed while it downloaded
@@ -12295,18 +12480,21 @@ void main() {
       }
     }
 
-    // Always re-read from the server rather than trusting the copy in memory: the folder on
-    // disk is the only record of what actually exists, and it can change behind this page.
+    // Always re-read rather than trusting the copy in memory: in SHOWCASE_MODE the static
+    // manifest is the only record of what got exported, and otherwise the folder on disk can
+    // change behind this page either way.
     async function refreshHistory() {
       try {
-        const res = await fetch(`${SERVER_URL}/api/history`);
+        const res = await fetch(SHOWCASE_MODE ? 'dungeons.json' : `${SERVER_URL}/api/history`);
         const data = await res.json();
         historyEntries = Array.isArray(data.sessions) ? data.sessions : [];
+        if (SHOWCASE_MODE) applyShowcaseOverlay(historyEntries);
       } catch (err) {
         console.error('History fetch error:', err);
         historyEntries = null;
       }
       renderHistoryList();
+      if (SHOWCASE_MODE) renderShowcaseList();
     }
 
     function openHistory() {
@@ -12416,7 +12604,7 @@ void main() {
         alert('A dungeon is still being generated. Let it finish first.');
         return;
       }
-      if (screenSetup.classList.contains('hidden')) {
+      if (!atBaseScreen()) {
         askLeaveRun('start', entry);
         return;
       }
@@ -12450,7 +12638,7 @@ void main() {
 
       resetCombatForNewDungeon();
       resetCrawl('LOADING ASSETS');
-      screenSetup.classList.add('hidden');
+      hideBaseScreen();
       screenProgress.classList.remove('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
@@ -12475,9 +12663,11 @@ void main() {
       setTabTitlePercent(0);
 
       try {
-        const res = await fetch(
-          `${SERVER_URL}/api/history_bundle?id=${encodeURIComponent(entry.id)}`);
-        if (!res.ok) throw new Error('The server could not read that saved dungeon.');
+        const bundleUrl = SHOWCASE_MODE
+          ? `dungeons/${encodeURIComponent(entry.id)}/bundle.json`
+          : `${SERVER_URL}/api/history_bundle?id=${encodeURIComponent(entry.id)}`;
+        const res = await fetch(bundleUrl);
+        if (!res.ok) throw new Error('Could not read that saved dungeon.');
         const bundle = await res.json();
         stopGenerationTimers();
         // The title bar's ✕ can land while this read is in flight. It has already put the
@@ -12511,7 +12701,7 @@ void main() {
         resetCrawl();
         resetTabTitle();
         screenProgress.classList.add('hidden');
-        screenSetup.classList.remove('hidden');
+        showBaseScreen();
         if (titleButtons) titleButtons.classList.remove('hidden');
         appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
         // Whatever went wrong, the list this row came from is now out of date.
@@ -13275,16 +13465,43 @@ void main() {
     }
 
     // Boot engine
-    // Catches the reload-out-of-a-cancel case: this page is brand new, but the server may
-    // still be stopping the run the previous page abandoned on its way out.
-    watchForSettling();
-    // ...and the reload-in-the-middle-of-a-movie case: an ending movie asked for from History may
-    // still be filming, and CREATE / Fill-in have to come up greyed out until it is done.
-    watchEndingJob();
-    // ...and a model download still going from before a reload.
-    watchDownloadJob();
-    // ...and whether this machine's ComfyUI can make a dungeon at all (see checkPreflight).
-    checkPreflight();
+    if (SHOWCASE_MODE) {
+      // None of watchForSettling/watchEndingJob/watchDownloadJob/checkPreflight below have a
+      // server to reach in this export - they already fail soft (each catches its own network
+      // error), but skipping them outright keeps this page's network traffic honestly empty
+      // instead of four failed requests on every load.
+      if (btnOpenSessionsFolder) btnOpenSessionsFolder.classList.add('hidden');
+      if (btnOpenAssetsFolder) btnOpenAssetsFolder.classList.add('hidden');
+      if (btnQuitEraseRun) btnQuitEraseRun.classList.add('hidden');
+      // Options, trimmed to what still means something without ComfyUI: Difficulty, Max Frame
+      // Rate and Screensaver Wait stay; Graphics, Sound Generation, Ending Video and the ComfyUI
+      // Connection fields are all generation-only, so they're replaced with one note pointing at
+      // the repo for anyone who wants the real thing.
+      const gfxQualityRow = document.getElementById('gfxQualityRow');
+      const soundAndEndingRow = document.getElementById('soundAndEndingRow');
+      const comfySettingsSection = document.getElementById('comfySettingsSection');
+      const showcaseGenerateNote = document.getElementById('showcaseGenerateNote');
+      const aboutModelsSection = document.getElementById('aboutModelsSection');
+      if (gfxQualityRow) gfxQualityRow.classList.add('hidden');
+      if (soundAndEndingRow) soundAndEndingRow.classList.add('hidden');
+      if (comfySettingsSection) comfySettingsSection.classList.add('hidden');
+      if (showcaseGenerateNote) showcaseGenerateNote.classList.remove('hidden');
+      if (aboutModelsSection) aboutModelsSection.classList.add('hidden');
+      screenSetup.classList.add('hidden');
+      if (screenShowcase) screenShowcase.classList.remove('hidden');
+      refreshHistory();
+    } else {
+      // Catches the reload-out-of-a-cancel case: this page is brand new, but the server may
+      // still be stopping the run the previous page abandoned on its way out.
+      watchForSettling();
+      // ...and the reload-in-the-middle-of-a-movie case: an ending movie asked for from History
+      // may still be filming, and CREATE / Fill-in have to come up greyed out until it is done.
+      watchEndingJob();
+      // ...and a model download still going from before a reload.
+      watchDownloadJob();
+      // ...and whether this machine's ComfyUI can make a dungeon at all (see checkPreflight).
+      checkPreflight();
+    }
     buildDefaultTextures();
     generateAuthentic3DMaze(DIFFICULTIES.medium.grids);
     render3D();

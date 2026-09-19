@@ -1,0 +1,8 @@
+# One dungeon_sessions/ id per line - curate by hand after reviewing what's in that folder.
+# Screen for anything you wouldn't want public: real names/brands typed while testing (a saved
+# run once named its hero "Will Smith" in a "Pizza Hut" setting - see DISTRIBUTION_PLAN.md),
+# unfinished-looking test runs, anything else you'd rather not publish. Blank lines and
+# #-comments are ignored.
+#
+# Example:
+# 20260913-163851-c9aec7
