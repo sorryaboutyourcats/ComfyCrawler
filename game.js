@@ -9,6 +9,16 @@
     // server, favorite/beaten kept in this browser's own localStorage instead of meta.json.
     const SHOWCASE_MODE = window.COMFYCRAWLER_SHOWCASE === true;
 
+    // Where sounds/ lives, relative to whoever served this page. SERVER_URL is a path from the
+    // domain ROOT (fine for the live server/ComfyUI, which really is rooted there) - but a
+    // showcase export can be hosted anywhere, including a subfolder, and export_showcase.py
+    // ships sounds/ sitting right next to this page's own index.html. A root-relative fetch
+    // 404s the moment the export isn't served from its host's root, which is what silently
+    // drops every theme-independent sound (menu/button/start/end/ready, and every STATIC_MUSIC
+    // screen loop) while a run's own music still plays - that's embedded as base64 in the
+    // bundle, never fetched at all. A plain relative path fixes it for every hosting depth.
+    const SOUNDS_BASE = SHOWCASE_MODE ? 'sounds' : `${SERVER_URL}/sounds`;
+
     // ---- Remembered choices -------------------------------------------------------------------
     // Options (difficulty, max frame rate, ending video and its look, screensaver wait) and the
     // quick-ideas shuffle count are saved by the server (server.py PAGE SETTINGS), not only in this
@@ -862,7 +872,7 @@
       const ctx = sfxContext();
       if (!ctx) return;
       menuMusicLoading = true;
-      fetch(`${SERVER_URL}/sounds/menu_music.wav`)
+      fetch(`${SOUNDS_BASE}/menu_music.wav`)
         .then(r => (r.ok ? r.arrayBuffer() : Promise.reject()))
         .then(ab => ctx.decodeAudioData(ab, buf => {
           menuMusicBuf = buf;
@@ -984,7 +994,7 @@
       const ctx = sfxContext();
       if (!ctx) return;
       screenMusicLoading[name] = true;
-      fetch(`${SERVER_URL}/sounds/${name}_music.wav`)
+      fetch(`${SOUNDS_BASE}/${name}_music.wav`)
         .then(r => (r.ok ? r.arrayBuffer() : Promise.reject()))
         .then(ab => ctx.decodeAudioData(ab, buf => {
           screenMusicBufs[name] = buf;
@@ -1213,7 +1223,7 @@
       if (!ctx) return;
       UI_SOUNDS.forEach(name => {
         if (sfxBank[name]) return;
-        fetch(`${SERVER_URL}/sounds/${name}.wav`)
+        fetch(`${SOUNDS_BASE}/${name}.wav`)
           .then(r => (r.ok ? r.arrayBuffer() : Promise.reject()))
           .then(ab => ctx.decodeAudioData(ab, buf => { sfxBank[name] = buf; }, () => {}))
           .catch(() => { /* falls back to synthSfx */ });
