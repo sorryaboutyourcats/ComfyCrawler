@@ -205,6 +205,12 @@
     const historySimilarOnlyLabel = document.getElementById('historySimilarOnlyLabel');
     const showcaseList = document.getElementById('showcaseList');
     const showcaseFootNote = document.getElementById('showcaseFootNote');
+    // Rows or tiles - the pair in the History window's footer, and the pair in the showcase
+    // gallery's header. Both drive the one setting; see setHistoryView.
+    const btnHistoryViewList = document.getElementById('btnHistoryViewList');
+    const btnHistoryViewTiles = document.getElementById('btnHistoryViewTiles');
+    const btnShowcaseViewList = document.getElementById('btnShowcaseViewList');
+    const btnShowcaseViewTiles = document.getElementById('btnShowcaseViewTiles');
     const btnOpenSessionsFolder = document.getElementById('btnOpenSessionsFolder');
     const btnOpenAssetsFolder = document.getElementById('btnOpenAssetsFolder');
     const modalHistoryConfirm = document.getElementById('modalHistoryConfirm');
@@ -11523,7 +11529,7 @@ void main() {
         return;
       }
       showcaseList.innerHTML = '';
-      historyEntries.forEach(entry => showcaseList.appendChild(buildHistoryRow(entry)));
+      historyEntries.forEach(entry => showcaseList.appendChild(buildHistoryEntryEl(entry)));
       requestAnimationFrame(() => {
         showcaseList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
       });
@@ -11597,6 +11603,60 @@ void main() {
     // matches resolve_named_styles' fields dict in server.py.
     const NAME_FIELD_ORDER = ['wall', 'player', 'weapon', 'enemy'];
 
+    // What the player typed to make this dungeon, and what the server turned it into - the
+    // tooltip a row's thumbnail carries, the one its Prompts button repeats, and the whole of
+    // what a tile can show, having no room for an info line of its own.
+    function historyPromptLines(entry) {
+      const lines = [];
+      if (entry.wall_style) lines.push('Dungeon: ' + entry.wall_style);
+      if (entry.player_style) lines.push('Player: ' + entry.player_style);
+      if (entry.weapon_style) lines.push('Weapon: ' + entry.weapon_style);
+      if (entry.enemy_style) lines.push('Enemy: ' + entry.enemy_style);
+      // When the typed words were abstract ("internet", "memes"), the server's set designer
+      // resolved them into the concrete materials and objects that actually got drawn. Show
+      // those under the typed words, so a surprising-looking dungeon explains itself. Absent
+      // on dungeons saved before this existed, and on themes that matched a built-in style.
+      if (entry.theme_brief) {
+        const designed = THEME_BRIEF_ORDER
+          .filter(k => entry.theme_brief[k])
+          .map(k => '  ' + k + ': ' + entry.theme_brief[k]);
+        if (designed.length) lines.push('', 'Designed into:', ...designed);
+      }
+      // A quoted proper name resolves to a kind of thing (a park, a cat) - show what each
+      // named field turned into, the same spirit as "Designed into:" above but keyed to which
+      // field actually carried a name. Absent on dungeons saved before this existed and on
+      // runs where nothing was quoted.
+      if (entry.named_styles) {
+        const named = NAME_FIELD_ORDER
+          .filter(k => entry.named_styles[k] && entry.named_styles[k].name)
+          .map(k => {
+            const n = entry.named_styles[k];
+            const kind = n.kind ? ' (' + n.kind + (n.known ? ', recognised' : '') + ')' : '';
+            return '  ' + k + ': ' + n.name + kind;
+          });
+        if (named.length) lines.push('', 'Named:', ...named);
+      }
+      return lines;
+    }
+
+    // The row's info line, in pieces: wall style · date · size · quality tier · music · ending.
+    // A tile has no line for these, so they go into its tooltip instead.
+    function historyMetaBits(entry) {
+      const bits = [];
+      if (entry.wall_style) bits.push(entry.wall_style);
+      if (entry.created_text) bits.push(entry.created_text);
+      const size = historySizeText(entry.size);
+      if (size) bits.push(size);
+      // Which "Graphics Quality" tier the assets were baked at (high quality / optimized /
+      // reduced). Absent on dungeons saved before this was recorded.
+      if (entry.quality_text) bits.push(entry.quality_text);
+      if (entry.has_music) bits.push('♪ music');
+      // An ending cutscene saved beside the run (Options > Ending Video). The server reads the
+      // file itself for this, so a clip a background render finished later shows up too.
+      if (entry.has_ending_video) bits.push('🎬 ending');
+      return bits;
+    }
+
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
       row.className = 'hist-row win95-box p-1.5 flex items-center gap-2';
@@ -11616,35 +11676,7 @@ void main() {
       thumbFrame.className = 'win95-inset w-12 h-12 shrink-0 bg-black flex items-center justify-center overflow-hidden';
       // Hover the thumbnail to see exactly what the player typed into the creation wizard
       // for this dungeon. Native title tooltip - same treatment as the buttons below.
-      const promptBits = [];
-      if (entry.wall_style) promptBits.push('Dungeon: ' + entry.wall_style);
-      if (entry.player_style) promptBits.push('Player: ' + entry.player_style);
-      if (entry.weapon_style) promptBits.push('Weapon: ' + entry.weapon_style);
-      if (entry.enemy_style) promptBits.push('Enemy: ' + entry.enemy_style);
-      // When the typed words were abstract ("internet", "memes"), the server's set designer
-      // resolved them into the concrete materials and objects that actually got drawn. Show
-      // those under the typed words, so a surprising-looking dungeon explains itself. Absent
-      // on dungeons saved before this existed, and on themes that matched a built-in style.
-      if (entry.theme_brief) {
-        const designed = THEME_BRIEF_ORDER
-          .filter(k => entry.theme_brief[k])
-          .map(k => '  ' + k + ': ' + entry.theme_brief[k]);
-        if (designed.length) promptBits.push('', 'Designed into:', ...designed);
-      }
-      // A quoted proper name resolves to a kind of thing (a park, a cat) - show what each
-      // named field turned into, the same spirit as "Designed into:" above but keyed to which
-      // field actually carried a name. Absent on dungeons saved before this existed and on
-      // runs where nothing was quoted.
-      if (entry.named_styles) {
-        const named = NAME_FIELD_ORDER
-          .filter(k => entry.named_styles[k] && entry.named_styles[k].name)
-          .map(k => {
-            const n = entry.named_styles[k];
-            const kind = n.kind ? ' (' + n.kind + (n.known ? ', recognised' : '') + ')' : '';
-            return '  ' + k + ': ' + n.name + kind;
-          });
-        if (named.length) promptBits.push('', 'Named:', ...named);
-      }
+      const promptBits = historyPromptLines(entry);
       if (promptBits.length) {
         thumbFrame.title = promptBits.join('\n');
         thumbFrame.classList.add('cursor-help');
@@ -11696,19 +11728,7 @@ void main() {
 
       const meta = document.createElement('div');
       meta.className = 'hist-meta text-[10px] text-slate-600 font-bold truncate';
-      const metaBits = [];
-      if (entry.wall_style) metaBits.push(entry.wall_style);
-      if (entry.created_text) metaBits.push(entry.created_text);
-      const size = historySizeText(entry.size);
-      if (size) metaBits.push(size);
-      // Which "Graphics Quality" tier the assets were baked at (high quality / optimized /
-      // reduced). Absent on dungeons saved before this was recorded.
-      if (entry.quality_text) metaBits.push(entry.quality_text);
-      if (entry.has_music) metaBits.push('♪ music');
-      // An ending cutscene saved beside the run (Options > Ending Video). The server reads the
-      // file itself for this, so a clip a background render finished later shows up too.
-      if (entry.has_ending_video) metaBits.push('🎬 ending');
-      meta.textContent = metaBits.join('  ·  ');
+      meta.textContent = historyMetaBits(entry).join('  ·  ');
       col.appendChild(meta);
 
       row.appendChild(col);
@@ -11776,6 +11796,302 @@ void main() {
       return row;
     }
 
+    // ==========================================
+    // THE TILE VIEW
+    // ==========================================
+    // The same saved runs, read as pictures instead of rows. A tile's picture is that run's
+    // card: its hero standing in their default pose - the idle frame the game rests on between
+    // swings - in a corridor built from that run's own ceiling, wall and floor textures, drawn
+    // server-side by _session_card in server.py. So "which dungeon was that?" is answered by
+    // looking at it rather than by reading a line about it.
+    //
+    // A tile is a .hist-row like any other row: same data-id, same .hist-start / .hist-star /
+    // .hist-movie buttons. Everything that works on the list - paintHistoryFavorite,
+    // paintHistoryMovie, the two-second repaint while an ending films, the scroll-to-the-run-
+    // you-are-in on open - therefore works on the grid without knowing which view is up.
+    //
+    // What a tile does NOT carry is Use Prompts and the trash can: three buttons is what fits
+    // over a picture this size, and both of those live one click away in the list view.
+    const HISTORY_VIEW_KEY = 'comfycrawler.historyView';
+    let historyView = prefs.get(HISTORY_VIEW_KEY) === 'tiles' ? 'tiles' : 'list';
+
+    // Where a run's card picture lives: an endpoint on the live server, which draws it on the
+    // first request and keeps it beside the bundle, or the plain file tools/export_showcase.py
+    // copied next to that dungeon in the static export. Same split as endingClipSrc.
+    function historyCardSrc(id) {
+      return SHOWCASE_MODE
+        ? `dungeons/${encodeURIComponent(id)}/card.png`
+        : `${SERVER_URL}/api/history_card?id=${encodeURIComponent(id)}`;
+    }
+
+    // A tile has one line for the name and one for the cast, and no room at all for the info
+    // line a row carries - so everything else about the run goes into the tooltip on its
+    // picture: the date, size, quality tier and music, then the words that were typed to make
+    // it. Every string here came out of a language model, so it reaches the DOM through
+    // .title / textContent and never as markup - same rule the rows follow.
+    function historyTileTooltip(entry, castText) {
+      const lines = [historyTitleOf(entry)];
+      if (castText) lines.push(castText);
+      const meta = historyMetaBits(entry);
+      if (meta.length) lines.push(meta.join('  ·  '));
+      if (Number(entry.frame_version) === 2) lines.push('Frame version 2 - foes have a strike frame');
+      const prompts = historyPromptLines(entry);
+      if (prompts.length) lines.push('', ...prompts);
+      return lines.join('\n');
+    }
+
+    // ---- Fetching the pictures, one at a time ----------------------------------------------
+    // server.py answers one request at a time (a plain TCPServer - see run_server), and drawing
+    // a card for a run saved before tiles existed costs it most of a second: its 16MB bundle has
+    // to be read back off disk. Six tiles asking at once therefore fill every connection the
+    // browser will open to this host, and the next thing the page needs - a star, a delete, the
+    // ending-job poll - is refused outright rather than queued ("Failed to fetch"). Measured:
+    // that is exactly what a plain <img loading="lazy"> grid did.
+    //
+    // So the grid asks for its pictures itself: a tile's card is requested when the tile is
+    // scrolled into view, and only ever one request is in flight. The blurred thumbnail under
+    // it is what the player sees meanwhile, so a queue of thirty is not a grid of holes.
+    const historyCardQueue = [];
+    let historyCardInFlight = false;
+    // Reads against the viewport rather than the list's own scroll box: the box is a different
+    // element in the History window and in the showcase gallery, and the viewport contains both.
+    // The margin starts the row below the fold fetching before it is scrolled to.
+    const historyCardWatcher = ('IntersectionObserver' in window)
+      ? new IntersectionObserver((entries, obs) => {
+          entries.forEach(e => {
+            if (!e.isIntersecting) return;
+            obs.unobserve(e.target);
+            historyCardQueue.push(e.target);
+            pumpHistoryCards();
+          });
+        }, { rootMargin: '300px' })
+      : null;
+
+    function pumpHistoryCards() {
+      if (historyCardInFlight) return;
+      while (historyCardQueue.length) {
+        const img = historyCardQueue.shift();
+        // The list was rebuilt (a view switch, a delete, a refresh) while this waited its turn -
+        // its tile is gone, and so is any reason to fetch its picture.
+        if (!img.isConnected || !img.dataset.cardSrc) continue;
+        historyCardInFlight = true;
+        const done = () => {
+          historyCardInFlight = false;
+          pumpHistoryCards();
+        };
+        img.addEventListener('load', done, { once: true });
+        img.addEventListener('error', done, { once: true });
+        img.src = img.dataset.cardSrc;
+        return;
+      }
+    }
+
+    // Every image currently being watched. A detached one never fires the observer again - the
+    // list was rebuilt out from under it - and the observer holds it alive, so each new tile
+    // sweeps the dead ones out on its way in. That keeps a window opened and closed twenty
+    // times from accumulating twenty lists' worth of images.
+    const historyCardWatched = [];
+
+    function queueHistoryCard(img, src) {
+      img.dataset.cardSrc = src;
+      // No IntersectionObserver (nothing this page runs on lacks it, but the grid should not
+      // simply be blank if one turns up): fall back to asking for every card, still one at a
+      // time through the same queue.
+      if (!historyCardWatcher) {
+        historyCardQueue.push(img);
+        pumpHistoryCards();
+        return;
+      }
+      for (let i = historyCardWatched.length - 1; i >= 0; i--) {
+        if (historyCardWatched[i].isConnected) continue;
+        historyCardWatcher.unobserve(historyCardWatched[i]);
+        historyCardWatched.splice(i, 1);
+      }
+      historyCardWatched.push(img);
+      historyCardWatcher.observe(img);
+    }
+
+    function buildHistoryTile(entry) {
+      const tile = document.createElement('div');
+      tile.className = 'hist-row hist-tile win95-box';
+      tile.dataset.id = entry.id || '';
+      const isCurrentRun = !!(entry.id && entry.id === currentRunHistoryId);
+      if (isCurrentRun) {
+        tile.classList.add('hist-row--current');
+        tile.setAttribute('aria-current', 'true');
+      }
+
+      const castBits = [entry.hero, entry.boss].filter(Boolean);
+      const castText = castBits.length
+        ? castBits.join('  vs  ')
+        : [entry.player_style, entry.enemy_style].filter(Boolean).join('  vs  ');
+
+      const art = document.createElement('div');
+      art.className = 'hist-tile__art';
+      art.title = historyTileTooltip(entry, castText);
+
+      // The listing's own 96px thumbnail goes down first, blown up and blurred. The card is a
+      // separate request per tile - and on a run saved before tiles existed the server has to
+      // draw it before it can answer - so without this the grid would be black rectangles for
+      // as long as that takes. It also stays as the fallback: a run whose card cannot be drawn
+      // at all keeps the blur rather than a hole.
+      if (entry.thumb) {
+        const under = document.createElement('img');
+        under.src = entry.thumb;
+        under.alt = '';
+        under.className = 'hist-tile__under';
+        art.appendChild(under);
+      } else {
+        const glyph = document.createElement('span');
+        glyph.className = 'text-3xl select-none opacity-40';
+        glyph.textContent = '🏰';
+        art.appendChild(glyph);
+      }
+
+      if (entry.id) {
+        const card = document.createElement('img');
+        // No .pixelated class: the page already applies image-rendering: pixelated to every
+        // img, and this one is no exception - a tile should look like the game does.
+        card.className = 'hist-tile__card';
+        card.alt = '';
+        card.decoding = 'async';
+        card.addEventListener('load', () => card.classList.add('is-loaded'));
+        // No card for this run (an older static export, or a bundle with nothing drawable in
+        // it): drop the empty image and leave the blurred thumbnail showing.
+        card.addEventListener('error', () => card.remove());
+        art.appendChild(card);
+        // Not card.src = ... : see queueHistoryCard. The picture is fetched when the tile is
+        // actually scrolled to, and only ever one at a time.
+        queueHistoryCard(card, historyCardSrc(entry.id));
+      }
+
+      // What the run IS, readable without hovering: which one is running behind this window,
+      // and whether it is starred. The actions below only appear on hover, and these two are
+      // not actions.
+      const badges = document.createElement('div');
+      badges.className = 'hist-tile__badges';
+      const tags = document.createElement('div');
+      tags.className = 'flex items-center gap-1 min-w-0';
+      if (isCurrentRun) {
+        const tag = document.createElement('span');
+        tag.className = 'hist-now-playing text-[9px] font-black px-1.5 py-0.5 shrink-0';
+        tag.textContent = 'NOW PLAYING';
+        tags.appendChild(tag);
+      }
+      const frameVerTag = buildFrameVersionTag(entry);
+      if (frameVerTag) tags.appendChild(frameVerTag);
+      badges.appendChild(tags);
+      // Painted by paintHistoryFavorite along with the star button below, so starring a tile
+      // lights its corner in the same click.
+      const fav = document.createElement('span');
+      fav.className = 'hist-tile__fav shrink-0';
+      fav.textContent = '⭐';
+      fav.hidden = true;
+      badges.appendChild(fav);
+      art.appendChild(badges);
+
+      // The three actions, over the bottom of the picture. Built here rather than shared with
+      // buildHistoryRow because only the classes and the handlers are common - a row's buttons
+      // are labelled ("▶ Start") and sized to sit in a line of text, a tile's are glyphs sized
+      // to sit on an image - but they carry the same .hist-* classes, so the paint functions
+      // and the filming repaint drive either one.
+      const acts = document.createElement('div');
+      acts.className = 'hist-tile__acts';
+
+      const btnStart = document.createElement('button');
+      btnStart.type = 'button';
+      btnStart.className = 'hist-start win95-btn text-black bg-yellow-100 hover:bg-yellow-200';
+      btnStart.textContent = '▶';
+      // Deliberately an empty title, not a missing one - see the same note on the star in
+      // paintHistoryFavorite. A tile's actions already only appear on hover; a tooltip over
+      // them is one fade-in too many, and with no title attribute at all the browser would
+      // show the picture's own tooltip here instead of nothing.
+      btnStart.title = '';
+      btnStart.setAttribute('aria-label', isCurrentRun
+        ? 'Play ' + historyTitleOf(entry) + ' again from the beginning - you are in it now'
+        : 'Play ' + historyTitleOf(entry));
+      btnStart.addEventListener('click', () => startHistoryDungeon(entry));
+      acts.appendChild(btnStart);
+
+      const btnStar = document.createElement('button');
+      btnStar.type = 'button';
+      btnStar.className = 'hist-star win95-btn text-black hover:bg-yellow-200';
+      btnStar.addEventListener('click', () => toggleHistoryFavorite(entry, tile));
+      acts.appendChild(btnStar);
+
+      const btnMovie = document.createElement('button');
+      btnMovie.type = 'button';
+      btnMovie.className = 'hist-movie win95-btn text-black hover:bg-blue-200';
+      btnMovie.addEventListener('click', () => historyMovieAction(entry, btnMovie));
+      acts.appendChild(btnMovie);
+
+      art.appendChild(acts);
+      tile.appendChild(art);
+
+      const cap = document.createElement('div');
+      cap.className = 'hist-tile__cap';
+      const title = document.createElement('div');
+      title.className = 'text-[10px] font-black text-slate-900 truncate';
+      title.textContent = historyTitleOf(entry);
+      cap.appendChild(title);
+      const cast = document.createElement('div');
+      cast.className = 'text-[9px] font-bold text-blue-900 truncate';
+      cast.textContent = castText;
+      cap.appendChild(cast);
+      tile.appendChild(cap);
+
+      paintHistoryFavorite(tile, entry);
+      paintHistoryMovie(tile, entry);
+      return tile;
+    }
+
+    // One run, drawn the way the current view asks for. Both list renderers go through here.
+    function buildHistoryEntryEl(entry) {
+      return historyView === 'tiles' ? buildHistoryTile(entry) : buildHistoryRow(entry);
+    }
+
+    // Rows stack; tiles grid. The two containers keep their own inset frame, padding and
+    // scroll height either way - only the layout of their children changes.
+    function applyHistoryView() {
+      const tiles = historyView === 'tiles';
+      [historyList, showcaseList].forEach(el => {
+        if (!el) return;
+        el.classList.toggle('flex', !tiles);
+        el.classList.toggle('flex-col', !tiles);
+        el.classList.toggle('gap-1.5', !tiles);
+        el.classList.toggle('hist-grid', tiles);
+      });
+      // Both pairs of buttons show the same setting - the History window's and the showcase
+      // gallery's - so whichever one was clicked, both agree afterwards.
+      [[btnHistoryViewList, btnShowcaseViewList], [btnHistoryViewTiles, btnShowcaseViewTiles]]
+        .forEach(([a, b], i) => {
+          const on = (i === 1) === tiles;
+          [a, b].forEach(btn => {
+            if (!btn) return;
+            btn.classList.toggle('is-selected', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          });
+        });
+    }
+
+    function setHistoryView(view) {
+      const next = view === 'tiles' ? 'tiles' : 'list';
+      if (next === historyView) return;
+      historyView = next;
+      prefs.set(HISTORY_VIEW_KEY, historyView);
+      applyHistoryView();
+      // Rebuild whichever list is on screen. The entries are already in memory, so this is a
+      // redraw and not a refetch - nothing goes back to the server for it.
+      renderHistoryList();
+      if (SHOWCASE_MODE) renderShowcaseList();
+    }
+
+    if (btnHistoryViewList) btnHistoryViewList.addEventListener('click', () => setHistoryView('list'));
+    if (btnHistoryViewTiles) btnHistoryViewTiles.addEventListener('click', () => setHistoryView('tiles'));
+    if (btnShowcaseViewList) btnShowcaseViewList.addEventListener('click', () => setHistoryView('list'));
+    if (btnShowcaseViewTiles) btnShowcaseViewTiles.addEventListener('click', () => setHistoryView('tiles'));
+    applyHistoryView();
+
     // Which frame version a saved run was generated as. 1 is every run made without Last Attack
     // Frame - including all of those saved before the option existed, which the server reports
     // as 1 - and 2 is a run whose foes were drawn with a strike frame. Version 1 is the common
@@ -11827,9 +12143,23 @@ void main() {
         star.classList.toggle('is-selected', fav);
         star.textContent = fav ? '⭐' : '☆';
         star.setAttribute('aria-pressed', fav ? 'true' : 'false');
-        star.title = fav
+        const says = fav
           ? 'Favorite - locked against deleting. Click to unstar it.'
           : 'Favorite this dungeon - it cannot be deleted while it is starred';
+        star.setAttribute('aria-label', says);
+        // No hover tooltip on a tile's star: the strip only appears once the tile is hovered,
+        // so a tooltip on top of it is a second thing fading in over the picture just as the
+        // player is trying to look at it. The empty title is deliberate rather than omitted -
+        // with no title at all the browser walks up and shows the PICTURE's tooltip instead.
+        // The label above still carries the same words to a screen reader.
+        star.title = star.closest('.hist-tile') ? '' : says;
+      }
+      // A tile's corner star: the same flag, shown without hovering, since the star BUTTON
+      // is hidden until the tile is hovered or arrowed onto. Rows have no such element.
+      const favBadge = row.querySelector('.hist-tile__fav');
+      if (favBadge) {
+        favBadge.hidden = !fav;
+        favBadge.title = 'Favorite - locked against deleting';
       }
       const trash = row.querySelector('.hist-trash');
       if (trash) {
@@ -12390,7 +12720,7 @@ void main() {
         return;
       }
       historyList.innerHTML = '';
-      visible.forEach(entry => historyList.appendChild(buildHistoryRow(entry)));
+      visible.forEach(entry => historyList.appendChild(buildHistoryEntryEl(entry)));
       // Opened from inside a run, the row for that run is the one the player came to find -
       // and it can be anywhere in a list of thirty - so bring the list to it and flash it once.
       const currentRow = historyRevealCurrent

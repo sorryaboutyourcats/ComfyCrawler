@@ -691,6 +691,147 @@
     .hist-movie[data-kind="film"]:disabled {
       opacity: 0.22;
     }
+
+    /* ---- TILE VIEW ---------------------------------------------------------------------
+       The other way to read the same saved runs: a grid of pictures instead of a list of
+       lines. Each tile is the run's card - its hero standing in their default pose in that
+       dungeon's own corridor, drawn server-side by _session_card in server.py - so the view
+       answers "which dungeon was that?" by showing it rather than by naming it.
+
+       The rows and the tiles are the same elements as far as everything else on this page is
+       concerned: both carry .hist-row, the run's id on data-id, and the same .hist-start /
+       .hist-star / .hist-movie buttons, so paintHistoryFavorite, paintHistoryMovie and the
+       two-second repaint while an ending films all work on either without knowing which is up.
+
+       The container switches between `flex flex-col` and this grid; a message row (loading,
+       empty, the "Similar only" miss) spans the whole width rather than sitting in a cell. */
+    .hist-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 0.5rem;
+      align-content: start;
+    }
+    .hist-grid > :not(.hist-tile) { grid-column: 1 / -1; }
+
+    .hist-tile {
+      display: flex;
+      flex-direction: column;
+      padding: 3px;
+      min-width: 0;
+    }
+    /* The card at the game's own 4:3, on black - a tile with no card yet (an older run whose
+       picture is still being drawn) shows its dark frame rather than collapsing. */
+    .hist-tile__art {
+      position: relative;
+      aspect-ratio: 4 / 3;
+      background: #000000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hist-tile__art img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    /* Under the card while it loads: the listing's own 96px thumbnail, blown up and blurred.
+       The card is a separate request per tile and the server draws the missing ones on demand,
+       so without this a freshly scrolled row of tiles would be a row of black rectangles. It
+       stays underneath afterwards, which is also the fallback when a run has no card at all. */
+    .hist-tile__under {
+      filter: blur(6px) brightness(0.55);
+      transform: scale(1.15);
+    }
+    .hist-tile__card {
+      opacity: 0;
+      transition: opacity 180ms ease-out;
+    }
+    .hist-tile__card.is-loaded { opacity: 1; }
+
+    /* Hovering (or arrowing onto) a tile brings up its three actions over the picture: play it,
+       star it, watch or film its ending. They are always in the DOM and only faded out, never
+       display:none - the arrow keys walk what is on screen (focusablesIn in game.js), and a
+       button that is not there cannot be reached by keyboard at all. :focus-within is what
+       makes the keyboard cursor bring the strip up, the same way the mouse does. */
+    .hist-tile__acts {
+      position: absolute;
+      inset: auto 0 0 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.3rem;
+      padding: 0.35rem 0.25rem;
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.78) 55%);
+      opacity: 0;
+      transition: opacity 120ms ease-out;
+    }
+    .hist-tile:hover .hist-tile__acts,
+    .hist-tile:focus-within .hist-tile__acts { opacity: 1; }
+    /* A tile whose ending is filming right now shows its percent without being hovered - that
+       is a progress readout, not an action, and it is the one thing on a tile that changes on
+       its own. Same reason the row's button shows it in place. */
+    .hist-tile:has(.hist-movie[data-kind="filming"]) .hist-tile__acts { opacity: 1; }
+    /* Touch has no hover to give, so the strip simply stays up there. */
+    @media (hover: none) {
+      .hist-tile__acts { opacity: 1; }
+    }
+    .hist-tile__acts button {
+      min-width: 1.9rem;
+      padding: 0.15rem 0.4rem;
+      font-size: 0.8rem;
+      line-height: 1.2;
+    }
+    .hist-tile__acts .hist-start { font-weight: 900; }
+
+    /* Favorite and NOW PLAYING have to read WITHOUT hovering - they are what a run is, not
+       something to do to it - so they sit in the corners of the picture, above the strip. */
+    .hist-tile__badges {
+      position: absolute;
+      inset: 0.2rem 0.2rem auto 0.2rem;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.25rem;
+      pointer-events: none;
+    }
+    .hist-tile__fav {
+      font-size: 0.85rem;
+      line-height: 1;
+      text-shadow: 0 0 3px #000000, 0 1px 2px #000000;
+    }
+    /* The caption under the picture: the dungeon's name and its cast, both clipped rather than
+       marqueed - at four tiles to a row almost every line would overflow, and a grid of moving
+       text is unreadable. The date, size, quality and music live in the tile's own tooltip. */
+    .hist-tile__cap {
+      padding: 0.25rem 0.15rem 0.1rem;
+      min-width: 0;
+    }
+    /* The tile for the dungeon running behind the window, marked the way its row is: the
+       Win95 selected-item navy, here as a full border since a tile has no left edge to bar. */
+    .hist-tile.hist-row--current {
+      background: #d8e6ff;
+      box-shadow: inset 0 0 0 3px #000080, inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
+    }
+    /* #modalHistory's own focus ring is drawn 4px INSIDE the button, which on a tile's little
+       32px action buttons would leave almost nothing visible. Put it back on the edge for
+       those, and give the tiles in the showcase gallery - which is a screen, not a dialog, and
+       so was never covered by either rule - the same cue. */
+    #screenShowcase button:focus-visible {
+      outline: 2px dotted #000080;
+      outline-offset: 1px;
+    }
+    /* Offset 0 rather than outside it: one step out and the dotted navy would be sitting on
+       the dark picture behind the strip, where it disappears. On the button's own bevel it
+       reads on every ground these buttons use. */
+    #modalHistory .hist-tile__acts button:focus-visible,
+    #screenShowcase .hist-tile__acts button:focus-visible {
+      outline: 2px dotted #000080;
+      outline-offset: 0;
+    }
+
     /* History's ending movie player: the clip at its own 4:3 on black, drawn in the same
        Ending Video Look as the cutscene (the .ending-scaler canvas laid over it). */
     #endingPlayerFrame {
@@ -1447,7 +1588,7 @@
               This page only plays back dungeons someone already made. Making your own needs
               ComfyUI and roughly 50&ndash;95GB of models running on your own machine.
             </p>
-            <a class="about-link" href="https://github.com/sorryaboutyourcats/ComfyCrawler" target="_blank" rel="noopener noreferrer">
+            <a class="about-link text-[11px]" href="https://github.com/sorryaboutyourcats/ComfyCrawler" target="_blank" rel="noopener noreferrer">
               <span class="select-none">🏰</span>
               <span class="text-slate-800 shrink-0">Get ComfyCrawler</span>
               <span class="about-url">github.com/sorryaboutyourcats/ComfyCrawler</span>
@@ -1576,7 +1717,8 @@
             <p class="text-[11px] text-slate-800">
               Then you walk it. Every dungeon you finish making is kept in
               <strong>dungeon_sessions/</strong> and can be started again from 📜&nbsp;History for
-              nothing, because the expensive part already happened.
+              nothing, because the expensive part already happened. That window reads either
+              way: as rows, or as tiles &ndash; each dungeon drawn as its own hero standing in it.
             </p>
           </div>
 
@@ -1758,6 +1900,21 @@
         <div class="px-3 pb-3 flex justify-between items-center gap-2">
           <span id="historyFootNote" class="text-[10px] text-slate-600 font-bold truncate min-w-0"></span>
           <div class="flex items-center gap-2 shrink-0">
+            <!-- The same saved runs, read two ways: as rows (everything about a run in writing,
+                 with Prompts and the trash can beside it) or as tiles (each run as a picture of
+                 its hero standing in its own corridor, with play / favorite / movie on hover).
+                 The pick is remembered, and the showcase export's gallery carries the same pair.
+                 See setHistoryView in game.js. -->
+            <div class="flex shrink-0" role="group" aria-label="How saved dungeons are shown">
+              <button id="btnHistoryViewList" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300"
+                      title="Show the saved dungeons as rows - every detail in writing, with Use Prompts and Delete on each one">
+                &#9776;
+              </button>
+              <button id="btnHistoryViewTiles" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300"
+                      title="Show the saved dungeons as tiles - each one drawn as its hero standing in that dungeon. Hover a tile for play, favorite and movie">
+                &#9638;
+              </button>
+            </div>
             <!-- Filters the list above to runs whose dungeon style is close to a reference -
                  the dungeon actually being played when History is opened over a live run, else
                  whatever is on the main menu's mad-lib fields right now. See
@@ -2049,6 +2206,19 @@
         <div class="flex-1 min-w-0">
           <h2 class="font-bold text-base text-slate-900">ComfyCrawler</h2>
           <p class="text-xs text-slate-700">Pick a saved dungeon and play it &ndash; nothing to generate, nothing to install.</p>
+        </div>
+        <!-- Rows or tiles, the same pair the History window carries in its footer - one
+             setting, shared, so a visitor who picks tiles here still has them if they ever
+             open History. See setHistoryView in game.js. -->
+        <div class="flex shrink-0" role="group" aria-label="How saved dungeons are shown">
+          <button id="btnShowcaseViewList" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300"
+                  title="Show these dungeons as rows - every detail in writing">
+            &#9776;
+          </button>
+          <button id="btnShowcaseViewTiles" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300"
+                  title="Show these dungeons as tiles - each one drawn as its hero standing in that dungeon. Hover a tile for play, favorite and movie">
+            &#9638;
+          </button>
         </div>
         <!-- The only way into Options in this export: its usual button lives in Setup's own
              footer row, which this screen replaces wholesale. Opens the same #modalSettings via

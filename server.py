@@ -9298,6 +9298,254 @@ def _session_thumb(bundle):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Tile cards: one saved run, drawn as the hero standing in their own dungeon
+# ---------------------------------------------------------------------------
+# History (and the showcase export's landing list) can be shown as a grid of tiles instead of
+# rows, and a tile is a picture rather than a line of text - so it needs something better to
+# show than the 96px bust _session_thumb crops for a row. A card is that picture: the run's own
+# ceiling / wall / floor textures laid out as a lit corridor, with the hero's IDLE frame - the
+# default pose, the one the game rests on between swings - planted on the floor at the same
+# share of the frame drawOverTheShoulderPlayer gives them in battle. The result is roughly what
+# walking into that dungeon looks like.
+#
+# Deliberately NOT part of meta.json: a 320x240 PNG is ~100KB, and twenty of those inlined into
+# the listing would make drawing the window heavier than the thing it lists. It is its own file
+# beside the bundle, built once and kept - by save_dungeon_session for a new run, and lazily by
+# ensure_session_card for every run saved before tiles existed (building one costs a 16MB
+# bundle.json read, which is exactly why the result is written down).
+CARD_W, CARD_H = 320, 240
+CARD_FILENAME = "card.png"
+# Where the corridor's three surfaces meet, as a share of the card's height. The floor line is
+# also where the hero's feet go.
+CARD_CEILING_SPAN = 0.17
+CARD_HORIZON = 0.63
+# The hero's opaque height as a share of the card, matching the `height * 0.6` battle sprites
+# are drawn at, nudged up because a tile is a fifth the size of the viewport it apes.
+CARD_HERO_SPAN = 0.66
+
+
+def _bundle_image(bundle, key, index=0):
+    """One of a bundle's base64 data-URL images as RGBA, or None. `key` may name a list
+    (player_sprites), in which case `index` picks the frame."""
+    src = bundle.get(key)
+    if isinstance(src, list):
+        src = src[index] if len(src) > index else None
+    if not isinstance(src, str) or not src:
+        return None
+    try:
+        raw = base64.b64decode(src.split(",", 1)[-1])
+        return Image.open(io.BytesIO(raw)).convert("RGBA")
+    except Exception as e:
+        print(f"[history] card image from {key} failed ({e})")
+        return None
+
+
+def _cover(img, width, height):
+    """Scale-and-crop `img` to exactly width x height, keeping its aspect - CSS object-fit:
+    cover. None for an empty box, so a caller can skip that band entirely."""
+    if img is None or width <= 0 or height <= 0:
+        return None
+    scale = max(width / img.width, height / img.height)
+    w = max(1, int(round(img.width * scale)))
+    h = max(1, int(round(img.height * scale)))
+    resized = img.convert("RGB").resize((w, h), Image.LANCZOS)
+    left = (w - width) // 2
+    top = (h - height) // 2
+    return resized.crop((left, top, left + width, top + height))
+
+
+def _dim_vertical(img, top_mul, bottom_mul):
+    """Multiply an image by a brightness ramp running top to bottom. This is what turns three
+    flat texture bands into a corridor: the ceiling falls away into the dark, the wall lifts
+    toward the floor line, and the floor is brightest right where the hero is standing."""
+    if img is None:
+        return None
+    arr = np.asarray(img, dtype=np.float32)
+    ramp = np.linspace(top_mul, bottom_mul, arr.shape[0], dtype=np.float32).reshape(-1, 1, 1)
+    return Image.fromarray(np.clip(arr * ramp, 0, 255).astype(np.uint8))
+
+
+def _vignette(img, strength=0.85):
+    """Darken toward the edges, centred a little above the middle of the card - the same
+    one-lantern falloff the dungeon view has, and what keeps a tile's hero reading as lit
+    rather than pasted onto wallpaper."""
+    arr = np.asarray(img, dtype=np.float32)
+    h, w = arr.shape[0], arr.shape[1]
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    dx = (xx - w * 0.5) / (w * 0.5)
+    dy = (yy - h * 0.52) / (h * 0.62)
+    dist = np.sqrt(dx * dx + dy * dy)
+    # Flat across the lit middle, then falling away - so the light pools around the hero
+    # rather than shading the whole picture down evenly.
+    mul = np.clip(1.0 - strength * np.clip(dist - 0.42, 0, None) ** 1.5, 0.15, 1.0)
+    return Image.fromarray(np.clip(arr * mul[..., None], 0, 255).astype(np.uint8))
+
+
+def _opaque_box(img, threshold=14):
+    """The bounding box of everything solid enough to count as the character. The same alpha>14
+    cut drawTrimmedSprite uses in game.js, so a card frames the hero the way the battle canvas
+    does instead of including whatever transparent margin the generator baked into the frame."""
+    alpha = np.asarray(img.split()[-1])
+    rows = np.nonzero(alpha.max(axis=1) > threshold)[0]
+    cols = np.nonzero(alpha.max(axis=0) > threshold)[0]
+    if not len(rows) or not len(cols):
+        return None
+    return (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+
+
+def _floor_shadow(card, cx, feet_y, radius_x, radius_y=8.0):
+    """A soft dark ellipse where the hero meets the floor. Without it the sprite floats: it was
+    cut out of a white background, so nothing else in the picture says its feet are touching
+    anything."""
+    arr = np.asarray(card, dtype=np.float32)
+    h, w = arr.shape[0], arr.shape[1]
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    dx = (xx - cx) / max(1.0, radius_x)
+    dy = (yy - feet_y) / max(1.0, radius_y)
+    dist = np.sqrt(dx * dx + dy * dy)
+    mul = np.clip(0.42 + 0.58 * np.clip(dist, 0, 1) ** 0.8, 0, 1)
+    return Image.fromarray(np.clip(arr * mul[..., None], 0, 255).astype(np.uint8))
+
+
+def _session_card(bundle):
+    """The tile picture for one saved run as PNG bytes, or None if the bundle has nothing
+    drawable in it. Never raises - a card is decoration, and a run without one still lists,
+    replays and deletes."""
+    if not bundle:
+        return None
+    try:
+        wall = _bundle_image(bundle, "wall_texture")
+        ceiling = _bundle_image(bundle, "ceiling_texture") or wall
+        floor = _bundle_image(bundle, "floor_texture") or wall
+        # Frame 0 of the sheet is the idle stance - what the hero stands in when they are
+        # neither swinging, blocking nor hurt. player_sprite is the single-frame fallback for
+        # bundles made before the sheet existed.
+        hero = _bundle_image(bundle, "player_sprites", 0) or _bundle_image(bundle, "player_sprite")
+        if wall is None and hero is None:
+            return None
+
+        card = Image.new("RGB", (CARD_W, CARD_H), (14, 14, 18))
+        ceil_h = int(round(CARD_H * CARD_CEILING_SPAN))
+        horizon = int(round(CARD_H * CARD_HORIZON))
+
+        band = _dim_vertical(_cover(ceiling, CARD_W, ceil_h), 0.18, 0.52)
+        if band is not None:
+            card.paste(band, (0, 0))
+        band = _dim_vertical(_cover(wall, CARD_W, horizon - ceil_h), 0.55, 1.0)
+        if band is not None:
+            card.paste(band, (0, ceil_h))
+        band = _dim_vertical(_cover(floor, CARD_W, CARD_H - horizon), 0.95, 0.42)
+        if band is not None:
+            card.paste(band, (0, horizon))
+        card = _vignette(card)
+
+        if hero is not None:
+            box = _opaque_box(hero)
+            cropped = hero.crop(box) if box else hero
+            target_h = int(round(CARD_H * CARD_HERO_SPAN))
+            target_w = max(1, int(round(target_h * cropped.width / cropped.height)))
+            # A wide pose - arms out, a long weapon - would otherwise run off both sides of a
+            # tile this narrow. Give back height rather than crop the hero.
+            max_w = int(round(CARD_W * 0.78))
+            if target_w > max_w:
+                target_h = max(1, int(round(target_h * max_w / target_w)))
+                target_w = max_w
+            cropped = cropped.resize((target_w, target_h), Image.LANCZOS)
+            # Feet just past the bottom edge, the same plant drawOverTheShoulderPlayer gives
+            # them, so a tile reads as a crop of the battle view rather than a portrait
+            # floating in one.
+            feet_y = CARD_H - 2
+            left = (CARD_W - target_w) // 2
+            card = _floor_shadow(card, CARD_W / 2, feet_y - 3, target_w * 0.45)
+            card.paste(cropped, (left, feet_y - target_h), cropped)
+
+        buf = io.BytesIO()
+        card.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[history] card render failed ({e})")
+        return None
+
+
+def _write_session_card(folder, bundle):
+    """Render a run's card into its folder. Returns the path, or None if there was nothing to
+    draw (or the write failed - again, never fatal)."""
+    png = _session_card(bundle)
+    if not png:
+        return None
+    path = os.path.join(folder, CARD_FILENAME)
+    try:
+        with open(path, "wb") as f:
+            f.write(png)
+        return path
+    except Exception as e:
+        print(f"[history] card not saved ({e})")
+        return None
+
+
+# Drawing a card for a run that has none means reading its whole 16MB bundle.json back in -
+# about 0.7s. This server answers one request at a time (see run_server), so a grid of thirty
+# tiles asking for thirty of those in a row would hold the socket for half a minute, and the
+# star and the trash can behind them would feel dead while it did. The lock keeps the backfill
+# thread and a request from drawing the same run twice.
+_card_lock = threading.Lock()
+_card_backfill_thread = None
+
+
+def ensure_session_card(session_id):
+    """The path to a run's card, drawing it first if it has none. Every run saved before tiles
+    existed comes through here once; the cost is opening its bundle.json, which is why the
+    result is written down rather than re-rendered per request. None when the run is gone or
+    has nothing drawable in it."""
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return None
+    path = os.path.join(folder, CARD_FILENAME)
+    if os.path.exists(path):
+        return path
+    bundle_path = os.path.join(folder, "bundle.json")
+    if not os.path.exists(bundle_path):
+        return None
+    with _card_lock:
+        # The backfill may have drawn it while this request waited for the lock.
+        if os.path.exists(path):
+            return path
+        try:
+            with open(bundle_path, encoding="utf-8") as f:
+                bundle = json.load(f)
+        except Exception as e:
+            print(f"[history] card needs {session_id}'s bundle, which would not open ({e})")
+            return None
+        return _write_session_card(folder, bundle)
+
+
+def start_card_backfill():
+    """Draw the cards for every saved run that has none, off the request thread. Kicked when
+    the History listing is fetched - by then the page is about to ask for the pictures anyway,
+    and one worker doing them in a row beats thirty requests each waiting out its own render.
+    Does nothing if a backfill is already going; returns at once either way."""
+    global _card_backfill_thread
+    if _card_backfill_thread is not None and _card_backfill_thread.is_alive():
+        return
+
+    def work():
+        missing = [s["id"] for s in list_dungeon_sessions()
+                   if not os.path.exists(os.path.join(SESSIONS_DIR, s["id"], CARD_FILENAME))]
+        if not missing:
+            return
+        print(f"[history] drawing tile cards for {len(missing)} saved run(s)")
+        for session_id in missing:
+            ensure_session_card(session_id)
+            # PIL and numpy drop the GIL for the heavy work, but reading the bundle back in
+            # does not - hand the socket a gap between runs so the page stays answerable.
+            time.sleep(0.05)
+        print("[history] tile cards done")
+
+    _card_backfill_thread = threading.Thread(target=work, name="card-backfill", daemon=True)
+    _card_backfill_thread.start()
+
+
 def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_style,
                          sound_mode="music_and_sound", ending_video_path=None):
     """Persist a finished bundle under dungeon_sessions/. Returns the new id, or None if
@@ -9313,6 +9561,11 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
         bundle_path = os.path.join(folder, "bundle.json")
         with open(bundle_path, "w", encoding="utf-8") as f:
             json.dump(bundle, f, ensure_ascii=True)
+        # History's tile view draws this run as its hero standing in its own corridor. Built
+        # here while the bundle is already in memory; ensure_session_card is the lazy path
+        # every run saved before tiles existed takes instead, at the cost of reading the 16MB
+        # file back off disk.
+        _write_session_card(folder, bundle)
         has_ending = False
         if ending_video_path:
             try:
@@ -10632,6 +10885,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/history":
             payload = json.dumps({"sessions": list_dungeon_sessions()},
                                  ensure_ascii=True).encode("utf-8")
+            # The window this listing draws can be switched to tiles, and every run saved
+            # before tiles existed needs its picture drawn from its bundle first. Start that
+            # in the background now rather than paying for it one blocked request at a time
+            # when the grid asks - see start_card_backfill.
+            start_card_backfill()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -10662,6 +10920,31 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"success": False,
                                          "error": "That saved dungeon is gone."},
                                         ensure_ascii=True).encode("utf-8"))
+            return
+
+        # One saved run's tile picture - the hero in their default pose, standing in that
+        # dungeon's own corridor (see _session_card). Drawn on the first request and kept beside
+        # the bundle, so the hundreds of runs saved before the tile view existed get one without
+        # a migration pass. A 404 here is not an error the grid shows: the tile falls back to
+        # the listing's own 96px thumbnail.
+        elif urllib.parse.urlparse(self.path).path == "/api/history_card":
+            qs = urllib.parse.urlparse(self.path).query
+            session_id = urllib.parse.parse_qs(qs).get("id", [""])[0]
+            card = ensure_session_card(session_id)
+            if card and os.path.exists(card):
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(os.path.getsize(card)))
+                # Same no-store every other route here sends: the file on disk is the cache that
+                # matters, and re-sending 100KB over the loopback costs nothing next to serving a
+                # stale card after this renderer changes.
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(card, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+                return
+            self.send_response(404)
+            self.end_headers()
             return
 
         # Where a run's ending cutscene stands - polled by game.js while a background render is
@@ -11341,13 +11624,24 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class DungeonTCPServer(socketserver.TCPServer):
+    """socketserver's own listen() backlog is 5, which is fine for a page that asks for one
+    thing at a time and wrong for one that asks for a gridful. This server answers a single
+    request at a time, so six tile pictures in flight fill the accepted connection plus the
+    whole backlog, and the seventh - the star the player just clicked, the ending-job poll -
+    is refused by the OS rather than queued, surfacing as "Failed to fetch". game.js fetches
+    those pictures one at a time for the same reason (queueHistoryCard); this is the floor
+    under that, so a burst from anywhere else waits its turn instead of being dropped."""
+    request_queue_size = 64
+
+
 def run_server():
     try:
         # 127.0.0.1 only: nothing else has ever connected, and a LAN-facing socket is what raises
         # the Windows Firewall prompt on a first run. Every copy binding the SAME address is also
         # what makes a second copy fail cleanly - measured on Windows, a 127.0.0.1 bind and a
         # wildcard ("") bind of one port both succeed side by side, SO_EXCLUSIVEADDRUSE or not.
-        httpd = socketserver.TCPServer(("127.0.0.1", PORT), DungeonHTTPRequestHandler)
+        httpd = DungeonTCPServer(("127.0.0.1", PORT), DungeonHTTPRequestHandler)
     except OSError as e:
         # 10048 is Windows' "address in use" (a running copy of this server, or another program);
         # 10013 is what it says for a port inside a range Windows has reserved.

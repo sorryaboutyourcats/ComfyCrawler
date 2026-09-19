@@ -77,7 +77,11 @@ def export_showcase(out_dir, ids_path):
         src = os.path.join(server.SESSIONS_DIR, session_id)
         dest = os.path.join(dungeons_dir, session_id)
         os.makedirs(dest, exist_ok=True)
-        for filename in ("bundle.json", server.ENDING_FILENAME):
+        # The gallery's tile view reads dungeons/<id>/card.png the same way the live page reads
+        # /api/history_card. Nothing in a static export can render one, so draw any that is
+        # missing here, while server.py is still importable and the bundle is still on disk.
+        server.ensure_session_card(session_id)
+        for filename in ("bundle.json", server.ENDING_FILENAME, server.CARD_FILENAME):
             src_file = os.path.join(src, filename)
             if os.path.exists(src_file):
                 shutil.copy2(src_file, os.path.join(dest, filename))
