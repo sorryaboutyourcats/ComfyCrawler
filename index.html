@@ -973,6 +973,16 @@
       opacity: 0.5;
       cursor: default;
     }
+    /* Same fade, before the list itself exists to act on: the view-toggle buttons switch
+       between reading the saved runs as rows or tiles, so they start disabled and stay that
+       way until the first history read lands - see updateHistoryLoadControls in game.js.
+       "Similar only" gets the same treatment through its own opacity-50 class, already
+       toggled by syncHistorySimilarOnly for the "nothing to compare against" case. */
+    #btnHistoryViewList:disabled,
+    #btnHistoryViewTiles:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
     /* The movie button while its run's ending is filming shows the percent instead of a glyph. It
        stays clickable - clicking it again asks whether to stop filming - so it is only greyed a
        little, well short of the 0.5 a disabled button gets, and the number stays readable. */
@@ -1440,7 +1450,9 @@
       outline-offset: -3px;
     }
     .hist-trash:disabled:active,
-    .hist-movie:disabled:active {
+    .hist-movie:disabled:active,
+    #btnHistoryViewList:disabled:active,
+    #btnHistoryViewTiles:disabled:active {
       border-top: 2px solid #ffffff;
       border-left: 2px solid #ffffff;
       border-right: 2px solid #808080;
@@ -2459,13 +2471,15 @@
                  with Prompts and the trash can beside it) or as tiles (each run as a picture of
                  its hero standing in its own corridor, with play / favorite / movie on hover).
                  The pick is remembered, and the showcase export's gallery carries the same pair.
-                 See setHistoryView in game.js. -->
+                 See setHistoryView in game.js. Start disabled - there is nothing to switch the
+                 view OF until the first server read lands; updateHistoryLoadControls there
+                 lifts this once historyEntries is real. -->
             <div class="flex shrink-0" role="group" aria-label="How saved dungeons are shown">
-              <button id="btnHistoryViewList" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300"
+              <button id="btnHistoryViewList" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300" disabled
                       title="Show the saved dungeons as rows - every detail in writing, with Use Prompts and Delete on each one">
                 &#9776;
               </button>
-              <button id="btnHistoryViewTiles" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300"
+              <button id="btnHistoryViewTiles" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300" disabled
                       title="Show the saved dungeons as tiles - each one drawn as its hero standing in that dungeon. Hover a tile for play, favorite and movie">
                 &#9638;
               </button>
@@ -2475,11 +2489,12 @@
                  whatever is on the main menu's mad-lib fields right now. See
                  historySimilarReference in game.js. Greys out (and unchecks itself) when there
                  is nothing to compare against, the same "nothing to act on" treatment as Erase
-                 Current Run. -->
+                 Current Run - and, same as the two view buttons above, while the listing itself
+                 is still loading (see updateHistoryLoadControls / syncHistorySimilarOnly). -->
             <label id="historySimilarOnlyLabel" for="historySimilarOnly"
                    class="flex items-center gap-1 text-[10px] text-slate-700 font-bold cursor-pointer select-none"
                    title="Only show saved runs that look like the dungeon you're in now (or, at the menu, the prompt you're typing)">
-              <input type="checkbox" id="historySimilarOnly" class="win95-checkbox" />
+              <input type="checkbox" id="historySimilarOnly" class="win95-checkbox" disabled />
               Similar only
             </label>
             <button id="btnOpenSessionsFolder" class="win95-btn px-3 py-1.5 text-xs text-black hover:bg-slate-300"

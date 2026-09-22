@@ -11869,6 +11869,11 @@ void main() {
     // The last listing fetched from the server. null means the fetch itself failed, which
     // is a different row than "you have not made any dungeons yet".
     let historyEntries = [];
+    // False until the very first history read has landed (success or failure). The view-toggle
+    // buttons and "Similar only" checkbox both act on that listing, so they stay disabled until
+    // there is a real one to act on - see updateHistoryLoadControls, set here rather than
+    // inferred from historyEntries because [] is also its starting value before any fetch runs.
+    let historyLoaded = false;
     // The entry the confirm box is currently asking about, or null.
     let historyPendingDelete = null;
     // Set by openHistory when a run is live behind the window, consumed by the next
@@ -12691,6 +12696,9 @@ void main() {
     if (btnShowcaseViewList) btnShowcaseViewList.addEventListener('click', () => setHistoryView('list'));
     if (btnShowcaseViewTiles) btnShowcaseViewTiles.addEventListener('click', () => setHistoryView('tiles'));
     applyHistoryView();
+    // Both buttons ship `disabled` in the markup already (see index.html); this just wires the
+    // live flag behind that up front, so it agrees with the DOM from the first paint.
+    updateHistoryLoadControls();
 
     // Which frame version a saved run was generated as. 1 is every run made without Last Attack
     // Frame - including all of those saved before the option existed, which the server reports
@@ -13282,13 +13290,27 @@ void main() {
     }
 
     // The checkbox greys itself out (and drops its own tick) whenever there is nothing to
-    // compare against, rather than sitting there checked and silently doing nothing.
+    // compare against, rather than sitting there checked and silently doing nothing - and the
+    // same while the listing it filters hasn't loaded yet (see historyLoaded).
     function syncHistorySimilarOnly() {
       if (!historySimilarOnly) return;
       const blank = historyReferenceIsBlank(historySimilarReference());
-      if (blank) historySimilarOnly.checked = false;
-      historySimilarOnly.disabled = blank;
-      if (historySimilarOnlyLabel) historySimilarOnlyLabel.classList.toggle('opacity-50', blank);
+      const disable = !historyLoaded || blank;
+      if (disable) historySimilarOnly.checked = false;
+      historySimilarOnly.disabled = disable;
+      if (historySimilarOnlyLabel) historySimilarOnlyLabel.classList.toggle('opacity-50', disable);
+    }
+
+    // The other two loading-gated controls: the view-toggle buttons, which switch between
+    // reading the saved runs as rows or tiles. Called wherever historyLoaded can change (only
+    // refreshHistory, once the first read lands) plus once at startup so the disabled attribute
+    // already sitting in the markup has a live flag behind it. "Similar only" is folded into
+    // syncHistorySimilarOnly instead, since it already recomputes on every render.
+    function updateHistoryLoadControls() {
+      [btnHistoryViewList, btnHistoryViewTiles].forEach(btn => {
+        if (btn) btn.disabled = !historyLoaded;
+      });
+      syncHistorySimilarOnly();
     }
 
     // ---- Sort order ------------------------------------------------------------------------
@@ -13519,6 +13541,13 @@ void main() {
       } catch (err) {
         console.error('History fetch error:', err);
         historyEntries = null;
+      }
+      // The view-toggle buttons and "Similar only" flip on right away, even on the fast path
+      // below where the rows themselves don't get rebuilt - a listing that came back unchanged
+      // is still a listing that has now loaded at least once.
+      if (!historyLoaded) {
+        historyLoaded = true;
+        updateHistoryLoadControls();
       }
       // Rows are already up and the re-read agrees with them: leave the DOM exactly as it is.
       // openHistory draws the previous listing the instant the window opens and lets this
