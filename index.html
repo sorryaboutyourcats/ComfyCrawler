@@ -180,13 +180,14 @@
       outline: 2px dotted #000080;
       outline-offset: -4px;
     }
-    /* .win95-input (Options' three dropdowns and its ComfyUI Connection text fields) sets its
-       own outline: none below to drop the browser's default ring, but nothing ever drew a
-       replacement - so walking onto one with the arrow keys left no visible cue at all, unlike
-       every button around it. Same navy dotted rectangle, just outward: these have no bevel for
-       an inward ring to sit inside the way a button's does. */
+    /* .win95-input (Options' three dropdowns and its ComfyUI Connection text fields, plus
+       History's Sort dropdown) sets its own outline: none below to drop the browser's default
+       ring, but nothing ever drew a replacement - so walking onto one with the arrow keys left
+       no visible cue at all, unlike every button around it. Same navy dotted rectangle, just
+       outward: these have no bevel for an inward ring to sit inside the way a button's does. */
     #modalSettings select:focus-visible,
-    #modalSettings input:focus-visible {
+    #modalSettings input:focus-visible,
+    #modalHistory select:focus-visible {
       outline: 2px dotted #000080;
       outline-offset: 1px;
     }
@@ -1031,6 +1032,10 @@
       grid-template-rows: auto auto;
       padding: 3px;
       min-width: 0;
+      /* Room for the keyboard focus ring, which is drawn OUTSIDE the tile: moveFocusIn scrolls
+         the whole tile into view, and without this the list stops with the tile's edge flush
+         against its own, clipping the ring off exactly when it is needed. */
+      scroll-margin: 6px;
     }
     /* The card at the game's own 4:3, on black - a tile with no card yet (an older run whose
        picture is still being drawn) shows its dark frame rather than collapsing. */
@@ -1064,6 +1069,95 @@
       transition: opacity 180ms ease-out;
     }
     .hist-tile__card.is-loaded { opacity: 1; }
+
+    /* ---- The hover parallax ----------------------------------------------------------------
+       The card again, in two pieces: the corridor and the hero who is standing in it, written
+       as separate files by server.py (see CARD_BG_FILENAME). Stacked, they composite to exactly
+       the flat card underneath them - so they can fade in over it with nothing to see - and
+       then the mouse pulls them apart, the hero tracking the cursor about two and a half times
+       as hard as the corridor drifts the other way. That difference is the whole effect: it is
+       what parallax IS, and it is why the pictures had to be split rather than transformed as
+       one. game.js writes the cursor into --par-x / --par-y (-1..1 from the tile's middle) and
+       everything below is the stylesheet's own work.
+
+       At rest every transform here resolves to the identity - --par-x is 0 and both scales are
+       1 - which is deliberate, and the reason the scales are variables rather than constants:
+       an over-scaled layer would mean the tile visibly jumped the moment these two loaded. The
+       zoom is something hovering does, not something arriving does. */
+    .hist-tile__bg,
+    .hist-tile__hero {
+      opacity: 0;
+      transition: opacity 180ms ease-out, transform 90ms ease-out;
+    }
+    .hist-tile__art.is-parallax .hist-tile__bg,
+    .hist-tile__art.is-parallax .hist-tile__hero { opacity: 1; }
+
+    /* The corridor pulls AGAINST the cursor, and only a little - it is the far thing. It is
+       also over-scaled while hovered, by more than it can ever slide, so the slack it is moving
+       through never runs out and shows the black frame behind it at an edge. */
+    .hist-tile__bg {
+      --bg-scale: 1;
+      transform: scale(var(--bg-scale))
+                 translate3d(calc(var(--par-x, 0) * -8px), calc(var(--par-y, 0) * -6px), 0);
+    }
+    .hist-tile:hover .hist-tile__bg { --bg-scale: 1.16; }
+
+    /* The hero goes WITH the cursor and goes far - the near thing, and the one the eye is on.
+       transform-origin at the floor line because their feet are planted on the bottom edge of
+       the picture: scaling from the middle would lift them off it, which is the one thing the
+       card's whole composition is arranged to avoid (see CARD_HERO_SPAN in server.py). The
+       drop-shadow is on the figure rather than in the picture, so it moves with them - the
+       soft ellipse baked into the corridor is a shadow on the FLOOR and stays with the floor. */
+    .hist-tile__hero {
+      --hero-scale: 1;
+      transform-origin: 50% 100%;
+      transform: scale(var(--hero-scale))
+                 translate3d(calc(var(--par-x, 0) * 20px), calc(var(--par-y, 0) * 12px), 0);
+      filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
+    }
+    .hist-tile:hover .hist-tile__hero { --hero-scale: 1.06; }
+
+    /* And the picture itself turns toward the cursor, on the perspective the tile provides.
+       rotateX is negated: pushing the cursor UP should tip the top of the card away, the way a
+       card held in the hand goes, and a raw positive rotateX does the opposite.
+       Note this is on .hist-tile__art, which .hist-tile__acts is deliberately NOT inside (see
+       the grid-area note below) - so the buttons stay square to the screen while the picture
+       behind them turns. That is on purpose: they are controls, and a tilted button is a worse
+       thing to hit than a flat one. */
+    .hist-tile { perspective: 600px; }
+    .hist-tile__art.is-parallax {
+      transition: transform 90ms ease-out;
+      transform: rotateY(calc(var(--par-x, 0) * 5deg)) rotateX(calc(var(--par-y, 0) * -5deg));
+    }
+
+    /* Only the tile under the cursor gets its layers promoted. A grid of thirty tiles is sixty
+       full-size pictures, and promoting all of them up front costs more video memory than the
+       window is worth - only one of them can be moving at a time. */
+    .hist-tile:hover .hist-tile__bg,
+    .hist-tile:hover .hist-tile__hero,
+    .hist-tile:hover .hist-tile__art.is-parallax { will-change: transform; }
+
+    /* Coming to rest. game.js drops .is-parallax-live when the pointer leaves, which lands the
+       transitions on a longer ease than the one they track the cursor with - so letting go of a
+       tile settles it back to square rather than snapping it there. */
+    .hist-tile__art.is-parallax:not(.is-parallax-live) {
+      transition-duration: 300ms;
+    }
+    /* Two values because these two transition two properties: the opacity they fade in with
+       is not the thing being lengthened, only the transform is. */
+    .hist-tile__art.is-parallax:not(.is-parallax-live) .hist-tile__bg,
+    .hist-tile__art.is-parallax:not(.is-parallax-live) .hist-tile__hero {
+      transition-duration: 180ms, 300ms;
+    }
+
+    /* Touch has no cursor to follow, so there is nothing to follow it with. game.js doesn't
+       even ask for the layers on a screen like this (see historyCanHover); this is the belt to
+       that braces, and the same opt-out the action strip takes a few rules down. */
+    @media (hover: none) {
+      .hist-tile__art.is-parallax,
+      .hist-tile__bg,
+      .hist-tile__hero { transform: none; }
+    }
 
     /* Hovering (or arrowing onto) a tile brings up its three actions over the picture: play it,
        star it, watch or film its ending. They are always in the DOM and only faded out, never
@@ -1151,13 +1245,41 @@
       outline: 2px dotted #000080;
       outline-offset: 1px;
     }
-    /* Offset 0 rather than outside it: one step out and the dotted navy would be sitting on
-       the dark picture behind the strip, where it disappears. On the button's own bevel it
-       reads on every ground these buttons use. */
+    /* Offset 0 rather than outside it: one step out and the navy would be sitting on the dark
+       picture behind the strip, where it disappears. On the button's own bevel it reads on
+       every ground these buttons use. Solid rather than dotted, and wearing a white ring just
+       outside it: dotted navy on a 32px grey button, over a photo, was the cue nobody could
+       find - the white separates the ring from both the button and the picture. The bevel's
+       own inset highlight goes with it (one box-shadow per element), which at this size is
+       nothing you can see; the raised/pressed BORDERS are untouched, so a starred tile's star
+       still reads as held down while the cursor is on it. */
     #modalHistory .hist-tile__acts button:focus-visible,
     #screenShowcase .hist-tile__acts button:focus-visible {
-      outline: 2px dotted #000080;
+      outline: 2px solid #000080;
       outline-offset: 0;
+      box-shadow: 0 0 0 2px #ffffff;
+      background: #ffffcc;
+    }
+
+    /* ...and the tile that button belongs to takes a ring of its own. Three buttons a third of
+       an inch wide, in a grid of forty pictures, is not enough to find the cursor by - the
+       question a player is actually asking here is WHICH DUNGEON am I on, and that is the tile,
+       not the button. Drawn out in the grid's own 0.5rem gap (3px ring, 2px clear of the tile),
+       so it never covers the picture or crowds the neighbouring tile.
+       :has(:focus-visible), not :focus-within: a tile clicked with the mouse should not light
+       up - the same rule every other focus cue in this app follows. */
+    #modalHistory .hist-tile:has(:focus-visible),
+    #screenShowcase .hist-tile:has(:focus-visible) {
+      outline: 3px solid #000080;
+      outline-offset: 2px;
+    }
+    /* The caption under the picture goes the Win95 selected-item blue to match, which is also
+       what says "this tile" on the half of it that isn't the ring. The tile for the running
+       dungeon already owns that colour (.hist-row--current above), so on that one the ring
+       alone is the difference - which is correct: it is the same tile either way. */
+    #modalHistory .hist-tile:has(:focus-visible) .hist-tile__cap,
+    #screenShowcase .hist-tile:has(:focus-visible) .hist-tile__cap {
+      background: #d8e6ff;
     }
 
     /* Tiles on a phone: the actions strip moves off the picture into a row of its own below
@@ -2033,7 +2155,9 @@
     <div id="modalAbout" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
       <div class="win95-box w-full max-w-4xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
         <div class="win95-title flex items-center justify-between mb-2">
-          <span>❓ About ComfyCrawler</span>
+          <!-- The version is also written in comfyui_web/comfycrawler.js (APP_VERSION) and in
+               pyproject.toml (as 0.111.0) - bump all three. -->
+          <span>❓ About ComfyCrawler v0.111</span>
           <button id="btnCloseAbout" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
         </div>
 
@@ -2251,10 +2375,31 @@
           hero, foes, art and narration, on a freshly drawn maze at your current difficulty.
         </div>
 
+        <!-- What order the saved runs come in. Purely a view of the same list - nothing is
+             written to disk and no run is hidden by it (that's "Similar only" in the footer).
+             Default is the order the server hands them over in, newest first; the rest are
+             computed in sortHistoryEntries() in game.js, and the pick is remembered. -->
+        <div class="px-3 pt-1 flex items-center justify-end gap-1.5">
+          <label for="historySort" class="text-[10px] text-slate-700 font-bold select-none">Sort</label>
+          <select id="historySort" class="win95-input text-xs font-bold cursor-pointer"
+                  title="What order the saved dungeons are listed in">
+            <option value="default">Default (newest first)</option>
+            <option value="style">Style (dungeon look, A-Z)</option>
+            <option value="player">Player (hero, A-Z)</option>
+            <option value="completed">Completed (beaten first)</option>
+            <option value="random">Randomized</option>
+          </select>
+        </div>
+
         <!-- .win95-inset paints itself black, so the white list ground is overridden inline
              rather than with a bg- utility - the same way the progress trough above does it. -->
-        <div id="historyList" class="win95-inset mx-3 my-2 p-2 overflow-y-auto flex flex-col gap-1.5"
-             style="background: #ffffff; min-height: 140px; max-height: 52vh;"></div>
+        <!-- The inset frame is a wrapper and the scroller sits inside it with a little vertical
+             margin, so the scrollbar's arrow buttons start below the frame's top edge rather than
+             flush against it. -->
+        <div class="win95-inset mx-3 my-2" style="background: #ffffff;">
+          <div id="historyList" class="p-2 overflow-y-auto flex flex-col gap-1.5"
+               style="margin: 3px 0; min-height: 134px; max-height: calc(52vh - 6px);"></div>
+        </div>
 
         <!-- The two folder buttons hand the player the directories behind this window: the saved
              runs themselves, and the raw ComfyUI renders every bundle was built out of. The page

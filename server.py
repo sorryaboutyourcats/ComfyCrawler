@@ -9316,6 +9316,16 @@ def _session_thumb(bundle):
 # bundle.json read, which is exactly why the result is written down).
 CARD_W, CARD_H = 320, 240
 CARD_FILENAME = "card.png"
+# The same picture again, cut in two, so the tile view can slide the hero against the corridor
+# when the mouse is over it (see .hist-tile__bg / .hist-tile__hero in index.html). Pasting one
+# onto the other reproduces card.png exactly - that is what lets the grid swap the flat picture
+# for the pair without a flicker. Both are written in the same pass as the card, off the one
+# bundle read, because opening a 16MB bundle again later to get them is the expensive part.
+CARD_BG_FILENAME = "card_bg.png"      # the corridor, its vignette and the floor shadow, no hero
+CARD_HERO_FILENAME = "card_hero.png"  # RGBA: the hero alone, at the spot card.png puts them
+# Which file a ?layer= asks for. The empty string is the flat card, so one lookup covers the
+# route's whole vocabulary and an unknown layer can never reach the filesystem.
+CARD_LAYER_FILENAMES = {"": CARD_FILENAME, "bg": CARD_BG_FILENAME, "hero": CARD_HERO_FILENAME}
 # Where the corridor's three surfaces meet, as a share of the card's height. The floor line is
 # also where the hero's feet go.
 CARD_CEILING_SPAN = 0.17
@@ -9408,12 +9418,29 @@ def _floor_shadow(card, cx, feet_y, radius_x, radius_y=8.0):
     return Image.fromarray(np.clip(arr * mul[..., None], 0, 255).astype(np.uint8))
 
 
-def _session_card(bundle):
-    """The tile picture for one saved run as PNG bytes, or None if the bundle has nothing
-    drawable in it. Never raises - a card is decoration, and a run without one still lists,
-    replays and deletes."""
+def _png_bytes(img):
+    """One PIL image as PNG bytes."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _session_card_layers(bundle):
+    """The tile picture for one saved run, as a (card, background, hero) triple of PNG bytes -
+    the flat picture, the corridor without its hero, and the hero alone on transparency. All
+    three or none: (None, None, None) when the bundle has nothing drawable in it at all.
+
+    A bundle with textures but no sprite still gets a hero layer - a blank transparent one.
+    That keeps "has this run been rendered?" answerable by looking for three files, instead of
+    three files or two depending on what was in a bundle nobody wants to open again.
+
+    The background and the hero composite back to exactly the card, which is what lets the grid
+    layer them in place of it without anything moving on screen until the mouse asks it to.
+
+    Never raises - a card is decoration, and a run without one still lists, replays and
+    deletes."""
     if not bundle:
-        return None
+        return None, None, None
     try:
         wall = _bundle_image(bundle, "wall_texture")
         ceiling = _bundle_image(bundle, "ceiling_texture") or wall
@@ -9423,7 +9450,7 @@ def _session_card(bundle):
         # bundles made before the sheet existed.
         hero = _bundle_image(bundle, "player_sprites", 0) or _bundle_image(bundle, "player_sprite")
         if wall is None and hero is None:
-            return None
+            return None, None, None
 
         card = Image.new("RGB", (CARD_W, CARD_H), (14, 14, 18))
         ceil_h = int(round(CARD_H * CARD_CEILING_SPAN))
@@ -9440,6 +9467,7 @@ def _session_card(bundle):
             card.paste(band, (0, horizon))
         card = _vignette(card)
 
+        hero_layer = Image.new("RGBA", (CARD_W, CARD_H), (0, 0, 0, 0))
         if hero is not None:
             box = _opaque_box(hero)
             cropped = hero.crop(box) if box else hero
@@ -9457,31 +9485,47 @@ def _session_card(bundle):
             # floating in one.
             feet_y = CARD_H - 2
             left = (CARD_W - target_w) // 2
+            # The shadow stays with the corridor rather than the hero. It is cast ON the floor,
+            # so when the mouse slides the hero a few pixels out of the picture the dark patch
+            # under their feet should stay where the floor is - dragging it along would read as
+            # the whole figure being a sticker, which is the opposite of what the effect is for.
             card = _floor_shadow(card, CARD_W / 2, feet_y - 3, target_w * 0.45)
-            card.paste(cropped, (left, feet_y - target_h), cropped)
+            hero_layer.paste(cropped, (left, feet_y - target_h), cropped)
 
-        buf = io.BytesIO()
-        card.save(buf, format="PNG")
-        return buf.getvalue()
+        # `card` is the corridor, finished: it is the background layer as-is. The flat card is
+        # that same picture with the hero pasted on - a copy, so the background keeps its own.
+        background = card
+        flat = background.copy()
+        flat.paste(hero_layer, (0, 0), hero_layer)
+
+        return _png_bytes(flat), _png_bytes(background), _png_bytes(hero_layer)
     except Exception as e:
         print(f"[history] card render failed ({e})")
-        return None
+        return None, None, None
 
 
 def _write_session_card(folder, bundle):
-    """Render a run's card into its folder. Returns the path, or None if there was nothing to
-    draw (or the write failed - again, never fatal)."""
-    png = _session_card(bundle)
-    if not png:
+    """Render a run's card and its two parallax layers into its folder, all from the one bundle.
+    Returns the card's path, or None if there was nothing to draw (or the write failed - again,
+    never fatal). A layer that will not write costs the tile its hover effect and nothing else,
+    so those failures do not sink the card."""
+    flat, background, hero = _session_card_layers(bundle)
+    if not flat:
         return None
-    path = os.path.join(folder, CARD_FILENAME)
-    try:
-        with open(path, "wb") as f:
-            f.write(png)
-        return path
-    except Exception as e:
-        print(f"[history] card not saved ({e})")
-        return None
+    written = None
+    for png, filename in ((flat, CARD_FILENAME), (background, CARD_BG_FILENAME),
+                          (hero, CARD_HERO_FILENAME)):
+        if not png:
+            continue
+        path = os.path.join(folder, filename)
+        try:
+            with open(path, "wb") as f:
+                f.write(png)
+            if filename == CARD_FILENAME:
+                written = path
+        except Exception as e:
+            print(f"[history] {filename} not saved ({e})")
+    return written
 
 
 # Drawing a card for a run that has none means reading its whole 16MB bundle.json back in -
@@ -9493,31 +9537,49 @@ _card_lock = threading.Lock()
 _card_backfill_thread = None
 
 
-def ensure_session_card(session_id):
-    """The path to a run's card, drawing it first if it has none. Every run saved before tiles
-    existed comes through here once; the cost is opening its bundle.json, which is why the
-    result is written down rather than re-rendered per request. None when the run is gone or
-    has nothing drawable in it."""
+def _card_files_missing(folder):
+    """True when any of a run's three card files is absent. Checking the whole set rather than
+    the one file being asked for is what pulls a run drawn before the parallax layers existed
+    through a redraw: its card.png alone would otherwise answer every request and it would never
+    get the other two."""
+    return any(not os.path.exists(os.path.join(folder, name))
+               for name in CARD_LAYER_FILENAMES.values())
+
+
+def ensure_session_card(session_id, layer=""):
+    """The path to one of a run's card files, drawing the set first if any of them is missing.
+    `layer` is "" for the flat card, or "bg" / "hero" for the two parallax layers. Every run
+    saved before tiles existed comes through here once; the cost is opening its bundle.json,
+    which is why the result is written down rather than re-rendered per request. None when the
+    run is gone, the layer is not one of the three, or the bundle has nothing drawable in it."""
+    filename = CARD_LAYER_FILENAMES.get(layer)
+    if filename is None:
+        return None
     folder = _session_dir(session_id)
     if not folder or not os.path.isdir(folder):
         return None
-    path = os.path.join(folder, CARD_FILENAME)
-    if os.path.exists(path):
+    path = os.path.join(folder, filename)
+    if not _card_files_missing(folder):
         return path
     bundle_path = os.path.join(folder, "bundle.json")
     if not os.path.exists(bundle_path):
-        return None
+        # Nothing to redraw from. Whatever of the set is already on disk still serves - a run
+        # whose bundle has gone keeps the card it was given, it just never gains the layers.
+        return path if os.path.exists(path) else None
     with _card_lock:
-        # The backfill may have drawn it while this request waited for the lock.
-        if os.path.exists(path):
+        # The backfill may have drawn them while this request waited for the lock.
+        if not _card_files_missing(folder):
             return path
         try:
             with open(bundle_path, encoding="utf-8") as f:
                 bundle = json.load(f)
         except Exception as e:
             print(f"[history] card needs {session_id}'s bundle, which would not open ({e})")
+            return path if os.path.exists(path) else None
+        # _write_session_card returns the flat card's path; this call may have been for a layer.
+        if not _write_session_card(folder, bundle):
             return None
-        return _write_session_card(folder, bundle)
+        return path if os.path.exists(path) else None
 
 
 def start_card_backfill():
@@ -9531,7 +9593,7 @@ def start_card_backfill():
 
     def work():
         missing = [s["id"] for s in list_dungeon_sessions()
-                   if not os.path.exists(os.path.join(SESSIONS_DIR, s["id"], CARD_FILENAME))]
+                   if _card_files_missing(os.path.join(SESSIONS_DIR, s["id"]))]
         if not missing:
             return
         print(f"[history] drawing tile cards for {len(missing)} saved run(s)")
@@ -10927,10 +10989,16 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # the bundle, so the hundreds of runs saved before the tile view existed get one without
         # a migration pass. A 404 here is not an error the grid shows: the tile falls back to
         # the listing's own 96px thumbnail.
+        #
+        # ?layer=bg / ?layer=hero ask for the same picture split in two, which is what the tile
+        # slides against itself under the mouse. A 404 on one of those costs the tile its hover
+        # effect only - it keeps showing the flat card. `layer` is never joined into a path: it
+        # is looked up in CARD_LAYER_FILENAMES, and anything not in there is simply not found.
         elif urllib.parse.urlparse(self.path).path == "/api/history_card":
             qs = urllib.parse.urlparse(self.path).query
-            session_id = urllib.parse.parse_qs(qs).get("id", [""])[0]
-            card = ensure_session_card(session_id)
+            params = urllib.parse.parse_qs(qs)
+            session_id = params.get("id", [""])[0]
+            card = ensure_session_card(session_id, params.get("layer", [""])[0])
             if card and os.path.exists(card):
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")

@@ -120,11 +120,30 @@
     // `enemyHpMul` scales every foe's maxHp in initEnemy (walker, flyer, boss and both pack
     // types alike), so the harder mazes also hit back harder. Easy leaves the tuned base
     // numbers alone; Medium is +25%, Hard is +60%.
+    //
+    // The rest of the fields are the COMBAT knobs, and every one of them is optional - Medium is
+    // the tuned baseline and carries none of them, so an absent field means "play it as written".
+    //   baseHp / baseStm     what the hero's bars start a run at, standing in for BASE_MAX_HP /
+    //                        BASE_MAX_STM in applyProgressionStats (level-up bonuses stack on
+    //                        top as usual).
+    //   reactiveBlockOdds    the chance the walker's reactive guard answers a given swing. It
+    //                        normally answers EVERY one outside its punish window (see
+    //                        reactiveBlock), which is a wall to a player who hasn't found that
+    //                        window yet; rolled per swing in the attack handler.
+    //   flyersBreakOff       a flyer or circler hit during its own dive gives the attack up
+    //                        rather than pressing through to the blow.
+    //   maxPack              caps how many foes a pack variant spawns with, so the swarmer's
+    //                        three become two (the circler is already a pair).
     const DIFFICULTIES = {
-      easy:   { grids: 33,  enemyHpMul: 1,    desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit.' },
+      easy:   { grids: 33,  enemyHpMul: 1,    baseHp: 150, baseStm: 150, reactiveBlockOdds: 0.45, flyersBreakOff: true, maxPack: 2,
+                desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 150 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
       medium: { grids: 66,  enemyHpMul: 1.25, desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, and foes with 25% more health.' },
-      hard:   { grids: 111, enemyHpMul: 1.6,  desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit, and foes with 60% more health.' }
+      hard:   { grids: 111, enemyHpMul: 1.6,  baseHp: 75,
+                desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit, foes with 60% more health, and a hero who starts with only 75.' }
     };
+    function difficultyCfg() {
+      return DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium;
+    }
     const MAX_GRIDS = 111;
 
     // How the maze is SHAPED, as opposed to how big it is. The generator used to emit a PERFECT
@@ -213,6 +232,7 @@
     const btnHistoryOk = document.getElementById('btnHistoryOk');
     const historySimilarOnly = document.getElementById('historySimilarOnly');
     const historySimilarOnlyLabel = document.getElementById('historySimilarOnlyLabel');
+    const historySort = document.getElementById('historySort');
     const showcaseList = document.getElementById('showcaseList');
     const showcaseFootNote = document.getElementById('showcaseFootNote');
     // Rows or tiles - the pair in the History window's footer, and the pair in the showcase
@@ -328,6 +348,22 @@
     const WALL_HEIGHT = 0.62;
     const CAMERA_SETBACK = 0.42;
     const TEX_SIZE = 256;
+
+    // How much of a wall texture's HEIGHT is shown on the wall, as a fraction of the texture,
+    // centred. The wall is only WALL_HEIGHT tall in the world, so the texture can't be both
+    // whole and square-texeled, so this is a dial between the two ends:
+    //   1.0         the whole texture is squeezed into the wall, so nothing is cut off (a sign or
+    //               logo keeps its top and bottom) at the price of art looking 1/WALL_HEIGHT
+    //               (~1.6x) too wide - bricks and bark read stretched sideways.
+    //   WALL_HEIGHT only the middle 62% is sampled, so texels are square but the top and bottom
+    //               ~19% of every wall texture is never seen. This was the original behaviour.
+    //   in between  a compromise: it crops (1 - v) / 2 off each edge and stretches art
+    //               v / WALL_HEIGHT wide. The midpoint, (1 + WALL_HEIGHT) / 2 = 0.81, loses ~9.5%
+    //               top and bottom and stretches ~1.3x. Current setting.
+    // Backend-only switch, no UI: to go back to the original crop, change the line below to
+    //   const WALL_TEX_VSPAN = WALL_HEIGHT;
+    // buildOpenDoorTexture reads it too, so an opened gate's jamb stays lined up with the door.
+    const WALL_TEX_VSPAN = (1 + WALL_HEIGHT) / 2;
 
     // Texels per world unit on the floor and ceiling. This MUST stay exactly TEX_SIZE: the sampler
     // masks with & (TEX_SIZE - 1), so one full texture then lands on exactly one 1x1 map cell,
@@ -2464,6 +2500,8 @@
     // The base bars every run starts from. playerMaxHp / playerMaxStm are BASE + the bonuses
     // banked by SURVIVAL / STAMINA picks, recomputed by applyProgressionStats() - so resetting
     // progression really does put the bars back where a fresh hero starts.
+    // Medium's numbers, and the fallback for any difficulty that doesn't name its own - see
+    // DIFFICULTIES.baseHp / baseStm, where Easy's 150s and Hard's 75 health live.
     const BASE_MAX_HP = 100;
     const BASE_MAX_STM = 100;
 
@@ -2558,8 +2596,9 @@
     }
 
     function applyProgressionStats() {
-      combatState.playerMaxHp = BASE_MAX_HP + progression.bonusHp;
-      combatState.playerMaxStm = BASE_MAX_STM + progression.bonusStm;
+      const diff = difficultyCfg();
+      combatState.playerMaxHp = (diff.baseHp || BASE_MAX_HP) + progression.bonusHp;
+      combatState.playerMaxStm = (diff.baseStm || BASE_MAX_STM) + progression.bonusStm;
       combatState.playerHp = Math.min(combatState.playerHp, combatState.playerMaxHp);
       combatState.playerStm = Math.min(combatState.playerStm, combatState.playerMaxStm);
     }
@@ -2920,6 +2959,16 @@
     // Full circles a circler flies before it commits to a swoop.
     const CIRCLER_LAPS = 3;
 
+    // How many foes a pack variant actually fields once the difficulty has had its say: `group`
+    // is the number it was tuned around, DIFFICULTIES.maxPack the ceiling Easy puts on it. Both
+    // the fight and the corridor marker that previews it read this, so a swarm never shows three
+    // silhouettes down the hall and then arrives as two.
+    function packSizeOf(cfg) {
+      const n = Math.max(1, (cfg && cfg.group) || 1);
+      const cap = difficultyCfg().maxPack;
+      return cap ? Math.min(n, cap) : n;
+    }
+
     // --- THE DREAD CHARGE ------------------------------------------------------------------
     // The boss's set piece, and the only thing in combat that moves in DEPTH. Every
     // BOSS_CHARGE_EVERY swings it stops fighting the fight it has been fighting, walks off the
@@ -3152,7 +3201,7 @@
         key = ENEMY_VARIANTS[key].recolorOf;
       }
       const cfg = ENEMY_VARIANTS[key] || ENEMY_VARIANTS.walker;
-      const count = Math.max(1, cfg.group || 1);
+      const count = packSizeOf(cfg);
       const name = enemyDisplayName(key, cfg);
 
       // The lead is REUSED, never replaced: killPlayer, deathEpitaph and
@@ -4799,6 +4848,24 @@ void main() {
       // actually resolves.
       playSfx('attack');
       combatState.attackFrame = 1;
+      // EASY: the walker's guard is a reaction, not a gamble - it answers every swing that isn't
+      // thrown into its punish window, which reads as a wall to anyone who hasn't found that
+      // window yet. The lapse is rolled HERE, once per swing, rather than inside the guard check:
+      // that runs on every frame of the reactive window, so a roll there would come up "guard"
+      // almost every time whatever the odds said. A lapse both drops the guard it is already
+      // holding (the walker keeps one through a blocked hit, so the last swing's block would
+      // otherwise still be up) and bars a new one for the rest of this swing, through the same
+      // noBlockTimer the boss's charge recovery uses.
+      const guardOdds = difficultyCfg().reactiveBlockOdds;
+      if (guardOdds !== undefined) {
+        for (const e of combatState.enemies) {
+          const ecfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+          if (ecfg.reactiveBlock && e.hp > 0 && Math.random() >= guardOdds) {
+            e.blockTimer = 0;
+            e.noBlockTimer = Math.max(e.noBlockTimer, ATTACK_HIT_FRAME + 3);
+          }
+        }
+      }
       combatState.faceState = 'attack';
       combatState.faceTimer = 18;
     }
@@ -5503,6 +5570,16 @@ void main() {
               e.hp = Math.max(0, e.hp - dmg);
               e.state = 'hurt';
               e.stateTimer = 12;
+              // EASY: a flyer caught inside its own swoop gives the attack up instead of pressing
+              // through it. The dive is a committed line - `diving` closes on the player, and the
+              // blow lands on the step into `striking` - so a hit that arrives first now sends it
+              // straight to the climb and the dive never connects. 'rising' is both flyers' own
+              // way home (the circler flies back to the slot it owns), so nothing else changes.
+              if (difficultyCfg().flyersBreakOff && cfg.fly
+                  && (e.swoop === 'diving' || e.swoop === 'striking')) {
+                e.swoop = 'rising';
+                e.swoopTimer = 26;
+              }
               // Anchored on the foe that was actually hit rather than on the centre line, so in
               // a pack the number appears over the one that took it.
               showFloatingCombatText(`-${dmg} SLASH!`,
@@ -6542,7 +6619,7 @@ void main() {
         // corridor and each bobbing on its own phase so it reads as several small foes rather
         // than one blurred silhouette. Offsets are fractions of the drawn width, so the spread
         // holds at any distance.
-        const groupN = Math.max(1, (ENEMY_VARIANTS[v.m.variant] || {}).group || 1);
+        const groupN = packSizeOf(ENEMY_VARIANTS[v.m.variant]);
         const members = [];
         for (let i = 0; i < groupN; i++) {
           members.push({
@@ -7557,8 +7634,8 @@ void main() {
     function buildOpenDoorTexture() {
       if (!doorTexture) { doorOpenTexture = null; return; }
 
-      const bandY = Math.round((TEX_SIZE * (1 - WALL_HEIGHT)) / 2);
-      const bandH = Math.round(TEX_SIZE * WALL_HEIGHT);
+      const bandY = Math.round((TEX_SIZE * (1 - WALL_TEX_VSPAN)) / 2);
+      const bandH = Math.round(TEX_SIZE * WALL_TEX_VSPAN);
 
       const src = document.createElement('canvas');
       src.width = src.height = TEX_SIZE;
@@ -9045,12 +9122,13 @@ void main() {
         const addG = wallLanternLight * 20;
 
         // Walls keep v3's density of one texture per world unit HORIZONTALLY (texX above is
-        // unchanged), but are now only WALL_HEIGHT tall - so squeezing the whole texture in
-        // vertically compressed it by 0.62 and made bark and brick read as 1.6x too wide. Showing
-        // only WALL_HEIGHT of the texture instead makes texels square again. Centring the crop
-        // keeps wall-mounted detail (the lantern sconce sits around y=50-126) fully in frame.
-        const step = (TEX_SIZE * WALL_HEIGHT) / lineHeight;
-        const texTop = (TEX_SIZE * (1 - WALL_HEIGHT)) / 2;
+        // unchanged), but are only WALL_HEIGHT tall. WALL_TEX_VSPAN picks how much of the
+        // texture's height that shows: 1.0 squeezes the whole texture in (nothing cut off, art
+        // reads ~1.6x too wide), WALL_HEIGHT crops to the centre (square texels, top and bottom
+        // lost). See the constant for how to switch back. The crop is centred, so wall-mounted
+        // detail (the lantern sconce sits around y=50-126) stays in frame either way.
+        const step = (TEX_SIZE * WALL_TEX_VSPAN) / lineHeight;
+        const texTop = (TEX_SIZE * (1 - WALL_TEX_VSPAN)) / 2;
         let texPos = texTop + (clampedStart - screenHeight / 2 + lineHeight / 2) * step;
 
         // One 32-bit store per pixel instead of four 8-bit ones - see PIX_ALPHA.
@@ -10223,7 +10301,7 @@ void main() {
       }
     }
 
-    function resetCrawl(enterButtonLabel = 'GENERATING ASSETS') {
+    function resetCrawl(enterButtonLabel = 'GENERATING ASSETS', pendingText = 'The chronicle is being written...') {
       // Before anything else: a second CREATE must not leave the previous dungeon's
       // narrator talking over the new one, or its loading loop running under the menu music
       // this screen opens on.
@@ -10242,7 +10320,10 @@ void main() {
         crawlText.classList.remove('rolling');
         crawlText.innerHTML = '';
       }
-      if (crawlPending) crawlPending.style.display = '';
+      if (crawlPending) {
+        crawlPending.textContent = pendingText;
+        crawlPending.style.display = '';
+      }
       if (btnEnterDungeon) {
         btnEnterDungeon.disabled = true;
         btnEnterDungeon.textContent = enterButtonLabel;
@@ -10356,6 +10437,27 @@ void main() {
       });
     }
 
+    // The nearest thing above el that scrolls its own contents: the History list, the Options
+    // box. What is inside one of those is mostly BELOW the fold rather than off the screen, and
+    // the walk has to know the difference - see the in-pane rule in moveFocusIn. Stops at root,
+    // so a dialog's own box never counts as the pane its contents sit in.
+    function scrollPaneOf(el, root) {
+      for (let n = el && el.parentElement; n && n !== root; n = n.parentElement) {
+        if (n.scrollHeight <= n.clientHeight + 1) continue;
+        const flow = getComputedStyle(n).overflowY;
+        if (flow === 'auto' || flow === 'scroll') return n;
+      }
+      return null;
+    }
+
+    // Lexicographic: the first place two keys differ decides it, smaller wins.
+    function keyBeats(key, other) {
+      for (let i = 0; i < key.length; i++) {
+        if (key[i] !== other[i]) return key[i] < other[i];
+      }
+      return false;
+    }
+
     // Pick the best control to move to. The mad-lib fields aren't left-edge aligned (each is
     // centred in its own row behind a label of its own width), so a plain "nearest in that
     // direction" jumps diagonally - wall straight to weapon, past player. Instead: a candidate
@@ -10363,6 +10465,16 @@ void main() {
     // for U/D) always beats one that doesn't; within that, the smallest gap along the pressed
     // axis wins, then the smallest cross-axis offset. L/R never take a non-overlapping
     // candidate at all, so a row end just stops rather than lurching to another row.
+    //
+    // Ahead of all of that: while the cursor is inside a scrolling pane, anything else in that
+    // pane beats anything outside it. Measured in History's tile view, which is what this is
+    // for - the next row of tiles is clipped below the list's bottom edge, so by plain distance
+    // it sits FARTHER down the screen than the OK button under the window, and ArrowDown off
+    // the last visible row walked out to the footer instead of down to the tiles. ArrowDown
+    // from the footer then scrolled a tile into view and landed back in the grid, so the cursor
+    // ping-ponged between the two instead of walking the grid at all. The pane is still left
+    // behind normally: nothing inside it that way means the footer (or, going up, the title
+    // bar) wins, exactly as before.
     function moveFocusIn(root, dir) {
       const list = focusablesIn(root);
       if (!list.length) return;
@@ -10373,6 +10485,7 @@ void main() {
       const horiz = dir === 'left' || dir === 'right';
       const aMidX = (a.left + a.right) / 2;
       const aMidY = (a.top + a.bottom) / 2;
+      const pane = scrollPaneOf(active, root);
 
       let best = null;
       let bestKey = null;
@@ -10394,10 +10507,9 @@ void main() {
         if (horiz && !overlap) continue;   // L/R stay on the current row
 
         const cross = horiz ? Math.abs(midY - aMidY) : Math.abs(midX - aMidX);
-        const key = [overlap ? 0 : 1, Math.round(forward), Math.round(cross)];
-        if (!bestKey || key[0] < bestKey[0]
-            || (key[0] === bestKey[0] && key[1] < bestKey[1])
-            || (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] < bestKey[2])) {
+        const outside = (pane && !pane.contains(el)) ? 1 : 0;
+        const key = [outside, overlap ? 0 : 1, Math.round(forward), Math.round(cross)];
+        if (!bestKey || keyBeats(key, bestKey)) {
           best = el;
           bestKey = key;
         }
@@ -10407,7 +10519,12 @@ void main() {
       // The History list and the Options box both scroll inside themselves, so a cursor that
       // walked past the edge has to be brought back into view. 'nearest' does nothing when
       // the control is already fully visible, which is the setup screen's whole case.
-      best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      //
+      // A tile's button is scrolled to as its whole tile: those buttons sit at the bottom of
+      // the picture, so bringing just the button into view leaves the caption under it - and
+      // the bottom of the tile's focus ring - still clipped off the edge of the list.
+      const bring = (best.closest && best.closest('.hist-tile')) || best;
+      bring.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
 
     // Which dialog the arrow keys belong to right now, innermost first: the two confirm
@@ -11837,10 +11954,17 @@ void main() {
     // Where a run's card picture lives: an endpoint on the live server, which draws it on the
     // first request and keeps it beside the bundle, or the plain file tools/export_showcase.py
     // copied next to that dungeon in the static export. Same split as endingClipSrc.
-    function historyCardSrc(id) {
+    //
+    // `layer` picks one of the three files the server writes for a run: the flat card by
+    // default, or 'bg' / 'hero' - the same picture cut into the corridor and the figure
+    // standing in it, which is what the mouse slides against each other (see wireTileParallax).
+    const HISTORY_CARD_FILES = { '': 'card.png', bg: 'card_bg.png', hero: 'card_hero.png' };
+    function historyCardSrc(id, layer) {
+      const file = HISTORY_CARD_FILES[layer || ''];
       return SHOWCASE_MODE
-        ? `dungeons/${encodeURIComponent(id)}/card.png`
-        : `${SERVER_URL}/api/history_card?id=${encodeURIComponent(id)}`;
+        ? `dungeons/${encodeURIComponent(id)}/${file}`
+        : `${SERVER_URL}/api/history_card?id=${encodeURIComponent(id)}`
+          + (layer ? `&layer=${encodeURIComponent(layer)}` : '');
     }
 
     // A tile has one line for the name and one for the cast, and no room at all for the info
@@ -11906,10 +12030,27 @@ void main() {
     }
 
     // Every image currently being watched. A detached one never fires the observer again - the
-    // list was rebuilt out from under it - and the observer holds it alive, so each new tile
-    // sweeps the dead ones out on its way in. That keeps a window opened and closed twenty
-    // times from accumulating twenty lists' worth of images.
+    // list was rebuilt out from under it - and the observer holds it alive, so the dead ones are
+    // swept out as new tiles arrive. That keeps a window opened and closed twenty times from
+    // accumulating twenty lists' worth of images.
     const historyCardWatched = [];
+    let historyCardSweepPending = false;
+
+    // Deferred to the next frame ON PURPOSE, not run inline as each image is queued. A tile is
+    // built whole and appended after (renderHistoryList), so every image belonging to the tile
+    // currently being built is still detached - "detached" only means "dead" once that pass has
+    // finished. Sweeping inline was fine while a tile queued exactly one picture, because by
+    // then the previous tile was already in the list; the moment a tile queued three, queueing
+    // its second threw away its first, and the grid loaded nothing but the last image of each
+    // tile. One frame later they are all in the document and the check means what it says.
+    function sweepHistoryCardWatched() {
+      historyCardSweepPending = false;
+      for (let i = historyCardWatched.length - 1; i >= 0; i--) {
+        if (historyCardWatched[i].isConnected) continue;
+        historyCardWatcher.unobserve(historyCardWatched[i]);
+        historyCardWatched.splice(i, 1);
+      }
+    }
 
     function queueHistoryCard(img, src) {
       img.dataset.cardSrc = src;
@@ -11921,13 +12062,100 @@ void main() {
         pumpHistoryCards();
         return;
       }
-      for (let i = historyCardWatched.length - 1; i >= 0; i--) {
-        if (historyCardWatched[i].isConnected) continue;
-        historyCardWatcher.unobserve(historyCardWatched[i]);
-        historyCardWatched.splice(i, 1);
+      if (!historyCardSweepPending) {
+        historyCardSweepPending = true;
+        requestAnimationFrame(sweepHistoryCardWatched);
       }
       historyCardWatched.push(img);
       historyCardWatcher.observe(img);
+    }
+
+    // ---- The hover parallax -----------------------------------------------------------------
+    // A tile's picture is flat, but the thing it is a picture OF has depth: a figure standing
+    // some way down a corridor. So when the mouse is over a tile the two are pulled apart - the
+    // hero tracks the cursor hard, the corridor drifts the other way, and the whole card turns
+    // on a perspective - and the tile reads as a diorama being leaned over rather than a
+    // screenshot. The server writes the corridor and the hero as separate pictures for exactly
+    // this (CARD_BG_FILENAME / CARD_HERO_FILENAME in server.py); layered, they composite to the
+    // flat card exactly, so switching to them changes nothing on screen until the mouse moves.
+    //
+    // All of the movement itself is CSS (see .hist-tile__bg / .hist-tile__hero in index.html).
+    // What this does is write where the cursor is into two custom properties, the same way the
+    // crawl's duration and the marquee's are handed to the stylesheet.
+    //
+    // Deliberately NOT gated on prefers-reduced-motion: this machine reports `reduce` at all
+    // times, so treating it as a signal here would mean building an effect that is never once
+    // seen on the box it is being built on. `(hover: hover)` is the gate that matters - a touch
+    // screen has no cursor to follow, and on one the tiles stay exactly as they were.
+    const historyCanHover = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+
+    function wireTileParallax(tile, art) {
+      if (!historyCanHover) return;
+      let pending = null;
+      // Where the picture sits inside its tile, and how big it is. Captured on the way in and
+      // held for the length of the hover, because it CANNOT be read while the effect is
+      // running: art is about to carry a 3D rotation, and getBoundingClientRect on a rotated
+      // element returns the box that rotation sweeps out - a box that grows as the card turns,
+      // so measuring the cursor against it would feed the tilt back into itself and shiver.
+      // These are layout facts about a tile, so they do not change while one is hovered; the
+      // tile's own position is re-read every frame instead, which is what keeps the effect
+      // honest if the list is scrolled with the mouse sitting still.
+      let offX = 0, offY = 0, artW = 0, artH = 0;
+
+      const write = () => {
+        pending = null;
+        const box = tile.getBoundingClientRect();
+        if (!artW || !artH) return;
+        // -1..1 from the middle of the PICTURE, clamped. Measuring against the tile instead
+        // would put the neutral point somewhere up in the art, because the caption underneath
+        // is part of the tile and nothing hovers it - the vertical half of the effect came out
+        // lopsided that way, reaching -0.87 at the top edge but only +0.05 at the bottom.
+        const x = Math.max(-1, Math.min(1, ((lastX - box.left - offX) / artW) * 2 - 1));
+        const y = Math.max(-1, Math.min(1, ((lastY - box.top - offY) / artH) * 2 - 1));
+        art.style.setProperty('--par-x', x.toFixed(3));
+        art.style.setProperty('--par-y', y.toFixed(3));
+      };
+
+      let lastX = 0, lastY = 0;
+      // Listened for on the TILE, not on the picture, even though it is the picture that moves.
+      // The action strip sits over the bottom of the picture and is a sibling of it rather than
+      // a child (see the grid-area note in index.html), so a pointer heading for those buttons
+      // LEAVES the picture - and wiring this to the picture collapsed the whole effect the
+      // moment the mouse went for the thing the hover had just revealed. The tile is the thing
+      // being hovered, which is also what the CSS keys the two scales off.
+      //
+      // Past the bottom edge of the picture - over the strip, or down on the caption - the
+      // clamp in write() simply holds the effect at full tilt, which is what it looks like it
+      // should do from there anyway.
+      tile.addEventListener('pointerenter', () => {
+        // Both properties are still 0 here and .is-parallax-live is off, so art is sitting
+        // untransformed - the one moment in a hover when its box can be trusted.
+        const tileBox = tile.getBoundingClientRect();
+        const artBox = art.getBoundingClientRect();
+        offX = artBox.left - tileBox.left;
+        offY = artBox.top - tileBox.top;
+        artW = artBox.width;
+        artH = artBox.height;
+      });
+
+      tile.addEventListener('pointermove', e => {
+        lastX = e.clientX;
+        lastY = e.clientY;
+        art.classList.add('is-parallax-live');
+        // One write per frame however many moves the mouse reports in it. Everything else on a
+        // tile is a short CSS transition kicked by a class; a cursor-following transform is the
+        // one thing here that has to be recomputed as fast as the screen can show it.
+        if (pending === null) pending = requestAnimationFrame(write);
+      }, { passive: true });
+
+      tile.addEventListener('pointerleave', () => {
+        if (pending !== null) { cancelAnimationFrame(pending); pending = null; }
+        // Dropping the class lengthens every transition involved (see index.html), so letting
+        // go of a tile eases it back to square instead of snapping there.
+        art.classList.remove('is-parallax-live');
+        art.style.setProperty('--par-x', '0');
+        art.style.setProperty('--par-y', '0');
+      });
     }
 
     function buildHistoryTile(entry) {
@@ -11982,6 +12210,32 @@ void main() {
         // Not card.src = ... : see queueHistoryCard. The picture is fetched when the tile is
         // actually scrolled to, and only ever one at a time.
         queueHistoryCard(card, historyCardSrc(entry.id));
+
+        // The same picture again, in two pieces, for the hover parallax. Through the same queue
+        // as everything else - three images a tile is precisely the pile-up that queue exists
+        // to keep off a server answering one request at a time - and laid over the flat card
+        // they replace, which they match pixel for pixel, so there is nothing to see when they
+        // arrive. Only once BOTH are up does the picture start moving: half a pair would be a
+        // hero with no corridor behind them.
+        if (historyCanHover) {
+          let loaded = 0;
+          ['bg', 'hero'].forEach(layer => {
+            const img = document.createElement('img');
+            img.className = `hist-tile__${layer}`;
+            img.alt = '';
+            img.decoding = 'async';
+            img.addEventListener('load', () => {
+              if (++loaded === 2) art.classList.add('is-parallax');
+            });
+            // No layer for this run - an export made before they existed, or a bundle that
+            // would not open a second time. The tile keeps its flat card and simply doesn't
+            // move, which is what it did before any of this.
+            img.addEventListener('error', () => img.remove());
+            art.appendChild(img);
+            queueHistoryCard(img, historyCardSrc(entry.id, layer));
+          });
+          wireTileParallax(tile, art);
+        }
       }
 
       // What the run IS, readable without hovering: which one is running behind this window,
@@ -12714,14 +12968,94 @@ void main() {
       if (historySimilarOnlyLabel) historySimilarOnlyLabel.classList.toggle('opacity-50', blank);
     }
 
-    // The subset of historyEntries the list is actually showing right now - every saved run,
-    // unless "Similar only" is both checked and has something to filter by.
+    // ---- Sort order ------------------------------------------------------------------------
+    // The dropdown above the list. It reorders what is already on screen and nothing else: no
+    // run is hidden by it (that is "Similar only"), nothing is written to the bundles, and the
+    // server is never asked again - the entries are already in memory.
+    const HISTORY_SORT_KEY = 'comfycrawler.historySort';
+    const HISTORY_SORTS = ['default', 'style', 'player', 'completed', 'random'];
+    const storedHistorySort = prefs.get(HISTORY_SORT_KEY);
+    let historySortMode = HISTORY_SORTS.includes(storedHistorySort) ? storedHistorySort : 'default';
+    if (historySort) historySort.value = historySortMode;
+
+    // Randomized is a shuffle of the whole list, not a coin flip per comparison: a comparator
+    // that answered differently each time it was asked would make the sort itself incoherent.
+    // Each run keeps its draw until the order is thrown away (reshuffleHistoryOrder), so the
+    // list does not rearrange itself under the player's hand when a star, a delete or the
+    // two-second filming repaint rebuilds the rows. Keyed by id, falling back to the entry
+    // object for a listing that somehow has none.
+    const historyRandomRank = new Map();
+
+    function historyRandomRankOf(entry) {
+      const key = entry.id || entry;
+      if (!historyRandomRank.has(key)) historyRandomRank.set(key, Math.random());
+      return historyRandomRank.get(key);
+    }
+
+    function reshuffleHistoryOrder() {
+      historyRandomRank.clear();
+    }
+
+    // Blank sinks: a run with no dungeon style typed into it belongs at the bottom of an A-Z,
+    // not at the top of it under the empty string.
+    function compareHistoryText(a, b) {
+      if (!a) return b ? 1 : 0;
+      if (!b) return -1;
+      return a.localeCompare(b);
+    }
+
+    // Leading punctuation is dropped before comparing: half the library's styles were typed
+    // with the quotes still on them ("Pizza Hut"), and sorted raw those all pile up at the top
+    // of the A-Z under the quote character instead of landing under P.
+    function historySortKey(entry) {
+      const bits = historySortMode === 'style'
+        ? [entry.wall_style]
+        : [entry.player_style, entry.hero];
+      const first = (bits.find(v => (v || '').trim()) || '').trim().toLowerCase();
+      return first.replace(/^[^\p{L}\p{N}]+/u, '') || first;
+    }
+
+    // Always a copy, and never a re-sort of historyEntries itself - "Default" has to still mean
+    // the order the server handed over (newest first), which is the order that array is in.
+    // Every sort here is stable, so runs that tie fall back to exactly that default order.
+    function sortHistoryEntries(list) {
+      if (!Array.isArray(list) || historySortMode === 'default') return list;
+      const out = list.slice();
+      if (historySortMode === 'random') {
+        out.sort((a, b) => historyRandomRankOf(a) - historyRandomRankOf(b));
+      } else if (historySortMode === 'completed') {
+        // Beaten first. Not a filter: the runs whose boss is still standing follow underneath,
+        // which is also the list someone sorting by this is often really after.
+        out.sort((a, b) => (b.beaten ? 1 : 0) - (a.beaten ? 1 : 0));
+      } else {
+        out.sort((a, b) => compareHistoryText(historySortKey(a), historySortKey(b)));
+      }
+      return out;
+    }
+
+    if (historySort) {
+      historySort.addEventListener('change', () => {
+        const next = HISTORY_SORTS.includes(historySort.value) ? historySort.value : 'default';
+        historySortMode = next;
+        prefs.set(HISTORY_SORT_KEY, next);
+        // Picking Randomized again is how you ask for a different shuffle - the order only
+        // otherwise changes when the window is reopened.
+        if (next === 'random') reshuffleHistoryOrder();
+        renderHistoryList();
+      });
+    }
+
+    // The subset of historyEntries the list is actually showing right now, in the order the
+    // Sort dropdown asks for - every saved run, unless "Similar only" is both checked and has
+    // something to filter by.
     function visibleHistoryEntries() {
       if (!Array.isArray(historyEntries)) return historyEntries;
       syncHistorySimilarOnly();
-      if (!historySimilarOnly || !historySimilarOnly.checked) return historyEntries;
-      const ref = historySimilarReference();
-      return historyEntries.filter(entry => historyEntryMatchesReference(entry, ref));
+      const filtered = (!historySimilarOnly || !historySimilarOnly.checked)
+        ? historyEntries
+        : historyEntries.filter(entry =>
+            historyEntryMatchesReference(entry, historySimilarReference()));
+      return sortHistoryEntries(filtered);
     }
 
     function renderHistoryList() {
@@ -12867,6 +13201,10 @@ void main() {
       // Opened mid-run: the list that comes back should arrive scrolled to the dungeon being
       // played, not at the top. Nothing to reveal when the player is out at the main menu.
       historyRevealCurrent = !!currentRunHistoryId;
+      // A new shuffle every time the window is opened - a randomized list that came back in
+      // yesterday's order would not read as randomized at all. Only the order is thrown away;
+      // the entries themselves are refetched below either way.
+      if (historySortMode === 'random') reshuffleHistoryOrder();
       // The rows are still being fetched, so park the cursor on OK; renderHistoryList moves
       // it up onto the first Start once there is a list to move onto.
       focusFirstIn(modalHistory, btnHistoryOk);
@@ -12990,7 +13328,7 @@ void main() {
       const numGrids = (DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium).grids;
 
       resetCombatForNewDungeon();
-      resetCrawl('LOADING ASSETS');
+      resetCrawl('LOADING ASSETS', 'The chronicle is being retrieved...');
       hideBaseScreen();
       screenProgress.classList.remove('hidden');
       appContainer.className = 'win95-box p-1 text-black mode-progress';

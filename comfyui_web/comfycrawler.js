@@ -9,6 +9,8 @@ const openComfyCrawler = () => {
   window.open(url("/comfycrawler/"), "_blank", "noopener");
 };
 const GITHUB_URL = "https://github.com/sorryaboutyourcats/ComfyCrawler";
+// Also written in the About box's title bar in index.html and in pyproject.toml (as 0.111.0) - bump all three.
+const APP_VERSION = "v0.111";
 
 // registerSidebarTab's `icon` becomes an <i class="{icon} side-bar-button-icon">, sized by
 // font-size alone - so a plain CSS class with a background-image stands in for a PrimeIcons glyph,
@@ -112,7 +114,8 @@ function createPanel(root) {
   const groupBox = el("div", "display:flex;flex-direction:column;gap:8px;");
   const actionBox = el("div", "display:flex;flex-wrap:wrap;gap:6px;");
   const noteBox = el("div", "font-size:11px;opacity:0.75;line-height:1.4;white-space:pre-wrap;");
-  const footer = el("div", "margin-top:auto;padding-top:8px;border-top:1px solid var(--border-color,#4e4e4e);");
+  const footer = el("div", "margin-top:auto;padding-top:8px;border-top:1px solid var(--border-color,#4e4e4e);" +
+    "display:flex;justify-content:space-between;align-items:baseline;gap:8px;");
   const githubLink = document.createElement("a");
   githubLink.href = GITHUB_URL;
   githubLink.target = "_blank";
@@ -121,7 +124,8 @@ function createPanel(root) {
   githubLink.style.cssText = "color:var(--fg-color,#ddd);opacity:0.75;font-size:11px;text-decoration:none;";
   githubLink.addEventListener("mouseenter", () => { githubLink.style.textDecoration = "underline"; });
   githubLink.addEventListener("mouseleave", () => { githubLink.style.textDecoration = "none"; });
-  footer.append(githubLink);
+  const versionTag = el("span", "opacity:0.6;font-size:11px;", APP_VERSION);
+  footer.append(githubLink, versionTag);
   root.append(statusBox, groupBox, actionBox, noteBox, footer);
 
   const setNote = (text) => { note = text; noteBox.textContent = text; };
