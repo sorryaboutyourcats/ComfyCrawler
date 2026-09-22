@@ -599,6 +599,8 @@
     // to already block it. Set from the crawl's own scroll duration in startCrawl(); belt and
     // braces alongside the narrationActive() check in screensaverBlocked().
     let crawlReadingUntil = 0;
+    // Date.now() when startCrawl() set the crawl rolling - see the animationstart listener there.
+    let crawlRollStartedAt = 0;
     // True only while the server is actually rendering a dungeon for us. Drives the
     // "you will lose this" refresh warning and the cancel beacon further down - see the
     // beforeunload/pagehide pair next to the CREATE handler.
@@ -681,6 +683,16 @@
       narrateIndex = i;
       narrateClips.forEach((c, idx) => c.el.classList.toggle('speaking', idx === i));
       if (i >= narrateClips.length) { finishNarration(); return; }
+      // On a phone the story is a static block that scrolls inside the stage (index.html
+      // caps its height), so keep the paragraph being read on screen. Only the stage's own
+      // scrollTop moves - scrollIntoView would drag the page along too. A no-op for the
+      // rolling crawl, whose stage never overflows scrollably.
+      if (crawlStage && crawlStage.scrollHeight > crawlStage.clientHeight) {
+        const el = narrateClips[i].el;
+        const top = el.getBoundingClientRect().top - crawlStage.getBoundingClientRect().top
+          + crawlStage.scrollTop;
+        crawlStage.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' });
+      }
       narrateAudio.src = narrateClips[i].src;
       const p = narrateAudio.play();
       // A rejected promise (autoplay blocked) is handled by the startCheck timeout below,
@@ -2934,6 +2946,7 @@
     const combatBtns = [btnCombatAttack, btnCombatBlock, btnCombatDodgeL, btnCombatDodgeR];
     function setCombatButtonsLive(live) {
       for (const b of combatBtns) if (b) b.disabled = !live;
+      if (!live) releaseThumbPads();   // stick mode's strafe slider goes inert with its buttons
     }
 
     const keysHeld = {
@@ -3556,6 +3569,9 @@
       } else {
         combatState.inBattle = !combatState.inBattle;
       }
+      // The stick and the strafe slider trade places here; a thumb still down on the one going
+      // away must not walk (or strafe) the player once it comes back.
+      releaseThumbPads();
       setMusicMode(combatState.inBattle);
 
       if (combatState.inBattle) {
@@ -3571,7 +3587,7 @@
         if (dpadGrid) dpadGrid.classList.add('hidden');
         if (controlsHeader) controlsHeader.innerHTML = agentMode
           ? "TURN-BASED (agent):<br>A/D move · W strike<br>S block · SPACE wait<br>1 key = 1 turn (1/6s)"
-          : "COMBAT:<br>A/D to move<br>W to strike<br>S to block";
+          : "A/D to move<br>W to strike<br>S to block";
 
         combatState.playerX = 0;
         combatState.vx = 0;
@@ -3603,7 +3619,7 @@
         }
         if (battleActionBar) battleActionBar.classList.add('hidden');
         if (dpadGrid) dpadGrid.classList.remove('hidden');
-        if (controlsHeader) controlsHeader.innerHTML = "EXPLORATION:<br>W/S to move<br>A/D to turn<br>SPACE to use";
+        if (controlsHeader) controlsHeader.innerHTML = "W/S to move<br>A/D to turn<br>SPACE to use";
         combatState.introFrame = 0;
         setBattleMusicRate(1, 0.8);   // fight over - any boss pitch-shift slides back to normal
         // Hiding the action bar mid-press means the Block button never receives its pointerup or
@@ -3689,10 +3705,15 @@
 
     // Any held input has to be dropped whenever the player stops actively driving the game, or a
     // key that never got its keyup survives into the next dungeon.
+    // A function declaration, so it can be called before the pads are wired at load.
+    function releaseThumbPads() {
+      for (const pad of document.querySelectorAll('.thumb-pad')) if (pad._release) pad._release();
+    }
     function releaseHeldKeys() {
       keysHeld.left = false;
       keysHeld.right = false;
       keysHeld.block = false;
+      releaseThumbPads();
     }
 
     // Twenty ways to say the run ended. {hero} / {area} / {enemy} are filled from the current
@@ -5099,20 +5120,19 @@ void main() {
     }
 
     // In agent mode a press is one turn of the fight rather than a hold (see agentTurn).
+    // pointercancel releases too: if the browser ever takes over a touch mid-hold, no
+    // pointerup follows, and the strafe / guard would otherwise stay stuck on.
     if (btnCombatDodgeL) {
       btnCombatDodgeL.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ left: true })) return; keysHeld.left = true; });
-      btnCombatDodgeL.addEventListener('pointerup', () => { keysHeld.left = false; });
-      btnCombatDodgeL.addEventListener('pointerleave', () => { keysHeld.left = false; });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(evt => btnCombatDodgeL.addEventListener(evt, () => { keysHeld.left = false; }));
     }
     if (btnCombatDodgeR) {
       btnCombatDodgeR.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ right: true })) return; keysHeld.right = true; });
-      btnCombatDodgeR.addEventListener('pointerup', () => { keysHeld.right = false; });
-      btnCombatDodgeR.addEventListener('pointerleave', () => { keysHeld.right = false; });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(evt => btnCombatDodgeR.addEventListener(evt, () => { keysHeld.right = false; }));
     }
     if (btnCombatBlock) {
       btnCombatBlock.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ block: true })) return; keysHeld.block = true; });
-      btnCombatBlock.addEventListener('pointerup', () => { keysHeld.block = false; });
-      btnCombatBlock.addEventListener('pointerleave', () => { keysHeld.block = false; });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(evt => btnCombatBlock.addEventListener(evt, () => { keysHeld.block = false; }));
     }
     if (btnCombatAttack) {
       btnCombatAttack.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ attack: true })) return; combatAttack(); });
@@ -10191,6 +10211,129 @@ void main() {
     btnRight.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateRight(); });
     if (btnAction) btnAction.addEventListener('pointerdown', (e) => { e.preventDefault(); interact(); });
 
+    // ---- Touch controls: buttons or thumb stick ----
+    // The switch in the controls panel (touch screens only - see .touch-controls in index.html)
+    // swaps the D-pad's arrows for one thumb stick and the two strafe buttons for one slider.
+    // Remembered in this browser only, not in the server-side prefs: it's a choice about this
+    // device's screen, and a phone and a tablet on the same server can want different ones.
+    const TOUCH_STICK_KEY = 'comfycrawler.touchStick';
+    const touchControls = document.querySelector('.touch-controls');
+    const btnTouchMode = document.getElementById('btnTouchMode');
+    const moveStick = document.getElementById('moveStick');
+    const strafeSlider = document.getElementById('strafeSlider');
+
+    function setTouchStickMode(on) {
+      if (!touchControls) return;
+      releaseThumbPads();
+      touchControls.classList.toggle('stick-mode', on);
+      if (btnTouchMode) btnTouchMode.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    if (btnTouchMode) {
+      btnTouchMode.addEventListener('click', () => {
+        const on = btnTouchMode.getAttribute('aria-checked') !== 'true';
+        setTouchStickMode(on);
+        try { localStorage.setItem(TOUCH_STICK_KEY, on ? 'on' : 'off'); } catch (_) { /* storage disabled */ }
+      });
+    }
+    try { setTouchStickMode(localStorage.getItem(TOUCH_STICK_KEY) === 'on'); } catch (_) { /* storage disabled */ }
+
+    // One pad, either shape: follows a single pointer, clamps the knob to the pad, and reports
+    // a direction ('up' / 'down' / 'left' / 'right', or null inside the dead zone) each time it
+    // changes. A thumb drifting across the diagonal keeps its direction until the other axis
+    // clearly wins, so a walk doesn't flick into a turn. pad._release lets go from outside.
+    function wireThumbPad(pad, horizontal, onDir) {
+      if (!pad) return;
+      const knob = pad.querySelector('.thumb-pad__knob');
+      let pointer = null;
+      let dir = null;
+      function setDir(d) {
+        if (d === dir) return;
+        dir = d;
+        pad.dataset.dir = d || '';
+        onDir(d);
+      }
+      function follow(e) {
+        const r = pad.getBoundingClientRect();
+        let dx = e.clientX - (r.left + r.width / 2);
+        let dy = horizontal ? 0 : e.clientY - (r.top + r.height / 2);
+        // Stops short of the edge arrows, so the one lit up isn't under the knob.
+        const reach = Math.max(8, ((horizontal ? r.width : Math.min(r.width, r.height)) - knob.offsetWidth) / 2 - 14);
+        const len = Math.hypot(dx, dy);
+        const ax = Math.abs(dx), ay = Math.abs(dy);
+        if (len > reach) { dx *= reach / len; dy *= reach / len; }
+        knob.style.transform = `translate(${dx}px, ${dy}px)`;
+        // The dead zone is measured on the thumb, not the clamped knob: a thumb landing a
+        // little off-centre shouldn't set off a step on the short-travel phone-sized pad.
+        if (len < Math.max(10, r.width * 0.12)) { setDir(null); return; }
+        const wasX = dir === 'left' || dir === 'right';
+        const wasY = dir === 'up' || dir === 'down';
+        const useX = wasX ? ay < ax * 1.3 : wasY ? ax > ay * 1.3 : ax >= ay;
+        setDir(useX ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down'));
+      }
+      function release() {
+        if (pointer === null) return;
+        pointer = null;
+        knob.style.transform = '';
+        pad.classList.remove('is-held');
+        setDir(null);
+      }
+      pad._release = release;
+      pad.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (pointer !== null) return;
+        if (pad === strafeSlider && btnCombatDodgeL && btnCombatDodgeL.disabled) return;
+        pointer = e.pointerId;
+        try { pad.setPointerCapture(pointer); } catch (_) { /* pointer already gone */ }
+        pad.classList.add('is-held');
+        follow(e);
+      });
+      pad.addEventListener('pointermove', (e) => { if (e.pointerId === pointer) follow(e); });
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((evt) => {
+        pad.addEventListener(evt, (e) => { if (e.pointerId === pointer) release(); });
+      });
+    }
+
+    // Stick: a push acts at once, exactly like the button it replaces (and queues the same way
+    // mid-step). Held, it keeps going - the next step as soon as this one lands, so holding up
+    // walks the corridor, while a held turn waits a beat between quarter-turns so it can be
+    // stopped facing the right way - a longer beat before the first repeat, like a key's
+    // auto-repeat, so a quick flick is reliably one quarter-turn.
+    const STICK_ACTIONS = { up: moveForward, down: moveBackward, left: rotateLeft, right: rotateRight };
+    const STICK_TURN_FIRST_GAP_MS = 550;
+    const STICK_TURN_GAP_MS = 400;
+    let stickDir = null;
+    let stickTimer = null;
+    let stickNextTurn = 0;
+    function stickAct(first) {
+      stickNextTurn = performance.now() + (first ? STICK_TURN_FIRST_GAP_MS : STICK_TURN_GAP_MS);
+      STICK_ACTIONS[stickDir]();
+    }
+    wireThumbPad(moveStick, false, (d) => {
+      stickDir = d;
+      if (stickTimer) { clearInterval(stickTimer); stickTimer = null; }
+      if (!d) return;
+      stickAct(true);
+      stickTimer = setInterval(() => {
+        if (!stickDir || player.isAnimating || combatState.inBattle || inputLocked()) return;
+        const turning = stickDir === 'left' || stickDir === 'right';
+        if (turning && performance.now() < stickNextTurn) return;
+        stickAct(false);
+      }, 40);
+    });
+
+    // Slider: left or right of centre is the strafe button on that side, held. In agent mode a
+    // push is one turn, like a press of the button (and agentStep lets go of the slider after it).
+    wireThumbPad(strafeSlider, true, (d) => {
+      if ((d === 'left' || d === 'right') && agentTurn({ [d]: true })) return;
+      keysHeld.left = d === 'left';
+      keysHeld.right = d === 'right';
+    });
+    // A long press on a touch screen is a context-menu gesture: Android buzzes and offers
+    // copy / share, and that is the vibration a held D-pad or Block button gave. Preventing
+    // default on pointerdown doesn't stop it (that only suppresses the compat mouse events),
+    // so swallow the contextmenu itself anywhere on the controls panel.
+    document.querySelector('.touch-controls')?.addEventListener('contextmenu', (e) => e.preventDefault());
+
     window.addEventListener('keydown', (e) => {
       if (screenGame.classList.contains('hidden')) return;
 
@@ -10746,8 +10889,10 @@ void main() {
                                (paras.length + (story.hook ? 2 : 1)) * CRAWL_SECONDS_PER_PARAGRAPH);
       crawlText.style.setProperty('--crawl-duration', seconds + 's');
       crawlReadingUntil = Date.now() + seconds * 1000;
+      crawlRollStartedAt = Date.now();
       // Restart cleanly if a previous dungeon left the animation on the node.
       crawlText.classList.remove('rolling');
+      crawlText.style.animationDelay = '';
       void crawlText.offsetWidth;
       crawlText.classList.add('rolling');
 
@@ -10755,6 +10900,18 @@ void main() {
       // A story with no audio (generation failed, or a mode that never renders any) has no
       // "when the narrator stops" moment to wait for, so the loading loop starts now.
       if (!narrationActive()) playScreenMusic('loading');
+    }
+
+    // The static-block media queries in index.html switch the animation off rather than pause
+    // it, so a window that crosses one mid-story (a small tablet rotated to landscape, a
+    // desktop window dragged wider) gets a brand-new animation that would start the crawl over
+    // from the bottom. Pushing its start back by the time already spent reading picks it up
+    // where it would have been instead; changing the delay retimes the running animation.
+    if (crawlText) {
+      crawlText.addEventListener('animationstart', (e) => {
+        if (e.target !== crawlText || !crawlText.classList.contains('rolling')) return;
+        crawlText.style.animationDelay = -((Date.now() - crawlRollStartedAt) / 1000) + 's';
+      });
     }
 
     // Classic Win98 install-bar: fixed-pitch blocks sized to the trough's actual width, so
@@ -14259,6 +14416,11 @@ void main() {
     // yields to narration, a live battle or a playing video, the same as an idle open does.
     let screensaverForced = false;
 
+    // "Move the mouse" is meaningless on a phone with no mouse to move - a coarse primary
+    // pointer means touch is the normal input, not a mouse in disguise.
+    const SS_TOUCH_PRIMARY = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    const SS_RETURN_PROMPT = SS_TOUCH_PRIMARY ? 'TAP THE SCREEN TO RETURN' : 'MOVE THE MOUSE OR PRESS A KEY TO RETURN';
+
     // ---- Stars -------------------------------------------------------------
     // Model space is a unit frustum: x and y in [-1, 1], z falling from 1 (the far plane,
     // where a star is a dim speck at the vanishing point) to 0 (the eye). The projection is
@@ -14423,7 +14585,7 @@ void main() {
         const where = ((dungeonStory && dungeonStory.location) || '').trim();
         ssLine(where ? (where.toUpperCase() + ' IS WAITING') : 'THE DUNGEON IS WAITING',
                cx, baseY + small * 2.6, small, 0.72, { rgb: '200,214,255', spacing: 2 });
-        ssLine('MOVE THE MOUSE OR PRESS A KEY TO RETURN', cx, h - small * 2.4, small, 0.45,
+        ssLine(SS_RETURN_PROMPT, cx, h - small * 2.4, small, 0.45,
                { rgb: '176,176,176', spacing: 1 });
         return;
       }
@@ -14526,7 +14688,7 @@ void main() {
              0.66 + 0.24 * Math.sin(t * 1.1), { spacing: 6 });
       ssMarquee(w, h,
         'COMFYCRAWLER   •   A 3D DUNGEON BUILT OUT OF WHATEVER YOU TYPE   •   ' +
-        'MOVE THE MOUSE OR PRESS A KEY TO RETURN   •   ', t);
+        SS_RETURN_PROMPT + '   •   ', t);
     }
 
     // ---- Frame -------------------------------------------------------------
@@ -14869,7 +15031,7 @@ void main() {
       if (combatState.inBattle && controlsHeader && !combatState.dead) {
         controlsHeader.innerHTML = agentMode
           ? "TURN-BASED (agent):<br>A/D move · W strike<br>S block · SPACE wait<br>1 key = 1 turn (1/6s)"
-          : "COMBAT:<br>A/D to move<br>W to strike<br>S to block";
+          : "A/D to move<br>W to strike<br>S to block";
       }
       return agentMode;
     }

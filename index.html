@@ -114,7 +114,11 @@
       box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
       font-weight: bold;
       cursor: pointer;
+      /* The -webkit- copies are what iOS/iPadOS Safari actually reads: without them a held
+         button got the text-selection loupe, and the callout off a long press. */
+      -webkit-user-select: none;
       user-select: none;
+      -webkit-touch-callout: none;
       touch-action: manipulation;
       display: inline-flex;
       align-items: center;
@@ -323,7 +327,10 @@
                    padding: 16px 20px; }
       #crawlViewport { position: relative; inset: auto; overflow: visible;
                        -webkit-mask-image: none; mask-image: none; }
-      #crawlStage { perspective: none; height: auto; min-height: 200px; overflow: visible; }
+      /* Capped and scrolling, same as the phone block below explains. */
+      #crawlStage { perspective: none; height: auto; overflow-x: hidden; overflow-y: auto;
+                    max-height: max(120px, calc(100dvh - 240px));
+                    min-height: min(200px, max(120px, calc(100dvh - 240px))); }
       #crawlPending { position: relative; padding: 24px; }
     }
     /* Same static block on a phone, but reached by screen width rather than the setting
@@ -331,14 +338,24 @@
        this always reports prefers-reduced-motion: reduce, which is NOT representative of a
        real visitor's phone, so that media query can't be trusted as a mobile signal. The tilted
        Star Wars crawl also has nowhere near enough width to work with once the window is
-       phone-sized. 760px matches the phone breakpoint the rest of this stylesheet uses. */
-    @media (max-width: 760px) {
+       phone-sized. 760px matches the phone breakpoint the rest of this stylesheet uses.
+       The second condition is the same phone turned on its side (the landscape query further
+       down): 844px wide clears the width test, so without it rotating mid-story switched the
+       animation back on and the text started crawling up from the bottom - and a 430px stage
+       doesn't fit a ~390px-tall screen anyway.
+       The static story still has to fit the screen, though: at height:auto a long one grew
+       the window past the bottom edge and cut off the progress bar and Enter button. So the
+       stage is capped at what the rest of the loading window leaves (title bar, header row,
+       progress bar, status line, button, padding and gaps - about 240px) and scrolls. */
+    @media (max-width: 760px), (max-height: 520px) and (orientation: landscape) {
       #crawlText.rolling { animation: none; }
       #crawlText { position: relative; top: 0; left: 0; width: 100%; transform: none;
                    padding: 16px 20px; }
       #crawlViewport { position: relative; inset: auto; overflow: visible;
                        -webkit-mask-image: none; mask-image: none; }
-      #crawlStage { perspective: none; height: auto; min-height: 200px; overflow: visible; }
+      #crawlStage { perspective: none; height: auto; overflow-x: hidden; overflow-y: auto;
+                    max-height: max(120px, calc(100dvh - 240px));
+                    min-height: min(200px, max(120px, calc(100dvh - 240px))); }
       #crawlPending { position: relative; padding: 24px; }
     }
     #btnEnterDungeon:disabled {
@@ -384,6 +401,19 @@
       max-height: 44px !important;
       font-size: 16px;
       font-weight: bold;
+    }
+    /* The D-pad / battle bar panel is held, not tapped, so no part of it may start a text
+       selection or a long-press callout - including the gaps between buttons and the hint
+       text above them, which is where an iPad thumb drifting off a button would land. And
+       touch-action: none on the buttons themselves, so the browser never claims a held
+       press as a pan or zoom gesture (that fires pointercancel and drops a held Block). */
+    .touch-controls, .touch-controls * {
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+    .touch-controls button {
+      touch-action: none;
     }
     .combat-btn {
       height: 62px;
@@ -586,6 +616,9 @@
       .sidebar-wrapper > :nth-child(1) { flex: 1 1 38% !important; min-width: 0 !important; }
       .sidebar-wrapper > :nth-child(2) { flex: 1 1 58% !important; min-width: 0 !important; }
       .sidebar-wrapper > :nth-child(3) { flex: 1 0 100% !important; }
+      /* The key list goes in the phone layout too, not just on touch screens - the D-pad
+         and battle buttons under it are self-explanatory at this width. */
+      #controlsHeader { display: none !important; }
     }
 
     /* Touch targets. Apple and Google both put the floor at ~44px; the D-pad was already
@@ -692,6 +725,17 @@
       #btnCombatDodgeR { grid-area: dodgeR; }
       #btnCombatAttack { grid-area: attack; }
       #btnCombatBlock  { grid-area: block; }
+      /* Attack/block set the bar's two row heights, so they are held to exactly the D-pad
+         button size of each block below - two rows of each, same gap, same box. At the
+         .combat-btn height instead (68px on touch), every fight grew the window 24-44px
+         and every win shrank it back. */
+      #btnCombatAttack, #btnCombatBlock { height: 44px; }
+    }
+    @media (max-width: 760px) and (pointer: coarse) {
+      #btnCombatAttack, #btnCombatBlock { height: 56px; }
+    }
+    @media (max-width: 760px) and (max-height: 780px) {
+      #btnCombatAttack, #btnCombatBlock { height: 46px; }
     }
 
     /* Phone in landscape: plenty of width, almost no height. Keep the desktop side-by-side
@@ -732,6 +776,157 @@
         font-size: 15px;
       }
       .combat-btn { height: 46px; font-size: 18px; }
+    }
+
+    /* ---- Touch controls: buttons or thumb stick ------------------------------
+       The switch in the controls panel's top-right corner swaps the D-pad's four arrows for
+       one thumb stick, and the battle bar's two strafe buttons for one horizontal slider -
+       a thumb that rocks left and right instead of hunting for the other button. USE, Attack
+       and Block stay buttons either way. Touch screens only: everything here sits under
+       pointer: coarse, so the choice (game.js keeps it in this browser) can never leave a
+       desktop without its buttons. The panel gives up 16px of padding to hold the switch in
+       every mode, so a fight starting doesn't shift the window by the switch's height. */
+    .touch-controls { position: relative; }
+    #btnTouchMode, .thumb-pad { display: none; }
+    @media (pointer: coarse) {
+      .touch-controls { padding-top: 24px !important; }
+      #btnTouchMode {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        position: absolute;
+        top: 3px;
+        right: 4px;
+        height: 20px;
+        padding: 0 2px 0 4px;
+        font-size: 9px;
+        font-weight: bold;
+        color: #334155;
+        background: transparent;
+      }
+      #btnTouchMode:focus-visible { outline: 2px dotted #000080; outline-offset: 1px; }
+      /* A sunken Win95 groove with a raised knob in it: the knob sits left for buttons,
+         slides right and the groove goes navy for the stick. */
+      .touch-mode__track {
+        position: relative;
+        width: 28px;
+        height: 14px;
+        background: #ffffff;
+        border-top: 1px solid #808080;
+        border-left: 1px solid #808080;
+        border-right: 1px solid #ffffff;
+        border-bottom: 1px solid #ffffff;
+        box-shadow: inset 1px 1px #0a0a0a;
+      }
+      .touch-mode__knob {
+        position: absolute;
+        top: 1px;
+        left: 1px;
+        width: 12px;
+        height: 10px;
+        background: #c0c0c0;
+        border-top: 1px solid #ffffff;
+        border-left: 1px solid #ffffff;
+        border-right: 1px solid #0a0a0a;
+        border-bottom: 1px solid #0a0a0a;
+        transition: left 0.12s;
+      }
+      #btnTouchMode[aria-checked="true"] .touch-mode__track { background: #000080; }
+      #btnTouchMode[aria-checked="true"] .touch-mode__knob { left: 13px; }
+
+      /* Stick mode: the pads in, the buttons they replace out, and the plus-shaped D-pad's
+         spacer <div>s out with them. */
+      .stick-mode .thumb-pad { display: block; }
+      .stick-mode #btnUp, .stick-mode #btnDown, .stick-mode #btnLeft, .stick-mode #btnRight,
+      .stick-mode #btnCombatDodgeL, .stick-mode #btnCombatDodgeR,
+      .stick-mode #dpadGrid > div:empty { display: none !important; }
+
+      /* The stick on the left thumb, USE on the right - the phone layout's own split, and it
+         fits the desktop-width sidebar a tablet gets as well. */
+      .touch-controls.stick-mode #dpadGrid {
+        width: 100% !important;
+        grid-template-columns: auto 1fr auto;
+        grid-template-rows: auto;
+        grid-template-areas: "stick . use";
+        align-items: center;
+      }
+      .stick-mode #moveStick { grid-area: stick; }
+      .stick-mode #btnAction { grid-area: use; }
+
+      /* The pad: a sunken well, faint arrows round its edge naming what each push does (the
+         one being pushed toward lights up), and a raised Win95 knob that follows the thumb and
+         springs back to the middle on release - game.js moves it with a transform. */
+      .thumb-pad {
+        position: relative;
+        touch-action: none;
+        background: #a8a8a8;
+        border-top: 2px solid #808080;
+        border-left: 2px solid #808080;
+        border-right: 2px solid #ffffff;
+        border-bottom: 2px solid #ffffff;
+        box-shadow: inset 1px 1px #0a0a0a;
+      }
+      .thumb-pad__knob {
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        background: #c0c0c0;
+        border-top: 2px solid #ffffff;
+        border-left: 2px solid #ffffff;
+        border-right: 2px solid #808080;
+        border-bottom: 2px solid #808080;
+        box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, 1px 1px 0 #0a0a0a;
+        pointer-events: none;
+      }
+      .thumb-pad.is-held .thumb-pad__knob { background: #d4d4d4; }
+      .thumb-pad__hint {
+        position: absolute;
+        font-size: 12px;
+        font-weight: bold;
+        line-height: 1;
+        color: #6b6b6b;
+        pointer-events: none;
+      }
+      .thumb-pad__hint--up    { top: 3px; left: 50%; transform: translateX(-50%); }
+      .thumb-pad__hint--down  { bottom: 3px; left: 50%; transform: translateX(-50%); }
+      .thumb-pad__hint--left  { left: 4px; top: 50%; transform: translateY(-50%); }
+      .thumb-pad__hint--right { right: 4px; top: 50%; transform: translateY(-50%); }
+      .thumb-pad[data-dir="up"] .thumb-pad__hint--up,
+      .thumb-pad[data-dir="down"] .thumb-pad__hint--down,
+      .thumb-pad[data-dir="left"] .thumb-pad__hint--left,
+      .thumb-pad[data-dir="right"] .thumb-pad__hint--right { color: #000080; }
+
+      /* Sized per breakpoint to whatever the battle bar stands at there, so a fight starting
+         doesn't resize the window: two 68px rows on a tablet (142 - a 130px pad, which is what
+         fits beside USE and the grid's two gaps in its 220px sidebar, plus margin), two 56px
+         rows on a phone, two 46px rows on a short phone. */
+      .move-stick { width: 130px; height: 130px; margin: 6px 0; }
+      .move-stick .thumb-pad__knob { width: 52px; height: 52px; }
+
+      /* The slider takes the strafe buttons' row in the tablet's 2x2 battle bar, at a combat
+         button's height... */
+      .strafe-slider { grid-column: 1 / -1; height: 68px; }
+      .strafe-slider .thumb-pad__knob { width: 56px; height: auto; top: 2px; bottom: 2px; }
+      .strafe-slider .thumb-pad__hint { font-size: 14px; }
+      #battleActionBar:has(#btnCombatDodgeL:disabled) .strafe-slider { opacity: 0.4; filter: grayscale(0.7); }
+    }
+    @media (pointer: coarse) and (max-width: 760px) {
+      .move-stick { width: 118px; height: 118px; margin: 0; }
+      .move-stick .thumb-pad__knob { width: 48px; height: 48px; }
+      /* ...and on a phone, both strafe buttons' two-row areas, left of Attack/Block. */
+      .strafe-slider { grid-area: 1 / 1 / 3 / 3; height: auto; }
+    }
+    @media (pointer: coarse) and (max-width: 760px) and (max-height: 780px) {
+      .move-stick { width: 98px; height: 98px; }
+      .move-stick .thumb-pad__knob { width: 42px; height: 42px; }
+    }
+    /* Phone on its side: the controls column is 156px wide, so the stick shrinks to leave
+       USE its place beside it. */
+    @media (pointer: coarse) and (max-height: 520px) and (orientation: landscape) {
+      .move-stick { width: 82px; height: 82px; }
+      .move-stick .thumb-pad__knob { width: 34px; height: 34px; }
+      .strafe-slider { height: 46px; }
+      .strafe-slider .thumb-pad__knob { width: 44px; }
     }
 
     /* ---- Screen saver: Windows 98 "Starfield Simulation" ------------------
@@ -814,6 +1009,25 @@
       height: 100%;
       pointer-events: none;
       z-index: 1;
+    }
+
+    /* The death, level-up and victory boxes live inside .viewport-frame, which clips
+       (overflow:hidden) - fine on a desktop, where the view is 500px+ tall, but on a phone it
+       is a ~280px strip and a four-option level-up or a victory box with its ending buttons
+       gets its bottom cut off. At phone sizes they come out of the frame and cover the whole
+       screen instead (no ancestor has a transform, so fixed really is the screen), keeping
+       their own z-30/z-40 order under the z-50 dialogs. The box scrolls if even the screen is
+       too short - a phone on its side. Same two conditions as the phone layouts below. */
+    @media (max-width: 760px), (max-height: 520px) and (orientation: landscape) {
+      #defeatModal, #levelUpModal, #victoryModal {
+        position: fixed;
+        padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right))
+                 max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+      }
+      #defeatModal > .win95-box, #levelUpModal > .win95-box, #victoryModal > .win95-box {
+        max-height: 100%;
+        overflow-y: auto;
+      }
     }
 
     /* The run report on the victory / death box, agent mode only (showAgentReport in game.js).
@@ -3126,7 +3340,7 @@
               <div class="win95-box p-3 flex flex-col items-center gap-2 w-full max-w-[300px] shadow-2xl text-center border-4 border-yellow-400">
                 <h3 class="font-black text-sm text-yellow-900">⬆️ LEVEL UP!</h3>
                 <p class="text-[11px] text-slate-800 leading-tight">
-                  You reach <strong id="levelUpLevelText">Level 2</strong>. Choose what the fighting taught you.
+                  You reach <strong id="levelUpLevelText">Level 2</strong>. Choose upgrade.
                 </p>
                 <div id="levelUpChoices" class="flex flex-col gap-1.5 w-full">
                   <button data-choice="strength" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-red-900 bg-red-100 hover:bg-red-200">
@@ -3257,8 +3471,14 @@
           </div>
 
           <!-- D-Pad Navigation Controls -->
-          <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
-            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">EXPLORATION:<br>W/S to move<br>A/D to turn<br>SPACE to use</div>
+          <div class="win95-box touch-controls p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
+            <!-- Buttons or thumb stick. Touch screens only (see .touch-controls in the <style>):
+                 a keyboard or mouse has nothing to gain from a stick. -->
+            <button id="btnTouchMode" type="button" role="switch" aria-checked="false" aria-label="Thumb stick controls" title="Switch between buttons and a thumb stick">
+              <span class="touch-mode__label">STICK</span>
+              <span class="touch-mode__track"><span class="touch-mode__knob"></span></span>
+            </button>
+            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">W/S to move<br>A/D to turn<br>SPACE to use</div>
 
             <div id="dpadGrid" class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>
@@ -3272,6 +3492,16 @@
               <div></div>
               <button id="btnAction" class="win95-btn dpad-btn !text-[10px]" title="Use switch / door (Space)">USE</button>
               <div></div>
+
+              <!-- Stick mode's stand-in for the four arrows: push up to walk, down to back up,
+                   sideways to turn; held, it keeps going. USE stays a button. -->
+              <div id="moveStick" class="thumb-pad move-stick" aria-hidden="true">
+                <span class="thumb-pad__hint thumb-pad__hint--up">▲</span>
+                <span class="thumb-pad__hint thumb-pad__hint--down">▼</span>
+                <span class="thumb-pad__hint thumb-pad__hint--left">↺</span>
+                <span class="thumb-pad__hint thumb-pad__hint--right">↻</span>
+                <div class="thumb-pad__knob"></div>
+              </div>
             </div>
 
             <!-- Battle Action Bar: takes the D-pad's slot during a fight rather than adding a
@@ -3290,6 +3520,13 @@
               <button id="btnCombatDodgeR" class="win95-btn combat-btn bg-slate-200 hover:bg-slate-300 active:bg-slate-400" title="Strafe Right (Hold D / Right)">
                 ➡️
               </button>
+              <!-- Stick mode's stand-in for the two strafe buttons: one slider, thumb held left or
+                   right of centre. Attack and Block stay buttons. -->
+              <div id="strafeSlider" class="thumb-pad strafe-slider" aria-hidden="true">
+                <span class="thumb-pad__hint thumb-pad__hint--left">◀</span>
+                <span class="thumb-pad__hint thumb-pad__hint--right">▶</span>
+                <div class="thumb-pad__knob"></div>
+              </div>
             </div>
           </div>
 
