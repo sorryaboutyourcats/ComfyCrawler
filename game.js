@@ -11984,9 +11984,25 @@ void main() {
       return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(1) + ' MB';
     }
 
+    // What the rows on screen were last built from, or null when the list area is showing a
+    // message instead. refreshHistory compares the listing that comes back against this and
+    // leaves the DOM alone when nothing has changed, so the re-read behind an already-drawn
+    // window never blinks the rows, throws away the scroll position, or pulls the keyboard
+    // cursor off a button someone is reaching for.
+    let historyRenderedSignature = null;
+
+    function historyListingSignature() {
+      try {
+        return JSON.stringify(historyEntries);
+      } catch (_) {
+        return null;      // never matches, so a listing that will not stringify always redraws
+      }
+    }
+
     // A single centered line in the list area - loading, empty, or an error.
     function setHistoryMessage(text) {
       if (!historyList) return;
+      historyRenderedSignature = null;   // no rows on screen now, so the next listing must draw
       historyList.innerHTML = '';
       const msg = document.createElement('div');
       msg.className = 'text-xs text-slate-500 font-bold text-center py-8 px-4';
@@ -13435,6 +13451,7 @@ void main() {
         historyList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
       });
       renderHistoryFootNote();
+      historyRenderedSignature = historyListingSignature();
     }
 
     // "12 dungeons · 3 favorites · 410.2 MB on disk". Its own function so a star toggle can
@@ -13493,6 +13510,7 @@ void main() {
     // manifest is the only record of what got exported, and otherwise the folder on disk can
     // change behind this page either way.
     async function refreshHistory() {
+      const drawn = historyRenderedSignature;
       try {
         const res = await fetch(SHOWCASE_MODE ? 'dungeons.json' : `${SERVER_URL}/api/history`);
         const data = await res.json();
@@ -13502,6 +13520,11 @@ void main() {
         console.error('History fetch error:', err);
         historyEntries = null;
       }
+      // Rows are already up and the re-read agrees with them: leave the DOM exactly as it is.
+      // openHistory draws the previous listing the instant the window opens and lets this
+      // catch up behind it, so on all but the first open this is the usual outcome - and a
+      // rebuild here would cost the scroll position and the keyboard cursor for no new rows.
+      if (drawn !== null && historyListingSignature() === drawn) return;
       renderHistoryList();
       if (SHOWCASE_MODE) renderShowcaseList();
     }
@@ -13518,18 +13541,31 @@ void main() {
       if (historySimilarOnlyLabel) historySimilarOnlyLabel.classList.toggle('hidden', !currentRunHistoryId);
       if (!currentRunHistoryId && historySimilarOnly) historySimilarOnly.checked = false;
       syncHistorySimilarOnly();
-      setHistoryMessage('Reading saved dungeons...');
-      if (historyFootNote) historyFootNote.textContent = '';
-      // Opened mid-run: the list that comes back should arrive scrolled to the dungeon being
-      // played, not at the top. Nothing to reveal when the player is out at the main menu.
+      // Opened mid-run: the list should arrive scrolled to the dungeon being played, not at
+      // the top. Nothing to reveal when the player is out at the main menu.
       historyRevealCurrent = !!currentRunHistoryId;
       // A new shuffle every time the window is opened - a randomized list that came back in
       // yesterday's order would not read as randomized at all. Only the order is thrown away;
       // the entries themselves are refetched below either way.
       if (historySortMode === 'random') reshuffleHistoryOrder();
-      // The rows are still being fetched, so park the cursor on OK; renderHistoryList moves
-      // it up onto the first Start once there is a list to move onto.
-      focusFirstIn(modalHistory, btnHistoryOk);
+      // The rows describe what is sitting in dungeon_sessions/, and reading that back is the
+      // slow part: three filesystem round trips per saved run, which on a mapped network
+      // drive (where this repo usually lives) is seconds for a large history. So the listing
+      // from last time goes up immediately and the re-read runs behind it - refreshHistory
+      // only touches the DOM again if what came back is actually different. Only the very
+      // first open of a session has nothing to show, and that one waits.
+      if (Array.isArray(historyEntries) && historyEntries.length) {
+        // Before the render: renderHistoryList moves the cursor off OK onto a Start itself,
+        // and parking it on OK afterwards would drag it straight back.
+        focusFirstIn(modalHistory, btnHistoryOk);
+        renderHistoryList();
+      } else {
+        setHistoryMessage('Reading saved dungeons...');
+        if (historyFootNote) historyFootNote.textContent = '';
+        // Nothing to put the cursor on yet, so park it on OK; renderHistoryList moves it up
+        // onto the first Start once there is a list to move onto.
+        focusFirstIn(modalHistory, btnHistoryOk);
+      }
       refreshHistory();
       // The rows' movie buttons show whatever ending render is going - including one the server
       // started on its own at the end of a background-mode run, which this page never asked for.

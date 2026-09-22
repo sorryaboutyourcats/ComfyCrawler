@@ -9537,6 +9537,13 @@ _card_lock = threading.Lock()
 _card_backfill_thread = None
 
 
+# Which saved runs are known to have all three card files already. Filled in for free by
+# _read_session_row, which has the folder's directory listing open anyway, and by
+# ensure_session_card once it has drawn a set. start_card_backfill reads it so that opening
+# History a second time does not re-stat every folder looking for work that is already done.
+_SESSION_CARDS_DRAWN = set()
+
+
 def _card_files_missing(folder):
     """True when any of a run's three card files is absent. Checking the whole set rather than
     the one file being asked for is what pulls a run drawn before the parallax layers existed
@@ -9560,6 +9567,7 @@ def ensure_session_card(session_id, layer=""):
         return None
     path = os.path.join(folder, filename)
     if not _card_files_missing(folder):
+        _SESSION_CARDS_DRAWN.add(session_id)
         return path
     bundle_path = os.path.join(folder, "bundle.json")
     if not os.path.exists(bundle_path):
@@ -9569,6 +9577,7 @@ def ensure_session_card(session_id, layer=""):
     with _card_lock:
         # The backfill may have drawn them while this request waited for the lock.
         if not _card_files_missing(folder):
+            _SESSION_CARDS_DRAWN.add(session_id)
             return path
         try:
             with open(bundle_path, encoding="utf-8") as f:
@@ -9593,7 +9602,8 @@ def start_card_backfill():
 
     def work():
         missing = [s["id"] for s in list_dungeon_sessions()
-                   if _card_files_missing(os.path.join(SESSIONS_DIR, s["id"]))]
+                   if s["id"] not in _SESSION_CARDS_DRAWN
+                   and _card_files_missing(os.path.join(SESSIONS_DIR, s["id"]))]
         if not missing:
             return
         print(f"[history] drawing tile cards for {len(missing)} saved run(s)")
@@ -9704,35 +9714,143 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
         return None
 
 
-def list_dungeon_sessions():
+# ---- the listing cache ----------------------------------------------------------------
+# Building the listing from scratch means, per saved run, two existence checks and a read of
+# meta.json. That is three filesystem round trips each, and on a mapped network drive (this
+# repo's usual home) a round trip is ~8ms rather than ~0ms - sixty runs cost about three
+# seconds, all of it the History window sitting on "Reading saved dungeons...".
+#
+# So the rows are kept. _SESSION_ROWS holds one finished row per folder, and a listing that
+# finds every name already in there never touches those folders at all: one os.listdir of
+# dungeon_sessions/ (which does catch a run being added or deleted behind our back) and the
+# cached rows go straight back out.
+#
+# Everything that changes what a row SAYS goes through this file - save_dungeon_session,
+# _update_session_meta (favorite, beaten, last_played, has_ending_video) and
+# delete_dungeon_session - and each of those drops the row it touched, so the cache cannot
+# go stale on its own. Editing a meta.json by hand from outside is the one case it would
+# miss; list_dungeon_sessions(fresh=True) (GET /api/history?fresh=1) re-reads everything.
+#
+# Only real rows are kept. A folder that is not a finished run - a save caught halfway,
+# a meta.json that will not parse - is looked at again on every listing, so the moment it
+# becomes one it lists. That costs one round trip per broken folder, and there are
+# normally none; caching the "no" instead would hide a finished run until a restart.
+_SESSION_ROWS = {}
+_SESSION_ROWS_SKIPPED = set()   # names already complained about, so the log says it once
+_SESSION_ROWS_DIR = None      # which SESSIONS_DIR the rows above were read from
+_SESSION_ROWS_LOCK = threading.Lock()
+
+
+def forget_session_rows(session_id=None):
+    """Drop one cached listing row, or all of them. Called by every write that changes what a
+    row says, so the next listing reads that folder again and nothing else."""
+    with _SESSION_ROWS_LOCK:
+        if session_id is None:
+            _SESSION_ROWS.clear()
+            _SESSION_ROWS_SKIPPED.clear()
+        else:
+            _SESSION_ROWS.pop(session_id, None)
+            _SESSION_ROWS_SKIPPED.discard(session_id)
+
+
+def _read_session_row(name, cached=None):
+    """One folder's listing row, or None if it is not a finished run (no bundle) or its
+    meta.json will not open. One os.scandir instead of two exists() calls and a blind open:
+    the directory listing already answers "is bundle.json there" and "is ending.mp4 there",
+    and on Windows a DirEntry carries its stat with it, so this is a single round trip.
+
+    Returns (row, signature) - the signature being meta.json's size and mtime. Pass the
+    folder's last (row, signature) as `cached` and a file that has not changed since is not
+    read again, which is what makes a fresh=True rebuild one round trip per run instead of
+    three."""
+    folder = os.path.join(SESSIONS_DIR, name)
+    try:
+        with os.scandir(folder) as it:
+            entries = {e.name: e for e in it}
+    except Exception:
+        return None, None
+    if "bundle.json" not in entries or "meta.json" not in entries:
+        return None, None
+    try:
+        stat = entries["meta.json"].stat()
+        signature = (stat.st_size, stat.st_mtime_ns)
+    except Exception:
+        signature = None
+    # Free while the directory listing is open, and it saves start_card_backfill three
+    # round trips per saved run every time the History window is opened.
+    if all(f in entries for f in CARD_LAYER_FILENAMES.values()):
+        _SESSION_CARDS_DRAWN.add(name)
+    else:
+        _SESSION_CARDS_DRAWN.discard(name)
+    if cached and cached[0] and signature and cached[1] == signature:
+        row = dict(cached[0])
+        # Still taken from this scandir, not from the cached row: a clip can land beside an
+        # untouched meta.json (a background render that could not write its flag).
+        row["has_ending_video"] = ENDING_FILENAME in entries
+        return row, signature
+    try:
+        with open(os.path.join(folder, "meta.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["id"] = name          # the folder is the truth, whatever the file says
+        # Every run saved before the Last Attack Frame option existed is frame version 1.
+        meta.setdefault("frame_version", FRAME_VERSION_BASE)
+        # Same rule for the cutscene: the file on disk decides, so a meta.json that missed a
+        # background render's update (or predates the option) still lists what is there.
+        meta["has_ending_video"] = ENDING_FILENAME in entries
+        # Runs saved before "beaten" was recorded have never been beaten as far as anyone knows.
+        meta["beaten"] = bool(meta.get("beaten"))
+        _SESSION_ROWS_SKIPPED.discard(name)
+        return meta, signature
+    except Exception as e:
+        # Re-read every listing (nothing is cached for it), so say this once and not once
+        # per time the History window is opened.
+        if name not in _SESSION_ROWS_SKIPPED:
+            _SESSION_ROWS_SKIPPED.add(name)
+            print(f"[history] skipping {name} ({e})")
+        return None, None
+
+
+def list_dungeon_sessions(fresh=False):
     """Every saved session's meta record, newest first. A folder whose meta.json is missing
     or unreadable (an interrupted save, a half-finished delete) is skipped rather than
-    breaking the whole listing."""
-    out = []
+    breaking the whole listing.
+
+    Served from the row cache above unless `fresh`, which throws it away first and re-reads
+    every folder off disk."""
+    global _SESSION_ROWS_DIR
     try:
-        names = os.listdir(SESSIONS_DIR)
+        names = [n for n in os.listdir(SESSIONS_DIR) if _SESSION_ID_RE.match(n)]
     except Exception:
-        return out
-    for name in names:
-        if not _SESSION_ID_RE.match(name):
-            continue
-        meta_path = os.path.join(SESSIONS_DIR, name, "meta.json")
-        if not os.path.exists(os.path.join(SESSIONS_DIR, name, "bundle.json")):
-            continue
-        try:
-            with open(meta_path, encoding="utf-8") as f:
-                meta = json.load(f)
-            meta["id"] = name          # the folder is the truth, whatever the file says
-            # Every run saved before the Last Attack Frame option existed is frame version 1.
-            meta.setdefault("frame_version", FRAME_VERSION_BASE)
-            # Same rule for the cutscene: the file on disk decides, so a meta.json that missed a
-            # background render's update (or predates the option) still lists what is there.
-            meta["has_ending_video"] = os.path.exists(os.path.join(SESSIONS_DIR, name, ENDING_FILENAME))
-            # Runs saved before "beaten" was recorded have never been beaten as far as anyone knows.
-            meta["beaten"] = bool(meta.get("beaten"))
-            out.append(meta)
-        except Exception as e:
-            print(f"[history] skipping {name} ({e})")
+        return []
+    with _SESSION_ROWS_LOCK:
+        # The tests point SESSIONS_DIR at a temp folder and back again; rows read from the
+        # old one describe runs that are not in this directory at all.
+        if _SESSION_ROWS_DIR != SESSIONS_DIR:
+            _SESSION_ROWS.clear()
+            _SESSION_ROWS_DIR = SESSIONS_DIR
+        for gone in [n for n in _SESSION_ROWS if n not in names]:
+            del _SESSION_ROWS[gone]
+        _SESSION_ROWS_SKIPPED.intersection_update(names)
+        # A fresh listing re-reads every folder; an ordinary one only the folders it has no
+        # row for - a brand new run, or one whose row a write above dropped.
+        stale = list(names) if fresh else [n for n in names if n not in _SESSION_ROWS]
+        known = {n: _SESSION_ROWS.get(n) for n in stale}
+    # Read outside the lock - a first listing of a large history is seconds of disk, and
+    # nothing else should have to wait behind it.
+    for name in stale:
+        row, signature = _read_session_row(name, known.get(name))
+        with _SESSION_ROWS_LOCK:
+            if _SESSION_ROWS_DIR != SESSIONS_DIR:
+                continue
+            if row:
+                _SESSION_ROWS[name] = (row, signature)
+            else:
+                _SESSION_ROWS.pop(name, None)
+    with _SESSION_ROWS_LOCK:
+        out = [row for row, _ in (_SESSION_ROWS.get(n) or (None, None) for n in names) if row]
+    # Shallow copies: these dicts go to json.dumps and to tools/export_showcase.py, and a
+    # caller that edited one would be editing the cache.
+    out = [dict(row) for row in out]
     out.sort(key=lambda m: m.get("created", 0), reverse=True)
     return out
 
@@ -9765,6 +9883,8 @@ def _update_session_meta(folder, changes):
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=True)
         os.replace(tmp_path, os.path.join(folder, "meta.json"))
+        # This row now says something different - drop it so the next listing reads it back.
+        forget_session_rows(os.path.basename(folder))
         return meta
 
 
@@ -9824,6 +9944,7 @@ def delete_dungeon_session(session_id):
     # longer exists.
     cancel_ending_video_job("its dungeon was deleted", session_id=session_id)
     shutil.rmtree(folder)
+    forget_session_rows(session_id)
     print(f"[history] deleted {session_id}")
     return True
 
@@ -10358,6 +10479,9 @@ def _store_session_ending(session_id, src_path):
     try:
         _update_session_meta(folder, {"has_ending_video": True})
     except Exception as e:
+        # The clip is on disk either way, and the listing reads that from the folder - so the
+        # row still has to be dropped, which the failed update did not get to do.
+        forget_session_rows(session_id)
         print(f"[ending] clip stored, but meta.json was not updated ({e})")
 
 
@@ -10957,8 +11081,13 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # The History window's listing: meta records only (a name, a date, a 96px thumb),
         # never the bundles themselves.
-        elif self.path == "/api/history":
-            payload = json.dumps({"sessions": list_dungeon_sessions()},
+        elif urllib.parse.urlparse(self.path).path == "/api/history":
+            # The listing is served from the row cache (see list_dungeon_sessions), which is
+            # kept honest by every write in this file dropping the row it changed. ?fresh=1 is
+            # the way back to disk for the one case that cannot reach: a meta.json edited by
+            # hand while the server was up.
+            fresh = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("fresh", [""])[0] == "1"
+            payload = json.dumps({"sessions": list_dungeon_sessions(fresh=fresh)},
                                  ensure_ascii=True).encode("utf-8")
             # The window this listing draws can be switched to tiles, and every run saved
             # before tiles existed needs its picture drawn from its bundle first. Start that
@@ -11777,6 +11906,12 @@ def run_server():
     # The ComfyUI checklist, off the main thread: when ComfyUI isn't up yet every candidate URL
     # waits out its timeout, and the page should load meanwhile.
     threading.Thread(target=print_preflight, daemon=True).start()
+    # Read the History listing once now, so the first open of the window is served from the
+    # row cache like every one after it. This is the slow build - three filesystem round trips
+    # per saved run, seconds of it on a mapped network drive - and doing it here spends that
+    # while the player is still on the setup screen instead of while they are waiting on a
+    # window they just opened.
+    threading.Thread(target=list_dungeon_sessions, name="history-warmup", daemon=True).start()
     try:
         with httpd:
             httpd.serve_forever()
