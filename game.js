@@ -104,12 +104,11 @@
     // sound generation.
     const gfxQualitySelect = document.getElementById('gfxQualitySelect');
     const soundModeSelect = document.getElementById('soundModeSelect');
-    // Difficulty lives on the main screen now (next to Undo/Redo), not in Options - see
-    // difficultySelect below. difficultySelectShowcase is the one place it still shows up
-    // inside #modalSettings: SHOWCASE_MODE has no Setup footer to put it in (screenSetup is
-    // hidden there wholesale), yet difficulty still matters - replaying a saved dungeon
-    // re-rolls its maze shape at whatever difficulty is picked right now (see
-    // loadHistoryDungeon). Hidden by default; the boot-time SHOWCASE_MODE block reveals it.
+    // Difficulty lives on the main screen (next to Undo/Redo) - see difficultySelect below.
+    // difficultySelectShowcase is the copy at the top of Options (#modalSettings), always
+    // shown, and SHOWCASE_MODE's way to reach it too since that export hides Setup's footer -
+    // replaying a saved dungeon re-rolls its maze shape at whatever difficulty is picked
+    // right now (see loadHistoryDungeon).
     // difficultySelectHistory is the same pick again, next to History's Sort dropdown, so a
     // saved dungeon can be replayed at a different difficulty without a trip to Setup first,
     // and difficultySelectGallery is that same pair once more in the showcase gallery's own
@@ -152,8 +151,8 @@
     //   bossSpdMul           walk, weave and the descent of a dive, never cadence or telegraphs.
     //   decoyDoors           how many dead-end doors to hang off the route - see addDecoyDoors.
     const DIFFICULTIES = {
-      easy:   { grids: 33,  enemyHpMul: 1,    baseHp: 150, baseStm: 150, reactiveBlockOdds: 0.45, flyersBreakOff: true, maxPack: 2,
-                desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 150 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
+      easy:   { grids: 33,  enemyHpMul: 1,    baseHp: 125, baseStm: 125, reactiveBlockOdds: 0.45, flyersBreakOff: true, maxPack: 2,
+                desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 125 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
       medium: { grids: 66,  enemyHpMul: 1.25, desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, and foes with 25% more health.' },
       hard:   { grids: 111, enemyHpMul: 1.6,  baseHp: 75, enemySpdMul: 1.1, bossSpdMul: 1.25, decoyDoors: 2,
                 desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit and doors that open onto dead ends. Foes have 60% more health and close 10% faster (the dread foe 25%), and the hero starts with only 75 health.' }
@@ -299,7 +298,9 @@
     // which is long enough that the tab is usually in the background, so the percent goes
     // into the title where it can be read from the tab strip without switching back - and
     // when the assets land it shouts instead of counting.
-    const BASE_TAB_TITLE = 'ComfyCrawler by sorryaboutyourcats';
+    const BASE_TAB_TITLE = SHOWCASE_MODE
+      ? 'ComfyCrawler (read-only edition) by sorryaboutyourcats'
+      : 'ComfyCrawler by sorryaboutyourcats';
     function setTabTitlePercent(percent) {
       const pct = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
       document.title = pct + '% ' + BASE_TAB_TITLE;
@@ -914,6 +915,32 @@
     let menuMusicNode = null;      // { src, gain } while actually playing
     let menuMusicStopped = false;  // true once the ready chime has silenced it for this run
     let menuMusicFaded = false;    // true while narration has faded it out (node kept alive for restore)
+    // Options' "Disable menu music" checkbox. The loop still runs and every fade above still
+    // happens - it just plays into menuMusicBus, which sits at 0 while this is on. Muting one
+    // bus instead of skipping the spawns means unticking it mid-menu brings the music straight
+    // back without re-plumbing any of the start / fade / restore paths.
+    const MENU_MUSIC_OFF_KEY = 'comfycrawler.menuMusicOff';
+    let menuMusicOff = prefs.get(MENU_MUSIC_OFF_KEY) === 'on';
+    let menuMusicBus = null;
+
+    function menuMusicOut(ctx) {
+      if (!menuMusicBus) {
+        menuMusicBus = ctx.createGain();
+        menuMusicBus.gain.value = menuMusicOff ? 0 : 1;
+        menuMusicBus.connect(musicMaster);
+      }
+      return menuMusicBus;
+    }
+
+    function setMenuMusicOff(off) {
+      menuMusicOff = !!off;
+      if (menuMusicBus && audioCtx) {
+        const now = audioCtx.currentTime;
+        menuMusicBus.gain.cancelScheduledValues(now);
+        menuMusicBus.gain.setValueAtTime(menuMusicBus.gain.value, now);
+        menuMusicBus.gain.linearRampToValueAtTime(menuMusicOff ? 0 : 1, now + 0.3);
+      }
+    }
 
     function _spawnMenuMusicNode(initialGain) {
       const ctx = sfxContext();
@@ -923,7 +950,7 @@
       src.loop = true;
       const g = ctx.createGain();
       g.gain.value = initialGain;
-      src.connect(g); g.connect(musicMaster);
+      src.connect(g); g.connect(menuMusicOut(ctx));
       src.start();
       return { src, gain: g };
     }
@@ -1764,6 +1791,18 @@
     const difficultySelects = [difficultySelect, difficultySelectShowcase,
                                difficultySelectHistory, difficultySelectGallery].filter(Boolean);
 
+    // Hovering any difficulty dropdown shows how the three differ, side by side. Hand-written
+    // from DIFFICULTIES (and BASE_MAX_HP / BASE_MAX_STM for Medium) - retune one, update this.
+    const DIFFICULTY_TOOLTIP = ['Difficulty - how the three differ:', '',
+      'Easy: small looping maze, nearby Exit. Hero starts with 125 health and stamina.',
+      '  Foes guard far less, flyers break off when struck mid-dive, packs come two at a time.', '',
+      'Medium: the standard game. 66-corridor branching maze, distant Exit.',
+      '  Hero starts with 100 health and stamina. Foes have 25% more health.', '',
+      'Hard: sprawling 111-corridor maze with dead-end doors and a long route to the Exit.',
+      '  Hero starts with only 75 health. Foes have 60% more health and close 10% faster',
+      '  (the boss 25% faster).'].join('\n');
+    difficultySelects.forEach((sel) => { sel.title = DIFFICULTY_TOOLTIP; });
+
     function setDifficulty(id) {
       if (!DIFFICULTIES[id]) id = 'medium';
       selectedDifficulty = id;
@@ -1780,6 +1819,15 @@
       });
     });
     setDifficulty(prefs.get(DIFFICULTY_KEY));
+
+    const menuMusicOffCheckbox = document.getElementById('menuMusicOffCheckbox');
+    if (menuMusicOffCheckbox) {
+      menuMusicOffCheckbox.checked = menuMusicOff;
+      menuMusicOffCheckbox.addEventListener('change', () => {
+        setMenuMusicOff(menuMusicOffCheckbox.checked);
+        prefs.set(MENU_MUSIC_OFF_KEY, menuMusicOff ? 'on' : 'off');
+      });
+    }
 
     // Last Attack Frame's Off / On / Quick / Flip / Mixed row, drawn like the difficulty row: the
     // pick stays pressed in, and like difficulty it sticks across reloads - it is a way of playing
@@ -14626,7 +14674,7 @@ void main() {
       if (btnOpenSessionsFolder) btnOpenSessionsFolder.classList.add('hidden');
       if (btnOpenAssetsFolder) btnOpenAssetsFolder.classList.add('hidden');
       if (btnQuitEraseRun) btnQuitEraseRun.classList.add('hidden');
-      // Options, trimmed to what still means something without ComfyUI: Difficulty and the
+      // Options, trimmed to what still means something without ComfyUI: Difficulty (always shown) and the
       // Display Settings section (Max Frame Rate, Screensaver Wait) stay; the whole Generation
       // Settings section (Texture and Sprite Generation, Sound Generation, Ending Video) and the
       // ComfyUI Connection fields are generation-only, so they're replaced with one note
@@ -14635,15 +14683,15 @@ void main() {
       const comfySettingsSection = document.getElementById('comfySettingsSection');
       const showcaseGenerateNote = document.getElementById('showcaseGenerateNote');
       const aboutModelsSection = document.getElementById('aboutModelsSection');
-      const difficultySettingsRow = document.getElementById('difficultySettingsRow');
       if (generationSettingsSection) generationSettingsSection.classList.add('hidden');
       if (comfySettingsSection) comfySettingsSection.classList.add('hidden');
       if (showcaseGenerateNote) showcaseGenerateNote.classList.remove('hidden');
       if (aboutModelsSection) aboutModelsSection.classList.add('hidden');
-      // Difficulty's own row lives in Setup's footer now, which this export hides wholesale -
-      // this is the copy that stays reachable, so replaying a saved dungeon can still pick what
-      // it re-rolls the maze at (see difficultySelectShowcase above).
-      if (difficultySettingsRow) difficultySettingsRow.classList.remove('hidden');
+      // The About box's text, swapped for its play-only reading: "you make these on your own
+      // machine" and the localhost plumbing are replaced by "these were made elsewhere" and how
+      // a static page plays them back. See the ABOUT DIALOG comment in index.html.
+      document.querySelectorAll('[data-generation-only]').forEach((el) => el.classList.add('hidden'));
+      document.querySelectorAll('[data-showcase-only]').forEach((el) => el.classList.remove('hidden'));
       screenSetup.classList.add('hidden');
       if (screenShowcase) screenShowcase.classList.remove('hidden');
       refreshHistory();

@@ -1507,7 +1507,8 @@
         <!-- The window icon: the same CC-shades cat as the tab favicon, at its native
              16px so one SVG pixel lands on one CSS pixel. -->
         <img src="favicon.svg" alt="" width="16" height="16" class="shrink-0" style="image-rendering: pixelated;">
-        <span>ComfyCrawler by sorryaboutyourcats</span>
+        <span data-generation-only>ComfyCrawler by sorryaboutyourcats</span>
+        <span class="hidden" data-showcase-only>ComfyCrawler (read-only edition) by sorryaboutyourcats</span>
       </div>
       <div id="titleButtons" class="flex gap-1 text-xs">
         <!-- Main menu and the loading screen (see the #btnAbout rule in the stylesheet): who
@@ -1894,13 +1895,11 @@
         </div>
 
         <div class="p-3 flex flex-col gap-4">
-          <!-- Difficulty: moved out to Setup's own footer (next to Undo/Redo) for the normal
-               generate-a-dungeon flow - see difficultySelect in index.html/game.js. This copy is
-               SHOWCASE_MODE's only way to reach it: that export hides Setup's footer wholesale,
-               yet difficulty still matters there - replaying a saved dungeon re-rolls its maze
-               shape at whatever difficulty is picked right now (see loadHistoryDungeon in
-               game.js). Hidden by default; the boot-time SHOWCASE_MODE block reveals it. -->
-          <div id="difficultySettingsRow" class="win95-box p-3 bg-slate-100 flex flex-col gap-2 hidden">
+          <!-- Difficulty: the same pick as Setup's footer (difficultySelect, next to Undo/Redo)
+               and History's - setDifficulty in game.js keeps every copy in sync. Always shown,
+               and SHOWCASE_MODE's way to reach it too since that export hides Setup's footer.
+               Hovering it shows how the three differ (DIFFICULTY_TOOLTIP). -->
+          <div id="difficultySettingsRow" class="win95-box p-3 bg-slate-100 flex flex-col gap-2">
             <label for="difficultySelectShowcase" class="text-xs font-bold text-slate-800">
               Difficulty:
             </label>
@@ -2075,7 +2074,7 @@
             </div>
           </div>
 
-          <!-- Display Settings: Max Frame Rate and Screensaver Wait are both about playing back a
+          <!-- Display Settings: Max Frame Rate, Screensaver Wait and Disable menu music are all about playing back a
                dungeon rather than generating one, so they stay in their own section below
                Generation Settings and, unlike it, still mean something in the showcase export. -->
           <div class="flex flex-col gap-3">
@@ -2122,6 +2121,14 @@
               <!-- Hidden for now - may be shown again later. -->
               <div class="text-[10px] text-slate-500 font-bold" hidden>The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
             </div>
+
+            <!-- Silences only the title screen's loop (sounds/menu_music.wav) - loading, victory,
+                 death and dungeon music are untouched. game.js: setMenuMusicOff / menuMusicBus. -->
+            <label for="menuMusicOffCheckbox"
+                   class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer select-none">
+              <input type="checkbox" id="menuMusicOffCheckbox" class="win95-checkbox" />
+              Disable menu music
+            </label>
           </div>
 
           <!-- Shown only in the showcase export (SHOWCASE_MODE in game.js, toggled at boot) -
@@ -2211,7 +2218,12 @@
     <!-- ABOUT DIALOG - what the title bar's ? opens. Credits, the two links, and an honest
          parts list of everything that does the drawing, so "what made this picture?" is
          answerable from inside the game and not only from the README. All static text: it does
-         not read the server, so it has to be edited by hand when the pipeline changes. -->
+         not read the server, so it has to be edited by hand when the pipeline changes.
+         Two readings of the same box: anything marked data-generation-only is the live
+         game's (making dungeons on this machine), anything marked data-showcase-only is the
+         play-only export's (dungeons made elsewhere, played back from static files). The
+         showcase-only ones start hidden, and the boot-time SHOWCASE_MODE block in game.js
+         swaps the two sets over. Unmarked text reads true in both. -->
     <div id="modalAbout" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
       <div class="win95-box w-full max-w-4xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
         <div class="win95-title flex items-center justify-between mb-2">
@@ -2224,8 +2236,10 @@
         <div class="px-3 pt-1 flex items-center gap-3">
           <div class="text-4xl leading-none select-none">🏰</div>
           <div class="min-w-0">
-            <div class="text-base font-black text-slate-900">ComfyCrawler</div>
-            <div class="text-[11px] font-bold text-slate-700">A Windows&nbsp;95 3D Maze &amp; Valbrace styled dungeon crawler that draws itself, on your own hardware.</div>
+            <div class="text-base font-black text-slate-900" data-generation-only>ComfyCrawler</div>
+            <div class="text-base font-black text-slate-900 hidden" data-showcase-only>ComfyCrawler (read-only edition) by sorryaboutyourcats</div>
+            <div class="text-[11px] font-bold text-slate-700" data-generation-only>A Windows&nbsp;95 3D Maze &amp; Valbrace styled dungeon crawler that draws itself, on your own hardware.</div>
+            <div class="text-[11px] font-bold text-slate-700 hidden" data-showcase-only>A Windows&nbsp;95 3D Maze &amp; Valbrace styled dungeon crawler that draws itself &ndash; these are dungeons it already drew.</div>
           </div>
         </div>
 
@@ -2253,7 +2267,7 @@
             </div>
           </div>
 
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1" data-generation-only>
             <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🎮 What this is</div>
             <p class="text-[11px] text-slate-800">
               You fill in four blanks on the main menu &ndash; a style, a hero, a weapon, a foe &ndash;
@@ -2270,6 +2284,28 @@
             </p>
           </div>
 
+          <div class="flex flex-col gap-1 hidden" data-showcase-only>
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🎮 What this is</div>
+            <p class="text-[11px] text-slate-800">
+              A play-only copy of ComfyCrawler. Every dungeon in the list started as four blanks
+              &ndash; a style, a hero, a weapon, a foe &ndash; and a stack of models running on
+              sorryaboutyourcats&rsquo; own PC built the rest: the walls, ceiling and floor, the
+              hero and their swing, three different foes, the story that scrolls past before you
+              start, the names, the footsteps, the music, and on some of them a short film of the
+              final blow.
+            </p>
+            <p class="text-[11px] text-slate-800">
+              All of that was made ahead of time, so here there is nothing to wait for: pick one and
+              walk it. The pictures and sounds are fixed, but the maze is not &ndash; it is laid out
+              fresh every time you press Start, at whichever difficulty is picked, so the same
+              dungeon plays differently twice.
+            </p>
+            <p class="text-[11px] text-slate-800">
+              Want one with your own four blanks in it? <strong>🛠️&nbsp;Make your own runs</strong>,
+              under the list, has both ways to get one.
+            </p>
+          </div>
+
           <div class="flex flex-col gap-1">
             <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🛠️ How it was made</div>
             <p class="text-[11px] text-slate-800">
@@ -2279,15 +2315,16 @@
             </p>
             <p class="text-[11px] text-slate-800">
               sorryaboutyourcats decided what it should be and played every build; Claude wrote the
-              code and measured what came back. Most of the prompt wording in here was settled by
-              counting pixels on real renders rather than by taste &ndash; foes used to draw at 4% of
-              their canvas until &ldquo;fill the frame&rdquo; replaced &ldquo;small, with a large
-              margin&rdquo;.
+              code and measured what came back.
             </p>
           </div>
 
           <div class="flex flex-col gap-1.5">
             <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🧠 What does the drawing</div>
+            <p class="text-[11px] text-slate-800 hidden" data-showcase-only>
+              None of these run in this page. They ran once per dungeon, on one NVIDIA RTX&nbsp;3090
+              through ComfyUI, and what they made is what you are playing.
+            </p>
 
             <div class="text-[11px] text-slate-800">
               <strong>Krea&nbsp;2 Turbo</strong> &mdash; walls, ceilings and floors, the hero&rsquo;s
@@ -2346,7 +2383,7 @@
             </div>
           </div>
 
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1" data-generation-only>
             <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🔌 How it is plumbed</div>
             <p class="text-[11px] text-slate-800">
               A Python&nbsp;3.10 standard-library HTTP server on <strong>127.0.0.1:5555</strong> serves
@@ -2359,6 +2396,20 @@
             <p class="text-[11px] font-bold text-slate-800">
               No cloud API, no account, no key, no MCP server. The only thing this page talks to is
               your own machine, and nothing you type into it leaves.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-1 hidden" data-showcase-only>
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🔌 How this page works</div>
+            <p class="text-[11px] text-slate-800">
+              It is the same page and the same game code as the full version, with generating
+              switched off. There is no server behind it: just static files, a list of the
+              dungeons, and one saved bundle per dungeon holding its pictures, sounds, music, story
+              and names. The maze, the foes&rsquo; moves and the fights all run in your browser.
+            </p>
+            <p class="text-[11px] font-bold text-slate-800">
+              No account and no tracking. Your options, stars and which bosses you have beaten are
+              kept in this browser only, and go nowhere else.
             </p>
           </div>
 
@@ -2393,7 +2444,7 @@
                two links are about sorryaboutyourcats generally, so they read as a footnote rather
                than competing with "This game" up top for the player's first look. -->
           <div class="flex flex-col gap-1">
-            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">🔗 Elsewhere</div>
+            <div class="text-xs font-black text-blue-900 border-b border-slate-300 pb-0.5">❤️ Support &amp; follow</div>
             <div class="flex flex-col gap-0.5 mt-0.5 text-[11px]">
               <a class="about-link" href="https://store.steampowered.com/app/3529400/Mow_Meow/" target="_blank" rel="noopener noreferrer">
                 <span class="select-none">🐱</span>
@@ -2888,8 +2939,14 @@
         </div>
       </div>
 
-      <div id="showcaseList" class="win95-inset p-2 overflow-y-auto flex flex-col gap-1.5"
-           style="background: #ffffff; min-height: 140px; max-height: 64vh;"></div>
+      <!-- .win95-inset paints itself black, so the white list ground is overridden inline
+           rather than with a bg- utility. The inset frame is a wrapper and the scroller sits
+           inside it with a little vertical margin, so the scrollbar's arrow buttons start below
+           the frame's top edge rather than flush against it - matching History's own list. -->
+      <div class="win95-inset" style="background: #ffffff;">
+        <div id="showcaseList" class="p-2 overflow-y-auto flex flex-col gap-1.5"
+             style="margin: 3px 0; min-height: 134px; max-height: calc(64vh - 6px);"></div>
+      </div>
 
       <!-- Footer, laid out like the History window's own: the count on the left, every control
            bottom right. Difficulty and Sort are that window's two dropdowns again, driving the
