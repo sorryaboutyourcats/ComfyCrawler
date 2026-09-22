@@ -110,8 +110,11 @@
     // hidden there wholesale), yet difficulty still matters - replaying a saved dungeon
     // re-rolls its maze shape at whatever difficulty is picked right now (see
     // loadHistoryDungeon). Hidden by default; the boot-time SHOWCASE_MODE block reveals it.
+    // difficultySelectHistory is the same pick again, next to History's Sort dropdown, so a
+    // saved dungeon can be replayed at a different difficulty without a trip to Setup first.
     const difficultySelect = document.getElementById('difficultySelect');
     const difficultySelectShowcase = document.getElementById('difficultySelectShowcase');
+    const difficultySelectHistory = document.getElementById('difficultySelectHistory');
     const gridDesc = document.getElementById('gridDesc');
     // Options' Off / On pair for Last Attack Frame - see setLastAttackFrame.
     const lastAttackFrameRow = document.getElementById('lastAttackFrameRow');
@@ -1453,7 +1456,8 @@
       posY: 1.5,
       angle: 0,
       dirIndex: 1,
-      isAnimating: false
+      isAnimating: false,
+      bumping: false
     };
 
     // ==========================================
@@ -1753,11 +1757,13 @@
       if (gridDesc) gridDesc.textContent = DIFFICULTIES[id].desc;
       if (difficultySelect) difficultySelect.value = id;
       if (difficultySelectShowcase) difficultySelectShowcase.value = id;
+      if (difficultySelectHistory) difficultySelectHistory.value = id;
     }
 
-    // Both selects drive the same setDifficulty - only one is ever on screen at once
-    // (difficultySelect in normal mode, difficultySelectShowcase in SHOWCASE_MODE), so there is
-    // nothing to keep in sync beyond what setDifficulty already does on every change.
+    // All three selects drive the same setDifficulty - difficultySelect and
+    // difficultySelectShowcase are never both on screen at once (normal mode vs. SHOWCASE_MODE),
+    // but difficultySelectHistory in the History modal can be up alongside either one, so it
+    // gets kept in sync the same way rather than assumed to be the only other picker around.
     if (difficultySelect) {
       difficultySelect.addEventListener('change', () => {
         setDifficulty(difficultySelect.value);
@@ -1767,6 +1773,12 @@
     if (difficultySelectShowcase) {
       difficultySelectShowcase.addEventListener('change', () => {
         setDifficulty(difficultySelectShowcase.value);
+        prefs.set(DIFFICULTY_KEY, selectedDifficulty);
+      });
+    }
+    if (difficultySelectHistory) {
+      difficultySelectHistory.addEventListener('change', () => {
+        setDifficulty(difficultySelectHistory.value);
         prefs.set(DIFFICULTY_KEY, selectedDifficulty);
       });
     }
@@ -3123,8 +3135,25 @@
     // A flyer hovers a fixed height off the floor line, so when the near-wall pull-in walks the
     // whole staging DOWN the canvas the flyer rides down with it and ends up sitting in the
     // hero's face at chest height rather than up out of reach. Lift it back up by this fraction
-    // of the pull-in distance, so a flyer pressed against a wall still reads as airborne.
-    const NEAR_WALL_FLY_LIFT = 0.4;
+    // of the pull-in distance, so a flyer pressed against a wall still reads as airborne. The
+    // wall is the case that needs it most: with masonry filling the frame there is no receding
+    // floor to judge the gap against, and the foe's shadow - the other cue that it is up there
+    // at all - has been walked down to the bottom edge of the view and faded out with height.
+    // What is left is the daylight under its feet, so there has to be some.
+    const NEAR_WALL_FLY_LIFT = 0.55;
+
+    // FLYER SIZE. A flyer is drawn at this fraction of the height its variant asks for, and the
+    // px that frees up go straight back into altitude. The name plate, not cfg.hover, is what
+    // actually caps how high a flyer gets to hang: the clamp in drawEnemyBody pushes anything
+    // that would be drawn under the plate back DOWN, and at full hover that was eating ~24 of
+    // the flyer's 58px - so the foe the player is meant to read as out of reach was hanging at
+    // barely a third of a wall. A shorter foe is one the same plate lets hover higher, and it
+    // costs a little of a silhouette that was never the thing being read.
+    //
+    // Flat and per-variant rather than worked out per frame against the plate: a factor that
+    // tracked the live altitude would pulse the foe's size as it bobs, and swing it once a lap
+    // on a circler - it has to stay the same creature it was a frame ago.
+    const FLYER_SIZE = 0.86;
 
     // The hue on swarmer/circler above is only a starting value: every run rolls both of them
     // fresh, and independently - this run's runts can be blue while its fledglings are purple,
@@ -5810,6 +5839,10 @@ void main() {
       const isHurt = combatState.dead || combatState.faceState === 'hurt' || combatState.hurtFrame > 0;
       const isAttack = combatState.faceState === 'attack' || combatState.attackFrame > 0;
       const isBlock = combatState.shieldProgress > 0.5;
+      // A wall bump borrows the guard face too - it reads as the hero flinching off the
+      // collision rather than swinging or getting hit - but it is not a combat state, so it
+      // stays out of isBlock and does not light up the border below.
+      const showBlockFace = isBlock || player.bumping;
       // Spent sits BELOW the three action states: whatever the hero is doing this instant wins
       // the expression, and the portrait dim is what is left over when they are doing nothing
       // because there is nothing left to do it with. Cleared while dead and through a win outro,
@@ -5824,7 +5857,7 @@ void main() {
       // below, leaving the drained body sprite and the amber border to carry the "can't swing" read.
       let face = playerFaceImg;
       if (playerFaceFrames.length > 1) {
-        const idx = isHurt ? 3 : isAttack ? 1 : isBlock ? 2 : 0;
+        const idx = isHurt ? 3 : isAttack ? 1 : showBlockFace ? 2 : 0;
         face = playerFaceFrames[idx] || playerFaceFrames[0];
       }
 
@@ -6927,9 +6960,14 @@ void main() {
       // its horn tips are the highest thing it draws, about 65px above ey. Clamped on the
       // resting height with the bob's swing reserved above it and the bob added back after,
       // for the same reason - see the sprite path.
+
+      // See FLYER_SIZE - a flyer gives up a little height so the name plate lets it hang
+      // higher. Both bodies below take it: the sprite is sized with it, and the procedural
+      // fallback is scaled by it. 1 for anything with its feet on the floor.
+      const flySize = cfg.fly ? FLYER_SIZE : 1;
       const eyBob = Math.sin(Date.now() / 200) * 4;
       let ey = (groundY - 70) - (e.altitude || 0) - altLift + victoryHop;
-      const eyCeiling = hpPlateClear() + 65 + 4;
+      const eyCeiling = hpPlateClear() + 65 * flySize + 4;
       if (ey < eyCeiling) ey = Math.min(groundY - 70, eyCeiling);
       ey += eyBob;
 
@@ -6984,8 +7022,8 @@ void main() {
         if (frame && frame.complete && frame.naturalWidth > 0) {
           // Size by MEASURED solid content, not the raw frame - a small generation still fills
           // the combat view. heightFrac is per-variant: boss looms, flyer is smaller & airborne.
-          let targetH = Math.round(height * cfg.heightFrac * dScale);
-          let maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale);
+          let targetH = Math.round(height * cfg.heightFrac * dScale * flySize);
+          let maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale * flySize);
           const bobAmp = cfg.fly ? 4 : 3;
           const bob = Math.sin(Date.now() / (cfg.fly ? 110 : 220)) * bobAmp;
           // Hover, but not behind the name plate. A flyer's whole point is being up out of
@@ -7082,6 +7120,14 @@ void main() {
         c.translate(ex, groundY);
         c.scale(near.scale, near.scale);
         c.translate(-ex, -groundY);
+      }
+      // FLYER_SIZE reaches it the same way, but about (ex, ey) - the point its fixed offsets
+      // are all hung from. Scaled about the floor line instead, a smaller flyer would be
+      // dragged back DOWN towards the ground and would hand back the altitude it just bought.
+      if (flySize < 1) {
+        c.translate(ex, ey);
+        c.scale(flySize, flySize);
+        c.translate(-ex, -ey);
       }
       if (isHurt) c.translate((Math.random() * 8 - 4), 0);
 
@@ -9809,6 +9855,7 @@ void main() {
 
     function animateBump(dx, dy) {
       player.isAnimating = true;
+      player.bumping = true;
       const startX = player.posX;
       const startY = player.posY;
       const bumpX = startX + dx * 0.18;
@@ -9837,12 +9884,16 @@ void main() {
         if (elapsed >= TOTAL || viewportFrameAllowed(now)) {
           render3D();
           drawMinimap();
+          // combatFrame stands down for the whole bump (see its player.isAnimating bail-out),
+          // so the portrait's own render call has to happen here or the blocking face never paints.
+          renderDoomFace();
         }
 
         if (elapsed < TOTAL) {
           requestAnimationFrame(step);
         } else {
           player.isAnimating = false;
+          player.bumping = false;
 
           if (queuedAction) {
             const next = queuedAction;

@@ -2414,14 +2414,25 @@
              every time a dungeon is entered, and "Completed" orders the beaten ones by
              beaten_at, written once the first time each boss went down. -->
         <div class="px-3 pt-1 flex items-center justify-end gap-1.5">
-          <label for="historySort" class="text-[10px] text-slate-700 font-bold select-none">Sort</label>
+          <!-- Same three difficulties as Setup's difficultySelect - see setDifficulty in game.js,
+               which keeps all difficulty <select>s in sync. Useful right here because replaying a
+               saved dungeon re-rolls its maze shape at whatever difficulty is picked right now
+               (see loadHistoryDungeon in game.js), not just whatever it was made at. -->
+          <select id="difficultySelectHistory" class="win95-input text-xs font-bold cursor-pointer" title="Difficulty" aria-label="Difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+
+          <span class="win95-sep self-stretch my-0.5" aria-hidden="true"></span>
+
           <select id="historySort" class="win95-input text-xs font-bold cursor-pointer"
-                  title="What order the saved dungeons are listed in">
-            <option value="default">Default (newest first)</option>
+                  title="What order the saved dungeons are listed in" aria-label="Sort">
+            <option value="default">Default</option>
             <option value="played">Recently played</option>
-            <option value="style">Style (dungeon look, A-Z)</option>
-            <option value="player">Player (hero, A-Z)</option>
-            <option value="completed">Completed (beaten first)</option>
+            <option value="style">Style</option>
+            <option value="player">Player</option>
+            <option value="completed">Completed</option>
             <option value="random">Randomized</option>
           </select>
         </div>
