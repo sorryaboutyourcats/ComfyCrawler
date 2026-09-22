@@ -31,7 +31,9 @@ import server  # noqa: E402  (import only - run_server() sits behind `if __name_
 SOUND_WHITELIST = ("start.wav", "button.wav", "end.wav", "ready.wav") \
     + tuple(f"{k}_music.wav" for k in server.STATIC_MUSIC)
 
-STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png"]
+# llms.txt is the machine players' manual (what the game is, window.ComfyCrawler, what to report
+# back) - the showcase is the edition most of them will actually reach, so it ships there too.
+STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png", "llms.txt"]
 
 # The page's typeface, referenced by index.html's own @font-face as fonts/<name>. Shipped with
 # the export for the same reason tailwind.css is: a visitor's phone has no Comic Sans, and

@@ -11216,7 +11216,9 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        elif self.path == "/" or self.path == "/index.html":
+        # The query string is the page's own business, not a different page: `?agent` turns on
+        # agent mode (see llms.txt), and inside ComfyUI the /comfycrawler redirect carries one along.
+        elif self.path.split("?", 1)[0] in ("/", "/index.html"):
             html_file = os.path.join(PROJECT_DIR, "index.html")
             if os.path.exists(html_file):
                 with open(html_file, "rb") as f:
@@ -11237,6 +11239,21 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     content = f.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+        # The manual for AI agents: what the game is, how to play it through window.ComfyCrawler,
+        # and what to report afterwards. Served beside the page, where llms.txt convention and the
+        # page's own <link rel="help"> both look for it.
+        elif self.path == "/llms.txt":
+            txt_file = os.path.join(PROJECT_DIR, "llms.txt")
+            if os.path.exists(txt_file):
+                with open(txt_file, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)

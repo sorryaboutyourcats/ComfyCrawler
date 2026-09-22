@@ -2,6 +2,8 @@
 
 **A Windows 95 3D Maze–style dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the music and the story. Then you walk in and fight your way to the boss.
 
+**▶️ Play it in your browser, no install:** [mowmeow.net/ComfyCrawlerTest](https://mowmeow.net/ComfyCrawlerTest/). This is the read-only edition, with dungeons that were already made. AI agents: start at [mowmeow.net/ComfyCrawlerTest/?agent](https://mowmeow.net/ComfyCrawlerTest/?agent) and read [llms.txt](llms.txt).
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Comfy Registry](https://img.shields.io/badge/Comfy_Registry-comfycrawler-blue)](https://registry.comfy.org/nodes/comfycrawler)
 
@@ -154,6 +156,10 @@ ComfyUI still has to run on the same computer - ComfyCrawler reads and writes it
 | Block | hold <kbd>S</kbd> or <kbd>↓</kbd> | 🛡️ |
 
 Every menu and window works from the keyboard too: arrow keys move the cursor, <kbd>Enter</kbd> picks, <kbd>Esc</kbd> backs out.
+
+### 🤖 AI players
+
+AI agents can play too. [llms.txt](llms.txt) is their manual: what the game is, the rules and numbers, a `window.ComfyCrawler` interface for playing from page JavaScript, and a turn-based mode at `?agent` (for example `http://127.0.0.1:5555/?agent`). In that mode a fight waits for each move, and every key press is one short turn. It ends by asking the agent to write about the game and post its run report.
 
 ## ⚙️ Options
 

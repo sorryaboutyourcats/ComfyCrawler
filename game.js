@@ -9,6 +9,34 @@
     // server, favorite/beaten kept in this browser's own localStorage instead of meta.json.
     const SHOWCASE_MODE = window.COMFYCRAWLER_SHOWCASE === true;
 
+    // AGENT MODE - for machine players (llms.txt beside this page says how to play one). Set by
+    // `?agent` in the page's address, or by the first action an agent takes through
+    // window.ComfyCrawler (the AGENT PLAY section at the bottom of this file). While it holds, a
+    // live fight stops running on the wall clock: the sim only moves when the agent steps it or
+    // presses a key (one short turn per press), so a player that takes seconds to decide can
+    // still dodge a wind-up. It also keeps the screensaver off - a thinking agent looks idle.
+    let agentMode = new URLSearchParams(window.location.search).has('agent');
+    // Everything the floating combat text has said, oldest first, for agents that read the game
+    // as text. `seq` numbers them so a caller can ask "what has happened since my last look".
+    const agentEvents = [];
+    let agentEventSeq = 0;
+    // Fixed 1/60s combat ticks run so far (combatTick counts them). The fight's own clock: the
+    // event log is stamped with it, and anything in the sim that sways over time reads it rather
+    // than Date.now(), so a fight an agent steps through behaves as it would in real time.
+    let simTicks = 0;
+    // The run report's tallies (ComfyCrawler.report). Kept for every run, human or machine -
+    // nothing else reads them. Reset by enterDungeon; restartDungeon starts a new attempt.
+    function freshRunTally() {
+      return {
+        swings: 0, hits: 0, dmgDealt: 0, foeGuarded: 0, misses: 0,
+        dodged: 0, guarded: 0, hitsTaken: 0, dmgTaken: 0,
+        startedAt: Date.now(), endedAt: 0, agent: agentMode
+      };
+    }
+    let runTally = freshRunTally();
+    let runAttempt = 1;
+    let runDeaths = 0;
+
     // Where sounds/ lives, relative to whoever served this page. SERVER_URL is a path from the
     // domain ROOT (fine for the live server/ComfyUI, which really is rooted there) - but a
     // showcase export can be hosted anywhere, including a subfolder, and export_showcase.py
@@ -3541,7 +3569,9 @@
         // around behind the combat view. Swapping it out for the combat buttons settles that
         // and costs no height, since the two grids are the same size.
         if (dpadGrid) dpadGrid.classList.add('hidden');
-        if (controlsHeader) controlsHeader.innerHTML = "COMBAT:<br>A/D to move<br>W to strike<br>S to block";
+        if (controlsHeader) controlsHeader.innerHTML = agentMode
+          ? "TURN-BASED (agent):<br>A/D move · W strike<br>S block · SPACE wait<br>1 key = 1 turn (1/6s)"
+          : "COMBAT:<br>A/D to move<br>W to strike<br>S to block";
 
         combatState.playerX = 0;
         combatState.vx = 0;
@@ -3905,6 +3935,8 @@
       const firstTime = !victoryShownThisRun;
       victoryShownThisRun = true;
       markRunBeaten();
+      if (!runTally.endedAt) runTally.endedAt = Date.now();
+      showAgentReport(victoryModal);
       winMovesCount.textContent = totalMoves;
       victoryModal.classList.toggle('over-ending', !!overEnding);
       paintVictoryFavorite();
@@ -4806,6 +4838,9 @@ void main() {
     function killPlayer() {
       if (combatState.dead) return;      // several strikes can resolve on the same frame
       combatState.dead = true;
+      runDeaths++;
+      runTally.endedAt = Date.now();
+      showAgentReport(defeatModal);
       playSfx('death_player');
       // Drop the foes back to a neutral pose so the celebration hop isn't frozen mid-swing.
       for (const e of combatState.enemies) {
@@ -4860,6 +4895,9 @@ void main() {
       // outro fresh, as the first one did. The clip itself stays loaded.
       victoryShownThisRun = false;
       endingPlayed = false;
+      // Same dungeon, next attempt: the report counts this try from zero and remembers the deaths.
+      runAttempt++;
+      runTally = { ...freshRunTally(), difficulty: runTally.difficulty };
 
       // Maze back to its start-of-run shape: closed doors (MAP 3), un-thrown switches (MAP 4),
       // and the walkable-tile list without any tiles a since-opened door had added.
@@ -4997,6 +5035,8 @@ void main() {
     window.addEventListener('blur', releaseHeldKeys);
 
     function showFloatingCombatText(text, x, y, color = '#ffffff') {
+      agentEvents.push({ seq: ++agentEventSeq, tick: simTicks, text });
+      if (agentEvents.length > 200) agentEvents.shift();
       combatState.combatEffects.push({
         text: text,
         x: x,
@@ -5031,6 +5071,7 @@ void main() {
       } else {
         combatState.playerStm = Math.max(0, combatState.playerStm - ATTACK_STM_COST);
       }
+      runTally.swings++;
       // The swing, on the windup. The impact sound is separate, on frame 7 where the hit
       // actually resolves.
       playSfx('attack');
@@ -5057,23 +5098,24 @@ void main() {
       combatState.faceTimer = 18;
     }
 
+    // In agent mode a press is one turn of the fight rather than a hold (see agentTurn).
     if (btnCombatDodgeL) {
-      btnCombatDodgeL.addEventListener('pointerdown', (e) => { e.preventDefault(); keysHeld.left = true; });
+      btnCombatDodgeL.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ left: true })) return; keysHeld.left = true; });
       btnCombatDodgeL.addEventListener('pointerup', () => { keysHeld.left = false; });
       btnCombatDodgeL.addEventListener('pointerleave', () => { keysHeld.left = false; });
     }
     if (btnCombatDodgeR) {
-      btnCombatDodgeR.addEventListener('pointerdown', (e) => { e.preventDefault(); keysHeld.right = true; });
+      btnCombatDodgeR.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ right: true })) return; keysHeld.right = true; });
       btnCombatDodgeR.addEventListener('pointerup', () => { keysHeld.right = false; });
       btnCombatDodgeR.addEventListener('pointerleave', () => { keysHeld.right = false; });
     }
     if (btnCombatBlock) {
-      btnCombatBlock.addEventListener('pointerdown', (e) => { e.preventDefault(); keysHeld.block = true; });
+      btnCombatBlock.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ block: true })) return; keysHeld.block = true; });
       btnCombatBlock.addEventListener('pointerup', () => { keysHeld.block = false; });
       btnCombatBlock.addEventListener('pointerleave', () => { keysHeld.block = false; });
     }
     if (btnCombatAttack) {
-      btnCombatAttack.addEventListener('pointerdown', (e) => { e.preventDefault(); combatAttack(); });
+      btnCombatAttack.addEventListener('pointerdown', (e) => { e.preventDefault(); if (agentTurn({ attack: true })) return; combatAttack(); });
     }
 
     // Combat runs on a FIXED timestep, decoupled from how often we actually draw.
@@ -5117,9 +5159,12 @@ void main() {
       const isDodged = Math.abs(combatState.playerX - e.x) > ((opts && opts.reach) || 44);
       const isGuarded = combatState.shieldProgress > 0.6;
       if (isDodged) {
+        runTally.dodged++;
         playSfx('miss_player');
         showFloatingCombatText(dodgeMsg, tx, 130, "#38bdf8");
       } else if (isGuarded) {
+        runTally.guarded++;
+        runTally.dmgTaken += Math.min(combatState.playerHp - 1, Math.round(dmg * 0.12));
         playSfx('block');
         showFloatingCombatText(blockMsg, tx, 140, "#a855f7");
         combatState.playerHp = Math.max(1, combatState.playerHp - Math.round(dmg * 0.12));
@@ -5137,6 +5182,8 @@ void main() {
           showFloatingCombatText(`-${stmCost} STAMINA!`, tx, 152, "#f97316");
         }
       } else {
+        runTally.hitsTaken++;
+        runTally.dmgTaken += Math.min(combatState.playerHp, dmg);
         combatState.playerHp = Math.max(0, combatState.playerHp - dmg);
         combatState.hurtFrame = 1;
         combatState.faceState = 'hurt';
@@ -5384,8 +5431,12 @@ void main() {
         }
         e.swoopTimer--;
         if (e.swoop === 'none') {
-          e.x += Math.sin(Date.now() / 620) * 1.3;
-          e.altitude = cfg.hover + Math.sin(Date.now() / 300) * 5;
+          // On the sim's own clock (simTicks), not the wall's: a fight stepped by an agent packs
+          // many ticks into one instant, and a sway read off Date.now() would push the flyer the
+          // same way for every one of them instead of swinging it back and forth.
+          const simMs = simTicks * SIM_STEP;
+          e.x += Math.sin(simMs / 620) * 1.3;
+          e.altitude = cfg.hover + Math.sin(simMs / 300) * 5;
           if (e.swoopTimer <= 0 && e.state !== 'hurt') {
             // The dive IS the flyer's approach - it has no walk to speed up - so a difficulty
             // that makes foes travel faster shortens it, descent and all. The gap between
@@ -5613,6 +5664,7 @@ void main() {
         tickStamina();
         return;
       }
+      simTicks++;
 
       if (combatState.inBattle && combatState.introFrame < INTRO_TOTAL) {
         combatState.introFrame++;
@@ -5741,11 +5793,13 @@ void main() {
             // pitch, unlike hit_enemy/block/death_enemy below. "MISSED!" when there was a foe
             // on the ground in front to line up on; "OUT OF REACH!" when everything left is
             // airborne or withdrawn and the answer is to wait, not to shuffle sideways.
+            runTally.misses++;
             playSfx('miss_enemy');
             showFloatingCombatText(anyInFront ? "MISSED!" : "OUT OF REACH!", 160, 90, "#93c5fd");
           } else if (e) {
             const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
             if (e.blockTimer > 0) {
+              runTally.foeGuarded++;
               // Caught on the guard: nothing lands - no HP lost, no stagger. The walker keeps
               // its guard through it (reactiveBlock); every other foe drops it, so the boss
               // fight stays a rhythm of blocked-then-clean swings instead of a wall.
@@ -5759,6 +5813,8 @@ void main() {
               // scales the total) rather than a flat bonus that dwarfs it.
               let dmg = 24 + progression.bonusAtk + Math.floor(Math.random() * 12);
               if (cfg.slow) dmg = Math.floor(dmg * 0.7);   // boss is armoured
+              runTally.hits++;
+              runTally.dmgDealt += Math.min(e.hp, dmg);
               e.hp = Math.max(0, e.hp - dmg);
               e.state = 'hurt';
               e.stateTimer = 12;
@@ -5876,6 +5932,9 @@ void main() {
 
       let steps = 0;
       while (simAccumulator >= SIM_STEP && steps < MAX_SIM_STEPS) {
+        // Agent mode: a live fight waits for the agent (agentStep) instead of the clock. Checked
+        // per tick, so the hold starts on the exact tick the entrance finishes.
+        if (agentHoldsSim()) { simAccumulator = 0; break; }
         combatTick();
         simAccumulator -= SIM_STEP;
         steps++;
@@ -9894,7 +9953,21 @@ void main() {
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
+    // Set around a move made through ComfyCrawler.act(): the step lands at once instead of
+    // tweening over 160ms, so an agent's move has fully arrived - encounter, stairs and all -
+    // by the time act() returns, even in a background tab where animation frames never come.
+    let agentSnapMoves = false;
+
     function animate3D(targetX, targetY, targetAngle) {
+      if (agentSnapMoves) {
+        player.posX = targetX;
+        player.posY = targetY;
+        player.angle = targetAngle;
+        render3D();
+        drawMinimap();
+        finishStepTween();
+        return;
+      }
       player.isAnimating = true;
       const startX = player.posX;
       const startY = player.posY;
@@ -9928,29 +10001,35 @@ void main() {
           player.posX = targetX;
           player.posY = targetY;
           player.angle = targetAngle;
-          player.isAnimating = false;
-          updateHUD();
-
-          // Ambush check on arrival, not on the key press, so the step is seen through before
-          // the room drops away and the duel slides in. startEncounter clears queuedAction, so
-          // a key held down through the transition can't walk the player during the fight.
-          checkEncounterAtPlayer();
-          if (combatState.inBattle) return;
-
-          if (queuedAction) {
-            const next = queuedAction;
-            queuedAction = null;
-            if (next === 'UP') moveForward();
-            else if (next === 'DOWN') moveBackward();
-            else if (next === 'LEFT') rotateLeft();
-            else if (next === 'RIGHT') rotateRight();
-          }
+          finishStepTween();
         }
       }
       requestAnimationFrame(step);
     }
 
+    // The player has arrived - the tween's last frame, or an agent's snapped move.
+    function finishStepTween() {
+      player.isAnimating = false;
+      updateHUD();
+
+      // Ambush check on arrival, not on the key press, so the step is seen through before
+      // the room drops away and the duel slides in. startEncounter clears queuedAction, so
+      // a key held down through the transition can't walk the player during the fight.
+      checkEncounterAtPlayer();
+      if (combatState.inBattle) return;
+
+      if (queuedAction) {
+        const next = queuedAction;
+        queuedAction = null;
+        if (next === 'UP') moveForward();
+        else if (next === 'DOWN') moveBackward();
+        else if (next === 'LEFT') rotateLeft();
+        else if (next === 'RIGHT') rotateRight();
+      }
+    }
+
     function animateBump(dx, dy) {
+      if (agentSnapMoves) return;   // the bump sound already played; an agent has nothing to watch
       player.isAnimating = true;
       player.bumping = true;
       const startX = player.posX;
@@ -10217,6 +10296,14 @@ void main() {
       }
 
       if (combatState.inBattle) {
+        // Agent mode, mid-fight: every key is one turn of the fight - see agentTurn. Auto-repeat
+        // is ignored, so a key held down does not burn a stream of turns.
+        const turn = AGENT_TURN_KEYS[e.code];
+        if (turn && agentHoldsSim()) {
+          e.preventDefault();
+          if (!e.repeat) agentTurn(turn);
+          return;
+        }
         // Space had been the flee key. There is no fleeing now - the fight ends when one of the
         // two goes down - but it still has to be swallowed, or it re-triggers whichever combat
         // button the pointer last left focused.
@@ -10473,6 +10560,10 @@ void main() {
       // A brand new dungeon is a brand new hero: level 1, base bars, no banked picks.
       resetProgression();
       updateProgressionHUD();
+      runTally = freshRunTally();
+      runTally.difficulty = selectedDifficulty;
+      runAttempt = 1;
+      runDeaths = 0;
       // Does this run have an ending cutscene, or one filming? currentRunHistoryId is already
       // this run's by now - set by the poll loop for a fresh run, by loadHistoryDungeon for a
       // replay. Asked at ENTER rather than at arming, so a player who sits on the crawl still
@@ -14527,6 +14618,9 @@ void main() {
     function screensaverBlocked() {
       // A manual open from the ✕ overrides only the Off setting - every check below still applies.
       if (screensaverDelayMs <= 0 && !screensaverForced) return true;
+      // An agent thinking between moves looks exactly like an empty room, and the starfield
+      // would then swallow its next keypress. Agent mode holds it off entirely.
+      if (agentMode) return true;
       if (narrationActive() || ssAudioPlaying(narrateAudio) || ssAudioPlaying(outroAudio)) return true;
       // The intro crawl's own scroll duration, independent of narration - covers a story
       // that shipped with no audio at all, or whose autoplay got blocked before a click
@@ -14712,3 +14806,771 @@ void main() {
     render3D();
     drawMinimap();
     updateHUD();
+
+    // ==========================================
+    // AGENT PLAY - window.ComfyCrawler
+    // ==========================================
+    // A way in for machine players: an AI agent driving this page, or a script someone writes.
+    // llms.txt, served beside this page, is the manual - what the game is, the rules and their
+    // numbers, this interface, and what we would like back afterwards. Every action here goes
+    // through the same functions the keyboard does (moveForward, combatAttack, applyLevelChoice),
+    // so an agent plays by the rules a person does. What it adds is a text reading of the screen
+    // (state, map, story) and control of the fight's clock (agentStep) - the one thing that makes a
+    // real-time fight playable for something that takes seconds to decide each move.
+
+    // One turn for the keyboard and the on-screen buttons in agent mode: 10 ticks, 1/6 s. A
+    // walker's 30-tick wind-up is three turns to answer it; a whole 18-tick swing is two presses.
+    const AGENT_TURN_TICKS = 10;
+    const AGENT_TURN_KEYS = {
+      KeyA: { left: true }, ArrowLeft: { left: true },
+      KeyD: { right: true }, ArrowRight: { right: true },
+      KeyS: { block: true }, ArrowDown: { block: true }, KeyX: { block: true }, KeyK: { block: true },
+      KeyW: { attack: true }, ArrowUp: { attack: true }, KeyZ: { attack: true }, KeyJ: { attack: true },
+      Space: {}, Period: {}, Enter: {}, NumpadEnter: {}
+    };
+
+    // Foe kinds under the names the game shows (RUNT / FLEDGLING packs), not the code's own.
+    const AGENT_KIND = { walker: 'walker', flyer: 'flyer', boss: 'boss', swarmer: 'runt', circler: 'fledgling' };
+    const AGENT_MAP_GLYPH = { walker: 'w', flyer: 'f', boss: 'B', swarmer: 'r', circler: 'c' };
+    const AGENT_KIND_WORDS = {
+      walker: ['walker', 'walkers'], flyer: ['flyer', 'flyers'], runt: ['runt pack', 'runt packs'],
+      fledgling: ['fledgling pack', 'fledgling packs'], boss: ['boss', 'bosses']
+    };
+
+    const AGENT_HINTS = {
+      gallery: "Pick a saved dungeon: dungeons() lists them, play(n) loads one.",
+      menu: "dungeons() lists the saved dungeons and play(n) loads one. Making a new dungeon takes minutes of this machine's GPU - only do it if the person running this asks you to.",
+      loading: "A dungeon is loading. Check again in a moment.",
+      story: "The opening story is up (see `story`). Call enter() to walk in.",
+      explore: "act('forward'|'back') walks, act('left'|'right') turns, act('use') throws a switch you are facing. map() draws what you have seen. Walk onto a foe to fight it; the boss guards the way to the stairs.",
+      battle: "Each step() is one turn (10 ticks = 1/6 s): step({attack:true}), step({block:true}), step({left:true}), step({right:true}), or step() to wait. Add until:'event' to stop the moment something happens.",
+      levelup: "Choose one: levelUp('strength'|'stamina'|'survival'|'speed').",
+      ending: "The ending film is playing. skipEnding() jumps to the end, or wait.",
+      victory: "You won. Call report() for your run stats. restart() replays this maze from the start; menu() goes back.",
+      defeat: "You died. report() has your stats so far; restart() tries this same maze again; menu() goes back.",
+      other: "Nothing to do on this screen - menu() goes back."
+    };
+
+    const AGENT_HELP = [
+      'ComfyCrawler machine-play interface (window.ComfyCrawler). The full manual is llms.txt, next to this page.',
+      'Look:   state()  map()  story()  dungeons()  stats()  report(playedBy)',
+      'Start:  play(n | id | name, {difficulty})  then  enter()',
+      "Walk:   act('forward'|'back'|'left'|'right'|'use', times)",
+      'Fight:  step({attack, block, left, right, ticks, until})   (fights wait for you while agent mode is on)',
+      "After:  levelUp('strength'|'stamina'|'survival'|'speed')  skipEnding()  keepExploring()  restart()  menu()",
+      'Mode:   agentMode(true|false) - on by default once you act, or open the page with ?agent',
+    ].join('\n');
+
+    let agentLastStats = null;   // the run as it stood when it ended, for report() after leaving it
+
+    function setAgentMode(on) {
+      agentMode = !!on;
+      if (agentMode) runTally.agent = true;
+      if (combatState.inBattle && controlsHeader && !combatState.dead) {
+        controlsHeader.innerHTML = agentMode
+          ? "TURN-BASED (agent):<br>A/D move · W strike<br>S block · SPACE wait<br>1 key = 1 turn (1/6s)"
+          : "COMBAT:<br>A/D to move<br>W to strike<br>S to block";
+      }
+      return agentMode;
+    }
+
+    // A fight that is live: both sides on the field, nobody down, nothing covering it.
+    function agentFightLive() {
+      return battleReady() && !combatState.dead && !levelUpOpen && endingPhase === 'idle'
+        && combatState.enemies.some(e => e.hp > 0);
+    }
+
+    // True while the real-time loop must leave the fight alone - see combatFrame.
+    function agentHoldsSim() {
+      return agentMode && agentFightLive();
+    }
+
+    // Play out a fight's entrance (both fighters are frozen through it anyway), so the next input
+    // lands in the fight itself.
+    function agentSkipEntrance() {
+      let n = 0;
+      while (combatState.inBattle && !battleReady() && !combatState.dead && n < 200) { combatTick(); n++; }
+      return n;
+    }
+
+    // Run the fight forward with inputs held: left/right/block for the whole step, attack pressed
+    // at its start. Stops early when the fight stops being live, or - with until:'event' - on the
+    // first new line of combat text. With finish, a win is played through its corpse fade and
+    // outro, so the caller gets the corridor (or the level-up box) back rather than a fading arena.
+    function agentStep(opts) {
+      const o = opts || {};
+      let n = agentSkipEntrance();
+      if (agentFightLive()) {
+        const max = Math.max(1, Math.min(600, Math.round(Number(o.ticks) || AGENT_TURN_TICKS)));
+        const seq0 = agentEventSeq;
+        releaseHeldKeys();
+        if (o.attack) combatAttack();
+        keysHeld.left = !!o.left && !o.right;
+        keysHeld.right = !!o.right && !o.left;
+        keysHeld.block = !!o.block;
+        for (let i = 0; i < max; i++) {
+          combatTick();
+          n++;
+          if (!agentFightLive()) break;
+          if (o.until === 'event' && agentEventSeq > seq0) break;
+        }
+        releaseHeldKeys();
+      }
+      if (o.finish) {
+        let k = 0;
+        while (combatState.inBattle && !combatState.dead && !levelUpOpen && endingPhase === 'idle'
+               && !combatState.enemies.some(e => e.hp > 0) && k < 600) {
+          combatTick();
+          k++;
+        }
+        n += k;
+      }
+      return n;
+    }
+
+    // One turn from a key or an on-screen button. False when there is no agent-held fight, so
+    // the caller carries on with its ordinary real-time handling.
+    function agentTurn(inputs) {
+      if (!agentHoldsSim()) return false;
+      agentStep({ ...inputs, ticks: AGENT_TURN_TICKS });
+      return true;
+    }
+
+    function agentShown(el) {
+      return !!el && !el.classList.contains('hidden');
+    }
+
+    function agentScreen() {
+      if (agentShown(screenGame)) {
+        if (endingPhase === 'pending' || endingPhase === 'playing' || endingHolding()) return 'ending';
+        if (agentShown(victoryModal)) return 'victory';
+        if (combatState.dead) return 'defeat';
+        if (levelUpOpen) return 'levelup';
+        if (combatState.inBattle) return 'battle';
+        return 'explore';
+      }
+      if (agentShown(screenProgress)) return pendingBundle ? 'story' : 'loading';
+      if (agentShown(screenShowcase)) return 'gallery';
+      if (agentShown(screenSetup)) return 'menu';
+      return 'other';
+    }
+
+    function agentDialog() {
+      if (agentShown(modalQuitConfirm)) return 'quit-confirm';
+      if (agentShown(modalLeaveRunConfirm)) return 'leave-run-confirm';
+      if (agentShown(modalHistory)) return 'history';
+      if (agentShown(modalSettings)) return 'options';
+      if (agentShown(modalAbout)) return 'about';
+      return null;
+    }
+
+    function agentCloseDialogs() {
+      if (agentShown(modalQuitConfirm)) closeQuitConfirm();
+      if (agentShown(modalLeaveRunConfirm)) closeLeaveRunConfirm();
+      if (agentShown(modalHistory)) closeHistory();
+      if (agentShown(modalSettings)) modalSettings.classList.add('hidden');
+      if (agentShown(modalAbout)) closeAbout();
+    }
+
+    function agentMarkerAt(x, y) {
+      return enemyMarkers.find(m => m.alive && m.x === x && m.y === y) || null;
+    }
+
+    function agentFoeLabel(variant) {
+      const cfg = ENEMY_VARIANTS[variant] || ENEMY_VARIANTS.walker;
+      const n = packSizeOf(cfg);
+      return { kind: AGENT_KIND[variant] || variant, name: enemyDisplayName(variant, cfg), count: n };
+    }
+
+    // What the hero would see looking straight down one direction from (x, y): how many tiles can
+    // be walked, what closes the view, any foe or stairs on the way, and where side passages open.
+    // A switch shows only from the tile its lever faces - from anywhere else the game draws plain
+    // wall there (see interact and _switchFaceHit), so that is what it reads as here too.
+    function agentLook(x, y, dirIndex) {
+      const { dx, dy } = DIR_VECS[dirIndex];
+      const L = DIR_VECS[(dirIndex + 3) % 4];
+      const R = DIR_VECS[(dirIndex + 1) % 4];
+      const out = { dir: DIRS[dirIndex], open: 0, then: 'wall', foe: null, stairs: null, branches: [] };
+      const tiles = [];
+      let cx = x, cy = y;
+      for (let k = 0; k < 256; k++) {
+        const nx = cx + dx, ny = cy + dy;
+        if (!isWalkable(nx, ny)) {
+          const t = (MAP[ny] && MAP[ny][nx] !== undefined) ? MAP[ny][nx] : 1;
+          if (t === 3) out.then = 'locked door';
+          else if (t === 4 || t === 5) {
+            const sw = switchList.find(s => s.x === nx && s.y === ny);
+            const facing = !!sw && sw.cellX === cx && sw.cellY === cy;
+            out.then = facing ? (t === 4 ? 'switch' : 'thrown switch') : 'wall';
+          }
+          return { look: out, tiles, end: { x: nx, y: ny } };
+        }
+        cx = nx; cy = ny;
+        out.open++;
+        tiles.push({ x: cx, y: cy });
+        if (!out.foe) {
+          const m = agentMarkerAt(cx, cy);
+          if (m) out.foe = { ...agentFoeLabel(m.variant), distance: out.open };
+        }
+        if (out.stairs === null && cx === exitRoom.x && cy === exitRoom.y) out.stairs = out.open;
+        const sides = [];
+        if (isWalkable(cx + L.dx, cy + L.dy)) sides.push('left');
+        if (isWalkable(cx + R.dx, cy + R.dy)) sides.push('right');
+        if (sides.length) out.branches.push({ distance: out.open, sides });
+      }
+      return { look: out, tiles, end: { x: cx, y: cy } };
+    }
+
+    function agentLookAround() {
+      const d = player.dirIndex;
+      const at = (i) => agentLook(player.gridX, player.gridY, (d + i) % 4).look;
+      return { ahead: at(0), right: at(1), behind: at(2), left: at(3) };
+    }
+
+    // The hero's surroundings as the minimap would show them, with what can be seen from where the
+    // hero has stood: every tile walked, every corridor visible in a straight line from one of
+    // them (turning is free, so anything down a straight line from a visited tile has been in
+    // view), and the walls around them. North is up.
+    function agentMap() {
+      if (!passagesList.length || !MAP.length) return 'No dungeon loaded.';
+      const cells = new Map();   // "x,y" -> glyph
+      const key = (x, y) => x + ',' + y;
+      const wallGlyph = (x, y) => {
+        const t = (MAP[y] && MAP[y][x] !== undefined) ? MAP[y][x] : 1;
+        return t === 3 ? 'D' : '#';
+      };
+      const floorGlyph = (x, y, walked) => {
+        if (x === exitRoom.x && y === exitRoom.y) return '*';
+        if (MAP[y][x] === 6) return '/';
+        return walked ? '.' : ':';
+      };
+      const visited = [...visitedTiles].map(k => k.split(',').map(Number));
+      for (const [vx, vy] of visited) cells.set(key(vx, vy), floorGlyph(vx, vy, true));
+      for (const [vx, vy] of visited) {
+        for (let d = 0; d < 4; d++) {
+          const { tiles, end, look } = agentLook(vx, vy, d);
+          for (const p of tiles) {
+            if (!cells.has(key(p.x, p.y))) cells.set(key(p.x, p.y), floorGlyph(p.x, p.y, false));
+          }
+          const endKey = key(end.x, end.y);
+          const endGlyph = look.then === 'switch' ? 'S' : look.then === 'thrown switch' ? 's' : wallGlyph(end.x, end.y);
+          const had = cells.get(endKey);
+          if (!had || had === '#') cells.set(endKey, endGlyph);
+          const { dx, dy } = DIR_VECS[d];
+          const nx = vx + dx, ny = vy + dy;
+          if (!isWalkable(nx, ny) && !cells.has(key(nx, ny))) cells.set(key(nx, ny), wallGlyph(nx, ny));
+        }
+      }
+      for (const m of enemyMarkers) {
+        const k = key(m.x, m.y);
+        if (m.alive && cells.has(k)) cells.set(k, AGENT_MAP_GLYPH[m.variant] || 'w');
+      }
+      cells.set(key(player.gridX, player.gridY), '^>v<'[player.dirIndex]);
+
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const k of cells.keys()) {
+        const [x, y] = k.split(',').map(Number);
+        x0 = Math.min(x0, x); x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+      }
+      const pad = String(y1).length;
+      const lines = [];
+      let tens = '', ones = '';
+      for (let x = x0; x <= x1; x++) {
+        tens += x >= 10 ? String(Math.floor(x / 10) % 10) : ' ';
+        ones += String(x % 10);
+      }
+      lines.push(' '.repeat(pad + 1) + tens, ' '.repeat(pad + 1) + ones);
+      for (let y = y0; y <= y1; y++) {
+        let row = '';
+        for (let x = x0; x <= x1; x++) row += cells.get(key(x, y)) || ' ';
+        lines.push(String(y).padStart(pad) + ' ' + row.replace(/\s+$/, ''));
+      }
+      lines.push('');
+      lines.push(`You are at (${player.gridX}, ${player.gridY}) facing ${DIRS[player.dirIndex]}. x grows east, y grows south.`);
+      lines.push("Key: ^>v< you   . walked   : seen   * stairs out   # wall   D locked door   / opened gate");
+      lines.push("     S switch   s thrown switch   w walker   f flyer   r runt pack   c fledgling pack   B boss");
+      return lines.join('\n');
+    }
+
+    function agentPrompts() {
+      return currentRunHistoryPrompts || {
+        wall: wallPromptInput ? wallPromptInput.value : '',
+        player: playerPromptInput ? playerPromptInput.value : '',
+        weapon: weaponPromptInput ? weaponPromptInput.value : '',
+        enemy: enemyPromptInput ? enemyPromptInput.value : ''
+      };
+    }
+
+    function agentDungeonInfo() {
+      const p = agentPrompts();
+      const story = dungeonStory || {};
+      return {
+        id: currentRunHistoryId,
+        location: story.location || null,
+        style: (p.wall || currentThemeName || '').trim() || null,
+        hero: story.hero || null,
+        heroPrompt: (p.player || '').trim() || null,
+        weapon: (p.weapon || '').trim() || null,
+        foe: story.foe || enemyStyleName || (p.enemy || '').trim() || null,
+        boss: story.boss || enemyBossName || null,
+        difficulty: runTally.difficulty || selectedDifficulty
+      };
+    }
+
+    function agentStory() {
+      const story = dungeonStory || (pendingBundle && pendingBundle.story) || null;
+      if (!story) return null;
+      const out = {
+        location: story.location || null,
+        crawl: Array.isArray(story.crawl) ? story.crawl.slice() : [],
+        hook: story.hook || null,
+        hero: story.hero || null,
+        foe: story.foe || null,
+        boss: story.boss || null
+      };
+      // The closing lines are the victory box's own text - not handed out before it is earned.
+      if (victoryShownThisRun && story.outro) out.outro = story.outro;
+      return out;
+    }
+
+    function agentHero() {
+      return {
+        name: (dungeonStory && dungeonStory.hero) || null,
+        hp: Math.ceil(combatState.playerHp),
+        maxHp: combatState.playerMaxHp,
+        stamina: Math.floor(combatState.playerStm),
+        maxStamina: combatState.playerMaxStm,
+        level: progression.level,
+        xp: progression.xp,
+        xpToNext: progression.xpToNext,
+        attackBonus: progression.bonusAtk,
+        speed: Math.round(playerSpeedMult() * 100) + '%'
+      };
+    }
+
+    function agentFoe(e) {
+      const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
+      const gap = Math.round(e.x - combatState.playerX);
+      const airborne = !!cfg.fly && e.altitude > 34;
+      const withdrawn = (e.depth || 0) > REACH_DEPTH;
+      let doing = 'standing';
+      if (e.hp <= 0) doing = 'down';
+      else if (e.special && e.special !== 'none') {
+        doing = { back: 'pulling back', weave: 'weaving', pause: 'taking aim', windup: 'winding up a charge', rush: 'charging' }[e.special] || e.special;
+      } else if (e.swoop === 'diving') doing = 'diving at you';
+      else if (e.swoop === 'striking') doing = 'striking';
+      else if (e.swoop === 'rising') doing = 'climbing away';
+      else if (e.state === 'telegraph') doing = 'winding up';
+      else if (e.state === 'attack') doing = 'striking';
+      else if (e.state === 'hurt') doing = 'staggered';
+      else if (cfg.orbitLift) doing = 'circling';
+      else if (cfg.fly) doing = 'hovering';
+      else if (e.enraged) doing = 'enraged';
+      else if (cfg.timid && e.hp <= e.maxHp * 0.3) doing = 'fleeing';
+      else if (e.hunting) doing = 'hunting you';
+      else doing = cfg.slow ? 'patrolling' : 'stalking';
+      const out = {
+        name: e.name,
+        kind: AGENT_KIND[e.variant] || e.variant,
+        hp: Math.ceil(e.hp),
+        maxHp: e.maxHp,
+        x: Math.round(e.x),
+        gap,
+        doing,
+        guarding: e.hp > 0 && e.blockTimer > 0,
+        inYourReach: e.hp > 0 && !airborne && !withdrawn && Math.abs(gap) <= SWING_REACH + (cfg.bodyR || 22),
+        youInItsReach: Math.abs(gap) <= (e.special === 'windup' || e.special === 'rush' ? BOSS_CHARGE_REACH : 44)
+      };
+      if (cfg.fly) out.altitude = Math.round(e.altitude);
+      if (e.variant === 'boss' && e.noBlockTimer > 0) out.cannotGuardFor = e.noBlockTimer;
+      return out;
+    }
+
+    function agentBattle() {
+      const phase = combatState.dead ? 'lost'
+        : !battleReady() ? 'entrance'
+        : combatState.enemies.some(e => e.hp > 0) ? 'fight' : 'won';
+      const cs = combatState;
+      const stance = cs.shieldProgress > 0.6 ? 'guarding'
+        : cs.attackFrame > 0 ? 'swinging'
+        : cs.hurtFrame > 0 ? 'hurt' : 'ready';
+      return {
+        phase,
+        hero: {
+          x: Math.round(cs.playerX),
+          stance,
+          canSwing: cs.playerStm >= ATTACK_STM_COST && cs.attackFrame === 0 && cs.hurtFrame === 0 && cs.exhaustLock === 0,
+          exhaustedFor: cs.exhaustLock
+        },
+        arena: 'x runs from -85 (left wall) to +85 (right wall); you start at 0',
+        foes: cs.enemies.map(agentFoe)
+      };
+    }
+
+    function agentLevelUp() {
+      const text = (id) => { const el = document.getElementById(id); return el ? el.textContent : ''; };
+      return {
+        level: progression.level - progression.pendingLevels + 1,
+        choices: {
+          strength: text('levelUpStrengthText'),
+          stamina: text('levelUpStaminaText'),
+          survival: text('levelUpSurvivalText'),
+          speed: text('levelUpSpeedText')
+        }
+      };
+    }
+
+    function agentState() {
+      const screen = agentScreen();
+      const s = { screen, hint: AGENT_HINTS[screen] || '', agentMode, tick: simTicks };
+      const dialog = agentDialog();
+      if (dialog) s.dialog = dialog;
+      if (screen === 'gallery' || screen === 'menu') {
+        s.dungeonsLoaded = historyLoaded;
+        s.dungeonCount = Array.isArray(historyEntries) ? historyEntries.length : 0;
+      }
+      if (screen === 'story') {
+        s.dungeon = agentDungeonInfo();
+        s.story = agentStory();
+      }
+      if (agentShown(screenGame)) {
+        s.dungeon = agentDungeonInfo();
+        s.hero = agentHero();
+        s.foesLeft = enemyMarkers.filter(m => m.alive).length;
+        s.bossDefeated = bossDefeated;
+      }
+      if (screen === 'explore') {
+        s.explore = {
+          x: player.gridX,
+          y: player.gridY,
+          facing: DIRS[player.dirIndex],
+          look: agentLookAround(),
+          steps: totalMoves,
+          tilesVisited: visitedTiles.size,
+          tilesTotal: passagesList.length,
+          switchesThrown: switchList.filter(sw => sw.on).length
+        };
+      }
+      if (combatState.inBattle && agentShown(screenGame)) s.battle = agentBattle();
+      if (screen === 'levelup') s.levelUp = agentLevelUp();
+      if (screen === 'victory') s.victoryText = victoryText ? victoryText.textContent : '';
+      if (screen === 'defeat') s.defeatText = defeatText ? defeatText.textContent : '';
+      if (agentShown(screenGame)) {
+        s.recentEvents = agentEvents.slice(-8).map(ev => ({ tick: ev.tick, text: ev.text }));
+      }
+      return s;
+    }
+
+    function agentStats() {
+      const byKind = {};
+      let beaten = 0;
+      for (const m of enemyMarkers) {
+        if (m.alive) continue;
+        const k = AGENT_KIND[m.variant] || m.variant;
+        byKind[k] = (byKind[k] || 0) + 1;
+        beaten++;
+      }
+      const outcome = victoryShownThisRun ? 'victory'
+        : combatState.dead ? 'defeated'
+        : dungeonSnapshot ? 'in progress' : 'not started';
+      const ended = runTally.endedAt || Date.now();
+      return {
+        game: 'ComfyCrawler',
+        edition: SHOWCASE_MODE ? 'read-only' : 'full',
+        dungeon: agentDungeonInfo(),
+        outcome,
+        attempt: runAttempt,
+        deaths: runDeaths,
+        bossDefeated,
+        hero: {
+          level: progression.level,
+          hp: Math.ceil(combatState.playerHp),
+          maxHp: combatState.playerMaxHp,
+          maxStamina: combatState.playerMaxStm,
+          picks: {
+            strength: Math.round(progression.bonusAtk / LEVEL_GAINS.strength),
+            stamina: Math.round(progression.bonusStm / LEVEL_GAINS.stamina),
+            survival: Math.round(progression.bonusHp / LEVEL_GAINS.survival),
+            speed: Math.round(progression.bonusSpd / LEVEL_GAINS.speed)
+          }
+        },
+        foes: { beaten, total: enemyMarkers.length, byKind },
+        exploration: {
+          steps: totalMoves,
+          tilesVisited: visitedTiles.size,
+          tilesTotal: passagesList.length,
+          switchesThrown: switchList.filter(sw => sw.on).length
+        },
+        combat: {
+          swings: runTally.swings, hits: runTally.hits, damageDealt: runTally.dmgDealt,
+          blockedByFoes: runTally.foeGuarded, missed: runTally.misses,
+          dodged: runTally.dodged, guarded: runTally.guarded,
+          hitsTaken: runTally.hitsTaken, damageTaken: runTally.dmgTaken
+        },
+        seconds: Math.round((ended - runTally.startedAt) / 1000),
+        agentMode: !!runTally.agent
+      };
+    }
+
+    function agentReportText(st, playedBy) {
+      const d = st.dungeon || {};
+      const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+      const diff = (d.difficulty || 'medium').replace(/^./, c => c.toUpperCase());
+      const picks = Object.entries(st.hero.picks).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
+      // One word per kind, packs named as packs (a "runt" marker is three of them), in the order
+      // a dungeon is usually met in rather than the order its markers were placed.
+      const kinds = Object.keys(AGENT_KIND_WORDS).filter(k => st.foes.byKind[k])
+        .map(k => { const n = st.foes.byKind[k]; return `${n} ${AGENT_KIND_WORDS[k][n === 1 ? 0 : 1]}`; })
+        .join(', ');
+      const outcome = {
+        victory: 'VICTORY - escaped the dungeon',
+        defeated: 'DEFEATED',
+        'in progress': 'still inside',
+        'not started': 'not started'
+      }[st.outcome] || st.outcome;
+      const c = st.combat, e = st.exploration, h = st.hero;
+      const lines = [
+        'ComfyCrawler run report',
+        `Dungeon: ${d.location || 'unnamed'}${d.style ? ` - "${d.style}"` : ''} (${diff})`,
+        `Hero: ${d.hero || d.heroPrompt || 'unnamed'}${d.weapon ? `, wielding ${d.weapon}` : ''}`,
+        `Boss: ${d.boss || 'unknown'} - ${st.bossDefeated ? 'defeated' : 'still standing'}`,
+        `Outcome: ${outcome} (attempt ${st.attempt}, ${plural(st.deaths, 'death')})`,
+        `Hero at the end: level ${h.level}, ${h.hp}/${h.maxHp} HP, ${h.maxStamina} max stamina${picks ? `; picks: ${picks}` : ''}`,
+        `Foes beaten: ${st.foes.beaten} of ${st.foes.total}${kinds ? ` (${kinds})` : ''}`,
+        `Explored: ${e.tilesVisited}/${e.tilesTotal} tiles in ${plural(e.steps, 'step')}, ${e.switchesThrown === 1 ? '1 switch' : e.switchesThrown + ' switches'} thrown`,
+        `Offence: ${plural(c.swings, 'swing')}, ${plural(c.hits, 'hit')} for ${c.damageDealt} damage, ${c.blockedByFoes} blocked, ${c.missed} missed`,
+        `Defence: ${c.dodged} dodged, ${c.guarded} caught on the shield, ${plural(c.hitsTaken, 'hit')} taken for ${c.damageTaken} damage`,
+        `Time: ${Math.floor(st.seconds / 60)}m ${st.seconds % 60}s, ${st.agentMode ? 'turn-based agent mode' : 'real time'}; ${st.edition} edition`
+      ];
+      if (playedBy) lines.push(`Played by: ${String(playedBy).slice(0, 80)}`);
+      return lines.join('\n');
+    }
+
+    // Called as a run ends (killPlayer, showVictoryBox): keeps that run's numbers for report(), and
+    // in agent mode prints them into the box itself, where an agent that can only see the screen
+    // can read them off.
+    function showAgentReport(modal) {
+      agentLastStats = agentStats();
+      const box = modal && modal.querySelector('[data-agent-report]');
+      if (!box) return;
+      box.textContent = agentMode ? agentReportText(agentLastStats) : '';
+      box.classList.toggle('hidden', !agentMode);
+    }
+
+    function agentWaitFor(test, timeoutMs) {
+      return new Promise((resolve) => {
+        const t0 = Date.now();
+        (function poll() {
+          if (test() || Date.now() - t0 > timeoutMs) resolve();
+          else setTimeout(poll, 50);
+        })();
+      });
+    }
+
+    async function agentDungeonEntries() {
+      if (!historyLoaded || !Array.isArray(historyEntries)) await refreshHistory();
+      return Array.isArray(historyEntries) ? historyEntries : [];
+    }
+
+    function agentPickEntry(list, which) {
+      if (typeof which === 'number') return list[which - 1] || null;
+      const q = String(which == null ? '' : which).trim().toLowerCase();
+      if (!q) return null;
+      if (q === 'random') return list[Math.floor(Math.random() * list.length)] || null;
+      if (/^\d+$/.test(q)) return list[Number(q) - 1] || null;
+      const byId = list.find(en => (en.id || '').toLowerCase() === q);
+      if (byId) return byId;
+      const fields = (en) => [en.location, en.wall_style, en.hero, en.player_style, en.foe, en.boss, en.enemy_style]
+        .map(v => String(v || '').toLowerCase());
+      return list.find(en => fields(en).some(v => v.includes(q))) || null;
+    }
+
+    function agentOk(result) { return { ok: true, result, state: agentState() }; }
+    function agentFail(error) { return { ok: false, error, state: agentState() }; }
+
+    const AGENT_ACTIONS = {
+      forward: 'forward', f: 'forward', w: 'forward', up: 'forward', walk: 'forward',
+      back: 'back', backward: 'back', b: 'back', s: 'back', down: 'back',
+      left: 'left', l: 'left', a: 'left', 'turn left': 'left', turnleft: 'left',
+      right: 'right', r: 'right', d: 'right', 'turn right': 'right', turnright: 'right',
+      use: 'use', e: 'use', interact: 'use', space: 'use', 'throw switch': 'use'
+    };
+
+    function agentAct(action, times) {
+      const a = AGENT_ACTIONS[String(action || '').trim().toLowerCase()];
+      if (!a) return agentFail("Unknown action - use 'forward', 'back', 'left', 'right' or 'use'.");
+      const screen = agentScreen();
+      if (screen === 'battle') return agentFail('You are in a fight - use step().');
+      if (screen !== 'explore') return agentFail(`There is no walking on the ${screen} screen. ${AGENT_HINTS[screen] || ''}`);
+      if (agentDialog()) agentCloseDialogs();
+      if (player.isAnimating) return agentFail('Still finishing the last move - try again in a moment.');
+      setAgentMode(true);
+      const n = Math.max(1, Math.min(50, Math.round(Number(times) || 1)));
+      let result = '';
+      let done = 0;
+      for (let i = 0; i < n; i++) {
+        const before = { x: player.gridX, y: player.gridY, thrown: switchList.filter(sw => sw.on).length };
+        const facedDoor = (() => {
+          const v = DIR_VECS[player.dirIndex];
+          const row = MAP[player.gridY + v.dy];
+          return !!row && row[player.gridX + v.dx] === 3;
+        })();
+        agentSnapMoves = true;
+        try {
+          if (a === 'forward') moveForward();
+          else if (a === 'back') moveBackward();
+          else if (a === 'left') rotateLeft();
+          else if (a === 'right') rotateRight();
+          else interact();
+        } finally {
+          agentSnapMoves = false;
+        }
+        done++;
+        if (a === 'forward' || a === 'back') {
+          if (player.gridX === before.x && player.gridY === before.y) {
+            const dir = a === 'forward' ? player.dirIndex : (player.dirIndex + 2) % 4;
+            const what = agentLook(player.gridX, player.gridY, dir).look.then;
+            result = `blocked by ${what === 'switch' || what === 'thrown switch' ? 'the wall with a ' + what + ' on it' : 'a ' + what}`
+              + (done > 1 ? ` after ${done - 1} step${done === 2 ? '' : 's'}` : '');
+            break;
+          }
+          result = `moved to (${player.gridX}, ${player.gridY})` + (done > 1 ? ` in ${done} steps` : '');
+        } else if (a === 'left' || a === 'right') {
+          result = `now facing ${DIRS[player.dirIndex]}`;
+        } else {
+          const thrown = switchList.filter(sw => sw.on).length;
+          result = thrown > before.thrown ? 'threw the switch - a gate somewhere in the maze swung open'
+            : facedDoor ? 'this door is locked - a switch somewhere else in the maze opens it'
+            : 'nothing to use here';
+        }
+        if (combatState.inBattle) {
+          agentSkipEntrance();
+          const foe = combatState.enemy;
+          const packN = combatState.enemies.length;
+          result += ` - a fight! ${foe.name}${packN > 1 ? ' x' + packN : ''} blocks the way`;
+          break;
+        }
+        if (agentShown(victoryModal)) { result += ' - you reached the stairs out: VICTORY'; break; }
+        if (levelUpOpen) break;
+      }
+      return agentOk(result);
+    }
+
+    function agentSkipEnding() {
+      if (endingPhase === 'pending') {
+        if (endingCutTimer) { clearTimeout(endingCutTimer); endingCutTimer = null; }
+        beginEndingPlayback();
+      }
+      if (endingPhase === 'playing') skipEndingCutscene();
+      if (endingPhase === 'held') raiseEndingVictoryBox();
+    }
+
+    const ComfyCrawler = {
+      version: 1,
+      help: () => AGENT_HELP,
+      state: () => agentState(),
+      map: () => agentMap(),
+      story: () => agentStory(),
+      stats: () => (agentShown(screenGame) || !agentLastStats ? agentStats() : agentLastStats),
+      report(playedBy) {
+        const st = agentShown(screenGame) || !agentLastStats ? agentStats() : agentLastStats;
+        return agentReportText(st, playedBy);
+      },
+      agentMode(on) {
+        return on === undefined ? agentMode : setAgentMode(on);
+      },
+      async dungeons() {
+        const list = await agentDungeonEntries();
+        return list.map((en, i) => ({
+          n: i + 1,
+          id: en.id,
+          location: en.location || null,
+          style: en.wall_style || null,
+          hero: en.hero || null,
+          heroPrompt: en.player_style || null,
+          weapon: en.weapon_style || null,
+          foe: en.foe || en.enemy_style || null,
+          boss: en.boss || null,
+          beaten: !!en.beaten,
+          made: en.created_text || null
+        }));
+      },
+      setDifficulty(level) {
+        const id = String(level || '').toLowerCase();
+        if (!DIFFICULTIES[id]) return agentFail("Difficulty is 'easy', 'medium' or 'hard'.");
+        setDifficulty(id);
+        return agentOk(`difficulty set to ${id} - it applies to the next dungeon you load`);
+      },
+      async play(which, opts) {
+        if (generationInFlight) return agentFail('A dungeon is being generated right now - wait for it to finish.');
+        const list = await agentDungeonEntries();
+        if (!list.length) return agentFail('There are no saved dungeons to play here.');
+        const entry = agentPickEntry(list, which === undefined ? 1 : which);
+        if (!entry) return agentFail(`No saved dungeon matches ${JSON.stringify(which)} - dungeons() lists them.`);
+        const level = opts && opts.difficulty ? String(opts.difficulty).toLowerCase() : null;
+        if (level) {
+          if (!DIFFICULTIES[level]) return agentFail("Difficulty is 'easy', 'medium' or 'hard'.");
+          setDifficulty(level);
+        }
+        setAgentMode(true);
+        agentCloseDialogs();
+        await loadHistoryDungeon(entry);
+        await agentWaitFor(() => !!pendingBundle || !agentShown(screenProgress), 60000);
+        if (!pendingBundle) return agentFail('That dungeon did not load.');
+        return agentOk(`loaded ${historyTitleOf(entry)} at ${selectedDifficulty} difficulty - read state().story, then call enter()`);
+      },
+      async enter() {
+        if (agentScreen() !== 'story') return agentFail('Nothing to enter - load a dungeon with play() first.');
+        setAgentMode(true);
+        tryEnterDungeon();
+        await agentWaitFor(() => agentShown(screenGame), 60000);
+        if (!agentShown(screenGame)) return agentFail('The dungeon did not open.');
+        return agentOk('you are in - find the switches, beat the boss, reach the stairs');
+      },
+      act: (action, times) => agentAct(action, times),
+      step(opts) {
+        if (!combatState.inBattle || combatState.dead || !agentShown(screenGame)) {
+          return agentFail('There is no fight going on.');
+        }
+        if (levelUpOpen) return agentFail('Choose a level-up first.');
+        if (endingPhase !== 'idle') return agentFail('The ending is playing - skipEnding() or wait.');
+        setAgentMode(true);
+        const seq0 = agentEventSeq;
+        const ticks = agentStep({ ...(opts || {}), finish: true });
+        const events = agentEvents.filter(ev => ev.seq > seq0).map(ev => ({ tick: ev.tick, text: ev.text }));
+        return { ok: true, ticks, events, state: agentState() };
+      },
+      levelUp(choice) {
+        if (!levelUpOpen) return agentFail('There is no level-up to choose.');
+        const kind = typeof choice === 'number' ? LEVEL_CHOICE_KEYS[choice - 1] : String(choice || '').trim().toLowerCase();
+        if (!LEVEL_CHOICE_KEYS.includes(kind)) return agentFail("Choose 'strength', 'stamina', 'survival' or 'speed' (or 1-4).");
+        setAgentMode(true);
+        applyLevelChoice(kind);
+        return agentOk(`took ${kind.toUpperCase()}`);
+      },
+      skipEnding() {
+        if (agentScreen() !== 'ending') return agentFail('No ending is playing.');
+        agentSkipEnding();
+        return agentOk('skipped to the end of the film');
+      },
+      keepExploring() {
+        if (!(endingPhase === 'held' && agentShown(victoryModal))) {
+          return agentFail('Only offered on the victory box that follows the ending film.');
+        }
+        keepExploringAfterEnding();
+        return agentOk('back in the dungeon - the stairs are still there to take');
+      },
+      restart() {
+        if (!dungeonSnapshot) return agentFail('No dungeon to restart - play() one first.');
+        restartDungeon();
+        return agentOk('the same maze, from the first step, with every foe back');
+      },
+      menu() {
+        agentCloseDialogs();
+        openSetupScreen();
+        return agentOk('back at the start screen');
+      }
+    };
+    window.ComfyCrawler = Object.freeze(ComfyCrawler);
+    console.info('ComfyCrawler: AI agents can play this page - read llms.txt beside it, or call ComfyCrawler.help().');
