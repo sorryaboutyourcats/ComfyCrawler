@@ -1816,13 +1816,26 @@
                any of that; it only ever knows the single field the caret is sitting in.
                Both ship disabled - game.js enables each one the moment there is a step for it
                to walk to, and keeps the depth in the tooltip. -->
-          <button id="btnUndoPrompt" class="win95-btn undo-btn px-2.5 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Nothing to undo yet" disabled>
-            <span>↶ Undo</span>
+          <button id="btnUndoPrompt" class="win95-btn undo-btn px-2.5 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Nothing to undo yet" aria-label="Undo" disabled>
+            <span>↶</span>
           </button>
 
-          <button id="btnRedoPrompt" class="win95-btn undo-btn px-2.5 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Nothing to redo yet" disabled>
-            <span>↷ Redo</span>
+          <button id="btnRedoPrompt" class="win95-btn undo-btn px-2.5 py-1.5 text-xs text-black flex items-center gap-1.5 hover:bg-slate-300" title="Nothing to redo yet" aria-label="Redo" disabled>
+            <span>↷</span>
           </button>
+
+          <span class="win95-sep self-stretch my-0.5" aria-hidden="true"></span>
+
+          <!-- Difficulty: moved here from Options so it sits with the controls that shape the
+               dungeon you're about to make, next to Undo/Redo. A <select> rather than the old
+               three-button row - one control instead of three, and the arrow keys already walk a
+               <select>'s options on their own. game.js (setDifficulty) keeps it synced and
+               remembers the pick across reloads. -->
+          <select id="difficultySelect" class="win95-input text-xs font-bold cursor-pointer px-2 py-1.5" title="Difficulty" aria-label="Difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
         </div>
 
         <div class="flex items-center gap-2">
@@ -1852,22 +1865,21 @@
         </div>
 
         <div class="p-3 flex flex-col gap-4">
-          <div class="win95-box p-3 bg-slate-100 flex flex-col gap-2">
-            <label class="text-xs font-bold text-slate-800">
+          <!-- Difficulty: moved out to Setup's own footer (next to Undo/Redo) for the normal
+               generate-a-dungeon flow - see difficultySelect in index.html/game.js. This copy is
+               SHOWCASE_MODE's only way to reach it: that export hides Setup's footer wholesale,
+               yet difficulty still matters there - replaying a saved dungeon re-rolls its maze
+               shape at whatever difficulty is picked right now (see loadHistoryDungeon in
+               game.js). Hidden by default; the boot-time SHOWCASE_MODE block reveals it. -->
+          <div id="difficultySettingsRow" class="win95-box p-3 bg-slate-100 flex flex-col gap-2 hidden">
+            <label for="difficultySelectShowcase" class="text-xs font-bold text-slate-800">
               Difficulty:
             </label>
-
-            <div id="difficultyRow" class="flex gap-1.5">
-              <button type="button" data-difficulty="easy" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
-                <span class="text-xs">Easy</span>
-              </button>
-              <button type="button" data-difficulty="medium" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
-                <span class="text-xs">Medium</span>
-              </button>
-              <button type="button" data-difficulty="hard" class="difficulty-btn win95-btn flex-1 flex-col px-2 py-1.5 text-black">
-                <span class="text-xs">Hard</span>
-              </button>
-            </div>
+            <select id="difficultySelectShowcase" class="win95-input w-full text-xs font-bold cursor-pointer">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
 
             <!-- Hidden for now - may be shown again later. -->
             <div id="gridDesc" class="text-[11px] text-blue-900 font-bold mt-0.5" hidden>
@@ -1875,193 +1887,212 @@
             </div>
           </div>
 
-          <!-- Generation-only, so it means nothing in the showcase export - hidden there by
-               game.js at boot (SHOWCASE_MODE). -->
-          <div id="gfxQualityRow" class="flex flex-col gap-1.5">
-            <label class="text-xs font-bold text-slate-800">
-              Graphics:
-            </label>
-            <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-              <option value="normal" selected>High</option>
-              <option value="optimized">Medium</option>
-              <option value="reduced">Low</option>
-            </select>
-            <!-- Hidden for now - may be shown again later. -->
-            <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
-          </div>
-
-          <!-- Last Attack Frame: how a foe's attack frame lines up with the blow it throws, which
-               otherwise lands a beat after the frame goes up. On adds one more frame per foe,
-               swapped in on the tick its blow lands; Quick adds nothing and drops the wind-up, so
-               the attack frame arrives with the blow; Flip keeps Off's wind-up and mirrors the foe
-               the moment the blow lands; Mixed plays Quick for foes on the ground and Flip for
-               foes in the air. A row of buttons like the difficulty row
-               rather than a dropdown, so the arrow keys walk across it instead of being swallowed
-               by a <select>. game.js (setLastAttackFrame) keeps the pick pressed in and remembers
-               it across reloads.
-               The whole section is hidden for now - Mixed is the only mode offered and game.js
-               forces it, so there is nothing to pick. May be shown again later. -->
-          <div class="flex flex-col gap-1.5 hidden">
-            <label class="text-xs font-bold text-slate-800" id="lastAttackFrameLabel">
-              Last Attack Frame:
-            </label>
-            <div id="lastAttackFrameRow" class="flex gap-1.5" role="group" aria-labelledby="lastAttackFrameLabel">
-              <!-- Off/On/Quick/Flip hidden for now - Mixed is the only mode offered; may be
-                   shown again later. -->
-              <button type="button" data-last-attack-frame="off" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
-                      title="Foes show their attack frame as they wind up, and the blow lands a moment later. New dungeons are frame version 1.">
-                <span class="text-xs">Off</span>
-              </button>
-              <button type="button" data-last-attack-frame="on" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
-                      title="Foes get one more frame, shown the moment their attack lands. New dungeons are frame version 2 and take a little longer to create.">
-                <span class="text-xs">On</span>
-              </button>
-              <button type="button" data-last-attack-frame="quick" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
-                      title="No extra frame and no wind-up: the attack frame appears the moment the blow lands. Foes attack just as often. Works on every dungeon; new ones are frame version 1.">
-                <span class="text-xs">Quick</span>
-              </button>
-              <button type="button" data-last-attack-frame="flip" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
-                      title="No extra frame and the same wind-up as Off, but the foe flips round the moment its blow lands, so the hit reads as a swipe. Works on every dungeon; new ones are frame version 1.">
-                <span class="text-xs">Flip</span>
-              </button>
-              <button type="button" data-last-attack-frame="mixed" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="No extra frame. Foes on the ground (walker, runts, boss) play like Quick, and foes in the air (flyer, fledglings) play like Flip. Works on every dungeon; new ones are frame version 1.">
-                <span class="text-xs">Mixed</span>
-              </button>
+          <!-- Generation Settings: Texture and Sprite Generation, Sound Generation and Ending
+               Video (plus the two hidden rows that belong to Ending Video, and the hidden Last
+               Attack Frame row) all live under one heading - each is "how this dungeon gets
+               made", as opposed to the Display Settings section below, which is about playing
+               back whatever's already been made. Generation-only, so the whole section means
+               nothing in the showcase export - hidden there by game.js at boot (SHOWCASE_MODE). -->
+          <div id="generationSettingsSection" class="flex flex-col gap-3">
+            <div class="text-[11px] font-bold uppercase tracking-wide text-slate-700">
+              Generation Settings
             </div>
-          </div>
 
-          <div class="flex flex-col gap-1.5">
-            <label class="text-xs font-bold text-slate-800" for="maxFpsSlider">
-              Max Frame Rate: <span id="maxFpsValue" class="text-blue-900">60 FPS</span>
-            </label>
-            <!-- Notched, not free: the slider walks a fixed list of the frame rates monitors
-                 actually run at (FPS_STOPS in game.js) instead of every number between them, so
-                 it lands on 144 rather than 143. min/max are STOP INDICES - game.js sets them
-                 from the list's length - and the value shown in the label above is the stop's
-                 own FPS. -->
-            <input id="maxFpsSlider" class="win95-slider" type="range" min="0" max="10" step="1" value="4"
-                   aria-describedby="maxFpsHint" />
-            <!-- Ends only. The stops are evenly spaced on the track but not in FPS (12 to 24 is
-                 one notch, so is 144 to 200), so labelling every notch would crowd the row -
-                 and the readout in the label above already names the stop while you drag. -->
-            <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
-              <span>12</span><span>240</span>
-            </div>
-            <!-- Hidden for now - may be shown again later. -->
-            <div class="text-[10px] text-slate-500 font-bold" id="maxFpsHint" hidden>
-              The ceiling on how often the dungeon is redrawn. Your monitor is still the real
-              limit &ndash; this only ever asks for fewer frames than it offers. Combat keeps its
-              own 60-per-second clock, so lowering this never slows the fight down.
-            </div>
-          </div>
-
-          <!-- Sound Generation and Ending Video sit side by side: two dropdowns, one row. Both
-               are "how much extra does creating this dungeon do", so they read as a pair - and
-               a <select> each keeps the row short enough that the options list does not need
-               scrolling to reach the ComfyUI fields below. Stacks back to one column on a
-               narrow window. -->
-          <!-- Both are "how much extra does creating this dungeon do" - generation-only, so
-               hidden together in the showcase export by game.js at boot (SHOWCASE_MODE). -->
-          <div id="soundAndEndingRow" class="flex flex-col sm:flex-row gap-1.5 sm:gap-2">
-            <div id="soundModeRow" class="flex flex-col gap-1.5 flex-1 min-w-0">
-              <label class="text-xs font-bold text-slate-800" for="soundModeSelect">
-                Sound Generation:
+            <div id="gfxQualityRow" class="flex flex-col gap-1.5">
+              <label class="text-xs font-bold text-slate-800">
+                Texture and Sprite Generation:
               </label>
-              <select id="soundModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-                <option value="music_and_sound" selected>Generated music and sound</option>
-                <option value="sound_only">Generated sound (no music)</option>
-                <option value="skip">Skip sound generation</option>
+              <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                <option value="normal" selected>High</option>
+                <option value="optimized">Medium</option>
+                <option value="reduced">Low</option>
               </select>
               <!-- Hidden for now - may be shown again later. -->
-              <div class="text-[10px] text-slate-500 font-bold" hidden>Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+              <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
             </div>
 
-            <!-- Ending Video: a MiniMax H3 cutscene of the boss going down, filmed from the run's own
-                 hero, boss, textures and battle music, played the moment the boss's health runs out
-                 and held on its last frame under the victory box. A dropdown next to Sound
-                 Generation, because the two read as a pair - both are "how much more work does
-                 creating this dungeon do" - and because the arrow keys walk a <select> as happily
-                 as they walked the Off/On row it replaces. game.js (setEndingVideo) remembers the
-                 pick across reloads. Defaults to Off.
-
-                 The second row moves the render off the loading screen and into the background
-                 while the run is played - and only means anything with the dropdown On, so game.js
-                 greys it out while that is Off. It is hidden and forced Off for now (see its own
-                 comment below), which is why it lives outside the two-column row: nothing of it
-                 shows. -->
-            <div id="endingVideoCol" class="flex flex-col gap-1.5 flex-1 min-w-0">
-              <label class="text-xs font-bold text-slate-800" for="endingVideoSelect">
-                Ending Video:
+            <!-- Last Attack Frame: how a foe's attack frame lines up with the blow it throws, which
+                 otherwise lands a beat after the frame goes up. On adds one more frame per foe,
+                 swapped in on the tick its blow lands; Quick adds nothing and drops the wind-up, so
+                 the attack frame arrives with the blow; Flip keeps Off's wind-up and mirrors the foe
+                 the moment the blow lands; Mixed plays Quick for foes on the ground and Flip for
+                 foes in the air. A row of buttons like the difficulty row
+                 rather than a dropdown, so the arrow keys walk across it instead of being swallowed
+                 by a <select>. game.js (setLastAttackFrame) keeps the pick pressed in and remembers
+                 it across reloads.
+                 The whole section is hidden for now - Mixed is the only mode offered and game.js
+                 forces it, so there is nothing to pick. May be shown again later. -->
+            <div class="flex flex-col gap-1.5 hidden">
+              <label class="text-xs font-bold text-slate-800" id="lastAttackFrameLabel">
+                Last Attack Frame:
               </label>
-              <select id="endingVideoSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-                <option value="on"
-                        title="Films a cutscene of your hero beating the boss, scored from the dungeon's battle music. It plays the moment the boss runs out of health. Filming it makes creating a dungeon take a lot longer.">Generated ending video</option>
-                <option value="off" selected
-                        title="No cutscene. Beat the boss, walk the last stretch to the stairs, and the dungeon is escaped.">No ending video</option>
-              </select>
+              <div id="lastAttackFrameRow" class="flex gap-1.5" role="group" aria-labelledby="lastAttackFrameLabel">
+                <!-- Off/On/Quick/Flip hidden for now - Mixed is the only mode offered; may be
+                     shown again later. -->
+                <button type="button" data-last-attack-frame="off" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
+                        title="Foes show their attack frame as they wind up, and the blow lands a moment later. New dungeons are frame version 1.">
+                  <span class="text-xs">Off</span>
+                </button>
+                <button type="button" data-last-attack-frame="on" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
+                        title="Foes get one more frame, shown the moment their attack lands. New dungeons are frame version 2 and take a little longer to create.">
+                  <span class="text-xs">On</span>
+                </button>
+                <button type="button" data-last-attack-frame="quick" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
+                        title="No extra frame and no wind-up: the attack frame appears the moment the blow lands. Foes attack just as often. Works on every dungeon; new ones are frame version 1.">
+                  <span class="text-xs">Quick</span>
+                </button>
+                <button type="button" data-last-attack-frame="flip" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black" hidden
+                        title="No extra frame and the same wind-up as Off, but the foe flips round the moment its blow lands, so the hit reads as a swipe. Works on every dungeon; new ones are frame version 1.">
+                  <span class="text-xs">Flip</span>
+                </button>
+                <button type="button" data-last-attack-frame="mixed" class="last-attack-frame-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="No extra frame. Foes on the ground (walker, runts, boss) play like Quick, and foes in the air (flyer, fledglings) play like Flip. Works on every dungeon; new ones are frame version 1.">
+                  <span class="text-xs">Mixed</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Sound Generation and Ending Video sit side by side: two dropdowns, one row. Both
+                 are "how much extra does creating this dungeon do", so they read as a pair - and
+                 a <select> each keeps the row short enough that the options list does not need
+                 scrolling to reach the ComfyUI fields below. Stacks back to one column on a
+                 narrow window. -->
+            <!-- Both are "how much extra does creating this dungeon do" - generation-only, so
+                 hidden together in the showcase export by game.js at boot (SHOWCASE_MODE). -->
+            <div id="soundAndEndingRow" class="flex flex-col sm:flex-row gap-1.5 sm:gap-2">
+              <div id="soundModeRow" class="flex flex-col gap-1.5 flex-1 min-w-0">
+                <label class="text-xs font-bold text-slate-800" for="soundModeSelect">
+                  Sound Generation:
+                </label>
+                <select id="soundModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                  <option value="music_and_sound" selected>Generated music and sound</option>
+                  <option value="sound_only">Generated sound (no music)</option>
+                  <option value="skip">Skip sound generation</option>
+                </select>
+                <!-- Hidden for now - may be shown again later. -->
+                <div class="text-[10px] text-slate-500 font-bold" hidden>Music adds two 30-second Stable Audio 3 tracks (explore/battle) on top of the sound effects, which takes noticeably longer to generate. Skip disables all generated audio for the fastest dungeon.</div>
+              </div>
+
+              <!-- Ending Video: a MiniMax H3 cutscene of the boss going down, filmed from the run's own
+                   hero, boss, textures and battle music, played the moment the boss's health runs out
+                   and held on its last frame under the victory box. A dropdown next to Sound
+                   Generation, because the two read as a pair - both are "how much more work does
+                   creating this dungeon do" - and because the arrow keys walk a <select> as happily
+                   as they walked the Off/On row it replaces. game.js (setEndingVideo) remembers the
+                   pick across reloads. Defaults to Off.
+
+                   The second row moves the render off the loading screen and into the background
+                   while the run is played - and only means anything with the dropdown On, so game.js
+                   greys it out while that is Off. It is hidden and forced Off for now (see its own
+                   comment below), which is why it lives outside the two-column row: nothing of it
+                   shows. -->
+              <div id="endingVideoCol" class="flex flex-col gap-1.5 flex-1 min-w-0">
+                <label class="text-xs font-bold text-slate-800" for="endingVideoSelect">
+                  Ending Video:
+                </label>
+                <select id="endingVideoSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                  <option value="on"
+                          title="Films a cutscene of your hero beating the boss, scored from the dungeon's battle music. It plays the moment the boss runs out of health. Filming it makes creating a dungeon take a lot longer.">Generated ending video</option>
+                  <option value="off" selected
+                          title="No cutscene. Beat the boss, walk the last stretch to the stairs, and the dungeon is escaped.">No ending video</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Render Ending While Playing is hidden for now and forced Off - the cutscene is
+                 always filmed on the loading screen. The row is left here, wired up and all, so
+                 dropping the `hidden` below (and ENDING_BACKGROUND_OFFERED in game.js) brings it
+                 back. May be shown again later. -->
+            <div class="flex flex-col gap-1.5 hidden">
+              <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
+                Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
+              </label>
+              <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
+                <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
+                  <span class="text-xs">Off</span>
+                </button>
+                <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
+                  <span class="text-xs">On</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Ending Video Look - how the movie is blown up from the 512x384 it is filmed at to
+                 fill the viewport (the cutscene and History's player alike). Hidden for now and
+                 forced to Pixel, which matches the hard square pixels the rest of the dungeon is
+                 drawn with; the row is left here, wired up, so dropping the `hidden` below (and
+                 ENDING_LOOK_OFFERED in game.js) brings the choice back. May be shown again later.
+                 game.js (setEndingLook / createClipScaler) does the blow-up. -->
+            <div class="flex flex-col gap-1.5 hidden">
+              <label class="text-xs font-bold text-slate-800 mt-1" id="endingLookLabel">
+                Ending Video Look:
+              </label>
+              <div id="endingLookRow" class="flex gap-1.5" role="group" aria-labelledby="endingLookLabel">
+                <button type="button" data-ending-look="smooth" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="The browser's own stretch: soft, the way a small video looks blown up to fill the screen.">
+                  <span class="text-xs">Smooth</span>
+                </button>
+                <button type="button" data-ending-look="sharp" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="Upscales the movie to your screen's real pixels with an edge-aware filter and sharpens it (AMD FSR 1). Crisper, and still looks like a movie.">
+                  <span class="text-xs">Sharp</span>
+                </button>
+                <button type="button" data-ending-look="pixel" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
+                        title="No smoothing at all: hard square pixels, like the rest of the dungeon.">
+                  <span class="text-xs">Pixel</span>
+                </button>
+              </div>
             </div>
           </div>
 
-          <!-- Render Ending While Playing is hidden for now and forced Off - the cutscene is
-               always filmed on the loading screen. The row is left here, wired up and all, so
-               dropping the `hidden` below (and ENDING_BACKGROUND_OFFERED in game.js) brings it
-               back. May be shown again later. -->
-          <div class="flex flex-col gap-1.5 hidden">
-            <label class="text-xs font-bold text-slate-800 mt-1" id="endingBackgroundLabel">
-              Render Ending While Playing: <span class="text-[10px] text-red-800">(Experimental)</span>
-            </label>
-            <div id="endingBackgroundRow" class="flex gap-1.5" role="group" aria-labelledby="endingBackgroundLabel">
-              <button type="button" data-ending-background="off" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="The cutscene is filmed while the dungeon is being created, so it is always ready by the time you reach the boss.">
-                <span class="text-xs">Off</span>
-              </button>
-              <button type="button" data-ending-background="on" class="ending-background-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="The dungeon is ready sooner and the cutscene is filmed while you play. Reach the boss before it is done and you get the stairs ending instead - the victory window offers the cutscene once it finishes. Also films one for a saved dungeon from History that has none yet.">
-                <span class="text-xs">On</span>
-              </button>
+          <!-- Display Settings: Max Frame Rate and Screensaver Wait are both about playing back a
+               dungeon rather than generating one, so they stay in their own section below
+               Generation Settings and, unlike it, still mean something in the showcase export. -->
+          <div class="flex flex-col gap-3">
+            <div class="text-[11px] font-bold uppercase tracking-wide text-slate-700 border-t border-gray-400 pt-2">
+              Display Settings
             </div>
-          </div>
 
-          <!-- Ending Video Look - how the movie is blown up from the 512x384 it is filmed at to
-               fill the viewport (the cutscene and History's player alike). Hidden for now and
-               forced to Pixel, which matches the hard square pixels the rest of the dungeon is
-               drawn with; the row is left here, wired up, so dropping the `hidden` below (and
-               ENDING_LOOK_OFFERED in game.js) brings the choice back. May be shown again later.
-               game.js (setEndingLook / createClipScaler) does the blow-up. -->
-          <div class="flex flex-col gap-1.5 hidden">
-            <label class="text-xs font-bold text-slate-800 mt-1" id="endingLookLabel">
-              Ending Video Look:
-            </label>
-            <div id="endingLookRow" class="flex gap-1.5" role="group" aria-labelledby="endingLookLabel">
-              <button type="button" data-ending-look="smooth" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="The browser's own stretch: soft, the way a small video looks blown up to fill the screen.">
-                <span class="text-xs">Smooth</span>
-              </button>
-              <button type="button" data-ending-look="sharp" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="Upscales the movie to your screen's real pixels with an edge-aware filter and sharpens it (AMD FSR 1). Crisper, and still looks like a movie.">
-                <span class="text-xs">Sharp</span>
-              </button>
-              <button type="button" data-ending-look="pixel" class="ending-look-btn win95-btn flex-1 px-2 py-1.5 text-black"
-                      title="No smoothing at all: hard square pixels, like the rest of the dungeon.">
-                <span class="text-xs">Pixel</span>
-              </button>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-xs font-bold text-slate-800" for="maxFpsSlider">
+                Max Frame Rate: <span id="maxFpsValue" class="text-blue-900">60 FPS</span>
+              </label>
+              <!-- Notched, not free: the slider walks a fixed list of the frame rates monitors
+                   actually run at (FPS_STOPS in game.js) instead of every number between them, so
+                   it lands on 144 rather than 143. min/max are STOP INDICES - game.js sets them
+                   from the list's length - and the value shown in the label above is the stop's
+                   own FPS. -->
+              <input id="maxFpsSlider" class="win95-slider" type="range" min="0" max="10" step="1" value="4"
+                     aria-describedby="maxFpsHint" />
+              <!-- Ends only. The stops are evenly spaced on the track but not in FPS (12 to 24 is
+                   one notch, so is 144 to 200), so labelling every notch would crowd the row -
+                   and the readout in the label above already names the stop while you drag. -->
+              <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
+                <span>12</span><span>240</span>
+              </div>
+              <!-- Hidden for now - may be shown again later. -->
+              <div class="text-[10px] text-slate-500 font-bold" id="maxFpsHint" hidden>
+                The ceiling on how often the dungeon is redrawn. Your monitor is still the real
+                limit &ndash; this only ever asks for fewer frames than it offers. Combat keeps its
+                own 60-per-second clock, so lowering this never slows the fight down.
+              </div>
             </div>
-          </div>
 
-          <div class="flex flex-col gap-1.5">
-            <label class="text-xs font-bold text-slate-800" for="screensaverDelay">
-              Screensaver Wait:
-            </label>
-            <input id="screensaverDelay" class="win95-slider" type="range" min="0" max="7" step="1" value="2"
-                   aria-describedby="screensaverDelayText" />
-            <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
-              <span>Off</span><span>30s</span><span>1m</span><span>2m</span><span>5m</span><span>10m</span><span>30m</span><span>1h</span>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-xs font-bold text-slate-800" for="screensaverDelay">
+                Screensaver Wait:
+              </label>
+              <input id="screensaverDelay" class="win95-slider" type="range" min="0" max="7" step="1" value="2"
+                     aria-describedby="screensaverDelayText" />
+              <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
+                <span>Off</span><span>30s</span><span>1m</span><span>2m</span><span>5m</span><span>10m</span><span>30m</span><span>1h</span>
+              </div>
+              <!-- Hidden for now - may be shown again later. -->
+              <div class="text-[11px] text-blue-900 font-bold" id="screensaverDelayText" hidden>Starts after 1 minute of idling.</div>
+              <!-- Hidden for now - may be shown again later. -->
+              <div class="text-[10px] text-slate-500 font-bold" hidden>The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
             </div>
-            <!-- Hidden for now - may be shown again later. -->
-            <div class="text-[11px] text-blue-900 font-bold" id="screensaverDelayText" hidden>Starts after 1 minute of idling.</div>
-            <!-- Hidden for now - may be shown again later. -->
-            <div class="text-[10px] text-slate-500 font-bold" hidden>The Windows&nbsp;98 Starfield takes over the whole window once nothing has happened for this long. Typing, the mouse, a keypress, a button, narration, a playing video and a live battle all count as activity, so it never cuts in over one. Any input dismisses it. Drag all the way left to turn it off.</div>
           </div>
 
           <!-- Shown only in the showcase export (SHOWCASE_MODE in game.js, toggled at boot) -
@@ -2375,15 +2406,19 @@
           hero, foes, art and narration, on a freshly drawn maze at your current difficulty.
         </div>
 
-        <!-- What order the saved runs come in. Purely a view of the same list - nothing is
-             written to disk and no run is hidden by it (that's "Similar only" in the footer).
-             Default is the order the server hands them over in, newest first; the rest are
-             computed in sortHistoryEntries() in game.js, and the pick is remembered. -->
+        <!-- What order the saved runs come in. A view of the same list - no run is hidden by it
+             (that's "Similar only" in the footer). Default is the order the server hands them
+             over in, newest first; the rest are computed in sortHistoryEntries() in game.js,
+             and the pick is remembered. Two of them read stamps written while playing rather
+             than anything about the run itself: "Recently played" uses last_played, written
+             every time a dungeon is entered, and "Completed" orders the beaten ones by
+             beaten_at, written once the first time each boss went down. -->
         <div class="px-3 pt-1 flex items-center justify-end gap-1.5">
           <label for="historySort" class="text-[10px] text-slate-700 font-bold select-none">Sort</label>
           <select id="historySort" class="win95-input text-xs font-bold cursor-pointer"
                   title="What order the saved dungeons are listed in">
             <option value="default">Default (newest first)</option>
+            <option value="played">Recently played</option>
             <option value="style">Style (dungeon look, A-Z)</option>
             <option value="player">Player (hero, A-Z)</option>
             <option value="completed">Completed (beaten first)</option>
@@ -2960,7 +2995,7 @@
 
           <!-- D-Pad Navigation Controls -->
           <div class="win95-box p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
-            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">CONTROLS:</div>
+            <div id="controlsHeader" class="text-[10px] font-bold mb-1.5 text-slate-700 select-none text-center w-full">EXPLORATION:<br>W/S to move<br>A/D to turn<br>SPACE to use</div>
 
             <div id="dpadGrid" class="grid grid-cols-3 gap-1.5 w-32 my-auto justify-items-center">
               <div></div>

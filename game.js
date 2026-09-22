@@ -104,7 +104,14 @@
     // sound generation.
     const gfxQualitySelect = document.getElementById('gfxQualitySelect');
     const soundModeSelect = document.getElementById('soundModeSelect');
-    const difficultyRow = document.getElementById('difficultyRow');
+    // Difficulty lives on the main screen now (next to Undo/Redo), not in Options - see
+    // difficultySelect below. difficultySelectShowcase is the one place it still shows up
+    // inside #modalSettings: SHOWCASE_MODE has no Setup footer to put it in (screenSetup is
+    // hidden there wholesale), yet difficulty still matters - replaying a saved dungeon
+    // re-rolls its maze shape at whatever difficulty is picked right now (see
+    // loadHistoryDungeon). Hidden by default; the boot-time SHOWCASE_MODE block reveals it.
+    const difficultySelect = document.getElementById('difficultySelect');
+    const difficultySelectShowcase = document.getElementById('difficultySelectShowcase');
     const gridDesc = document.getElementById('gridDesc');
     // Options' Off / On pair for Last Attack Frame - see setLastAttackFrame.
     const lastAttackFrameRow = document.getElementById('lastAttackFrameRow');
@@ -134,12 +141,15 @@
     //                        rather than pressing through to the blow.
     //   maxPack              caps how many foes a pack variant spawns with, so the swarmer's
     //                        three become two (the circler is already a pair).
+    //   enemySpdMul /        how fast foes CLOSE on the player - see enemySpeedMul. Travel only:
+    //   bossSpdMul           walk, weave and the descent of a dive, never cadence or telegraphs.
+    //   decoyDoors           how many dead-end doors to hang off the route - see addDecoyDoors.
     const DIFFICULTIES = {
       easy:   { grids: 33,  enemyHpMul: 1,    baseHp: 150, baseStm: 150, reactiveBlockOdds: 0.45, flyersBreakOff: true, maxPack: 2,
                 desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 150 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
       medium: { grids: 66,  enemyHpMul: 1.25, desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, and foes with 25% more health.' },
-      hard:   { grids: 111, enemyHpMul: 1.6,  baseHp: 75,
-                desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit, foes with 60% more health, and a hero who starts with only 75.' }
+      hard:   { grids: 111, enemyHpMul: 1.6,  baseHp: 75, enemySpdMul: 1.1, bossSpdMul: 1.25, decoyDoors: 2,
+                desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit and doors that open onto dead ends. Foes have 60% more health and close 10% faster (the dread foe 25%), and the hero starts with only 75 health.' }
     };
     function difficultyCfg() {
       return DIFFICULTIES[selectedDifficulty] || DIFFICULTIES.medium;
@@ -177,7 +187,12 @@
       // these cells are ones the carve stopped short of, so a difficulty still buys the same
       // maze and the approach is added on top of it. Each cell is two tiles, so 3 puts the
       // stairs at the end of a six-tile run with the boss standing in it.
-      exitHallCells: 3
+      exitHallCells: 3,
+      // Longest branch addDecoyDoors tunnels behind one of Hard's dead-end doors, in cells, and
+      // grown through the same never-carved rock as the stairs' hallway - so it is free of the
+      // size budget for the same reason. Two cells is the floor it will accept; below that the
+      // player can see the whole of it from the doorway and the walk is not worth taking.
+      decoyHallCells: 3
     };
     let selectedDifficulty = 'medium';
     // LAST ATTACK FRAME - 'off' | 'on' | 'quick' | 'flip' | 'mixed'. Off, a foe's attack frame goes
@@ -1516,13 +1531,17 @@
       victoryModal.classList.add('hidden');
       if (defeatModal) defeatModal.classList.add('hidden');
       showBaseScreen();
+      // Swap the container back to the menu's own width class before measuring the Quick idea
+      // grid below - trimQuickIdeasToTwoRows() reads offsetTop, and doing that while appContainer
+      // was still sized for mode-game (fit-content, no cap) let the row report a false single
+      // line and leave every idea unhidden once the container shrank back to mode-setup's width.
+      appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
       if (SHOWCASE_MODE) {
         refreshHistory();        // re-read the manifest so a just-played run's beaten/favorite shows
       } else {
         shuffleQuickIdeas();     // fresh Quick idea order on every return to the menu
       }
       if (titleButtons) titleButtons.classList.remove('hidden');
-      appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
       returnToMenuMusic();     // win, lose, or quit - the dungeon's music stops, menu fades in
     }
 
@@ -1731,18 +1750,26 @@
     function setDifficulty(id) {
       if (!DIFFICULTIES[id]) id = 'medium';
       selectedDifficulty = id;
-      gridDesc.textContent = DIFFICULTIES[id].desc;
-      difficultyRow.querySelectorAll('.difficulty-btn').forEach((btn) => {
-        btn.classList.toggle('is-selected', btn.dataset.difficulty === id);
-      });
+      if (gridDesc) gridDesc.textContent = DIFFICULTIES[id].desc;
+      if (difficultySelect) difficultySelect.value = id;
+      if (difficultySelectShowcase) difficultySelectShowcase.value = id;
     }
 
-    difficultyRow.addEventListener('click', (e) => {
-      const btn = e.target.closest('.difficulty-btn');
-      if (!btn) return;
-      setDifficulty(btn.dataset.difficulty);
-      prefs.set(DIFFICULTY_KEY, selectedDifficulty);
-    });
+    // Both selects drive the same setDifficulty - only one is ever on screen at once
+    // (difficultySelect in normal mode, difficultySelectShowcase in SHOWCASE_MODE), so there is
+    // nothing to keep in sync beyond what setDifficulty already does on every change.
+    if (difficultySelect) {
+      difficultySelect.addEventListener('change', () => {
+        setDifficulty(difficultySelect.value);
+        prefs.set(DIFFICULTY_KEY, selectedDifficulty);
+      });
+    }
+    if (difficultySelectShowcase) {
+      difficultySelectShowcase.addEventListener('change', () => {
+        setDifficulty(difficultySelectShowcase.value);
+        prefs.set(DIFFICULTY_KEY, selectedDifficulty);
+      });
+    }
     setDifficulty(prefs.get(DIFFICULTY_KEY));
 
     // Last Attack Frame's Off / On / Quick / Flip / Mixed row, drawn like the difficulty row: the
@@ -1934,16 +1961,15 @@
       prefs.set(SOUND_MODE_KEY, soundModeSelect.value);
     }
 
-    // `focusTarget` is where the cursor starts - the current difficulty button normally (the
-    // dialog's first real choice, and a keyboard player wants to see where they already are, not
-    // land on OK), the ComfyUI address field when the setup screen's preflight notice opened it.
-    // The ComfyUI section reloads on every open, so edits left unapplied by ✕ / ESC last time
-    // never reappear as if they had been saved.
+    // `focusTarget` is where the cursor starts - the dialog's own first visible control when
+    // nothing is passed (focusFirstIn's fallback; a keyboard player wants to see where they
+    // already are, not land on OK), the ComfyUI address field when the setup screen's preflight
+    // notice opened it. The ComfyUI section reloads on every open, so edits left unapplied by
+    // ✕ / ESC last time never reappear as if they had been saved.
     function openSettings(focusTarget) {
       modalSettings.classList.remove('hidden');
       if (!SHOWCASE_MODE) loadComfySettings();   // section is hidden there anyway - nothing to check
-      const currentDifficultyBtn = difficultyRow.querySelector('.difficulty-btn.is-selected');
-      focusFirstIn(modalSettings, focusTarget || currentDifficultyBtn || btnSaveSettings);
+      focusFirstIn(modalSettings, focusTarget);
       if (focusTarget && document.activeElement === focusTarget) {
         focusTarget.scrollIntoView({ block: 'nearest' });
       }
@@ -2969,6 +2995,17 @@
       return cap ? Math.min(n, cap) : n;
     }
 
+    // How fast this foe TRAVELS, as a multiplier (see DIFFICULTIES.enemySpdMul / bossSpdMul).
+    // cfg.slow is the boss's tell throughout this file, so it is what picks the boss's own
+    // number. It scales closing speed ONLY - the stalk, the boss's weave, the descent of a dive
+    // - and deliberately not cadence, telegraphs or the charge's set piece: a foe that arrives
+    // sooner is harder to keep at arm's length, while a wind-up that played faster would just be
+    // harder to READ, and the charge's long tell is the whole reason it can be dodged at all.
+    function enemySpeedMul(cfg) {
+      const d = difficultyCfg();
+      return ((cfg && cfg.slow) ? d.bossSpdMul : d.enemySpdMul) || 1;
+    }
+
     // --- THE DREAD CHARGE ------------------------------------------------------------------
     // The boss's set piece, and the only thing in combat that moves in DEPTH. Every
     // BOSS_CHARGE_EVERY swings it stops fighting the fight it has been fighting, walks off the
@@ -3410,7 +3447,7 @@
         }
         if (battleActionBar) battleActionBar.classList.add('hidden');
         if (dpadGrid) dpadGrid.classList.remove('hidden');
-        if (controlsHeader) controlsHeader.textContent = "CONTROLS:";
+        if (controlsHeader) controlsHeader.innerHTML = "EXPLORATION:<br>W/S to move<br>A/D to turn<br>SPACE to use";
         combatState.introFrame = 0;
         setBattleMusicRate(1, 0.8);   // fight over - any boss pitch-shift slides back to normal
         // Hiding the action bar mid-press means the Block button never receives its pointerup or
@@ -4291,6 +4328,30 @@ void main() {
         });
     }
 
+    // The player just walked into this run - a fresh one or a replay off a History row. Stamped
+    // on the server every time (not once like "beaten"), because "Recently played" sorts on the
+    // LAST time a dungeon was entered. The copy in historyEntries is updated too, so a History
+    // window opened straight after sorts right without a refetch.
+    function markRunPlayed() {
+      const id = currentRunHistoryId;
+      if (!id) return;
+      const now = Date.now() / 1000;      // seconds, matching the server's time.time()
+      if (Array.isArray(historyEntries)) {
+        const entry = historyEntries.find(e => e.id === id);
+        if (entry) entry.last_played = now;
+      }
+      if (SHOWCASE_MODE) {
+        showcaseState.setPlayed(id, now);
+        return;
+      }
+      fetch(`${SERVER_URL}/api/history_played`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      }).then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); })
+        .catch(err => console.warn('Could not record this run as played:', err));
+    }
+
     // True while the clip covers the viewport - playing, or holding its last frame. The combat
     // sim freezes and the raycaster stops drawing under it.
     function endingOwnsViewport() {
@@ -5031,7 +5092,7 @@ void main() {
       } else if (e.special === 'weave') {
         e.depth = 1;
         e.state = 'idle';
-        e.x += e.weaveDir * BOSS_WEAVE_SPEED;
+        e.x += e.weaveDir * BOSS_WEAVE_SPEED * enemySpeedMul(cfg);
         if (e.x > BOSS_WEAVE_RANGE) { e.x = BOSS_WEAVE_RANGE; e.weaveDir = -1; }
         else if (e.x < -BOSS_WEAVE_RANGE) { e.x = -BOSS_WEAVE_RANGE; e.weaveDir = 1; }
         if (e.specialTimer <= 0) { e.special = 'pause'; e.specialTimer = BOSS_PAUSE_FRAMES; }
@@ -5135,12 +5196,14 @@ void main() {
         }
         e.swoopTimer--;
         if (e.swoop === 'none') {
-          e.orbit = (e.orbit + cfg.orbitSpeed) % (Math.PI * 2);
+          // Scaled once and reused for `laps` below, so a faster lap is still counted as one lap.
+          const orbitStep = cfg.orbitSpeed * enemySpeedMul(cfg);
+          e.orbit = (e.orbit + orbitStep) % (Math.PI * 2);
           // laps counts CIRCLES FLOWN, fractionally, rather than wraps of e.orbit - the two
           // are not the same thing for anyone whose slot phase isn't 0. The second of a pair
           // flies from pi, so its first wrap past 2pi comes half a circle in; counting wraps
           // would have it break off on a half lap, every lap.
-          e.laps += cfg.orbitSpeed / (Math.PI * 2);
+          e.laps += orbitStep / (Math.PI * 2);
           e.x = e.homeX + Math.cos(e.orbit) * cfg.orbitRX;
           // Minus sin: the low point of the lap is at orbit = pi/2 and the high point at
           // 3pi/2, running 26..78 against the 34px reach cut-off in the player's strike - so
@@ -5149,15 +5212,15 @@ void main() {
           if (e.laps >= CIRCLER_LAPS && e.state !== 'hurt') {
             e.laps = 0;
             e.diveOffset = packDiveOffset(e);
-            e.swoop = 'diving'; e.swoopTimer = 24; e.state = 'telegraph';
+            e.swoop = 'diving'; e.swoopTimer = Math.round(24 / enemySpeedMul(cfg)); e.state = 'telegraph';
             showFloatingCombatText("⚠️ IT BREAKS OFF!", 160 + e.x * 0.5, 58, "#fbbf24");
           }
         } else if (e.swoop === 'diving') {
-          e.altitude += (0 - e.altitude) * 0.22;
+          e.altitude += (0 - e.altitude) * 0.22 * enemySpeedMul(cfg);
           // Aimed at its own place in the line rather than at the player exactly, so a pack
           // that breaks off together arrives shoulder to shoulder instead of stacking on the
           // one pixel the player is standing on - see packDiveOffset.
-          e.x += ((combatState.playerX + (e.diveOffset || 0)) - e.x) * 0.16;
+          e.x += ((combatState.playerX + (e.diveOffset || 0)) - e.x) * 0.16 * enemySpeedMul(cfg);
           if (e.swoopTimer <= 0) {
             e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
             landEnemyStrike(e, cfg.dmg, "DODGED THE DIVE!", "🛡️ DIVE BLOCKED!", "DIVE!");
@@ -5198,12 +5261,15 @@ void main() {
           e.x += Math.sin(Date.now() / 620) * 1.3;
           e.altitude = cfg.hover + Math.sin(Date.now() / 300) * 5;
           if (e.swoopTimer <= 0 && e.state !== 'hurt') {
-            e.swoop = 'diving'; e.swoopTimer = 26; e.state = 'telegraph';
+            // The dive IS the flyer's approach - it has no walk to speed up - so a difficulty
+            // that makes foes travel faster shortens it, descent and all. The gap between
+            // swoops below is left alone: that is its cadence, not its speed.
+            e.swoop = 'diving'; e.swoopTimer = Math.round(26 / enemySpeedMul(cfg)); e.state = 'telegraph';
             showFloatingCombatText("⚠️ SWOOP INCOMING!", 160, 58, "#fbbf24");
           }
         } else if (e.swoop === 'diving') {
-          e.altitude += (0 - e.altitude) * 0.22;
-          e.x += (combatState.playerX - e.x) * 0.14;
+          e.altitude += (0 - e.altitude) * 0.22 * enemySpeedMul(cfg);
+          e.x += (combatState.playerX - e.x) * 0.14 * enemySpeedMul(cfg);
           if (e.swoopTimer <= 0) {
             e.swoop = 'striking'; e.swoopTimer = 14; e.state = 'attack';
             landEnemyStrike(e, cfg.dmg, "DODGED THE SWOOP!", "🛡️ SWOOP BLOCKED!", "SWOOP!");
@@ -5234,7 +5300,7 @@ void main() {
         // camp. ±62 closes that, and a hunt gets the walker's full ±85 so following the player
         // means all the way to the wall.
         const range = cfg.slow ? (e.hunting ? 85 : 62) : 85;
-        const spd = cfg.spd || (cfg.slow ? 0.5 : 0.9);
+        const spd = (cfg.spd || (cfg.slow ? 0.5 : 0.9)) * enemySpeedMul(cfg);
         // Below 30% HP a TIMID foe loses its nerve and backs away instead of closing. Only
         // the lone walker is: the boss never breaks off once it is hunting, and a swarmer
         // is meant to keep coming - three of them peeling away at 11 HP would turn the back
@@ -8179,9 +8245,11 @@ void main() {
     // The hallway is free: every cell of it was solid wall the carve stopped short of, so the
     // maze proper still has every corridor `grids` paid for.
     //
-    // Nothing else carves after this point - braidMaze has already run, the gate pass only
-    // stamps floor into walls and the lantern pass only touches MAP===1 - so the hallway carved
-    // here is still a hallway on the map the player walks.
+    // Nothing carves into the MAZE after this point - braidMaze has already run, the gate pass
+    // only stamps floor into walls and the lantern pass only touches MAP===1 - so the hallway
+    // carved here is still a hallway on the map the player walks. addDecoyDoors does carve
+    // after it, but only through never-carved rock and only behind a door of its own, so it can
+    // no more open a shortcut into this hallway than the hallway could into the maze.
     function relocateExit(plan, regionOf) {
       const lastId = plan ? plan.regionSeeds.length - 1 : 0;
       // Doors are not stamped yet, so this floods the maze as it will be with every gate open -
@@ -8325,6 +8393,65 @@ void main() {
       }
     }
 
+    // Where a lever goes, given `region` (everything the player can reach before the door it
+    // opens), `doorDist` (distances from that door's approach tile) and the cells already
+    // spoken for. Wants an (odd,odd) floor cell with a solid wall to mount on, well clear of
+    // the door, off the main route so reaching it costs a real detour, and ideally down a dead
+    // end. Returns null when nothing clears minDoorDist - the caller then relaxes and asks
+    // again. Shared with Hard's decoy doors: a lever mounted by different taste than a real
+    // one would be the tell that gives the whole trick away.
+    function _pickSwitchHost(region, doorDist, usedCells, pathTiles, minDoorDist) {
+      let best = null, bestScore = -1;
+      region.forEach((e) => {
+        if (e.x % 2 !== 1 || e.y % 2 !== 1) return;
+        if (e.x === startRoom.x && e.y === startRoom.y) return;
+        if (e.x === exitRoom.x && e.y === exitRoom.y) return;
+        if (usedCells.has(_tileKey(e.x, e.y))) return;
+        const dEntry = doorDist.get(_tileKey(e.x, e.y));
+        if (!dEntry || dEntry.dist < minDoorDist) return;
+        let wallNb = 0, floorNb = 0;
+        for (const dl of _ORTHO) {
+          const nx = e.x + dl.dx, ny = e.y + dl.dy;
+          if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+          if (MAP[ny][nx] === 1) wallNb++;
+          else if (MAP[ny][nx] === 0) floorNb++;
+        }
+        if (wallNb === 0) return;
+        const dd = dEntry.dist;
+        const offPath = !pathTiles.has(_tileKey(e.x, e.y));
+        const score = (offPath ? 60 : 0)                  // side passage, not the main route
+                    + (floorNb <= 1 ? 25 : 0)             // dead end
+                    + (dd <= 20 ? 40 : 0)                 // far, but not a slog back to the gate
+                    + Math.min(dd, 20) * 4
+                    + e.dist;                             // tie-break: deeper from the seed
+        if (score > bestScore) { bestScore = score; best = { x: e.x, y: e.y }; }
+      });
+      return best;
+    }
+
+    // The wall tile a switch is mounted on: a solid neighbour of its host cell. Prefers the
+    // wall opposite the single entrance (the "back wall" of a dead end), and prefers non-border.
+    function _pickSwitchWall(cell) {
+      const floorDirs = [];
+      for (const dl of _ORTHO) {
+        const nx = cell.x + dl.dx, ny = cell.y + dl.dy;
+        if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) floorDirs.push(dl);
+      }
+      const wallCandidates = [];
+      for (const dl of _ORTHO) {
+        const nx = cell.x + dl.dx, ny = cell.y + dl.dy;
+        if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
+        if (MAP[ny][nx] !== 1) continue;
+        const border = (nx === 0 || ny === 0 || nx === MAP_WIDTH - 1 || ny === MAP_HEIGHT - 1);
+        const opposite = floorDirs.length === 1 &&
+          dl.dx === -floorDirs[0].dx && dl.dy === -floorDirs[0].dy;
+        wallCandidates.push({ x: nx, y: ny, rank: (opposite ? 0 : 1) + (border ? 2 : 0) });
+      }
+      if (!wallCandidates.length) return null;
+      wallCandidates.sort((p, q) => p.rank - q.rank);
+      return wallCandidates[0];
+    }
+
     // Phase 3: stamp the planned doors and, for each, find one wall switch the player can
     // PROVABLY reach before that door (sequential gating). Guarantee: switch_k lies in the
     // region reachable with doors 0..k-1 open, so the player opens them in order and always
@@ -8332,8 +8459,6 @@ void main() {
     // which can make a switch easier to walk to but never moves it behind its own gate. Fills
     // doorList / switchList and stamps MAP (3 = closed door, 4 = switch OFF).
     function placeGatesAndSwitches(plan) {
-      doorList = [];
-      switchList = [];
       if (!plan) return;
 
       const gates = plan.gates;
@@ -8348,7 +8473,9 @@ void main() {
       const route = _bfsPath(startRoom, exitRoom) || path;
       const pathTiles = new Set(route.map((c) => _tileKey(c.x, c.y)));
 
-      const usedCells = new Set();
+      // Seeded with the cells Hard's decoy levers already hold (addDecoyDoors ran first), so
+      // two switches never end up mounted in the same little room.
+      const usedCells = new Set(switchList.map((s) => _tileKey(s.cellX, s.cellY)));
 
       for (let k = 0; k < N; k++) {
         const g = gates[k];
@@ -8368,44 +8495,14 @@ void main() {
         const approach = g.approach;
         const doorDist = _flood(approach, (x, y) => MAP[y][x] === 0 && !blocked.has(_tileKey(x, y)));
 
-        // host cell: an (odd,odd) floor tile in the region, not start/exit, unused, with a
-        // solid wall to mount on. Wants it well clear of the door, off the start->exit path
-        // (so reaching it costs a real detour) and ideally down a dead end.
-        let best = null, bestScore = -1;
-        const pickHost = (minDoorDist) => {
-          best = null; bestScore = -1;
-          region.forEach((e) => {
-            if (e.x % 2 !== 1 || e.y % 2 !== 1) return;
-            if (e.x === startRoom.x && e.y === startRoom.y) return;
-            if (e.x === exitRoom.x && e.y === exitRoom.y) return;
-            if (usedCells.has(_tileKey(e.x, e.y))) return;
-            const dEntry = doorDist.get(_tileKey(e.x, e.y));
-            if (!dEntry || dEntry.dist < minDoorDist) return;
-            let wallNb = 0, floorNb = 0;
-            for (const dl of _ORTHO) {
-              const nx = e.x + dl.dx, ny = e.y + dl.dy;
-              if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
-              if (MAP[ny][nx] === 1) wallNb++;
-              else if (MAP[ny][nx] === 0) floorNb++;
-            }
-            if (wallNb === 0) return;
-            const dd = dEntry.dist;
-            const offPath = !pathTiles.has(_tileKey(e.x, e.y));
-            const score = (offPath ? 60 : 0)                  // side passage, not the main route
-                        + (floorNb <= 1 ? 25 : 0)             // dead end
-                        + (dd <= 20 ? 40 : 0)                 // far, but not a slog back to the gate
-                        + Math.min(dd, 20) * 4
-                        + e.dist;                             // tie-break: deeper from the seed
-            if (score > bestScore) { bestScore = score; best = { x: e.x, y: e.y }; }
-          });
-        };
-
-        // 6 tiles = three cells clear of the gate. Relax only when the reachable region is
-        // too cramped to honour it, so tiny mazes still get a solvable switch.
-        pickHost(6);
-        if (!best) pickHost(4);
-        if (!best) pickHost(2);
-        if (!best) pickHost(0);
+        // host cell: see _pickSwitchHost. 6 tiles = three cells clear of the gate; relax only
+        // when the reachable region is too cramped to honour it, so tiny mazes still get a
+        // solvable switch.
+        let best = null;
+        for (const minDoorDist of [6, 4, 2, 0]) {
+          best = _pickSwitchHost(region, doorDist, usedCells, pathTiles, minDoorDist);
+          if (best) break;
+        }
 
         // fallback: a path cell strictly between the seed and this door, furthest from the
         // door first for the same reason.
@@ -8424,26 +8521,8 @@ void main() {
         }
         if (!best) continue;                               // cannot gate safely -> skip door
 
-        // wall tile for the switch: a solid neighbour of the host cell. Prefer the wall
-        // opposite the single entrance (the "back wall" of a dead end), and prefer non-border.
-        const floorDirs = [];
-        for (const dl of _ORTHO) {
-          const nx = best.x + dl.dx, ny = best.y + dl.dy;
-          if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH && MAP[ny][nx] === 0) floorDirs.push(dl);
-        }
-        const wallCandidates = [];
-        for (const dl of _ORTHO) {
-          const nx = best.x + dl.dx, ny = best.y + dl.dy;
-          if (ny < 0 || ny >= MAP_HEIGHT || nx < 0 || nx >= MAP_WIDTH) continue;
-          if (MAP[ny][nx] !== 1) continue;
-          const border = (nx === 0 || ny === 0 || nx === MAP_WIDTH - 1 || ny === MAP_HEIGHT - 1);
-          const opposite = floorDirs.length === 1 &&
-            dl.dx === -floorDirs[0].dx && dl.dy === -floorDirs[0].dy;
-          wallCandidates.push({ x: nx, y: ny, rank: (opposite ? 0 : 1) + (border ? 2 : 0) });
-        }
-        if (!wallCandidates.length) continue;
-        wallCandidates.sort((p, q) => p.rank - q.rank);
-        const wall = wallCandidates[0];
+        const wall = _pickSwitchWall(best);
+        if (!wall) continue;
 
         MAP[d.y][d.x] = 3;
         MAP[wall.y][wall.x] = 4;
@@ -8455,6 +8534,149 @@ void main() {
           x: wall.x, y: wall.y, cellX: best.x, cellY: best.y, doorIndex: k, on: false
         });
         usedCells.add(_tileKey(best.x, best.y));
+      }
+    }
+
+    // Phase 4, Hard only: the doors that go nowhere. Everything above gates the ONE route to
+    // the stairs, so every door the player has ever met was a door they had to open. These hang
+    // extra ones off that route which open onto a branch that simply runs out - so a junction
+    // can offer two archways with only one way on, and reading the maze wrong costs a walk back.
+    //
+    // The branch behind the door is CARVED, not found. The first version went looking for one
+    // the maze already had - a connector whose far side was a pocket holding nothing the run
+    // needed - and the maze almost never had one: braidDeadEnds ties off 70% of the dead ends
+    // into loops, and of the cut tiles that survive that, measured over 60 Hard mazes, 92%
+    // sealed something required (usually the stairs, being on the trunk). It yielded a decoy in
+    // 39% of mazes and never two. Tunnelling one instead makes the feature reliable AND the
+    // guarantee simpler: a run grown through never-carved rock connects to the maze at exactly
+    // one point, that point is where the door goes, and so the dead end behind it is true by
+    // construction. There is no pocket to prove anything about, nothing for braiding to reach
+    // around (it has long since run), and nothing the run needs can be inside, because a moment
+    // ago the whole branch was solid rock.
+    //
+    // It still has to run BEFORE the levers are sited, for a different reason: the lever hunt
+    // floods over MAP===0, so a decoy stamped first is a door the hunt cannot see past, and
+    // every real lever is therefore sited somewhere the player reaches without opening a single
+    // decoy. That is what keeps them skippable.
+    function addDecoyDoors(plan) {
+      const want = difficultyCfg().decoyDoors || 0;
+      if (!want || !exitRoom || !startRoom) return;
+
+      // Which tiles lie on the route the player really has to walk. Doors are not stamped yet,
+      // so both floods see the maze as it will be with every gate open - the same trick
+      // relocateExit uses just above. A tile is on SOME shortest walk exactly when its distance
+      // from the two ends adds up to the whole trip.
+      const fromStart = _flood(startRoom, (x, y) => MAP[y][x] === 0);
+      const fromExit = _flood(exitRoom, (x, y) => MAP[y][x] === 0);
+      const exitEntry = fromStart.get(_tileKey(exitRoom.x, exitRoom.y));
+      if (!exitEntry) return;
+      const trip = exitEntry.dist;
+      const onRoute = (x, y) => {
+        const a = fromStart.get(_tileKey(x, y)), b = fromExit.get(_tileKey(x, y));
+        return !!a && !!b && a.dist + b.dist === trip;
+      };
+
+      // A decoy's lever is confined to the same GATE SECTION as its door: the stretch of maze
+      // between two real gates, which is exactly what the player can walk while they are stood
+      // in front of it. Flooding out from the anchor without ever crossing a planned gate tile
+      // IS that stretch, and keeping the lever inside it is what makes the fork a choice the
+      // player can act on there and then rather than a door they come back for.
+      const gateTiles = (plan && plan.gates) ? plan.gates.map((g) => g.tile) : [];
+      const gateKeys = new Set(gateTiles.map((t) => _tileKey(t.x, t.y)));
+      const inSection = (x, y) => MAP[y][x] === 0 && !gateKeys.has(_tileKey(x, y));
+
+      const usedCells = new Set(switchList.map((s) => _tileKey(s.cellX, s.cellY)));
+      const triedAnchors = new Set();
+      // Negative ids, so a decoy can never collide with the numbered gates
+      // placeGatesAndSwitches is about to stamp (it uses a gate's position in the plan as its
+      // index). Nothing reads a door index as an order - it is purely what pairs a lever to the
+      // door it throws.
+      let nextIndex = -1;
+
+      for (let placed = 0, attempt = 0; placed < want && attempt < want + 6; attempt++) {
+        // Anchor: a carved cell with virgin rock beside it to tunnel into. Scored so the branch
+        // opens where the player will walk past it - and better still right beside a real gate,
+        // so the two archways read as one fork with nothing to tell them apart.
+        let anchor = null, bestRun = [], bestScore = -1;
+        for (let y = 1; y < MAP_HEIGHT - 1; y += 2) {
+          for (let x = 1; x < MAP_WIDTH - 1; x += 2) {
+            if (MAP[y][x] !== 0) continue;
+            if (x === startRoom.x && y === startRoom.y) continue;
+            if (x === exitRoom.x && y === exitRoom.y) continue;
+            if (triedAnchors.has(_tileKey(x, y))) continue;
+            const run = _growExitHall({ x, y }, MAZE.decoyHallCells, null,
+                                      new Set([_tileKey(x, y)]));
+            // One cell behind the door is an alcove the player takes in at a glance. The point
+            // is a branch they have to walk a little way down before it runs out on them.
+            if (run.length < 2) continue;
+            let nearGate = false;
+            for (const t of gateTiles) {
+              if (Math.abs(t.x - x) + Math.abs(t.y - y) <= 6) { nearGate = true; break; }
+            }
+            const score = (onRoute(x, y) ? 100 : 0)
+                        + (nearGate ? 45 : 0)
+                        + run.length * 8
+                        + Math.random() * 12;            // tie-break, so shapes vary run to run
+            if (score > bestScore) { bestScore = score; anchor = { x, y }; bestRun = run; }
+          }
+        }
+        if (!anchor) return;                  // no rock left to tunnel a dead end through
+
+        triedAnchors.add(_tileKey(anchor.x, anchor.y));
+
+        // The lever is sited BEFORE anything is carved, because if this section has nowhere to
+        // mount one the branch must not be dug at all: a door that can never open is not a
+        // decoy, it is a player hunting the rest of the dungeon for a lever that was never
+        // placed. Carving cannot change the answer anyway - everything it adds ends up sealed
+        // behind the door, where the lever hunt cannot see it.
+        const region = _flood(anchor, inSection);
+        const pathTiles = new Set();
+        region.forEach((e) => { if (onRoute(e.x, e.y)) pathTiles.add(_tileKey(e.x, e.y)); });
+        // The anchor itself is barred: the wall about to become its doorway is one of the walls
+        // a lever could otherwise be mounted on, and a lever in the cell facing its own door is
+        // no puzzle in any case.
+        const taken = new Set(usedCells);
+        taken.add(_tileKey(anchor.x, anchor.y));
+        let host = null;
+        for (const minDoorDist of [6, 4, 2, 0]) {
+          // The region doubles as the distance map: it is flooded from the anchor, which is the
+          // cell the player stands in when this door stops them.
+          host = _pickSwitchHost(region, region, taken, pathTiles, minDoorDist);
+          if (host) break;
+        }
+        if (!host) continue;
+        const wall = _pickSwitchWall(host);
+        if (!wall) continue;
+
+        // Carve it. Every cell of the run was solid rock and only the connectors ALONG the run
+        // come out with it, so the branch has exactly one opening - and that opening is where
+        // the door goes. Nothing can loop around it because there is nothing on the far side to
+        // loop around to, which is what makes the dead end true by construction rather than by
+        // a proof that braiding might have undone. Like the stairs' hallway it is free of the
+        // difficulty budget: `grids` counts carved corridors and none of these were ever carved.
+        const mouth = bestRun[0];
+        for (let i = 0; i < bestRun.length; i++) {
+          if (i > 0) MAP[bestRun[i].wy][bestRun[i].wx] = 0;
+          MAP[bestRun[i].y][bestRun[i].x] = 0;
+          triedAnchors.add(_tileKey(bestRun[i].x, bestRun[i].y));   // never nest one in another
+        }
+        MAP[mouth.wy][mouth.wx] = 3;
+        MAP[wall.y][wall.x] = 4;
+
+        const index = nextIndex--;
+        // Same shape of entry as a real door, `decoy` aside - drawn, opened and saved by exactly
+        // the same code, which is what keeps it indistinguishable until it is walked. axis: a
+        // connector with an even x joins the cells left and right of it, so the door's own plane
+        // spans north-south. See planGates for what this feeds.
+        doorList.push({
+          x: mouth.wx, y: mouth.wy, index, opened: false,
+          axis: (mouth.wx % 2 === 0) ? 'y' : 'x', decoy: true
+        });
+        switchList.push({
+          x: wall.x, y: wall.y, cellX: host.x, cellY: host.y, doorIndex: index, on: false
+        });
+        usedCells.add(_tileKey(host.x, host.y));
+        placed++;
       }
     }
 
@@ -8582,6 +8804,10 @@ void main() {
     // generateAuthentic3DMaze uses to decide whether this carve is one it keeps.
     function carveAndGateMaze(cellRows, cellCols, targetCells) {
       MAP = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(1));
+      // Emptied here rather than inside placeGatesAndSwitches: the decoy pass runs before that
+      // one now, and every reroll of this function has to start from a dungeon with no doors.
+      doorList = [];
+      switchList = [];
 
       const visitedCells = Array(cellRows).fill(0).map(() => Array(cellCols).fill(false));
       const stack = [];
@@ -8670,6 +8896,13 @@ void main() {
       //   placeGates.. stamps the doors that survived and hunts down switch hosts on the
       //                FINISHED map, so a lever is scored against the route the player really
       //                takes - hallway included.
+      //   addDecoy..   Hard only: tunnels short dead-end branches off the route and hangs a
+      //                door on the mouth of each. It is the second pass allowed to carve, and
+      //                like relocateExit it only ever takes never-carved rock, so it cannot
+      //                open a shortcut into anything that already exists. It runs BEFORE the
+      //                levers are sited: the lever hunt floods over MAP===0 and so cannot see
+      //                past a stamped door, which is what leaves every real lever somewhere
+      //                the player reaches without opening a decoy.
       // All four run BEFORE the lantern pass (which only touches MAP===1, so it skips our
       // door/switch tiles) and BEFORE passagesList is built (so a closed door is correctly
       // excluded from the walkable-tile count, and the loop and hallway tiles are correctly
@@ -8677,6 +8910,7 @@ void main() {
       const gatePlan = planGates();
       const gateRegions = braidMaze(cellRows, cellCols, gatePlan);
       relocateExit(gatePlan, gateRegions);
+      addDecoyDoors(gatePlan);
       placeGatesAndSwitches(gatePlan);
       return gatePlan;
     }
@@ -10096,6 +10330,10 @@ void main() {
       // replay. Asked at ENTER rather than at arming, so a player who sits on the crawl still
       // gets a clip that finished while they read.
       prepareEndingCutscene();
+      // Same id, same reason it is safe to read here: this is the moment the run is actually
+      // played, which is what "Recently played" in History orders by. Not fired from the crawl
+      // screen - backing out of the loading screen never counts as having played the dungeon.
+      markRunPlayed();
       // Narration keeps playing across screen changes; silence it before the game starts.
       stopNarration();
       // ...and drop the crawl-reading hold with it. startCrawl() sets crawlReadingUntil up to
@@ -11607,7 +11845,12 @@ void main() {
       return {
         get(id) {
           const rec = readAll()[id];
-          return { favorite: !!(rec && rec.favorite), beaten: !!(rec && rec.beaten) };
+          return {
+            favorite: !!(rec && rec.favorite),
+            beaten: !!(rec && rec.beaten),
+            beaten_at: (rec && rec.beaten_at) || 0,
+            last_played: (rec && rec.last_played) || 0,
+          };
         },
         setFavorite(id, favorite) {
           const all = readAll();
@@ -11617,7 +11860,15 @@ void main() {
         },
         setBeaten(id) {
           const all = readAll();
-          all[id] = { ...(all[id] || {}), beaten: true };   // never unset, same rule the server follows
+          const rec = all[id] || {};
+          // Never unset, and the stamp is never moved - same rule the server follows, so the
+          // Completed sort keeps ordering by the FIRST time this visitor beat the run.
+          all[id] = { ...rec, beaten: true, beaten_at: rec.beaten_at || Date.now() / 1000 };
+          writeAll(all);
+        },
+        setPlayed(id, at) {
+          const all = readAll();
+          all[id] = { ...(all[id] || {}), last_played: at };   // overwritten every entry
           writeAll(all);
         },
       };
@@ -11634,6 +11885,11 @@ void main() {
         const local = showcaseState.get(entry.id);
         entry.favorite = local.favorite;
         entry.beaten = local.beaten;
+        // The two sort stamps go the same way, for the same reason: "recently played" and
+        // "recently beaten" have to mean what THIS visitor did, not what the curator did on
+        // the machine the manifest was published from.
+        entry.beaten_at = local.beaten_at;
+        entry.last_played = local.last_played;
       });
     }
 
@@ -12973,7 +13229,7 @@ void main() {
     // run is hidden by it (that is "Similar only"), nothing is written to the bundles, and the
     // server is never asked again - the entries are already in memory.
     const HISTORY_SORT_KEY = 'comfycrawler.historySort';
-    const HISTORY_SORTS = ['default', 'style', 'player', 'completed', 'random'];
+    const HISTORY_SORTS = ['default', 'played', 'style', 'player', 'completed', 'random'];
     const storedHistorySort = prefs.get(HISTORY_SORT_KEY);
     let historySortMode = HISTORY_SORTS.includes(storedHistorySort) ? storedHistorySort : 'default';
     if (historySort) historySort.value = historySortMode;
@@ -13015,6 +13271,17 @@ void main() {
       return first.replace(/^[^\p{L}\p{N}]+/u, '') || first;
     }
 
+    // The most recent moment we have any evidence this run was being played. last_played is the
+    // real answer, but it is only written from the moment that stamp existed, so every run saved
+    // before it reads as never played. Beating a boss is proof the dungeon was being played then,
+    // and a run is always played at least once when it is made, so the older two stamps stand in
+    // for the whole back catalogue rather than letting it collapse into one indistinguishable
+    // block at the bottom. Highest wins, not first-found: a run beaten long after it was made and
+    // a run replayed long after it was beaten both have to land on their latest stamp.
+    function historyPlayedAt(entry) {
+      return Math.max(entry.last_played || 0, entry.beaten_at || 0, entry.created || 0);
+    }
+
     // Always a copy, and never a re-sort of historyEntries itself - "Default" has to still mean
     // the order the server handed over (newest first), which is the order that array is in.
     // Every sort here is stable, so runs that tie fall back to exactly that default order.
@@ -13023,10 +13290,14 @@ void main() {
       const out = list.slice();
       if (historySortMode === 'random') {
         out.sort((a, b) => historyRandomRankOf(a) - historyRandomRankOf(b));
+      } else if (historySortMode === 'played') {
+        out.sort((a, b) => historyPlayedAt(b) - historyPlayedAt(a));
       } else if (historySortMode === 'completed') {
-        // Beaten first. Not a filter: the runs whose boss is still standing follow underneath,
-        // which is also the list someone sorting by this is often really after.
-        out.sort((a, b) => (b.beaten ? 1 : 0) - (a.beaten ? 1 : 0));
+        // Beaten first, and within those the most recently beaten first. Not a filter: the runs
+        // whose boss is still standing follow underneath in the default order, which is also the
+        // list someone sorting by this is often really after.
+        out.sort((a, b) => ((b.beaten ? 1 : 0) - (a.beaten ? 1 : 0))
+                        || ((b.beaten && a.beaten) ? (b.beaten_at || 0) - (a.beaten_at || 0) : 0));
       } else {
         out.sort((a, b) => compareHistoryText(historySortKey(a), historySortKey(b)));
       }
@@ -14164,20 +14435,24 @@ void main() {
       if (btnOpenSessionsFolder) btnOpenSessionsFolder.classList.add('hidden');
       if (btnOpenAssetsFolder) btnOpenAssetsFolder.classList.add('hidden');
       if (btnQuitEraseRun) btnQuitEraseRun.classList.add('hidden');
-      // Options, trimmed to what still means something without ComfyUI: Difficulty, Max Frame
-      // Rate and Screensaver Wait stay; Graphics, Sound Generation, Ending Video and the ComfyUI
-      // Connection fields are all generation-only, so they're replaced with one note pointing at
-      // the repo for anyone who wants the real thing.
-      const gfxQualityRow = document.getElementById('gfxQualityRow');
-      const soundAndEndingRow = document.getElementById('soundAndEndingRow');
+      // Options, trimmed to what still means something without ComfyUI: Difficulty and the
+      // Display Settings section (Max Frame Rate, Screensaver Wait) stay; the whole Generation
+      // Settings section (Texture and Sprite Generation, Sound Generation, Ending Video) and the
+      // ComfyUI Connection fields are generation-only, so they're replaced with one note
+      // pointing at the repo for anyone who wants the real thing.
+      const generationSettingsSection = document.getElementById('generationSettingsSection');
       const comfySettingsSection = document.getElementById('comfySettingsSection');
       const showcaseGenerateNote = document.getElementById('showcaseGenerateNote');
       const aboutModelsSection = document.getElementById('aboutModelsSection');
-      if (gfxQualityRow) gfxQualityRow.classList.add('hidden');
-      if (soundAndEndingRow) soundAndEndingRow.classList.add('hidden');
+      const difficultySettingsRow = document.getElementById('difficultySettingsRow');
+      if (generationSettingsSection) generationSettingsSection.classList.add('hidden');
       if (comfySettingsSection) comfySettingsSection.classList.add('hidden');
       if (showcaseGenerateNote) showcaseGenerateNote.classList.remove('hidden');
       if (aboutModelsSection) aboutModelsSection.classList.add('hidden');
+      // Difficulty's own row lives in Setup's footer now, which this export hides wholesale -
+      // this is the copy that stays reachable, so replaying a saved dungeon can still pick what
+      // it re-rolls the maze at (see difficultySelectShowcase above).
+      if (difficultySettingsRow) difficultySettingsRow.classList.remove('hidden');
       screenSetup.classList.add('hidden');
       if (screenShowcase) screenShowcase.classList.remove('hidden');
       refreshHistory();

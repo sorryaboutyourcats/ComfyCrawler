@@ -9794,6 +9794,19 @@ def mark_dungeon_session_beaten(session_id):
     return True
 
 
+def mark_dungeon_session_played(session_id):
+    """Stamp a saved dungeon as played just now, for the "Recently played" sort. Written when the
+    player actually walks into it, so it covers a fresh run and a replay alike - unlike "created",
+    which is stamped once when the bundle is saved and never touched again. Overwrites every time:
+    the point of the field is the LAST time it was played. Returns the stamp, or None if the
+    session is not there."""
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return None
+    meta = _update_session_meta(folder, {"last_played": time.time()})
+    return meta["last_played"]
+
+
 def delete_dungeon_session(session_id):
     """Erase one saved dungeon - bundle, thumbnail, metadata and folder. True if it was
     there to remove. Raises SessionLocked for a favorite; an unreadable meta.json does not
@@ -11502,6 +11515,26 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     body, code = {"success": True, "beaten": True}, 200
             except Exception as e:
                 print(f"[history] beaten failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/history_played":
+            # The player just walked into a saved run - fresh or replayed. Body is {id}. Unlike
+            # "beaten" this overwrites on every entry: it is what "Recently played" sorts on.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                played = mark_dungeon_session_played(data.get("id"))
+                if played is None:
+                    body, code = {"success": False, "error": "That saved dungeon is gone."}, 404
+                else:
+                    body, code = {"success": True, "last_played": played}, 200
+            except Exception as e:
+                print(f"[history] played failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")

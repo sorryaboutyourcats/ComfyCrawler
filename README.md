@@ -158,7 +158,7 @@ Every menu and window works from the keyboard too: arrow keys move the cursor, <
 ## ⚙️ Options
 
 * **Difficulty** - Easy, Medium or Hard: ~33, ~66 or ~111 corridors, with foes getting 25% or 60% more health on the harder two.
-* **Graphics** - High, Medium or Low generation resolution. Lower is faster.
+* **Texture and Sprite Generation** - High, Medium or Low generation resolution. Lower is faster.
 * **Max Frame Rate** - 24 to 240 FPS.
 * **Sound Generation** - music and sound, sound only, or none (fastest).
 * **Ending Video** - film the ending cutscene (off by default; it adds several minutes).
