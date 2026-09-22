@@ -111,10 +111,14 @@
     // re-rolls its maze shape at whatever difficulty is picked right now (see
     // loadHistoryDungeon). Hidden by default; the boot-time SHOWCASE_MODE block reveals it.
     // difficultySelectHistory is the same pick again, next to History's Sort dropdown, so a
-    // saved dungeon can be replayed at a different difficulty without a trip to Setup first.
+    // saved dungeon can be replayed at a different difficulty without a trip to Setup first,
+    // and difficultySelectGallery is that same pair once more in the showcase gallery's own
+    // footer - the export's landing screen, where picking a difficulty before starting a saved
+    // run should not mean a trip into Options either. All of them go through setDifficulty.
     const difficultySelect = document.getElementById('difficultySelect');
     const difficultySelectShowcase = document.getElementById('difficultySelectShowcase');
     const difficultySelectHistory = document.getElementById('difficultySelectHistory');
+    const difficultySelectGallery = document.getElementById('difficultySelectGallery');
     const gridDesc = document.getElementById('gridDesc');
     // Options' Off / On pair for Last Attack Frame - see setLastAttackFrame.
     const lastAttackFrameRow = document.getElementById('lastAttackFrameRow');
@@ -250,11 +254,14 @@
     const btnHistoryOk = document.getElementById('btnHistoryOk');
     const historySimilarOnly = document.getElementById('historySimilarOnly');
     const historySimilarOnlyLabel = document.getElementById('historySimilarOnlyLabel');
+    // The same Sort pick in two places: History's own dropdown, and the copy in the showcase
+    // gallery's footer. One stored setting between them - see historySortMode.
     const historySort = document.getElementById('historySort');
+    const showcaseSort = document.getElementById('showcaseSort');
     const showcaseList = document.getElementById('showcaseList');
     const showcaseFootNote = document.getElementById('showcaseFootNote');
     // Rows or tiles - the pair in the History window's footer, and the pair in the showcase
-    // gallery's header. Both drive the one setting; see setHistoryView.
+    // gallery's footer. Both drive the one setting; see setHistoryView.
     const btnHistoryViewList = document.getElementById('btnHistoryViewList');
     const btnHistoryViewTiles = document.getElementById('btnHistoryViewTiles');
     const btnShowcaseViewList = document.getElementById('btnShowcaseViewList');
@@ -1751,37 +1758,27 @@
     // longer a difficulty (or nothing at all) falls back to Medium inside setDifficulty.
     const DIFFICULTY_KEY = 'comfycrawler.difficulty';
 
+    // Every copy of the pick on the page, in one list rather than named one at a time: two of
+    // them (History's and the showcase gallery's) can be up alongside another, so "the other
+    // one" was never a safe assumption, and a fourth made the copy-pasted pairs silly.
+    const difficultySelects = [difficultySelect, difficultySelectShowcase,
+                               difficultySelectHistory, difficultySelectGallery].filter(Boolean);
+
     function setDifficulty(id) {
       if (!DIFFICULTIES[id]) id = 'medium';
       selectedDifficulty = id;
       if (gridDesc) gridDesc.textContent = DIFFICULTIES[id].desc;
-      if (difficultySelect) difficultySelect.value = id;
-      if (difficultySelectShowcase) difficultySelectShowcase.value = id;
-      if (difficultySelectHistory) difficultySelectHistory.value = id;
+      difficultySelects.forEach((sel) => { sel.value = id; });
     }
 
-    // All three selects drive the same setDifficulty - difficultySelect and
-    // difficultySelectShowcase are never both on screen at once (normal mode vs. SHOWCASE_MODE),
-    // but difficultySelectHistory in the History modal can be up alongside either one, so it
-    // gets kept in sync the same way rather than assumed to be the only other picker around.
-    if (difficultySelect) {
-      difficultySelect.addEventListener('change', () => {
-        setDifficulty(difficultySelect.value);
+    // Every select drives the same setDifficulty, which then writes the pick back into all of
+    // them - so whichever one was used, the rest agree the moment they are looked at.
+    difficultySelects.forEach((sel) => {
+      sel.addEventListener('change', () => {
+        setDifficulty(sel.value);
         prefs.set(DIFFICULTY_KEY, selectedDifficulty);
       });
-    }
-    if (difficultySelectShowcase) {
-      difficultySelectShowcase.addEventListener('change', () => {
-        setDifficulty(difficultySelectShowcase.value);
-        prefs.set(DIFFICULTY_KEY, selectedDifficulty);
-      });
-    }
-    if (difficultySelectHistory) {
-      difficultySelectHistory.addEventListener('change', () => {
-        setDifficulty(difficultySelectHistory.value);
-        prefs.set(DIFFICULTY_KEY, selectedDifficulty);
-      });
-    }
+    });
     setDifficulty(prefs.get(DIFFICULTY_KEY));
 
     // Last Attack Frame's Off / On / Quick / Flip / Mixed row, drawn like the difficulty row: the
@@ -1989,6 +1986,58 @@
     btnSettings.addEventListener('click', () => openSettings());
     const btnShowcaseSettings = document.getElementById('btnShowcaseSettings');
     if (btnShowcaseSettings) btnShowcaseSettings.addEventListener('click', () => openSettings());
+
+    // "Make your own runs" - the showcase gallery's other footer button. Same shape as the
+    // About box: ✕, OK, ESC and a click on the darkened screen behind it all back out, and the
+    // keyboard cursor starts on OK rather than on the title bar's ✕. Static text, so unlike
+    // Options there is nothing to load on the way in.
+    const btnShowcaseMakeOwn = document.getElementById('btnShowcaseMakeOwn');
+    const modalMakeOwn = document.getElementById('modalMakeOwn');
+    const btnCloseMakeOwn = document.getElementById('btnCloseMakeOwn');
+    const btnMakeOwnOk = document.getElementById('btnMakeOwnOk');
+    const btnCopyDiscord = document.getElementById('btnCopyDiscord');
+    const discordCopyNote = document.getElementById('discordCopyNote');
+    function closeMakeOwn() {
+      if (modalMakeOwn) modalMakeOwn.classList.add('hidden');
+      // The "Copied!" note is per-visit: leaving it up means reopening the box on a claim about
+      // a clipboard that may since have been written over by anything else.
+      if (discordCopyNote) discordCopyNote.textContent = '';
+    }
+    if (btnShowcaseMakeOwn && modalMakeOwn) {
+      btnShowcaseMakeOwn.addEventListener('click', () => {
+        modalMakeOwn.classList.remove('hidden');
+        focusFirstIn(modalMakeOwn, btnMakeOwnOk);
+      });
+      modalMakeOwn.addEventListener('click', (e) => {
+        if (e.target === modalMakeOwn) closeMakeOwn();
+      });
+    }
+    if (btnCloseMakeOwn) btnCloseMakeOwn.addEventListener('click', closeMakeOwn);
+    if (btnMakeOwnOk) btnMakeOwnOk.addEventListener('click', closeMakeOwn);
+
+    // Discord is the one row in that box with no address to open - there is no per-user profile
+    // URL - so the row hands the username over instead. navigator.clipboard is absent on a
+    // plain-http export and refused when the page is not focused, so the note says which of the
+    // two happened rather than silently doing nothing: the username is on screen either way,
+    // and a visitor who can see it can still select it by hand.
+    let discordCopyTimer = null;
+    if (btnCopyDiscord) {
+      btnCopyDiscord.addEventListener('click', async () => {
+        const handle = 'sorryaboutyourcats';
+        let ok = false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(handle);
+            ok = true;
+          }
+        } catch (_) { ok = false; }
+        if (discordCopyNote) {
+          discordCopyNote.textContent = ok ? '(copied)' : '(copy it by hand)';
+          if (discordCopyTimer) clearTimeout(discordCopyTimer);
+          discordCopyTimer = setTimeout(() => { discordCopyNote.textContent = ''; }, 2500);
+        }
+      });
+    }
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     // OK applies ComfyUI edits that were never applied; if the server refuses them (a malformed
     // address, or a run in progress) Options stays open on the reason instead of losing them.
@@ -10821,7 +10870,7 @@ void main() {
     function topmostOpenDialog() {
       const stack = [modalDownloadStopConfirm, modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm,
                      modalHistoryConfirm, modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm,
-                     modalHistory, modalSettings, modalAbout];
+                     modalHistory, modalSettings, modalAbout, modalMakeOwn];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -11968,7 +12017,12 @@ void main() {
         return;
       }
       showcaseList.innerHTML = '';
-      historyEntries.forEach(entry => showcaseList.appendChild(buildHistoryEntryEl(entry)));
+      // sortHistoryEntries, not historyEntries raw: the gallery's footer carries the same Sort
+      // dropdown History does, driving the same stored pick, so it has to honour it. Not
+      // visibleHistoryEntries() - that also applies "Similar only", which has nothing to
+      // compare against on this screen (no live run, no mad-lib draft).
+      sortHistoryEntries(historyEntries)
+        .forEach(entry => showcaseList.appendChild(buildHistoryEntryEl(entry)));
       requestAnimationFrame(() => {
         showcaseList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
       });
@@ -12268,15 +12322,27 @@ void main() {
     // What a tile does NOT carry is Use Prompts and the trash can: three buttons is what fits
     // over a picture this size, and both of those live one click away in the list view.
     const HISTORY_VIEW_KEY = 'comfycrawler.historyView';
-    // No stored choice yet (a fresh browser, or one predating this key) defaults to tiles on a
-    // phone - a list row's date/size/quality line either gets cut to a few characters or wraps
-    // the row onto two lines at this width (see the max-width: 760px .hist-row override), while
-    // a tile is just a picture, which is what a screen this narrow reads fastest. Once the
-    // visitor picks a view explicitly (setHistoryView, below) that choice sticks regardless of
-    // width, same as it always has.
+    // No stored choice yet - a fresh browser, or one predating this key - falls back two ways.
+    //
+    // In the showcase export it is always tiles. That gallery is the first thing a visitor ever
+    // sees of this, and the pitch is the pictures: fifty-seven heroes standing in fifty-seven
+    // dungeons nobody drew by hand. A wall of rows leads with dates, file sizes and quality
+    // labels, which are the answers to questions a first-time player has not asked yet. They can
+    // still switch to rows from the footer, and that choice then sticks.
+    //
+    // Everywhere else it is tiles on a phone only. This is the History window, a working list:
+    // Use Prompts and the trash can live on a row and not on a tile, so rows are the right
+    // default for someone managing their own runs. Below 760px that stops being true - a row's
+    // date/size/quality line either gets cut to a few characters or wraps onto a second line
+    // (see the max-width: 760px .hist-row override), while a tile is just a picture, which is
+    // what a screen that narrow reads fastest.
+    //
+    // Either way, once the view is picked explicitly (setHistoryView, below) that choice sticks
+    // regardless of width or mode, same as it always has.
     const storedHistoryView = prefs.get(HISTORY_VIEW_KEY);
     let historyView = storedHistoryView === 'tiles' ? 'tiles'
       : storedHistoryView === 'list' ? 'list'
+      : SHOWCASE_MODE ? 'tiles'
       : (window.matchMedia && window.matchMedia('(max-width: 760px)').matches) ? 'tiles' : 'list';
 
     // Where a run's card picture lives: an endpoint on the live server, which draws it on the
@@ -13321,7 +13387,11 @@ void main() {
     const HISTORY_SORTS = ['default', 'played', 'style', 'player', 'completed', 'random'];
     const storedHistorySort = prefs.get(HISTORY_SORT_KEY);
     let historySortMode = HISTORY_SORTS.includes(storedHistorySort) ? storedHistorySort : 'default';
-    if (historySort) historySort.value = historySortMode;
+    // Both dropdowns again - History's and the showcase gallery's. They can never be on screen
+    // together (the gallery is the screen History opens over), but they share one stored pick,
+    // so the one that was not touched still has to be showing it when it next comes up.
+    const historySortSelects = [historySort, showcaseSort].filter(Boolean);
+    historySortSelects.forEach((sel) => { sel.value = historySortMode; });
 
     // Randomized is a shuffle of the whole list, not a coin flip per comparison: a comparator
     // that answered differently each time it was asked would make the sort itself incoherent.
@@ -13393,17 +13463,19 @@ void main() {
       return out;
     }
 
-    if (historySort) {
-      historySort.addEventListener('change', () => {
-        const next = HISTORY_SORTS.includes(historySort.value) ? historySort.value : 'default';
+    historySortSelects.forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const next = HISTORY_SORTS.includes(sel.value) ? sel.value : 'default';
         historySortMode = next;
+        historySortSelects.forEach((other) => { other.value = next; });
         prefs.set(HISTORY_SORT_KEY, next);
         // Picking Randomized again is how you ask for a different shuffle - the order only
         // otherwise changes when the window is reopened.
         if (next === 'random') reshuffleHistoryOrder();
         renderHistoryList();
+        if (SHOWCASE_MODE) renderShowcaseList();
       });
-    }
+    });
 
     // The subset of historyEntries the list is actually showing right now, in the order the
     // Sort dropdown asks for - every saved run, unless "Similar only" is both checked and has
@@ -13987,6 +14059,9 @@ void main() {
       } else if (modalAbout && !modalAbout.classList.contains('hidden')) {
         e.preventDefault();
         closeAbout();
+      } else if (modalMakeOwn && !modalMakeOwn.classList.contains('hidden')) {
+        e.preventDefault();
+        closeMakeOwn();
       } else if (modalHistory && !modalHistory.classList.contains('hidden')) {
         e.preventDefault();
         closeHistory();
