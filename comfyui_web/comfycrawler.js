@@ -23,8 +23,43 @@ iconStyle.textContent = `.comfycrawler-sidebar-icon {
 }`;
 document.head.appendChild(iconStyle);
 
+// Whether the top-bar button shows. Kept as a ComfyUI setting (on the server, per ComfyUI user)
+// rather than in localStorage, so it holds for every address ComfyUI is opened from. The button is
+// hidden with CSS: ComfyUI builds its action-bar buttons once from the extension list, but it does
+// put each one's `class` on the rendered button. The menu entry and the sidebar tab stay either
+// way, so the game is always one click away.
+const SHOW_BUTTON_SETTING = "ComfyCrawler.ShowTopBarButton";
+const TOPBAR_BUTTON_CLASS = "comfycrawler-topbar-button";
+const topbarStyle = document.createElement("style");
+document.head.appendChild(topbarStyle);
+
+function showTopBarButton(show) {
+  topbarStyle.textContent = show ? "" : `.${TOPBAR_BUTTON_CLASS} { display: none !important; }`;
+  // Keep any open sidebar panel's checkbox in step with a change made from ComfyUI's Settings.
+  document.querySelectorAll(".comfycrawler-topbar-toggle").forEach((box) => { box.checked = !!show; });
+}
+
+function topBarButtonShown() {
+  const value = app.extensionManager?.setting?.get(SHOW_BUTTON_SETTING);
+  return value === undefined ? true : !!value;
+}
+
 app.registerExtension({
   name: "ComfyCrawler.OpenButton",
+  settings: [
+    {
+      id: SHOW_BUTTON_SETTING,
+      category: ["ComfyCrawler", "Top bar", "Show button"],
+      name: "Show the ComfyCrawler button in the top bar",
+      tooltip: "The game also opens from ComfyUI's menu (ComfyCrawler > Open ComfyCrawler) and the ComfyCrawler sidebar tab.",
+      type: "boolean",
+      defaultValue: true,
+      onChange: (value) => showTopBarButton(value !== false),
+    },
+  ],
+  setup() {
+    showTopBarButton(topBarButtonShown());
+  },
   commands: [
     {
       id: "ComfyCrawler.Open",
@@ -39,6 +74,7 @@ app.registerExtension({
       icon: "pi pi-external-link",
       label: "ComfyCrawler",
       tooltip: "Open ComfyCrawler in a new tab",
+      class: TOPBAR_BUTTON_CLASS,
       onClick: openComfyCrawler,
     },
   ],
@@ -126,7 +162,24 @@ function createPanel(root) {
   githubLink.addEventListener("mouseleave", () => { githubLink.style.textDecoration = "none"; });
   const versionTag = el("span", "opacity:0.6;font-size:11px;", APP_VERSION);
   footer.append(githubLink, versionTag);
-  root.append(statusBox, groupBox, actionBox, noteBox, footer);
+
+  // Built once, outside render(), so a poll never rebuilds it out from under the keyboard.
+  const toggleRow = el("label", "display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;");
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.className = "comfycrawler-topbar-toggle";
+  toggle.checked = topBarButtonShown();
+  toggle.addEventListener("change", async () => {
+    showTopBarButton(toggle.checked);
+    try {
+      await app.extensionManager.setting.set(SHOW_BUTTON_SETTING, toggle.checked);
+    } catch (err) {
+      setNote("Couldn't save that setting - it lasts until this page is reloaded.");
+    }
+  });
+  toggleRow.append(toggle, document.createTextNode("Show the ComfyCrawler button in the top bar"));
+
+  root.append(statusBox, groupBox, actionBox, toggleRow, noteBox, footer);
 
   const setNote = (text) => { note = text; noteBox.textContent = text; };
 
