@@ -1776,24 +1776,63 @@
 
     @media (max-width: 760px) {
       #screenSetup { gap: 0.625rem; }
-      #screenSetup .madlib-box { padding: 0.75rem; gap: 0.75rem; }
+      #screenSetup .madlib-box { padding: 0.75rem; gap: 0.375rem; }
 
-      /* Every mad-lib line is the same two lines: the sentence, then its blank at full width
-         with the picture button beside it - the word "Attach" is dropped, the 🖼️ says it. The
-         blank is a full 36px tall to be an easy tap target, and the button matches it so the
-         two sit level on the blank's underline. */
+      /* Every mad-lib line reads like a line of a printed Mad Lib: the sentence, its blank
+         straight after it on the same line, the word type (STYLE, CHARACTER...) in small print
+         under the blank, and the picture button at the end - the word "Attach" dropped, the 🖼️
+         says it. No placeholder text in the blanks: on a blank this short "fill in character..."
+         was most of what fit, and the small print under the line already says what goes there.
+         What's typed is squeezed to fit its blank rather than cut off - see fitPromptField in
+         game.js.
+
+         The line never wraps. A sentence too long to leave its blank a usable width (the weapon
+         line on a 360px phone) wraps its own words instead, and the blank sits on the sentence's
+         LAST line - "...and their weapon / is a ____" - which is where a reader's eye expects it.
+         Wrapping the line itself would have dropped the blank under its sentence on some lines
+         and not others, and could strand the 🖼️ on a row by itself.
+
+         Everything stands on the blank's underline (flex-end). Not baseline alignment: the
+         writing in a blank shrinks to fit, its baseline moves with it, and every blank would
+         shift a pixel or two per keystroke. The sentence's own bottom padding lifts its words
+         to the height the writing in the blank sits at. */
       #screenSetup .madlib-line {
-        flex-wrap: wrap;
-        align-items: flex-start;
+        flex-wrap: nowrap;
+        align-items: flex-end;
         column-gap: 0.5rem;
-        row-gap: 0.125rem;
+        /* The small print hangs below the blank out of flow (below), so the line keeps its
+           room for it here. */
+        padding-bottom: 1rem;
       }
-      #screenSetup .madlib-lead { flex: 1 1 100%; line-height: 1.375; }
-      #screenSetup .madlib-field { flex: 1 1 0; min-width: 0; }
-      #screenSetup .madlib-field input { height: 2.25rem; }
-      /* The STYLE / CHARACTER / ... caption under each blank is 10px type that was inheriting
-         its line's 24px line height - half of every gap between the lines was that. */
-      #screenSetup .madlib-field input + span { line-height: 0.75rem; margin-top: 0.1875rem; }
+      /* When a sentence does wrap, balance its two lines ("...and their / weapon is a")
+         rather than leave one word hanging over the blank; the &nbsp; in "is a" (markup) keeps
+         the article with its verb either way. */
+      #screenSetup .madlib-lead {
+        flex: 0 1 auto;
+        white-space: normal;
+        text-wrap: balance;
+        line-height: 1.25;
+        padding-bottom: 0.25rem;
+      }
+      #screenSetup .madlib-field { flex: 1 1 0; min-width: 5.5rem; position: relative; }
+      /* 36px tall for the thumb, with the writing pushed down onto the line by padding so it
+         shares the sentence's baseline - words written ON the blank, not floating above it. */
+      #screenSetup .madlib-field input {
+        height: 2.25rem;
+        padding-top: 0.625rem;
+        padding-bottom: 0;
+        text-overflow: ellipsis;
+      }
+      #screenSetup .madlib-field input::placeholder { color: transparent; }
+      #screenSetup .madlib-field input + span {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        text-align: center;
+        line-height: 0.75rem;
+        margin-top: 0.1875rem;
+      }
       #screenSetup .madlib-attach {
         flex: none;
         width: 2.5rem;
@@ -1802,9 +1841,8 @@
         font-size: 1.125rem;
       }
       #screenSetup .madlib-attach .attach-word { display: none; }
-      /* An attached picture's badge covers the whole blank, caption and all, so there is room
-         for a thumbnail you can actually see. */
-      #screenSetup .madlib-field img { width: 2rem; height: 2rem; }
+      /* An attached picture's badge covers the blank; a thumbnail as big as it will hold. */
+      #screenSetup .madlib-field img { width: 1.75rem; height: 1.75rem; }
 
       /* Quick ideas: the label and 🎲 on a line of their own, and under them every idea in one
          row that scrolls sideways - nothing is trimmed away at this width, a swipe reaches the
@@ -1968,7 +2006,7 @@
       <div class="madlib-box win95-box p-4 bg-[#faf9f5] border-2 border-slate-400 flex flex-col gap-4">
         <!-- Line 1: Dungeon Style -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
-          <span class="madlib-lead font-bold whitespace-nowrap">The dungeon looks like</span>
+          <label for="wallPromptInput" class="madlib-lead font-bold whitespace-nowrap">The dungeon looks like</label>
 
           <div class="madlib-field inline-flex flex-col items-center flex-1 min-w-[200px]">
             <input 
@@ -1986,7 +2024,7 @@
 
         <!-- Line 2: Player Style / Upload -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
-          <span class="madlib-lead font-bold whitespace-nowrap">The player is a</span>
+          <label for="playerPromptInput" class="madlib-lead font-bold whitespace-nowrap">The player is&nbsp;a</label>
 
           <div class="madlib-field inline-flex flex-1 min-w-[180px] relative items-center">
             <div class="w-full flex flex-col items-center">
@@ -2024,7 +2062,7 @@
 
         <!-- Line 3: Weapon Style / Upload (reads on from the player line above) -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
-          <span class="madlib-lead font-bold whitespace-nowrap">...and their weapon is a</span>
+          <label for="weaponPromptInput" class="madlib-lead font-bold whitespace-nowrap">...and their weapon is&nbsp;a</label>
 
           <div class="madlib-field inline-flex flex-1 min-w-[180px] relative items-center">
             <div class="w-full flex flex-col items-center">
@@ -2058,7 +2096,7 @@
 
         <!-- Line 4: Enemy Style / Upload -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
-          <span class="madlib-lead font-bold whitespace-nowrap">The enemy is a</span>
+          <label for="enemyPromptInput" class="madlib-lead font-bold whitespace-nowrap">The enemy is&nbsp;a</label>
 
           <div class="madlib-field inline-flex flex-1 min-w-[180px] relative items-center">
             <div class="w-full flex flex-col items-center">

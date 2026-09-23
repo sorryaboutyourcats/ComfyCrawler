@@ -1623,6 +1623,9 @@
       // was still sized for mode-game (fit-content, no cap) let the row report a false single
       // line and leave every idea unhidden once the container shrank back to mode-setup's width.
       appContainer.className = 'win95-box p-1 text-black mode-setup w-full';
+      // The refill above ran while the menu was still hidden, too narrow to measure - squeeze
+      // its words to their blanks now that they have a width (see fitPromptField).
+      fitPromptFields();
       if (SHOWCASE_MODE) {
         refreshHistory();        // re-read the manifest so a just-played run's beaten/favorite shows
       } else {
@@ -2206,6 +2209,47 @@
     // trackpad still gets the caret.
     const setupOnTouch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
 
+    // The menu's phone layout (index.html, "Setup screen on a phone") puts each blank beside
+    // its sentence, 90-200px wide, so a long answer - every Quick idea's CHARACTER is one - is
+    // squeezed to fit its blank, the way you'd cramp your writing onto a paper Mad Lib, down to
+    // PROMPT_FIT_MIN_PX; past that the field's own ellipsis takes over. A wide window's blanks
+    // keep the one size they always had. Measured with a canvas rather than by trial resizes of
+    // the field, so fitting all four is one layout read each.
+    const setupPhoneLayout = window.matchMedia ? window.matchMedia('(max-width: 760px)') : null;
+    const PROMPT_FIT_MIN_PX = 11;
+    const promptFitCtx = document.createElement('canvas').getContext('2d');
+    // Each field's own size from the stylesheet, read while no squeeze is set on it - the
+    // computed size can't be asked again once one is.
+    const promptFitBase = new WeakMap();
+
+    function fitPromptField(el) {
+      // Hidden (the menu isn't up) measures as 0 wide - openSetupScreen fits them on the way in.
+      if (!setupPhoneLayout || !setupPhoneLayout.matches || !el.value || !el.clientWidth) {
+        el.style.fontSize = '';
+        return;
+      }
+      const cs = getComputedStyle(el);
+      if (!el.style.fontSize) promptFitBase.set(el, parseFloat(cs.fontSize));
+      const base = promptFitBase.get(el);
+      const room = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      promptFitCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${base}px ${cs.fontFamily}`;
+      const need = promptFitCtx.measureText(el.value).width;
+      const want = need <= room ? ''
+        : Math.max(PROMPT_FIT_MIN_PX, Math.floor(base * room / need * 4) / 4) + 'px';
+      // Only ever written when it changes: this runs on every keystroke, and resizing the text
+      // under the caret for nothing can jolt a field that has scrolled to keep the caret shown.
+      if (el.style.fontSize !== want) el.style.fontSize = want;
+    }
+
+    function fitPromptFields() {
+      SETUP_TEXT_FIELDS.forEach(([, el]) => fitPromptField(el));
+    }
+
+    // Every width change re-fits: a phone turned on its side leaves the phone layout entirely
+    // (and its blanks go back to one size), and the webfont arriving changes every measurement.
+    window.addEventListener('resize', fitPromptFields);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitPromptFields);
+
     const btnUndoPrompt = document.getElementById('btnUndoPrompt');
     const btnRedoPrompt = document.getElementById('btnRedoPrompt');
 
@@ -2318,6 +2362,7 @@
       setupBurstAt = now;
       updateUndoRedoButtons();
       syncFillInLabel();
+      fitPromptFields();
     }
 
     // Run a multi-field action - a Quick idea, a History refill - as a single undo step
@@ -2339,6 +2384,7 @@
       setupBurstKey = null;     // the next keystroke starts a fresh run, never joins the old one
       updateUndoRedoButtons();
       syncFillInLabel();
+      fitPromptFields();
 
       // Show what moved. Undo is usually pressed from the button at the bottom of the screen,
       // with the fields it rewrote some way up it, so every field that changed flashes and the
@@ -12139,7 +12185,9 @@ void main() {
           });
         });
         if (firstFilled) {
-          firstFilled.focus({ preventScroll: true });
+          // Not on touch - it would bring the keyboard up over what was just written (see
+          // setupOnTouch).
+          if (!setupOnTouch) firstFilled.focus({ preventScroll: true });
         } else {
           flashFillIn('⚠ Try again', 'The idea writer came back empty - press the button again.');
         }
