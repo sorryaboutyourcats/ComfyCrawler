@@ -2946,7 +2946,7 @@
     const combatBtns = [btnCombatAttack, btnCombatBlock, btnCombatDodgeL, btnCombatDodgeR];
     function setCombatButtonsLive(live) {
       for (const b of combatBtns) if (b) b.disabled = !live;
-      if (!live) releaseThumbPads();   // stick mode's strafe slider goes inert with its buttons
+      if (!live) releaseThumbPads();   // swipe mode's strafe slider goes inert with its buttons
     }
 
     const keysHeld = {
@@ -3569,9 +3569,12 @@
       } else {
         combatState.inBattle = !combatState.inBattle;
       }
-      // The stick and the strafe slider trade places here; a thumb still down on the one going
-      // away must not walk (or strafe) the player once it comes back.
+      // The touchpad and the strafe slider trade places here; a thumb still down on the one
+      // going away must not act (or keep strafing) once it comes back. And the buttons/swipe
+      // switch is off for the fight, so a stray tap on it can't swap the controls mid-swing.
       releaseThumbPads();
+      const touchModeSwitch = document.getElementById('btnTouchMode');
+      if (touchModeSwitch) touchModeSwitch.disabled = combatState.inBattle;
       setMusicMode(combatState.inBattle);
 
       if (combatState.inBattle) {
@@ -10211,37 +10214,93 @@ void main() {
     btnRight.addEventListener('pointerdown', (e) => { e.preventDefault(); rotateRight(); });
     if (btnAction) btnAction.addEventListener('pointerdown', (e) => { e.preventDefault(); interact(); });
 
-    // ---- Touch controls: buttons or thumb stick ----
+    // ---- Touch controls: buttons or swipe ----
     // The switch in the controls panel (touch screens only - see .touch-controls in index.html)
-    // swaps the D-pad's arrows for one thumb stick and the two strafe buttons for one slider.
-    // Remembered in this browser only, not in the server-side prefs: it's a choice about this
-    // device's screen, and a phone and a tablet on the same server can want different ones.
-    const TOUCH_STICK_KEY = 'comfycrawler.touchStick';
+    // swaps the D-pad for a touchpad you swipe and tap, and the two strafe buttons for one
+    // slider. Remembered in this browser only, not in the server-side prefs: it's a choice about
+    // this device's screen, and a phone and a tablet on the same server can want different ones.
+    // (The key still says stick - the first version was a thumb stick - so the choice carries over.)
+    // Swipe is the default: only a device that switched to buttons ('off') gets them.
+    const TOUCH_SWIPE_KEY = 'comfycrawler.touchStick';
     const touchControls = document.querySelector('.touch-controls');
     const btnTouchMode = document.getElementById('btnTouchMode');
-    const moveStick = document.getElementById('moveStick');
+    const swipePad = document.getElementById('swipePad');
     const strafeSlider = document.getElementById('strafeSlider');
 
-    function setTouchStickMode(on) {
+    function setTouchSwipeMode(on) {
       if (!touchControls) return;
       releaseThumbPads();
-      touchControls.classList.toggle('stick-mode', on);
+      touchControls.classList.toggle('swipe-mode', on);
       if (btnTouchMode) btnTouchMode.setAttribute('aria-checked', on ? 'true' : 'false');
     }
     if (btnTouchMode) {
       btnTouchMode.addEventListener('click', () => {
         const on = btnTouchMode.getAttribute('aria-checked') !== 'true';
-        setTouchStickMode(on);
-        try { localStorage.setItem(TOUCH_STICK_KEY, on ? 'on' : 'off'); } catch (_) { /* storage disabled */ }
+        setTouchSwipeMode(on);
+        try { localStorage.setItem(TOUCH_SWIPE_KEY, on ? 'on' : 'off'); } catch (_) { /* storage disabled */ }
       });
     }
-    try { setTouchStickMode(localStorage.getItem(TOUCH_STICK_KEY) === 'on'); } catch (_) { /* storage disabled */ }
+    let savedTouchMode = null;
+    try { savedTouchMode = localStorage.getItem(TOUCH_SWIPE_KEY); } catch (_) { /* storage disabled */ }
+    setTouchSwipeMode(savedTouchMode !== 'off');
 
-    // One pad, either shape: follows a single pointer, clamps the knob to the pad, and reports
-    // a direction ('up' / 'down' / 'left' / 'right', or null inside the dead zone) each time it
-    // changes. A thumb drifting across the diagonal keeps its direction until the other axis
-    // clearly wins, so a walk doesn't flick into a turn. pad._release lets go from outside.
-    function wireThumbPad(pad, horizontal, onDir) {
+    // The touchpad: one gesture per touch. A swipe acts the moment the thumb has travelled far
+    // enough - no waiting for the lift - and whichever axis it travelled further along decides
+    // which way; after that the touch is spent, so a long flick is still one step. A touch that
+    // lifts almost where it landed, quickly, is a tap: USE. Each is exactly the button it
+    // replaces, so a swipe mid-step queues the same way a press does.
+    const SWIPE_MIN_PX = 24;
+    const TAP_MAX_PX = 12;
+    const TAP_MAX_MS = 400;
+    const SWIPE_ACTIONS = { up: moveForward, down: moveBackward, left: rotateLeft, right: rotateRight };
+    if (swipePad) {
+      let touch = null;   // { id, x, y, t, spent }
+      let flashTimer = null;
+      const flash = (what) => {
+        swipePad.dataset.dir = what;
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => { swipePad.dataset.dir = ''; }, 250);
+      };
+      const release = () => {
+        touch = null;
+        swipePad.classList.remove('is-held');
+      };
+      swipePad._release = release;
+      swipePad.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (touch) return;
+        touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), spent: false };
+        try { swipePad.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+        swipePad.classList.add('is-held');
+      });
+      swipePad.addEventListener('pointermove', (e) => {
+        if (!touch || e.pointerId !== touch.id || touch.spent) return;
+        const dx = e.clientX - touch.x, dy = e.clientY - touch.y;
+        if (Math.hypot(dx, dy) < SWIPE_MIN_PX) return;
+        touch.spent = true;
+        const dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
+        flash(dir);
+        SWIPE_ACTIONS[dir]();
+      });
+      swipePad.addEventListener('pointerup', (e) => {
+        if (!touch || e.pointerId !== touch.id) return;
+        const t = touch;
+        release();
+        if (t.spent) return;
+        if (Math.hypot(e.clientX - t.x, e.clientY - t.y) <= TAP_MAX_PX && performance.now() - t.t <= TAP_MAX_MS) {
+          flash('tap');
+          interact();
+        }
+      });
+      ['pointercancel', 'lostpointercapture'].forEach((evt) => {
+        swipePad.addEventListener(evt, (e) => { if (touch && e.pointerId === touch.id) release(); });
+      });
+    }
+
+    // The fight's strafe slider: follows a single pointer, clamps the knob to the track, and
+    // reports 'left' / 'right' (or null inside the dead zone around the middle) each time that
+    // changes. pad._release lets go from outside.
+    function wireSlider(pad, onDir) {
       if (!pad) return;
       const knob = pad.querySelector('.thumb-pad__knob');
       let pointer = null;
@@ -10254,21 +10313,14 @@ void main() {
       }
       function follow(e) {
         const r = pad.getBoundingClientRect();
-        let dx = e.clientX - (r.left + r.width / 2);
-        let dy = horizontal ? 0 : e.clientY - (r.top + r.height / 2);
+        const raw = e.clientX - (r.left + r.width / 2);
         // Stops short of the edge arrows, so the one lit up isn't under the knob.
-        const reach = Math.max(8, ((horizontal ? r.width : Math.min(r.width, r.height)) - knob.offsetWidth) / 2 - 14);
-        const len = Math.hypot(dx, dy);
-        const ax = Math.abs(dx), ay = Math.abs(dy);
-        if (len > reach) { dx *= reach / len; dy *= reach / len; }
-        knob.style.transform = `translate(${dx}px, ${dy}px)`;
-        // The dead zone is measured on the thumb, not the clamped knob: a thumb landing a
-        // little off-centre shouldn't set off a step on the short-travel phone-sized pad.
-        if (len < Math.max(10, r.width * 0.12)) { setDir(null); return; }
-        const wasX = dir === 'left' || dir === 'right';
-        const wasY = dir === 'up' || dir === 'down';
-        const useX = wasX ? ay < ax * 1.3 : wasY ? ax > ay * 1.3 : ax >= ay;
-        setDir(useX ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down'));
+        const reach = Math.max(8, (r.width - knob.offsetWidth) / 2 - 14);
+        const dx = Math.max(-reach, Math.min(reach, raw));
+        knob.style.transform = `translateX(${dx}px)`;
+        // The dead zone is measured on the thumb, not the clamped knob.
+        if (Math.abs(raw) < Math.max(10, r.width * 0.12)) { setDir(null); return; }
+        setDir(raw < 0 ? 'left' : 'right');
       }
       function release() {
         if (pointer === null) return;
@@ -10281,7 +10333,7 @@ void main() {
       pad.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         if (pointer !== null) return;
-        if (pad === strafeSlider && btnCombatDodgeL && btnCombatDodgeL.disabled) return;
+        if (btnCombatDodgeL && btnCombatDodgeL.disabled) return;
         pointer = e.pointerId;
         try { pad.setPointerCapture(pointer); } catch (_) { /* pointer already gone */ }
         pad.classList.add('is-held');
@@ -10293,37 +10345,9 @@ void main() {
       });
     }
 
-    // Stick: a push acts at once, exactly like the button it replaces (and queues the same way
-    // mid-step). Held, it keeps going - the next step as soon as this one lands, so holding up
-    // walks the corridor, while a held turn waits a beat between quarter-turns so it can be
-    // stopped facing the right way - a longer beat before the first repeat, like a key's
-    // auto-repeat, so a quick flick is reliably one quarter-turn.
-    const STICK_ACTIONS = { up: moveForward, down: moveBackward, left: rotateLeft, right: rotateRight };
-    const STICK_TURN_FIRST_GAP_MS = 550;
-    const STICK_TURN_GAP_MS = 400;
-    let stickDir = null;
-    let stickTimer = null;
-    let stickNextTurn = 0;
-    function stickAct(first) {
-      stickNextTurn = performance.now() + (first ? STICK_TURN_FIRST_GAP_MS : STICK_TURN_GAP_MS);
-      STICK_ACTIONS[stickDir]();
-    }
-    wireThumbPad(moveStick, false, (d) => {
-      stickDir = d;
-      if (stickTimer) { clearInterval(stickTimer); stickTimer = null; }
-      if (!d) return;
-      stickAct(true);
-      stickTimer = setInterval(() => {
-        if (!stickDir || player.isAnimating || combatState.inBattle || inputLocked()) return;
-        const turning = stickDir === 'left' || stickDir === 'right';
-        if (turning && performance.now() < stickNextTurn) return;
-        stickAct(false);
-      }, 40);
-    });
-
     // Slider: left or right of centre is the strafe button on that side, held. In agent mode a
     // push is one turn, like a press of the button (and agentStep lets go of the slider after it).
-    wireThumbPad(strafeSlider, true, (d) => {
+    wireSlider(strafeSlider, (d) => {
       if ((d === 'left' || d === 'right') && agentTurn({ [d]: true })) return;
       keysHeld.left = d === 'left';
       keysHeld.right = d === 'right';
