@@ -582,6 +582,8 @@
          one exactly and everything after it is pushed onto line two. */
       .hist-row:not(.hist-tile) > .flex-col { flex: 1 1 calc(100% - 3.5rem) !important; }
       .hist-row:not(.hist-tile) .hist-start { flex: 1 1 auto !important; }
+      /* Icons only on a phone: the ▶ and 📋 say it, and the titles still carry the words. */
+      .hist-row:not(.hist-tile) .hist-btn-word { display: none; }
 
       /* One 190px-minimum tile per row on a phone is a poster, not a list. Two fit. */
       .hist-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important; }

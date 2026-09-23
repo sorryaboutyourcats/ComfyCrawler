@@ -12673,7 +12673,9 @@ void main() {
       const btnStart = document.createElement('button');
       btnStart.type = 'button';
       btnStart.className = 'hist-start win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
-      btnStart.textContent = '▶ Start';
+      // The word goes in its own span so a phone's list can drop it and keep just the icon.
+      btnStart.innerHTML = '▶<span class="hist-btn-word"> Start</span>';
+      btnStart.setAttribute('aria-label', 'Start');
       btnStart.title = isCurrentRun
         ? 'You are in this dungeon now - Start reloads it from the beginning, on a freshly drawn maze'
         : 'Play this dungeon again - no generation, straight to the loading screen';
@@ -12689,7 +12691,8 @@ void main() {
         const btnPrompts = document.createElement('button');
         btnPrompts.type = 'button';
         btnPrompts.className = 'hist-prompts win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
-        btnPrompts.textContent = '📋 Prompts';
+        btnPrompts.innerHTML = '📋<span class="hist-btn-word"> Prompts</span>';
+        btnPrompts.setAttribute('aria-label', 'Prompts');
         // The same typed words the thumbnail's tooltip lists, under a line saying what the
         // button does with them - this button IS the typed words, so showing them is the label.
         btnPrompts.title = 'Put what was typed to make this dungeon back on the main menu,'
