@@ -178,9 +178,13 @@
     //   enemySpdMul /        how fast foes CLOSE on the player - see enemySpeedMul. Travel only:
     //   bossSpdMul           walk, weave and the descent of a dive, never cadence or telegraphs.
     //   decoyDoors           how many dead-end doors to hang off the route - see addDecoyDoors.
+    //   noDeadEnds           every corridor leads somewhere: braidMaze ties off all of the tips
+    //                        instead of MAZE.braidDeadEnds of them, and tieOffDeadEnds sees to
+    //                        the few it could not reach. The stairs' hallway is the one exception.
     const DIFFICULTIES = {
       easy:   { grids: 33,  enemyHpMul: 1,    baseHp: 125, baseStm: 125, reactiveBlockOdds: 0.45, flyersBreakOff: true, maxPack: 2,
-                desc: 'Easy: a small looping labyrinth - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 125 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
+                noDeadEnds: true,
+                desc: 'Easy: a small looping labyrinth with no dead ends - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 125 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
       medium: { grids: 66,  enemyHpMul: 1.25, desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, and foes with 25% more health.' },
       hard:   { grids: 111, enemyHpMul: 1.6,  baseHp: 75, enemySpdMul: 1.1, bossSpdMul: 1.25, decoyDoors: 2,
                 desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit and doors that open onto dead ends. Foes have 60% more health and close 10% faster (the dread foe 25%), and the hero starts with only 75 health.' }
@@ -1846,7 +1850,7 @@
     // Hovering any difficulty dropdown shows how the three differ, side by side. Hand-written
     // from DIFFICULTIES (and BASE_MAX_HP / BASE_MAX_STM for Medium) - retune one, update this.
     const DIFFICULTY_TOOLTIP = ['Difficulty - how the three differ:', '',
-      'Easy: small looping maze, nearby Exit. Hero starts with 125 health and stamina.',
+      'Easy: small looping maze with no dead ends, nearby Exit. Hero starts with 125 health and stamina.',
       '  Foes guard far less, flyers break off when struck mid-dive, packs come two at a time.', '',
       'Medium: the standard game. 66-corridor branching maze, distant Exit.',
       '  Hero starts with 100 health and stamina. Foes have 25% more health.', '',
@@ -2797,16 +2801,21 @@
     function xpForLevel(level) { return 40 + (level - 1) * 30; }
 
     const LEVEL_GAINS = { strength: 4, stamina: 20, survival: 20, speed: 8 };
-    // SPEED is banked as a PERCENTAGE and spent as one multiplier on four separate things: the
-    // strafe (guarded or not), how fast a swing plays out, stamina regen, and the exploration
-    // step tween. Each is small on its own - which is why +8% is worth taking against a flat
-    // +20 max health - but they compound: faster regen plus a faster swing is meaningfully more
-    // damage per second, not just a snappier animation.
+    // SPEED is banked as a PERCENTAGE and spent as one multiplier on three separate things: the
+    // strafe (guarded or not), how fast a swing plays out, and the exploration step tween. Each
+    // is small on its own - which is why +8% is worth taking against a flat +20 max health.
+    // Stamina regen is NOT one of them: that rides on STAMINA picks instead (STM_REGEN_PER_PICK),
+    // so the stat that grows the bar is also the one that refills it.
     //
     // Capped, because the enemy AI is tuned against a 3.8px/frame strafe and a 0.8px/frame hunt
     // has to stay able to close. 1.6x is eight picks - further than a single run gets - so the
     // ceiling exists for the pathological case rather than as a wall the player feels.
     const SPEED_MAX_MULT = 1.6;
+    // Each STAMINA pick adds this fraction of the base 27/s regen on top of its +20 max bar.
+    // Above the 20% the bigger bar costs in refill time (+20 on a base 100), so a pick also
+    // shortens the full-bar wait rather than just lengthening it. Uncapped: nothing in the enemy
+    // AI is tuned against the regen rate the way it is against the strafe.
+    const STM_REGEN_PER_PICK = 0.25;
     // Every level also patches the hero up, whichever path they take. Without it the run is
     // decided by the first two fights - there is no other healing in the dungeon.
     const LEVEL_HEAL_FRAC = 0.4;
@@ -2842,6 +2851,11 @@
     // reader picks it up on its next frame.
     function playerSpeedMult() {
       return Math.min(SPEED_MAX_MULT, 1 + progression.bonusSpd / 100);
+    }
+
+    // Regen multiplier from STAMINA picks, derived from the banked bonus for the same reason.
+    function playerStmRegenMult() {
+      return 1 + (progression.bonusStm / LEVEL_GAINS.stamina) * STM_REGEN_PER_PICK;
     }
 
     function applyProgressionStats() {
@@ -2911,7 +2925,7 @@
       const vTxt = document.getElementById('levelUpSurvivalText');
       const pTxt = document.getElementById('levelUpSpeedText');
       if (sTxt) sTxt.textContent = `+${LEVEL_GAINS.strength} attack damage`;
-      if (tTxt) tTxt.textContent = `+${LEVEL_GAINS.stamina} max stamina`;
+      if (tTxt) tTxt.textContent = `+${LEVEL_GAINS.stamina} max stamina / +${Math.round(STM_REGEN_PER_PICK * 100)}% regen`;
       if (vTxt) vTxt.textContent = `+${LEVEL_GAINS.survival} max health`;
       // Shows the CAPPED result, so a hero already at the ceiling is told the truth rather than
       // sold a ninth +8% that does nothing.
@@ -2919,7 +2933,7 @@
         const now = playerSpeedMult();
         const next = Math.min(SPEED_MAX_MULT, 1 + (progression.bonusSpd + LEVEL_GAINS.speed) / 100);
         const gain = Math.round((next - now) * 100);
-        pTxt.textContent = gain > 0 ? `+${gain}% strafe / swing / regen` : 'speed already maxed';
+        pTxt.textContent = gain > 0 ? `+${gain}% strafe / swing` : 'speed already maxed';
       }
       levelUpModal.classList.remove('hidden');
       syncLevelUpSelection();
@@ -3756,8 +3770,8 @@
       combatState.pendingXp = 0;
       combatState.winTick = 0;
       combatState.winIsLevelUp = false;
-      // A won fight hands the hero back to exploration with a full bar. Regen is a flat 27/s
-      // everywhere (see the combat loop), so a drained bar would just race itself back to full
+      // A won fight hands the hero back to exploration with a full bar. Regen is one rate
+      // everywhere (27/s base, faster per STAMINA pick - see tickStamina()), so a drained bar would just race itself back to full
       // over the next few corridor steps anyway - snapping it here skips the pointless crawl and
       // opens every encounter fresh. The lock has to lift with it, or the regen guard stamps the
       // refill straight back to zero for its two seconds. Matches the level-up refill. The
@@ -5726,10 +5740,10 @@ void main() {
         combatState.exhaustLock--;
         combatState.playerStm = 0;
       } else if (!(combatState.inBattle && keysHeld.block) && combatState.playerStm < combatState.playerMaxStm) {
-        // 0.45/tick is 27/s - a full base bar in under four seconds. SPEED picks scale it, so
-        // the pick buys swings-per-fight as much as it buys footwork.
+        // 0.45/tick is 27/s - a full base bar in under four seconds. STAMINA picks scale it, so
+        // the pick buys swings-per-fight as well as a bigger bar.
         combatState.playerStm = Math.min(combatState.playerMaxStm,
-          combatState.playerStm + 0.45 * playerSpeedMult());
+          combatState.playerStm + 0.45 * playerStmRegenMult());
       }
 
       // How wrecked the hero LOOKS. Nothing reads this to decide what they may do - the action
@@ -6067,6 +6081,7 @@ void main() {
       }
       if (playerStmText) playerStmText.textContent = `${Math.ceil(combatState.playerStm)}/${combatState.playerMaxStm}`;
 
+      updateCombatVignette(now);
       renderDoomFace();
       // Nothing to raycast under the ending cutscene - it covers the whole viewport.
       if (activeMode !== 'v1_video' && !endingOwnsViewport()) {
@@ -6074,6 +6089,74 @@ void main() {
       }
     }
     requestAnimationFrame(combatFrame);
+
+    // The screen-edge warnings over a fight. The bars live in the sidebar, out of the eye line
+    // while the player is watching the foe's wind-up, so the viewport itself has to say it:
+    //  - HP under LOW_HP_FRAC: a red vignette with a slow, shallow pulse, deeper and a little
+    //    quicker as HP falls. A hit also brightens it briefly, low or not, scaled by the HP it
+    //    cost - so a blow caught on the shield (12% of the damage) barely registers.
+    //  - Too spent to swing (combatState.exhaustion, which already eases in and out over ~1/4s):
+    //    a dark tunnel that closes in from the edges, all the way while an overexertion lock runs.
+    // Kept deliberately calm: a sharp lub-dub and a strong hit flash read as flashing, not as
+    // a warning. Only while a fight is live - it fades out through the win outro, never shows
+    // exploring, and fades away slowly on death so the scene behind the death box is clear.
+    // Paint only: nothing reads these values back.
+    const combatVignette = document.getElementById('combatVignette');
+    const combatVignetteHp = document.getElementById('combatVignetteHp');
+    const combatVignetteStm = document.getElementById('combatVignetteStm');
+    const LOW_HP_FRAC = 0.4;       // the warning starts here...
+    const CRIT_HP_FRAC = 0.1;      // ...and is at full strength by here
+    const vignette = { hp: 0, stm: 0, hit: 0, phase: 0, lastHp: null, lastNow: 0, painted: '' };
+
+    function updateCombatVignette(now) {
+      if (!combatVignette) return;
+      const cs = combatState;
+      const dt = Math.min(100, Math.max(0, now - (vignette.lastNow || now)));
+      vignette.lastNow = now;
+      const live = cs.inBattle && cs.winTick === 0;
+
+      const hpFrac = cs.playerMaxHp > 0 ? cs.playerHp / cs.playerMaxHp : 1;
+      const hpRamp = Math.min(1, Math.max(0, (LOW_HP_FRAC - hpFrac) / (LOW_HP_FRAC - CRIT_HP_FRAC)));
+      // Onset at 0.4 rather than 0, so crossing the line is itself visible.
+      const hpTarget = (!live || cs.dead) ? 0 : (hpFrac < LOW_HP_FRAC ? 0.4 + 0.6 * hpRamp : 0);
+      const stmTarget = (!live || cs.dead) ? 0 : (cs.exhaustLock > 0 ? 1 : cs.exhaustion);
+
+      // Frame-rate independent easing, so a heal or a refill fades rather than pops: ~150ms in
+      // a fight, a slow ~0.7s fade-out on death.
+      const k = 1 - Math.exp(-dt / (cs.dead ? 700 : 150));
+      vignette.hp += (hpTarget - vignette.hp) * k;
+      vignette.stm += (stmTarget - vignette.stm) * k;
+      if (Math.abs(hpTarget - vignette.hp) < 0.003) vignette.hp = hpTarget;
+      if (Math.abs(stmTarget - vignette.stm) < 0.003) vignette.stm = stmTarget;
+
+      // Hit kick: any HP lost since last paint. lastHp is dropped between fights so the refill
+      // at a new dungeon (or a heal) can never read as a hit.
+      // Not on the killing blow - the vignette is fading out then, not kicking up. Full kick at
+      // a quarter of the bar lost in one go; a blocked chip of 2-3 HP is a tenth of that.
+      if (live && !cs.dead && vignette.lastHp !== null && cs.playerHp < vignette.lastHp - 0.01) {
+        const lost = (vignette.lastHp - cs.playerHp) / Math.max(1, cs.playerMaxHp);
+        vignette.hit = Math.max(vignette.hit, Math.min(1, lost / 0.25));
+      }
+      vignette.lastHp = live ? cs.playerHp : null;
+      if (cs.dead) vignette.hit = 0;
+      vignette.hit = Math.max(0, vignette.hit - dt / 500);
+
+      // Pulse: a soft sine swell, 1.8s apart at the onset down to 1.1s near death, only ever
+      // dipping to 85%. Phase is accumulated rather than taken from now % period, so the tempo
+      // can change mid-swell without the pulse jumping.
+      vignette.phase = (vignette.phase + dt / (1800 - 700 * hpRamp)) % 1;
+      const beat = 0.5 - 0.5 * Math.cos(vignette.phase * Math.PI * 2);
+      const hpOpacity = Math.min(1, Math.max(vignette.hp * (0.85 + 0.15 * beat), vignette.hit * 0.22));
+
+      const key = `${hpOpacity.toFixed(3)}|${vignette.stm.toFixed(3)}`;
+      if (key === vignette.painted) return;
+      vignette.painted = key;
+      combatVignette.style.visibility = (hpOpacity > 0 || vignette.stm > 0) ? 'visible' : 'hidden';
+      combatVignetteHp.style.opacity = hpOpacity.toFixed(3);
+      combatVignetteStm.style.opacity = (vignette.stm * 0.8).toFixed(3);
+      // Tunnel: the rim starts pushed past the frame edges and closes in (see #combatVignetteStm).
+      combatVignetteStm.style.setProperty('--tunnel', vignette.stm.toFixed(3));
+    }
 
     function renderDoomFace() {
       if (!doomFaceCtx) return;
@@ -8431,7 +8514,9 @@ void main() {
 
       // Pass 1 - dead ends. A cell with one open neighbour is a tip; opening a second wall
       // turns the passage that led to it into a loop. Capped at MAZE.braidDeadEnds so enough
-      // tips survive for placeGatesAndSwitches to hide levers down.
+      // tips survive for placeGatesAndSwitches to hide levers down - except on a difficulty
+      // that wants none at all, where every lever settles for a side passage instead.
+      const braidShare = difficultyCfg().noDeadEnds ? 1 : MAZE.braidDeadEnds;
       const deadEnds = [];
       for (let r = 0; r < cellRows; r++) {
         for (let c = 0; c < cellCols; c++) {
@@ -8440,7 +8525,7 @@ void main() {
         }
       }
       _shuffle(deadEnds);
-      const braidTarget = Math.round(deadEnds.length * MAZE.braidDeadEnds);
+      const braidTarget = Math.round(deadEnds.length * braidShare);
       let braided = 0;
       for (const de of deadEnds) {
         if (braided >= braidTarget) break;
@@ -8689,6 +8774,106 @@ void main() {
         MAP[step.wy][step.wx] = 0;
         MAP[step.y][step.x] = 0;
         exitRoom = { x: step.x, y: step.y };
+      }
+    }
+
+    // Easy only (DIFFICULTIES.noDeadEnds): the dead ends braidMaze could not tie off. It braids
+    // every tip on Easy, but only ever into a cell of the tip's own gate region, and measured
+    // over 2000 Easy mazes that still left one or two behind in 38% of them - tips whose other
+    // neighbours were all across the locked door or rock the carve never reached - with the
+    // spawn a dead end in another 39%. relocateExit adds one more whenever it hangs the stairs
+    // somewhere other than the old Exit cell, which braidMaze had to leave alone. Each one gets,
+    // in order of preference:
+    //   - a wall knocked through to a carved cell of its own region, as braidMaze would;
+    //   - failing that, a short tunnel through never-carved rock to one - still a loop, and like
+    //     the stairs' hallway free of the size budget, since `grids` counts carved corridors;
+    //   - failing both, the tip filled back in, and its parent handed the same three choices,
+    //     which costs a few tiles but leaves nothing to walk into and straight back out of.
+    // Per carve that is ~0.15 knock-throughs, ~0.31 tunnels and ~0.38 fills, and the maze still
+    // finishes a little LARGER than before (41.0 tiles against 40.3) with the walk to the stairs
+    // barely shorter (24.6 against 25.5). The spawn is the one tip it cannot fill - the player
+    // stands there - and a spawn with nowhere to loop to is left for generateAuthentic3DMaze
+    // to throw away.
+    //
+    // Tunnels keep to the same region rule as braidMaze, so every door stays mandatory. The
+    // stairs' hallway is the one dead end left standing, and nothing is let into it anywhere
+    // back to its first fork: an opening there would be a way round the boss who guards it.
+    const DEAD_END_TUNNEL_CELLS = 3;
+    function tieOffDeadEnds(plan, regionOf) {
+      if (!difficultyCfg().noDeadEnds) return;
+      const inside = (x, y) => x > 0 && x < MAP_WIDTH - 1 && y > 0 && y < MAP_HEIGHT - 1;
+      const isStart = (p) => p.x === startRoom.x && p.y === startRoom.y;
+      const floorNb = (p) => _ORTHO.map((d) => ({ x: p.x + d.dx, y: p.y + d.dy }))
+        .filter((q) => inside(q.x, q.y) && MAP[q.y][q.x] === 0);
+      const gateKeys = new Set((plan ? plan.gates : []).map((g) => _tileKey(g.tile.x, g.tile.y)));
+      const regionAt = (p) => regionOf.get(_tileKey(p.x, p.y));
+      const sameRegion = (a, b) => !plan || (regionAt(a) !== undefined && regionAt(a) === regionAt(b));
+
+      // The hallway, walked back from the stairs to its first fork the way findExitGuardSpot
+      // walks it. The fork is kept too - nothing is lost by leaving one junction alone.
+      const hall = new Set([_tileKey(exitRoom.x, exitRoom.y)]);
+      for (let prev = null, cur = exitRoom; ;) {
+        const onward = floorNb(cur).filter((q) => !prev || q.x !== prev.x || q.y !== prev.y);
+        if (onward.length !== 1 || isStart(onward[0]) || hall.has(_tileKey(onward[0].x, onward[0].y))) break;
+        prev = cur; cur = onward[0];
+        hall.add(_tileKey(cur.x, cur.y));
+      }
+      // A cell a tip may be joined to: carved, in its region, and not part of the hallway.
+      const joinable = (tip, c) => MAP[c.y][c.x] === 0 && !hall.has(_tileKey(c.x, c.y)) &&
+                                   sameRegion(tip, c);
+
+      // Breadth-first through never-carved cells, so the shortest loop wins; depth 0 is the
+      // plain knock-through. Returns the cells and connectors to open, or null.
+      const findLoop = (tip) => {
+        let frontier = [{ x: tip.x, y: tip.y, cut: [] }];
+        const seen = new Set([_tileKey(tip.x, tip.y)]);
+        for (let depth = 0; depth <= DEAD_END_TUNNEL_CELLS && frontier.length; depth++) {
+          const next = [];
+          for (const n of frontier) {
+            for (const d of _shuffle(_ORTHO.slice())) {
+              const w = { x: n.x + d.dx, y: n.y + d.dy };
+              const c = { x: n.x + d.dx * 2, y: n.y + d.dy * 2 };
+              if (!inside(c.x, c.y) || MAP[w.y][w.x] !== 1) continue;
+              const k = _tileKey(c.x, c.y);
+              if (seen.has(k)) continue;
+              seen.add(k);
+              if (joinable(tip, c)) return n.cut.concat([w]);
+              if (MAP[c.y][c.x] === 1) next.push({ x: c.x, y: c.y, cut: n.cut.concat([w, c]) });
+            }
+          }
+          frontier = next;
+        }
+        return null;
+      };
+
+      const todo = [];
+      for (let y = 1; y < MAP_HEIGHT - 1; y += 2) {
+        for (let x = 1; x < MAP_WIDTH - 1; x += 2) {
+          if (MAP[y][x] === 0 && !hall.has(_tileKey(x, y)) && floorNb({ x, y }).length <= 1) {
+            todo.push({ x, y });
+          }
+        }
+      }
+      _shuffle(todo);
+      while (todo.length) {
+        const tip = todo.pop();
+        if (MAP[tip.y][tip.x] !== 0 || hall.has(_tileKey(tip.x, tip.y))) continue;
+        const nb = floorNb(tip);
+        if (nb.length > 1) continue;                    // an earlier loop already opened it
+        const cut = findLoop(tip);
+        if (cut) {
+          for (const t of cut) {
+            MAP[t.y][t.x] = 0;
+            // Tunnelled cells join the tip's region, so a later tip can loop through them too.
+            if (plan && t.x % 2 === 1 && t.y % 2 === 1) regionOf.set(_tileKey(t.x, t.y), regionAt(tip));
+          }
+          continue;
+        }
+        // Nowhere to loop to: fill it in, unless it is the spawn or hangs off a door.
+        if (isStart(tip) || nb.length !== 1 || gateKeys.has(_tileKey(nb[0].x, nb[0].y))) continue;
+        MAP[tip.y][tip.x] = 1;
+        MAP[nb[0].y][nb[0].x] = 1;
+        todo.push({ x: nb[0].x * 2 - tip.x, y: nb[0].y * 2 - tip.y });
       }
     }
 
@@ -9022,19 +9207,30 @@ void main() {
       // a door. The attempt cap is only a backstop; at ~0.5% a second reroll is already rare.
       //
       // The same loop throws away a carve whose exit hallway leaves the boss nowhere to stand:
-      // findExitGuardSpot wants a straight run of five to put the guard in the middle of, and
-      // about 1% of hallways bend or run out before they offer one. That is a property of where
-      // relocateExit could tunnel rather than of the maze the player walks, so a fresh carve
-      // fixes it. Measured over 1200 dungeons a side it rerolls 1.4% of Easy carves, 1.3% of
-      // Medium and 0.9% of Hard, none of them ever ran out of attempts, and the boss came out
-      // with its five tiles on every one of the 3600.
+      // findExitGuardSpot wants a straight run of five to put the guard in the middle of, walled
+      // in on both sides, and a few hallways in a hundred bend, fork or run out before they
+      // offer one. That is a property of where relocateExit could tunnel rather than of the maze
+      // the player walks, so a fresh carve fixes it. Measured over 1200 dungeons a side (both
+      // reasons together) it rerolls 4.2% of Easy carves, 4.5% of Medium and 11% of Hard, none
+      // of them ever ran out of attempts, and the boss came out with its five tiles and only two
+      // open grid spots beside it on every one of the 3600.
+      //
+      // And on a difficulty with no dead ends, a carve whose spawn is still one. tieOffDeadEnds
+      // cannot fill the tile the player starts on, and ~13% of Easy spawns sit in a corner of
+      // the first region where every other neighbour is across the door. That takes Easy's
+      // rerolls from ~5% of carves to ~19%; measured over 4000 dungeons none ran out of
+      // attempts and not one kept a dead end, spawn included.
       for (let attempt = 1; ; attempt++) {
         const gatePlan = carveAndGateMaze(cellRows, cellCols, targetCells);
         const reachable = _flood(startRoom, (x, y) => MAP[y][x] === 0);
         const ungated = gatePlan && reachable.has(_tileKey(exitRoom.x, exitRoom.y));
         const cramped = !findExitGuardSpot().roomy;
-        const why = ungated ? 'boss reachable without a door' : 'no straight hallway for the boss';
-        if (!ungated && !cramped) break;
+        // See tieOffDeadEnds: the one tip it can neither loop nor fill is the spawn.
+        const deadSpawn = !!difficultyCfg().noDeadEnds && _ORTHO.filter((d) =>
+          [0, 3].includes(MAP[startRoom.y + d.dy][startRoom.x + d.dx])).length < 2;
+        const why = ungated ? 'boss reachable without a door'
+                  : cramped ? 'no straight hallway for the boss' : 'spawn is a dead end';
+        if (!ungated && !cramped && !deadSpawn) break;
         if (attempt >= MAZE_BUILD_ATTEMPTS) {
           console.info(`[maze] ${why} after ${attempt} attempts - keeping it`);
           break;
@@ -9192,6 +9388,11 @@ void main() {
       //                a door - see the gate tiers in there - which is safe precisely because
       //                braidMaze has already run and refusing carves it might have made is not
       //                something dropping a gate can undo.
+      //   tieOffDea..  Easy only: loops or fills whatever dead ends braidMaze could not reach.
+      //                The one pass after relocateExit that touches the maze proper, and it
+      //                keeps clear of the hallway back to its first fork, so the promise above
+      //                still holds for the stretch the boss stands in. Before placeGates.. so
+      //                the levers are sited on the map as it finally stands.
       //   placeGates.. stamps the doors that survived and hunts down switch hosts on the
       //                FINISHED map, so a lever is scored against the route the player really
       //                takes - hallway included.
@@ -9202,13 +9403,14 @@ void main() {
       //                levers are sited: the lever hunt floods over MAP===0 and so cannot see
       //                past a stamped door, which is what leaves every real lever somewhere
       //                the player reaches without opening a decoy.
-      // All four run BEFORE the lantern pass (which only touches MAP===1, so it skips our
+      // All of them run BEFORE the lantern pass (which only touches MAP===1, so it skips our
       // door/switch tiles) and BEFORE passagesList is built (so a closed door is correctly
       // excluded from the walkable-tile count, and the loop and hallway tiles are correctly
       // included).
       const gatePlan = planGates();
       const gateRegions = braidMaze(cellRows, cellCols, gatePlan);
       relocateExit(gatePlan, gateRegions);
+      tieOffDeadEnds(gatePlan, gateRegions);
       addDecoyDoors(gatePlan);
       placeGatesAndSwitches(gatePlan);
       return gatePlan;
@@ -9246,17 +9448,32 @@ void main() {
     // and the walk still stops at the first fork, so a deeper guard is no less unavoidable.
     const BOSS_MAX_TILES_FROM_EXIT = 8;
 
-    // The boss never stands on a corner, and never in a stub: it stands in the middle of a
-    // straight run of five, with two floor tiles to its left AND right, or two above AND below.
-    // A corner puts a wall a step from its shoulder, which on a foe markerScaleFor draws half
-    // again as large as anything else reads as the boss wedged into the masonry, and it leaves
-    // the player nowhere to sidestep the charge - the one attack that takes the whole telegraph
-    // bar. Five tiles of hallway is the room that fight wants.
+    // How many of the four grid spots beside (x, y) are a way in: floor, or a door - shut or
+    // thrown open, since a shut door is only a way in the player has not taken yet.
+    function openSidesAt(x, y) {
+      let n = 0;
+      for (const d of _ORTHO) {
+        const t = MAP[y + d.dy] && MAP[y + d.dy][x + d.dx];
+        if (t === 0 || t === 3 || t === 6) n++;
+      }
+      return n;
+    }
+
+    // The boss never stands on a corner, never in a stub and never at a junction: it stands in
+    // the middle of a straight run of five, with two floor tiles to its left AND right, or two
+    // above AND below, and wall on the other two sides - exactly two open grid spots beside it,
+    // the way the player comes in and the way on to the stairs. A corner puts a wall a step
+    // from its shoulder, which on a foe markerScaleFor draws half again as large as anything
+    // else reads as the boss wedged into the masonry, and it leaves the player nowhere to
+    // sidestep the charge - the one attack that takes the whole telegraph bar. Five tiles of
+    // hallway is the room that fight wants. A junction is the same run with a side passage or
+    // a door opening off the boss's own tile, and the last stand at the end of the hallway
+    // stops reading as one when it is fought in a crossroads.
     function bossHasHallwayRoom(x, y) {
       const open = (ax, ay) => ay > 0 && ay < MAP_HEIGHT - 1 && ax > 0 && ax < MAP_WIDTH - 1
                                && MAP[ay][ax] === 0;
       const run = (dx, dy) => open(x + dx, y + dy) && open(x + dx * 2, y + dy * 2);
-      return (run(-1, 0) && run(1, 0)) || (run(0, -1) && run(0, 1));
+      return ((run(-1, 0) && run(1, 0)) || (run(0, -1) && run(0, 1))) && openSidesAt(x, y) === 2;
     }
 
     // Walks the exit hallway back from the stairs and says where the one guard stands.
@@ -9280,8 +9497,9 @@ void main() {
     // run of five around it. On a hallway that carved straight that is the third tile itself,
     // leaving the fight exactly where it has always been; one that turned a corner there hands
     // the boss the next tile down that did not, rather than standing it in the corner. Measured
-    // over 1200 dungeons a side, the guard lands on the third or fourth tile 54% of the time on
-    // Easy, 62% on Medium and 67% on Hard, and six or eight tiles back on most of the rest.
+    // over 1200 dungeons a side, the guard lands on the third or fourth tile 51% of the time on
+    // Easy, 66% on Medium and 62% on Hard, six or eight tiles back on most of the rest, and two
+    // back on 7-8%.
     //
     // Reads MAP directly and counts only floor - a door is not somewhere a guard is stood - so
     // the same question can be asked twice: once by generateAuthentic3DMaze, to throw away a
@@ -9330,8 +9548,8 @@ void main() {
       }
 
       // walked[i] is i+1 tiles from the stairs. The shallowest roomy tile at or past the usual
-      // depth wins; failing that the deepest roomy tile IN FRONT of it, for the ~2% of hallways
-      // whose only straight five is the stretch nearest the stairs. Standing the guard two back
+      // depth wins; failing that the deepest roomy tile IN FRONT of it, for the ~8% of hallways
+      // whose only straight, walled-in five is the stretch nearest the stairs. Standing the guard two back
       // is closer than the fight wants to be, but it is still the corridor, still the one way
       // in, and still five tiles of room - all of which a corner three back is not.
       let spot = null, shallowRoomy = null;
@@ -9344,8 +9562,13 @@ void main() {
       const roomy = !!spot;
       // Last ditch, for a maze with no straight five anywhere behind the stairs:
       // generateAuthentic3DMaze rerolls those, but its attempt cap can run out - and an
-      // unavoidable guard in a bend still beats no guard at all.
-      if (!spot && walked.length) spot = walked[Math.min(BOSS_TILES_FROM_EXIT, walked.length) - 1];
+      // unavoidable guard in a bend still beats no guard at all. Still never at a junction,
+      // though: the deepest of the usual tiles with no more than two ways in, which the tile
+      // on the stairs' doorstep always is (a connector, walled on both sides by construction).
+      if (!spot && walked.length) {
+        const near = walked.slice(0, BOSS_TILES_FROM_EXIT).reverse();
+        spot = near.find((p) => openSidesAt(p.x, p.y) <= 2) || near[0];
+      }
 
       // Everything from the stairs back to and including the guard's own tile is the guarded
       // stretch. Tiles the walk explored BEHIND it are not part of it - they are ordinary
@@ -10294,7 +10517,8 @@ void main() {
     // slider. Remembered in this browser only, not in the server-side prefs: it's a choice about
     // this device's screen, and a phone and a tablet on the same server can want different ones.
     // (The key still says stick - the first version was a thumb stick - so the choice carries over.)
-    // Swipe is the default: only a device that switched to buttons ('off') gets them.
+    // Swipe is the default: only a device that switched to buttons ('off') gets them. The switch
+    // itself reads as "button controls" - off, knob left, is swipe; on, knob right, is buttons.
     const TOUCH_SWIPE_KEY = 'comfycrawler.touchStick';
     const touchControls = document.querySelector('.touch-controls');
     const btnTouchMode = document.getElementById('btnTouchMode');
@@ -10305,11 +10529,11 @@ void main() {
       if (!touchControls) return;
       releaseThumbPads();
       touchControls.classList.toggle('swipe-mode', on);
-      if (btnTouchMode) btnTouchMode.setAttribute('aria-checked', on ? 'true' : 'false');
+      if (btnTouchMode) btnTouchMode.setAttribute('aria-checked', on ? 'false' : 'true');
     }
     if (btnTouchMode) {
       btnTouchMode.addEventListener('click', () => {
-        const on = btnTouchMode.getAttribute('aria-checked') !== 'true';
+        const on = btnTouchMode.getAttribute('aria-checked') === 'true';
         setTouchSwipeMode(on);
         try { localStorage.setItem(TOUCH_SWIPE_KEY, on ? 'on' : 'off'); } catch (_) { /* storage disabled */ }
       });
@@ -14904,8 +15128,13 @@ void main() {
       ssLine('COMFYCRAWLER', cx, Math.round(h * 0.70),
              Math.max(20, Math.min(44, Math.round(w / 22))),
              0.66 + 0.24 * Math.sin(t * 1.1), { spacing: 6 });
+      // The live build's line describes typing your own dungeon into existence - not true here,
+      // where the gallery only ever plays back dungeons someone already made.
+      const tagline = SHOWCASE_MODE
+        ? 'A READ-ONLY GALLERY OF DUNGEONS SOMEONE ALREADY MADE'
+        : 'A 3D DUNGEON BUILT OUT OF WHATEVER YOU TYPE';
       ssMarquee(w, h,
-        'COMFYCRAWLER   •   A 3D DUNGEON BUILT OUT OF WHATEVER YOU TYPE   •   ' +
+        'COMFYCRAWLER   •   ' + tagline + '   •   ' +
         SS_RETURN_PROMPT + '   •   ', t);
     }
 

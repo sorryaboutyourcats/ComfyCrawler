@@ -804,8 +804,8 @@
       /* Off for the length of a fight (game.js, toggleBattleMode): the controls under a thumb
          mid-swing must not turn into different ones. */
       #btnTouchMode:disabled { opacity: 0.4; cursor: default; }
-      /* A sunken Win95 groove with a raised knob in it: the knob sits left for buttons,
-         slides right and the groove goes navy for swipe. */
+      /* A sunken Win95 groove with a raised knob in it: the knob sits left for swipe (the
+         default), slides right and the groove goes navy for buttons. */
       .touch-mode__track {
         position: relative;
         width: 28px;
@@ -1088,6 +1088,47 @@
     /* The cut into the clip: a white sheet that is fully up on the first frame and burns off,
        the flash an RPG uses to jump from the fight into its cinematic. Re-armed per play by
        toggling the class. */
+    /* Combat warning vignettes. Plain CSS rather than tailwind classes: the gradients are too
+       specific for utilities, and opacity/transform are written straight from game.js. */
+    #combatVignette {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      overflow: hidden;
+      visibility: hidden;
+      /* A size container, so the shadows below are sized in cqmin - a share of the viewport
+         frame itself - and keep the same proportions on a desktop and a phone. */
+      container-type: size;
+    }
+    #combatVignetteHp,
+    #combatVignetteStm {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      will-change: opacity;
+    }
+    /* Rounded-square rather than round: an INSET shadow's inner edge is the frame's own
+       rectangle, and the blur rounds its corners - so the vignette hugs the edges of the
+       screen evenly instead of leaving the sides clear and piling up in the corners the way
+       an ellipse does. Two layers per warning: a tight dark rim at the edge and a wider,
+       softer wash reaching in. The element keeps square corners so the frame's corners are
+       covered too (a border-radius would leave them clear). */
+    #combatVignetteHp {
+      box-shadow:
+        inset 0 0 10cqmin 2cqmin rgba(50, 0, 0, 0.9),
+        inset 0 0 40cqmin 9cqmin rgba(200, 16, 16, 0.6);
+    }
+    /* Tunnel vision: game.js drives --tunnel from 0 to 1 as exhaustion deepens, and the
+       spreads follow it, so the dark rim visibly closes in from past the frame's edges rather
+       than just fading up in place. The spread, not a scale transform: Chrome tiles a blur
+       this large, and scaling it showed the tiles as faint vertical bands. */
+    #combatVignetteStm {
+      --tunnel: 1;
+      box-shadow:
+        inset 0 0 12cqmin calc(2cqmin - (1 - var(--tunnel)) * 12cqmin) rgba(0, 0, 0, 0.65),
+        inset 0 0 40cqmin calc(7cqmin - (1 - var(--tunnel)) * 24cqmin) rgba(8, 10, 20, 0.45);
+    }
     #endingFlash {
       position: absolute;
       inset: 0;
@@ -3520,6 +3561,15 @@
             
             <canvas id="viewportCanvas" width="320" height="240"></canvas>
 
+            <!-- Low-health / low-stamina warning over the fight: a red heartbeat vignette as HP
+                 runs low and a dark tunnel closing in while the hero is too spent to swing.
+                 z-10, so the ending cutscene (z-20) and every box (z-30+) sit over it. Driven
+                 per frame by updateCombatVignette in game.js. -->
+            <div id="combatVignette" aria-hidden="true">
+              <div id="combatVignetteStm"></div>
+              <div id="combatVignetteHp"></div>
+            </div>
+
             <video id="gameVideo" playsinline class="w-full h-full object-cover image-rendering-pixelated hidden">
               <source id="videoSource" src="" type="video/mp4">
             </video>
@@ -3571,7 +3621,7 @@
                   </button>
                   <button data-choice="stamina" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-green-900 bg-green-100 hover:bg-green-200">
                     <span class="text-[11px] font-black">2 · STAMINA</span>
-                    <span class="text-[9px] font-bold text-slate-700" id="levelUpStaminaText">+20 max stamina</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpStaminaText">+20 max stamina / +25% regen</span>
                   </button>
                   <button data-choice="survival" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-blue-900 bg-blue-100 hover:bg-blue-200">
                     <span class="text-[11px] font-black">3 · SURVIVAL</span>
@@ -3579,7 +3629,7 @@
                   </button>
                   <button data-choice="speed" class="levelup-choice win95-btn w-full px-2 py-1 flex flex-col items-center text-purple-900 bg-purple-100 hover:bg-purple-200">
                     <span class="text-[11px] font-black">4 · SPEED</span>
-                    <span class="text-[9px] font-bold text-slate-700" id="levelUpSpeedText">+8% strafe / swing / regen</span>
+                    <span class="text-[9px] font-bold text-slate-700" id="levelUpSpeedText">+8% strafe / swing</span>
                   </button>
                 </div>
               </div>
@@ -3696,9 +3746,9 @@
           <div class="win95-box touch-controls swipe-mode p-2 flex-1 flex flex-col items-center justify-center min-h-[130px] flex-shrink-0">
             <!-- Buttons or swipe controls. Touch screens only (see .touch-controls in the <style>):
                  a keyboard or mouse has nothing to gain from a swipe pad. Swipe is the default,
-                 so the panel starts out in swipe-mode and the switch on - game.js takes both off
-                 at load for a device that chose buttons. -->
-            <button id="btnTouchMode" type="button" role="switch" aria-checked="true" aria-label="Swipe controls" title="Switch between buttons and swipe controls">
+                 so the panel starts out in swipe-mode and the switch off (knob left) - game.js
+                 flips both at load for a device that chose buttons (knob right). -->
+            <button id="btnTouchMode" type="button" role="switch" aria-checked="false" aria-label="Button controls" title="Switch between swipe and button controls">
               <span class="touch-mode__label">MODE</span>
               <span class="touch-mode__track"><span class="touch-mode__knob"></span></span>
             </button>

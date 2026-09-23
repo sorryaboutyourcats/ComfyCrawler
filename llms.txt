@@ -99,7 +99,7 @@ Difficulty (pick it before loading a dungeon; the maze is drawn at load):
 | Walkable tiles | ~40 | ~77 | ~124 |
 | Foe health | ×1 | ×1.25 | ×1.6 |
 | Hero health / stamina | 125 / 125 | 100 / 100 | 75 / 100 |
-| Other | Walkers guard only 45% of swings; flyers break off when hit mid-dive; packs are 2 at most | – | Foes close 10% faster (boss 25%); two doors open onto dead ends |
+| Other | Walkers guard only 45% of swings; flyers break off when hit mid-dive; packs are 2 at most; no dead ends - every corridor but the stairs' hallway loops back | – | Foes close 10% faster (boss 25%); two doors open onto dead ends |
 
 The maze:
 
@@ -113,15 +113,15 @@ The hero:
 
 - Nothing heals you except levelling up.
 - After every won fight, stamina refills to full.
-- Stamina regenerates 27 per second (0.45 per tick), but not while you guard.
+- Stamina regenerates 27 per second (0.45 per tick), but not while you guard. Each Stamina pick adds 25% of that.
 - **Strike:** costs 30 stamina and deals 24–35 damage (+4 per Strength pick). The blow lands 7 ticks after you press, and the swing takes 18 ticks in all. Horizontal reach is 18 px plus the foe's half-width (walker 26, flyer 30, runt 16, fledgling 22, boss 46). You cannot hit a flyer higher than 34 px, or a boss while it has pulled back. Swinging with less than 30 stamina (but more than 0) still lands, but then locks your stamina at 0 for 2 seconds: no guard, no swing, slow feet.
 - **Guard (hold):** it is up after 4 ticks. A blow caught on it deals only 12% of its damage and can never kill you. Each caught blow costs stamina: runt 15, fledgling 10, flyer 20, walker 25, boss 50, and the boss's charge 100. Holding it drains 0.3 stamina per tick (0.85 while moving) and halves your step speed.
 - **Dodge:** a blow misses if you are more than 44 px sideways from the foe when it lands (62 px for the boss's charge). You step 3.8 px per tick. The arena runs from −85 to +85.
 - **XP:** walker 22, flyer 28, boss 60, runts 10 each, fledglings 12 each. Level 2 costs 40 XP, and each level after that costs 30 more than the last. Each level heals 40% of max health, refills stamina, and asks for one pick:
   - Strength: +4 damage.
-  - Stamina: +20 max stamina.
+  - Stamina: +20 max stamina, and stamina regenerates 25% faster (of the base 27 per second).
   - Survival: +20 max health, handed over filled.
-  - Speed: +8% to stepping, swinging and regen, up to 1.6×.
+  - Speed: +8% to stepping and swinging, up to 1.6×.
 
 The foes (health shown before the difficulty multiplier):
 
