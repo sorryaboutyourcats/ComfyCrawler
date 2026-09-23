@@ -677,6 +677,15 @@
     function finishNarration() {
       stopNarration();
       playScreenMusic('loading');
+      // crawlReadingUntil is a fallback reading-pace estimate for a story with no narration at
+      // all - real narration finishing is the authoritative "done reading" signal and almost
+      // always arrives well before that estimate (CRAWL_MIN_SECONDS=55, 22s/paragraph assumes
+      // silent reading, not a voice actually speaking it). On a phone or with reduced motion the
+      // crawl is a static block with no animation left to justify the wait either. Left alone,
+      // the screen saver stayed blocked for however much of the estimate was still unspent -
+      // on a fast History/showcase load that could be another minute of sitting on a screen
+      // that had already finished doing everything it was blocking for.
+      crawlReadingUntil = 0;
     }
 
     function playNarrationClip(i) {
@@ -2189,6 +2198,14 @@
     ].filter(([, el]) => el);
     const SETUP_IMAGE_SLOTS = ['player', 'weapon', 'enemy'];
 
+    // A phone or tablet. On one of those, focusing a field from inside a tap brings the on-screen
+    // keyboard up over the bottom half of the menu, CREATE and all - so every move below that
+    // parks the caret in the mad-lib for a keyboard player (a Quick idea, Undo/Redo, History's
+    // Prompts, the first paint) stands down on touch, where the player taps a blank when they
+    // mean to type in it. Primary pointer only: a touch-screen laptop run from its mouse or
+    // trackpad still gets the caret.
+    const setupOnTouch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
     const btnUndoPrompt = document.getElementById('btnUndoPrompt');
     const btnRedoPrompt = document.getElementById('btnRedoPrompt');
 
@@ -2326,14 +2343,15 @@
       // Show what moved. Undo is usually pressed from the button at the bottom of the screen,
       // with the fields it rewrote some way up it, so every field that changed flashes and the
       // first one takes the caret - landing the player where the text they can now keep editing
-      // actually is. An image-only step changes no text and leaves the focus alone.
+      // actually is. An image-only step changes no text and leaves the focus alone. On touch
+      // only the flash: the caret would bring the keyboard up (see setupOnTouch).
       let firstChanged = null;
       SETUP_TEXT_FIELDS.forEach(([key, el]) => {
         if (before && before.text[key] === setupPresent.text[key]) return;
         flashPromptField(el);
         if (!firstChanged && !el.disabled) firstChanged = el;
       });
-      if (firstChanged) {
+      if (firstChanged && !setupOnTouch) {
         firstChanged.focus({ preventScroll: true });
         const end = firstChanged.value.length;
         firstChanged.setSelectionRange(end, end);
@@ -2510,7 +2528,8 @@
         // Don't leave the focus ring stranded on a preset deep in the grid. Landing it on
         // the first field lets the player read down the filled-in mad-lib from the top, and
         // Enter from a field still fires CREATE - so "pick an idea, press Enter" still goes.
-        wallPromptInput.focus({ preventScroll: true });
+        // Not on touch, where it would open the keyboard over the idea just picked.
+        if (!setupOnTouch) wallPromptInput.focus({ preventScroll: true });
       });
     }
 
@@ -2529,6 +2548,9 @@
     function shuffleQuickIdeas(reroll) {
       const row = document.getElementById('quickIdeasRow');
       if (!row) return;
+      // The ideas' own wrapper: display: contents on a wide window, the sideways strip on a
+      // phone (see #quickIdeasList in index.html).
+      const list = document.getElementById('quickIdeasList') || row;
       const btns = Array.from(row.querySelectorAll('.preset-btn'));
       const isWin95 = b => b.getAttribute('data-val') === 'Windows 95 3D maze';
       const pinned = reroll ? [] : btns.filter(isWin95);
@@ -2542,7 +2564,11 @@
       // flex-wrap grid. Arrow-key nav is geometric (see moveFocusIn) so it follows along.
       // The "Quick ideas:" label and the 🎲 button are not .preset-btn, so they are never
       // re-appended and stay at the head of the row.
-      [...pinned, ...rest].forEach(b => row.appendChild(b));
+      [...pinned, ...rest].forEach(b => list.appendChild(b));
+      // A phone's strip may be scrolled halfway along from the last visit or roll - bring it back
+      // to the start, where the new order begins. A no-op on a wide window, where the wrapper
+      // has no box to scroll.
+      list.scrollLeft = 0;
       trimQuickIdeasToTwoRows(row);
     }
 
@@ -2563,6 +2589,7 @@
       const rows = [...new Set(tops)].sort((a, b) => a - b);
       // One row, two rows, or the menu is off screen entirely (every offsetTop reads 0, so this
       // collapses to a single row and nothing is touched) - either way there is nothing to trim.
+      // A phone's sideways strip is always the one row, so there every idea stays.
       if (rows.length > 2) btns.forEach((b, i) => { if (tops[i] > rows[1]) b.classList.add('hidden'); });
       // The CSS clip that stops the untrimmed list from flashing on first paint (see
       // .quick-ideas-preflash-clip in index.html) has done its job the moment real .hidden
@@ -2631,8 +2658,9 @@
 
     // Land the cursor in STYLE on first paint, same as a Quick idea click or a History
     // "Prompts" apply does further down - a keyboard player can start typing, or arrow
-    // straight into CHARACTER/WEAPON/ENEMY, with no click needed first.
-    if (wallPromptInput) wallPromptInput.focus({ preventScroll: true });
+    // straight into CHARACTER/WEAPON/ENEMY, with no click needed first. Touch has no keyboard
+    // player to serve, only one to summon (see setupOnTouch).
+    if (wallPromptInput && !setupOnTouch) wallPromptInput.focus({ preventScroll: true });
 
     // ==========================================
     // VALBRACE REAL-TIME COMBAT ENGINE (v5)
@@ -11052,11 +11080,36 @@ void main() {
       tryEnterDungeon();
     });
 
+    // The blank after `el` in the mad-lib that can still be typed in, skipping any line a
+    // picture has taken (those are disabled). null past the last one, or for anything that
+    // isn't a mad-lib field at all.
+    function nextOpenSetupField(el) {
+      const fields = SETUP_TEXT_FIELDS.map(([, f]) => f);
+      const i = fields.indexOf(el);
+      if (i === -1) return null;
+      return fields.slice(i + 1).find(f => !f.disabled) || null;
+    }
+
+    // On a touch screen the keyboard's action key walks down the mad-lib the way a phone form
+    // does: "Next" from STYLE to CHARACTER to WEAPON to ENEMY, and "Go" - CREATE, same as Enter
+    // on a desktop - only from the last blank still open. Otherwise the key a phone keyboard
+    // puts under the thumb after every word would start a whole generation with three blanks
+    // still showing. The label is decided as each field takes focus, since attaching a picture
+    // can change which blank is the last open one.
+    if (setupOnTouch) {
+      SETUP_TEXT_FIELDS.forEach(([, el]) => {
+        el.addEventListener('focus', () => {
+          el.setAttribute('enterkeyhint', nextOpenSetupField(el) ? 'next' : 'go');
+        });
+      });
+    }
+
     // On the setup screen, Enter kicks off generation just like clicking CREATE. Ignored
     // while the Options modal is up, and while focus is in a textarea (so a multi-line
     // prompt field keeps its newline).
     window.addEventListener('keydown', (e) => {
-      if (e.code !== 'Enter') return;
+      // A phone keyboard's action key can arrive with no e.code, so on touch e.key counts too.
+      if (e.code !== 'Enter' && !(setupOnTouch && e.key === 'Enter')) return;
       if (screenSetup.classList.contains('hidden')) return;
       if (modalSettings && !modalSettings.classList.contains('hidden')) return;
       if (modalAbout && !modalAbout.classList.contains('hidden')) return;
@@ -11068,6 +11121,13 @@ void main() {
       // does too, natively). The CREATE shortcut is only for Enter from a mad-lib field or
       // from nowhere in particular.
       if (e.target && e.target.tagName === 'BUTTON') return;
+      // Touch: "Next" first, while there is a blank after this one to go to (see above).
+      const next = setupOnTouch && nextOpenSetupField(e.target);
+      if (next) {
+        e.preventDefault();
+        next.focus();
+        return;
+      }
       if (btnCreate.disabled) return;
       e.preventDefault();
       btnCreate.click();
@@ -12799,22 +12859,39 @@ void main() {
     //
     // Deliberately NOT gated on prefers-reduced-motion: this machine reports `reduce` at all
     // times, so treating it as a signal here would mean building an effect that is never once
-    // seen on the box it is being built on. `(hover: hover)` is the gate that matters - a touch
-    // screen has no cursor to follow, and on one the tiles stay exactly as they were.
+    // seen on the box it is being built on.
+    //
+    // A touch screen has no cursor, so there the finger stands in for one - but only once it
+    // has been held still for a moment (TILE_HOLD_MS). The grid is nearly all picture, so a
+    // finger landing on one is far more often the start of a scroll than a wish to lean over
+    // a diorama; a press that starts moving straight away is left alone to scroll the list,
+    // and a press that waits is taken to mean the picture and holds the list still while the
+    // finger drags the effect around. A plain tap does nothing, as it always did.
     const historyCanHover = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+    const TILE_HOLD_MS = 140;
+    const TILE_HOLD_SLOP = 10;
 
     function wireTileParallax(tile, art) {
-      if (!historyCanHover) return;
       let pending = null;
-      // Where the picture sits inside its tile, and how big it is. Captured on the way in and
-      // held for the length of the hover, because it CANNOT be read while the effect is
-      // running: art is about to carry a 3D rotation, and getBoundingClientRect on a rotated
+      // Where the picture sits inside its tile, and how big it is. Captured at the start of a
+      // hover or a hold and kept for its length, because it CANNOT be read off the screen while
+      // the effect is running: art carries a 3D rotation, and getBoundingClientRect on a rotated
       // element returns the box that rotation sweeps out - a box that grows as the card turns,
-      // so measuring the cursor against it would feed the tilt back into itself and shiver.
-      // These are layout facts about a tile, so they do not change while one is hovered; the
-      // tile's own position is re-read every frame instead, which is what keeps the effect
-      // honest if the list is scrolled with the mouse sitting still.
+      // so measuring the cursor against it would feed the tilt back into itself and shiver. The
+      // offset* properties are layout, untouched by transforms, so they are right even when a
+      // tile is caught mid-way through easing back to square. The tile's own position is
+      // re-read every frame instead (the tile itself never turns), which is what keeps the
+      // effect honest if the list is scrolled with the pointer sitting still.
       let offX = 0, offY = 0, artW = 0, artH = 0;
+      const measure = () => {
+        // tile is not positioned, so the two normally share an offsetParent and the difference
+        // is art's place in the tile; if some later rule positions the tile, art's offset is
+        // already relative to it.
+        offX = art.offsetParent === tile ? art.offsetLeft : art.offsetLeft - tile.offsetLeft;
+        offY = art.offsetParent === tile ? art.offsetTop : art.offsetTop - tile.offsetTop;
+        artW = art.offsetWidth;
+        artH = art.offsetHeight;
+      };
 
       const write = () => {
         pending = null;
@@ -12841,35 +12918,90 @@ void main() {
       // Past the bottom edge of the picture - over the strip, or down on the caption - the
       // clamp in write() simply holds the effect at full tilt, which is what it looks like it
       // should do from there anyway.
-      tile.addEventListener('pointerenter', () => {
-        // Both properties are still 0 here and .is-parallax-live is off, so art is sitting
-        // untransformed - the one moment in a hover when its box can be trusted.
-        const tileBox = tile.getBoundingClientRect();
-        const artBox = art.getBoundingClientRect();
-        offX = artBox.left - tileBox.left;
-        offY = artBox.top - tileBox.top;
-        artW = artBox.width;
-        artH = artBox.height;
-      });
-
-      tile.addEventListener('pointermove', e => {
-        lastX = e.clientX;
-        lastY = e.clientY;
+      // One write per frame however many moves the pointer reports in it. Everything else on a
+      // tile is a short CSS transition kicked by a class; a pointer-following transform is the
+      // one thing here that has to be recomputed as fast as the screen can show it.
+      const track = (x, y) => {
+        lastX = x;
+        lastY = y;
         art.classList.add('is-parallax-live');
-        // One write per frame however many moves the mouse reports in it. Everything else on a
-        // tile is a short CSS transition kicked by a class; a cursor-following transform is the
-        // one thing here that has to be recomputed as fast as the screen can show it.
         if (pending === null) pending = requestAnimationFrame(write);
-      }, { passive: true });
+      };
 
-      tile.addEventListener('pointerleave', () => {
+      const settle = () => {
         if (pending !== null) { cancelAnimationFrame(pending); pending = null; }
         // Dropping the class lengthens every transition involved (see index.html), so letting
         // go of a tile eases it back to square instead of snapping there.
         art.classList.remove('is-parallax-live');
+        tile.classList.remove('is-held');
         art.style.setProperty('--par-x', '0');
         art.style.setProperty('--par-y', '0');
-      });
+      };
+
+      // The mouse. A finger on a laptop's touch screen fires these too, and the touch path
+      // below already owns it, so pointerType 'touch' is skipped here.
+      if (historyCanHover) {
+        tile.addEventListener('pointerenter', e => { if (e.pointerType !== 'touch') measure(); });
+        tile.addEventListener('pointermove', e => {
+          if (e.pointerType !== 'touch') track(e.clientX, e.clientY);
+        }, { passive: true });
+        tile.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') settle(); });
+      }
+
+      // The finger. Touch events rather than pointer events because this needs to decide AFTER
+      // the press has begun whether the list may scroll: a pointer path would have to fix that
+      // up front with touch-action, and touch-action: none on nearly every pixel of the grid
+      // would leave it unscrollable. Here nothing is blocked until the hold has been earned -
+      // from then on each touchmove is cancelled, which keeps the list where it is.
+      //
+      // On the picture only, not the whole tile: on a phone the three actions have a row of
+      // their own under the picture, and a press on those is a press on a button.
+      let touchId = null, holdTimer = 0, held = false, startX = 0, startY = 0;
+      const ourTouch = e => Array.prototype.find.call(e.changedTouches, t => t.identifier === touchId);
+      const letGo = () => {
+        clearTimeout(holdTimer);
+        holdTimer = 0;
+        touchId = null;
+        if (held) { held = false; settle(); }
+      };
+
+      art.addEventListener('touchstart', e => {
+        // A second finger is a pinch, not a lean.
+        if (touchId !== null || e.touches.length > 1) { letGo(); return; }
+        const t = e.changedTouches[0];
+        touchId = t.identifier;
+        startX = lastX = t.clientX;
+        startY = lastY = t.clientY;
+        holdTimer = setTimeout(() => {
+          holdTimer = 0;
+          held = true;
+          measure();
+          // .is-held stands in for :hover, which the CSS keys the layers' zoom off - a phone's
+          // :hover sticks to whatever was last tapped, so it can't be trusted to mean "now".
+          tile.classList.add('is-held');
+          track(lastX, lastY);
+        }, TILE_HOLD_MS);
+      }, { passive: true });
+
+      art.addEventListener('touchmove', e => {
+        const t = touchId !== null && ourTouch(e);
+        if (!t) return;
+        if (!held) {
+          // Moved before the hold was earned: that's a scroll, and it is left to happen.
+          if (Math.hypot(t.clientX - startX, t.clientY - startY) > TILE_HOLD_SLOP) letGo();
+          else { lastX = t.clientX; lastY = t.clientY; }
+          return;
+        }
+        if (e.cancelable) e.preventDefault();
+        track(t.clientX, t.clientY);
+      }, { passive: false });
+
+      const endTouch = e => { if (touchId !== null && ourTouch(e)) letGo(); };
+      art.addEventListener('touchend', endTouch);
+      art.addEventListener('touchcancel', endTouch);
+      // A held finger is also a long press, which on Android opens the image's save / share
+      // menu over the top of the effect. While the hold is on, the press belongs to the tile.
+      art.addEventListener('contextmenu', e => { if (held || holdTimer) e.preventDefault(); });
     }
 
     function buildHistoryTile(entry) {
@@ -12930,8 +13062,9 @@ void main() {
         // to keep off a server answering one request at a time - and laid over the flat card
         // they replace, which they match pixel for pixel, so there is nothing to see when they
         // arrive. Only once BOTH are up does the picture start moving: half a pair would be a
-        // hero with no corridor behind them.
-        if (historyCanHover) {
+        // hero with no corridor behind them. Asked for on touch screens too - a held finger
+        // drives the same effect there (see wireTileParallax).
+        {
           let loaded = 0;
           ['bg', 'hero'].forEach(layer => {
             const img = document.createElement('img');
@@ -14253,8 +14386,15 @@ void main() {
 
       // Same landing as a Quick idea: the top of the filled-in mad-lib, reading down, with
       // Enter from any field still firing CREATE. Clearing an attached image above focuses
-      // that line's input, so this has to come last to win.
-      if (wallPromptInput) wallPromptInput.focus({ preventScroll: true });
+      // that line's input, so this has to come last to win. On touch it goes the other way:
+      // nothing is left focused, or the keyboard comes up over the refilled menu (see
+      // setupOnTouch) - and that same image clear may have focused a line already.
+      if (setupOnTouch) {
+        const active = document.activeElement;
+        if (active && SETUP_TEXT_FIELDS.some(([, el]) => el === active)) active.blur();
+      } else if (wallPromptInput) {
+        wallPromptInput.focus({ preventScroll: true });
+      }
     }
 
     // ---- Deleting a saved dungeon -----------------------------------------
@@ -14605,7 +14745,10 @@ void main() {
         // Breathing rather than blinking - a hard blink over a moving star field reads as a
         // glitch, a slow pulse reads as "waiting for you".
         const pulse = 0.66 + 0.34 * Math.sin(t * 2.2);
-        ssLine('DONE GENERATING ASSETS', cx, baseY, Math.round(big * 0.62), pulse, { spacing: 3 });
+        // currentRunHistoryPrompts is set only by a History (or showcase gallery) load, which
+        // generated nothing - that run's assets came straight off disk.
+        const headline = currentRunHistoryPrompts ? 'SAVED DUNGEON LOADED' : 'DONE GENERATING ASSETS';
+        ssLine(headline, cx, baseY, Math.round(big * 0.62), pulse, { spacing: 3 });
         const where = ((dungeonStory && dungeonStory.location) || '').trim();
         ssLine(where ? (where.toUpperCase() + ' IS WAITING') : 'THE DUNGEON IS WAITING',
                cx, baseY + small * 2.6, small, 0.72, { rgb: '200,214,255', spacing: 2 });
