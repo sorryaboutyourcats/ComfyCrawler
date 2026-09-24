@@ -2588,7 +2588,7 @@ _STYLE_BUCKETS = [
     ("win95",  ['win95', 'windows 95', 'windows', 'win 95', 'brick', '95', 'retro brick']),
     ("forest", ['forest', 'nature', 'jungle', 'woods', 'woodland', 'trees', 'tree', 'garden', 'swamp']),
     ("taco",   ['taco', 'tacos', 'burrito', 'mexican', 'nacho', 'fajita']),
-    ("cyber",  ['cyber', 'neon', 'cyberpunk', 'matrix', 'circuits', 'tech']),
+    ("cyber",  ['cyber', 'neon', 'cyberpunk', 'circuits', 'tech']),
     ("stone",  ['moss', 'stone', 'castle', 'dungeon', 'ancient', 'cave', 'rock']),
     ("candy",  ['candy', 'gingerbread', 'sweet', 'peppermint', 'cake', 'chocolate', 'cookie']),
     ("cat",    ['cat', 'cats', 'kitten', 'kittens', 'feline', 'dog', 'dogs', 'puppy', 'animal']),
@@ -2619,13 +2619,25 @@ _STYLE_BUCKETS_NAMED = [
     # "cathedral".
     ("mario",    ['mario', 'mushroom', 'mushrooms']),
     ("lsd",      ['lsd']),        # after lsddream, so the game keeps its own look
+    # The Matrix's falling green code. Used to be a key of the 'cyber' bucket, which paints
+    # cyan-and-purple circuitry - and quoted, "The Matrix" skipped the buckets for the set
+    # designer, which rolled the colour fresh every run (measured 2026-09-23 on the same input:
+    # "neon green digital rain", then "black-and-white film grain", then "black-and-cyan
+    # digital rain"). Everyone pictures the same green rain, so it is answered here.
+    ("matrix",   ['matrix', 'digital rain', 'code rain', 'falling code']),
 ]
+
+# Named-aesthetic buckets that still apply when the wall field was QUOTED. _theme_bucket sends
+# every quoted name down the designed path because proper names trip the fuzzy substring
+# tables ("rockefeller center" -> 'rock'). That reason does not hold for a key that IS the
+# name: "The Matrix" typed in quotes is asking for exactly this look.
+_STYLE_BUCKETS_QUOTE_SAFE = {"matrix"}
 
 
 def _style_bucket(wall_style):
     """Which hand-tuned theme bucket `wall_style` resolves to, or None for the generic path."""
     ui = (wall_style or "").lower()
-    for name, keys in _STYLE_BUCKETS_NAMED:        # lsddream, acid, glitch, mario, lsd
+    for name, keys in _STYLE_BUCKETS_NAMED:        # lsddream, acid, glitch, mario, lsd, matrix
         if any(k in ui for k in keys):
             return name
     for name, keys in _STYLE_BUCKETS[:4]:          # scifi, win95, forest, taco
@@ -2656,8 +2668,13 @@ def _theme_bucket(wall_style, wall_named=None):
     text that was never meant to describe a theme in the first place; the generic path (which
     falls back to the raw words when there is no brief) is the right home for it either way.
     Unquoted input leaves `wall_named` as None, so this is byte-identical to _style_bucket
-    alone for every string typed before this existed."""
-    return None if wall_named else _style_bucket(wall_style)
+    alone for every string typed before this existed.
+
+    The one exception is _STYLE_BUCKETS_QUOTE_SAFE - a bucket whose key is itself the name."""
+    bucket = _style_bucket(wall_style)
+    if wall_named and bucket not in _STYLE_BUCKETS_QUOTE_SAFE:
+        return None
+    return bucket
 
 
 def get_surface_prompts(wall_style, brief=None, wall_named=None):
@@ -2829,6 +2846,33 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
         lantern_p = (f"One bright red Super Mario mushroom power-up with big white circular spots and a stubby cream "
                      f"stalk with two simple cartoon eyes, glowing brilliantly from within with warm golden light, "
                      f"radiant, bold 16-bit video game sprite art with thick black outlines. {_LANTERN_TAIL}")
+
+    elif bucket == "matrix":
+        # The Matrix's digital rain: columns of glowing green glyphs running down a black
+        # screen. GREEN is the whole point (the player's words) - every surface names it, and
+        # the glyphs are bright on black so the distance shading still leaves them readable.
+        #
+        # All three use the WALL's "flat orthographic front view" framing, not the usual
+        # "camera pointing straight up/down". Rendered 2026-09-23, 3 rolls each: that wording
+        # came back as a receding 3D grid room, a radial zoom tunnel or perspective tiles on
+        # 5 of 6 floor/ceiling rolls (a glowing grid is the classic perspective floor), while
+        # the front-view wall was flat 6 of 6. Screen-flat code has no up or down to get wrong.
+        wall_p = ("A flat 2D vertical wall texture of The Matrix digital rain: dense vertical columns of "
+                  "glowing bright green katakana characters and numerals streaming down a pure black "
+                  "computer screen, each column brightest white-green at its leading character and fading "
+                  "to deep emerald green behind it, green phosphor CRT glow, flat orthographic front view, "
+                  "seamless tileable wall material, zero perspective, zero horizon.")
+        ceil_p = ("A flat 2D texture of a black computer screen filled edge to edge with dense rows of small "
+                  "glowing green computer code characters and numerals in The Matrix style, green phosphor "
+                  "glow on black, flat orthographic front view, seamless tileable material, zero perspective, "
+                  "zero vanishing point, zero horizon.")
+        floor_p = ("A flat 2D texture of square black glass tiles laid edge to edge in a flat grid, every tile "
+                   "filled with small glowing bright green code characters in The Matrix style, thin bright "
+                   "green seams between the tiles, flat orthographic front view, seamless tileable material, "
+                   "zero perspective, zero vanishing point, zero horizon.")
+        lantern_p = (f"An old boxy CRT computer monitor switched on, its black screen filled with falling "
+                     f"glowing green code characters in The Matrix style, blazing green phosphor light "
+                     f"pouring out of the screen. {_LANTERN_TAIL}")
 
     else:
         # THE ABSTRACT-THEME PATH. Everything below interpolates the typed words, so when those
@@ -3105,6 +3149,16 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
         switch_p = ("A small wall-mounted lever handle shaped like a shiny gold Super Mario coin stamped with a "
                     "star, on a red brick block plate, bold 16-bit video game art with thick black outlines, "
                     "the handle resting down. " + _GATE_TAIL)
+
+    elif bucket == "matrix":
+        door_p = (f"A closed heavy black steel door with a chrome handle, its whole face covered in "
+                  f"glowing green computer code characters, set into a surrounding archway of the same "
+                  f"streaming green Matrix digital rain on black as the corridor wall, flat straight-on "
+                  f"orthographic front view, {NO_MARGINS}, zero perspective, zero horizon.")
+        # Lantern is a CRT monitor full of code - the switch is the red pill, the other thing
+        # everyone remembers.
+        switch_p = ("A small wall-mounted lever handle shaped like one glossy red pill capsule, on a black "
+                    "metal plate edged with a glowing green trim, the handle resting down. " + _GATE_TAIL)
 
     elif brief and brief.get("door") and brief.get("switch"):
         # A designed gate. Unlike the raw-word branch below, both lines are already concrete
@@ -3629,11 +3683,7 @@ Design THREE different foes from that idea. They must read as three DIFFERENT cr
 the same family - not one creature drawn three times. Someone who sees all three together
 should think "those are three kinds of {enemy}", never "that is the same one with wings".
 
-- GRUNT: fights on foot on the ground. The plain, common version.
-- FLYER: genuinely airborne. It must look airborne even standing still in a picture.
-- BOSS: the champion, far bigger and heavier than the other two - and it gets that way by
-  having MORE OF ITSELF. Enlarge and multiply its own parts, stack or fuse several of it
-  together, thicken it, raise it up. Bulk it out with its own material, not with a costume.
+{roles}
 
 Rules for the LOOK lines. They are fed straight to an image generator, so:
 
@@ -3641,22 +3691,14 @@ Rules for the LOOK lines. They are fed straight to an image generator, so:
    the silhouette, the extra parts and the colours; never rename it to something else and
    never describe only the differences. Asked for three dragons, "heavy scaled armour with
    jagged teeth, standing on two thick legs" is WRONG - it forgot to say dragon.
-2. If {enemy} is an object, a machine or a piece of technology rather than a living creature,
-   then all three stay that object. Give it machinery, mountings, housings and moving parts.
-   Faces, limbs, claws, scales and feathers would replace it with a monster.
-3. Say how the FLYER stays up, with something that suits {enemy} specifically: feathered
-   wings, membrane wings, insect wings, spinning rotor blades, glowing thrusters, a gasbag.
-   Choose ONE and describe it.
-4. Give the three clearly different colours, so a player tells them apart instantly in a
-   dark corridor.
+{rule_kind}
+{rule_lift}
+{rule_colour}
 5. Describe ONLY what is in the picture. NEVER write what a foe is not, or what it lacks, or
    what it should not look like - every single word you write will be drawn.
 6. One sentence each, under 30 words. Plain physical description: shape, build, materials,
    colours, parts. No story, no history, no mood words unless they are visibly on the model.
-7. Bulk and menace come from the subject's OWN material and its OWN parts, made bigger,
-   thicker and more numerous. Calling a foe armoured, plated, helmeted, crowned, spiked, or
-   giving it a humanoid torso and shoulders, replaces it with a generic armoured warrior and
-   the subject vanishes - this is the single most common way this job goes wrong.
+{rule_bulk}
 
 Rules for the NAME lines. A name is what the health bar shows during the fight, so it has to
 point straight at the foe it belongs to:
@@ -3689,10 +3731,66 @@ BOSS_NAME: <1-3 word name, made from {enemy}, not a plural>
 BOSS_LOOK: <one sentence>"""
 
 
+# The four pieces of _ENEMY_SPECIES_USER that depend on what KIND of thing the family is. The
+# defaults are the wording every monster and object has always been designed with; a PERSON
+# (_enemy_is_person) gets its own, because every one of the defaults hurts a person - see the
+# note above _PERSON_ENEMY_NOUNS for what each did to "Lady in the red dress".
+_SPECIES_PARTS = {
+    "roles": """- GRUNT: fights on foot on the ground. The plain, common version.
+- FLYER: genuinely airborne. It must look airborne even standing still in a picture.
+- BOSS: the champion, far bigger and heavier than the other two - and it gets that way by
+  having MORE OF ITSELF. Enlarge and multiply its own parts, stack or fuse several of it
+  together, thicken it, raise it up. Bulk it out with its own material, not with a costume.
+""",
+    "rule_kind": """2. If {enemy} is an object, a machine or a piece of technology rather than a living creature,
+   then all three stay that object. Give it machinery, mountings, housings and moving parts.
+   Faces, limbs, claws, scales and feathers would replace it with a monster.
+""",
+    "rule_colour": """4. Give the three clearly different colours, so a player tells them apart instantly in a
+   dark corridor.
+""",
+    "rule_lift": """3. Say how the FLYER stays up, with something that suits {enemy} specifically: feathered
+   wings, membrane wings, insect wings, spinning rotor blades, glowing thrusters, a gasbag.
+   Choose ONE and describe it.
+""",
+    "rule_bulk": """7. Bulk and menace come from the subject's OWN material and its OWN parts, made bigger,
+   thicker and more numerous. Calling a foe armoured, plated, helmeted, crowned, spiked, or
+   giving it a humanoid torso and shoulders, replaces it with a generic armoured warrior and
+   the subject vanishes - this is the single most common way this job goes wrong.
+""",
+}
+_SPECIES_PARTS_PERSON = {
+    "roles": """- GRUNT: fights on foot on the ground. The plain, everyday version of {enemy}.
+- FLYER: floats in the air all by itself, hovering with both feet dangling well above the
+  ground, hair and clothes billowing around them.
+- BOSS: the champion - the most imposing version of that same one person: tall, commanding and
+  regal, in a grander and more dramatic version of the same outfit.
+""",
+    "rule_kind": """2. {enemy} is a person, so each foe is ONE whole person in natural human proportions,
+   shown from head to feet. Tell the three apart by build, outfit, hairstyle, colours and stance.
+""",
+    "rule_colour": """4. Keep every colour the words "{enemy}" name. Tell the three apart with the other
+   colours - hair, skin tone, accessories, trim - so a player spots the difference instantly.
+""",
+    "rule_lift": """3. The FLYER floats by itself - describe it hovering in mid-air with its feet off the ground.
+""",
+    "rule_bulk": """7. Menace comes from build, stance and outfit. Calling a foe armoured, plated, helmeted or
+   robotic replaces the person with a generic armoured warrior and the subject vanishes.
+""",
+}
+
+
 def _enemy_species_prompt(enemy_style):
     """Same hand-built chat template as _story_prompt - see there for why the <|im_start|>
-    opener and the empty <think> block are both mandatory."""
-    user = _ENEMY_SPECIES_USER.format(
+    opener and the empty <think> block are both mandatory.
+
+    The kind-dependent parts (_SPECIES_PARTS) go in before the {enemy} fill, since they name
+    {enemy} themselves."""
+    parts = _SPECIES_PARTS_PERSON if _enemy_is_person(enemy_style) else _SPECIES_PARTS
+    template = _ENEMY_SPECIES_USER
+    for key, text in parts.items():
+        template = template.replace("{" + key + "}", text.rstrip("\n"))
+    user = template.format(
         enemy=(enemy_style or "").strip() or "things that shamble")
     return (
         "<|im_start|>system\n" + ENEMY_SPECIES_SYSTEM + "<|im_end|>\n"
@@ -4239,6 +4337,58 @@ def _enemy_literal(enemy_style):
     return None
 
 
+# ---------------------------------------------------------------------------
+# A PERSON typed as the enemy - "Lady in the red dress".
+# ---------------------------------------------------------------------------
+# A person is already a specific physical thing, and both LLM stages kept turning one into
+# something else. Measured 2026-09-23 on "Lady in the red dress" in a "The Matrix" dungeon,
+# three set-designer rolls:
+#   "red dress with glowing seams"             - no woman at all, an animated dress
+#   "red-dress woman wearing wireframe armor"   - the armour word is stripped downstream,
+#                                                 "wearing wireframe" survives: the red ROBOT
+#                                                 the player reported
+#   "red-dress lady wearing black gloves"       - fine
+# The designer is told "everything belongs to one world", and it obliges by re-theming the
+# person to match the dungeon. Then the bestiary's family rules - built for monsters and
+# objects - treat her like one: "limbs thickened into fists", "fused into a towering mass of
+# overlapping limbs", "three stacked torsos". Its BOSS rule literally asks to "stack or fuse
+# several of it together", which on a person is body horror, and its FLYER rule asks for a
+# wing mechanism, which on a person is a huge wingspan the combat view has to shrink her to
+# fit (the "tiny flyer").
+#
+# So a person enemy keeps the typed words as the subject (no designer rewrite), and the
+# bestiary gets person-shaped role lines: one whole person each, told apart by build, outfit
+# and colour, the flyer levitating and the boss a grander version of the same person.
+#
+# Detected on the HEAD noun - the last word before the first joiner - so "Lady in the red
+# dress" is a lady, while "man-eating plant" is a plant and "ladybug" never matches at all.
+_PERSON_ENEMY_NOUNS = frozenset("""
+    lady ladies woman women man men girl girls boy boys guy guys gal gals dude dudes gentleman
+    gentlemen person people grandma grandpa granny grandmother grandfather businessman
+    businesswoman businessmen businesswomen policeman policewoman bride groom nun nuns
+    teenager teenagers kid kids child children mom dad mother father wife husband actor
+    actress actors singer celebrity
+""".split())
+_PERSON_HEAD_SPLIT = re.compile(
+    r"\b(?:in|with|from|of|wearing|who|that|dressed|holding|carrying|made|on|at)\b|[,(]", re.I)
+
+
+def _enemy_is_person(enemy_style):
+    """True when the typed enemy is a person, judged by its head noun. The chat family is NOT
+    one here even though its subject is ("young woman with a purple emoji speech bubble..."):
+    it has its own hand-tuned look (_CHAT_ENEMY_LOOK) and its own measured renders, and the
+    person role lines below were never tested against the bubble."""
+    text = (enemy_style or "").strip()
+    if not text or _CHAT_ENEMY_MARK in text.lower():
+        return False
+    words = re.findall(r"[a-z]+", _PERSON_HEAD_SPLIT.split(text, 1)[0].lower())
+    return bool(words) and words[-1] in _PERSON_ENEMY_NOUNS
+
+
+# Led onto every LOOK line of a person family - see _enemy_look_lead.
+_PERSON_ENEMY_LOOK = "one whole person seen from the top of the head down to the feet"
+
+
 def _enemy_look_lead(species, enemy_style):
     """Put this family's hand-tuned placement clause in FRONT of each designed LOOK line.
 
@@ -4249,7 +4399,19 @@ def _enemy_look_lead(species, enemy_style):
     reason to keep it if it did. Landing it here puts it in every variant and every pose
     frame, since all of them are built from these LOOK lines.
 
+    A PERSON enemy (_enemy_is_person) gets _PERSON_ENEMY_LOOK the same way, for the chest-up
+    bust reason written up on _CHAT_ENEMY_LOOK: "fill the frame" on a tall standing figure is
+    licence to crop in, and a lady cut off at the waist is drawn at the idle's scale as a
+    giant pair of legs.
+
     Returns `species` unchanged for every other theme."""
+    if species and _enemy_is_person(enemy_style):
+        for v in species.values():
+            look = (v.get("look") or "").strip().rstrip(".").strip()
+            if look:
+                v["look"] = f"{_PERSON_ENEMY_LOOK}: {_theme_inline(look)}"
+        print(f"[species] led all {len(species)} LOOK lines with the head-to-feet framing")
+        return species
     if not species or _CHAT_ENEMY_MARK not in (enemy_style or "").lower():
         return species
     for v in species.values():
@@ -4676,7 +4838,7 @@ def identify_names(items):
         return [{"type": None, "known": False, "seen": None} for _ in items]
 
 
-def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style):
+def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pictures=None):
     """Parse every quoted proper name across the four typed fields and resolve what kind of
     thing each one is. Never raises - a resolution failure just leaves that field's entity
     without a kind, which _named_style_text already treats as 'no name resolved', i.e. today's
@@ -4684,12 +4846,22 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style):
 
     Returns {"wall": entity|None, "player": entity|None, "weapon": entity|None,
     "enemy": entity|None, "text": {field: rewritten str}, "clean": {field: quotes-stripped
-    str}}. The FIRST entity in a field is what every single-value consumer uses (the bucket
-    bypass, the landmark slot, the boss name) - a second name in the same field still gets
-    spliced into `text`/`clean` correctly, it just isn't what titles the boss."""
+    str}, "story": {field: str}}. The FIRST entity in a field is what every single-value
+    consumer uses (the bucket bypass, the landmark slot, the boss name) - a second name in the
+    same field still gets spliced into `text`/`clean` correctly, it just isn't what titles the
+    boss.
+
+    `pictures` is describe_pictures()' reading of the lines that carried a reference picture.
+    On one of those the typed words are a NAME and never a description: the picture's LOOK
+    takes over `text`/`clean`, and the name rides on the entity (see _picture_entity). `story`
+    is `text` with those names put back, for the crawl - the one reader that should say a
+    weapon's name, and the only place a name can go without being painted (see the Reference
+    pictures section)."""
+    pictures = pictures or {}
     fields = {"wall": wall_style, "player": player_style,
               "weapon": weapon_style, "enemy": enemy_style}
-    parsed = {k: parse_named_styles(v) for k, v in fields.items()}
+    # A pictured line holds a name, which is never parsed for quotes - the name IS the whole line.
+    parsed = {k: ([] if k in pictures else parse_named_styles(v)) for k, v in fields.items()}
 
     pending = [(k, i) for k, ents in parsed.items() for i, e in enumerate(ents) if not e["kind"]]
     if pending:
@@ -4711,18 +4883,435 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style):
                 if kind:
                     ent["kind"], ent["source"] = kind, source
 
-    text, clean = {}, {}
+    text, clean, story = {}, {}, {}
     for k, v in fields.items():
+        if k in pictures:
+            look = pictures[k].get("look") or _PICTURE_FALLBACK_LOOK[k]
+            name = _picture_name(v)
+            text[k] = clean[k] = look
+            story[k] = f"{look}, called {name}" if (name and look) else (name or look)
+            continue
         text[k] = _apply_named_splices(v or "", parsed[k])
         clean[k] = _apply_named_splices_clean(v or "", parsed[k])
+        story[k] = text[k]
 
     out = {k: (parsed[k][0] if parsed[k] else None) for k in fields}
-    out["text"], out["clean"] = text, clean
+    for k in pictures:
+        if k in fields:
+            out[k] = _picture_entity(k, fields[k], pictures[k])
+    out["text"], out["clean"], out["story"] = text, clean, story
     for k in fields:
-        if out[k]:
+        if out[k] and out[k].get("name"):
             print(f"[names] {k}: \"{out[k]['raw']}\" -> {out[k].get('kind') or '(unresolved)'}"
                   f"{' (known)' if out[k].get('known') else ''} [{out[k].get('source')}]")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Reference pictures: one attached picture per mad-lib line, and what it turns into.
+# ---------------------------------------------------------------------------
+# Any of the four lines can carry a picture. The picture is what the thing LOOKS like; whatever
+# is typed on that line is what it is CALLED - the menu relabels the line NAME while a picture is
+# on it. Nothing that draws can take a picture as input (krea2 has no IPAdapter or ControlNet,
+# FLUX schnell paints the walls from text), so Qwen3-VL - already loaded as krea2's text
+# encoder - looks at it once and writes it down: KIND, one noun for what it is, and LOOK, a line
+# an artist could draw from. LOOK then stands in for that line's typed words everywhere the art
+# and the sound read them, and the typed name rides on a resolve_named_styles entity - the same
+# road a "quoted" name takes to the hero, the boss, the location and the door sign.
+#
+# The name stays OUT of every image prompt. At cfg 1.0 every word is drawn: a sword called
+# "The Beast" on a krea2 prompt comes back as a beast (the same trap as "stick of ram" drawing a
+# sheep). Only the crawl hears it, through resolve_named_styles' "story" text.
+PICTURE_SLOTS = ("wall", "player", "weapon", "enemy")
+PICTURE_MAX_TOKENS = 120
+PICTURE_TEMPERATURE = 0.5
+PICTURE_LOOK_MAX_WORDS = 36
+# Saved beside a History run so its Prompts button can put the picture back - see
+# save_dungeon_session. Never in export_showcase's session_files: a player's photo of themself
+# has no business in a public export.
+PICTURE_FILENAME = "picture_{}.jpg"
+
+PICTURE_SYSTEM = (
+    "You are the art director for a 1990s dungeon crawler. A player has attached a reference "
+    "picture, and you write down what is in it so an artist can draw it. You never explain "
+    "yourself and you never break format."
+)
+
+# What each line's picture is for, and what its LOOK should cover. The player's leaves out
+# whatever they are holding: the weapon line draws that, and "holding a phone" in the hero's
+# LOOK puts a phone in the other hand of every one of the nine pose frames.
+_PICTURE_ROLES = {
+    "wall": ("the dungeon - the place its walls, floors and whole look are built from",
+             "the place: what its walls and floor are made of, their colours, and the things in it"),
+    "player": ("the hero the player plays as",
+               "the person or character alone, not the background, in order from top to bottom: "
+               "build, hair and face, then their top, then their legwear, then their shoes. "
+               "Leave out anything they are holding"),
+    "weapon": ("the weapon the hero fights with",
+               "the object alone, not the background: its shape, materials, colours and markings"),
+    "enemy": ("the enemy the dungeon is full of",
+              "the subject alone, not the background. For a person or creature go in order "
+              "from top to bottom: build, head and face, then its top or body, then its legs "
+              "or legwear, then its feet or shoes. For an object, its shape, materials, colours "
+              "and markings"),
+}
+
+_PICTURE_USER = """This picture shows {role}.
+
+Rules:
+1. KIND is ONE common noun for what the picture shows - "sword", "cat", "man", "subway station",
+   "forest". Never an adjective.
+2. LOOK is one line of 10 to 30 words describing {look}. Start it with the KIND word itself and
+   write it to follow the word "a", the way "cat with orange tabby fur, white paws and a red
+   collar" does. Say only what is really there.
+3. {where}
+
+Reply using EXACTLY these two labels, each on its own line. No preamble, no markdown, no
+commentary:
+
+KIND: <one common noun>
+LOOK: <one line>"""
+
+# Rule 3, per line. Measured on the first wording: every object and animal came back with where
+# it had been photographed - "resting on wood grain surface", "sitting on white sink edge" - and
+# a sprite prompt draws that too. The place is the one line where the setting IS the subject.
+_PICTURE_WHERE = {
+    "wall": "Describe the place itself, not any people or animals in it.",
+    "player": ("Say nothing about where they are or what is behind them. If the picture cuts "
+               "them off - only the head, or only down to the chest or waist - still describe "
+               "ALL of them down to the feet: give them legwear and shoes that suit the rest of "
+               "the outfit, and end the LOOK on them."),
+    "weapon": "Say nothing about where it is or what it is lying on.",
+    "enemy": ("Say nothing about where it is or what it is sitting on. If the picture cuts it "
+              "off - only the head, or only down to the chest or waist - still describe ALL of "
+              "it down to the feet: give it the legs, lower body and footwear that suit the "
+              "part you can see, and end the LOOK on them."),
+}
+# Why the cut-off rule above. A player attached a head-and-chest photo of a man as the enemy,
+# and the LOOK came back all upper body - "curly brown hair, black shirt, silver chain with a
+# blue pendant" - every word true, nothing below the chest. krea2 frames what it is told
+# about: the idle came out a chest-up bust on the walker, flyer AND boss, only the block
+# frame (whose clause names the feet) whole. Same lesson as the ARMS guard's note above
+# ENEMY_BLOCK_POSES: a description with no lower half gets drawn with no lower half.
+
+# The reply is begun on its first label, the way _NAMING_REPLY_START begins the naming call's -
+# a small model handed a blank reply opens with "Sure! Here is..." as often as not.
+_PICTURE_REPLY_START = "KIND:"
+
+# When the picture could not be read at all, the line is drawn from these instead of from the
+# typed words - which are a name, and would be drawn literally. "" hands the player, weapon and
+# enemy to their prompt builders' own defaults; the wall gets the menu's own default theme.
+_PICTURE_FALLBACK_LOOK = {"wall": "Windows 95", "player": "", "weapon": "", "enemy": ""}
+# Every named thing needs a kind before the boss and the location will take its name (see
+# generate_story_names), so an unread KIND still gets one. The hero takes a name without one.
+_PICTURE_FALLBACK_KIND = {"wall": "place", "player": None, "weapon": "weapon", "enemy": "creature"}
+
+_PICTURE_LABEL_RE = re.compile(r"^\s*(KIND|LOOK)\s*:\s*(.*)$", re.IGNORECASE)
+# Where a thing was photographed, which rule 3 asks the model to leave out and it sometimes
+# still writes: "...black eye sitting on white sink edge". Cut from the match to the end of its
+# clause - there is often no comma in front of it to split on. Never applied to the wall.
+# A pose on the subject's OWN body is not a setting: "standing on its hind legs" was cut to
+# "wearing a red robe and", which lost the feet the cut-off rule (_PICTURE_WHERE) asks for.
+_PICTURE_SETTING_RE = re.compile(
+    r"\b(?:resting|sitting|lying|laying|standing|placed|set|perched|propped|leaning|posed)"
+    r"\s+(?:on|in|against|atop|by|beside|next|near|under|in\s+front)\b"
+    r"(?!\s+(?:its|his|her|their|two|four|all|both|hind|tip-?toes?)\b)"
+    r"|\b(?:in|against)\s+(?:the|a)\s+background\b|\bin\s+the\s+distance\b", re.IGNORECASE)
+
+
+def _picture_look_finish(slot, kind, look):
+    """The two things the model was asked for and does not reliably do, done in code. Cut the
+    setting off (see _PICTURE_SETTING_RE). Then put the KIND back in front when LOOK never says
+    it: asked to describe a fly swatter it wrote "blue plastic with grid pattern, long handle" -
+    every word true, and krea2 would never draw a fly swatter from it. Same lesson as
+    krea2_species_prompt's re-anchoring of the typed noun: a describer writes the details and
+    drops the thing they are details of."""
+    if slot != "wall":
+        parts = []
+        for part in look.split(","):
+            m = _PICTURE_SETTING_RE.search(part)
+            part = (part[:m.start()] if m else part).strip()
+            if m:
+                part = re.sub(r"\s+(?:and|with|or)$", "", part, flags=re.IGNORECASE)
+            if part:
+                parts.append(part)
+        cut = ", ".join(parts)
+        if len(cut.split()) >= 2:
+            look = cut
+    if kind:
+        head = kind.split()[-1]
+        if not re.search(r"\b" + re.escape(head) + r"(?:e?s)?\b", look, re.IGNORECASE):
+            look = f"{kind}, {look}"
+    return look
+
+
+def _picture_prompt(slot):
+    """Same hand-built chat template as _naming_prompt - see _story_prompt for why - with the
+    picture spliced in the way _story_prompt splices the player's."""
+    role, look = _PICTURE_ROLES[slot]
+    return (
+        "<|im_start|>system\n" + PICTURE_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
+        + _PICTURE_USER.format(role=role, look=look, where=_PICTURE_WHERE[slot]) + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n" + _PICTURE_REPLY_START
+    )
+
+
+def parse_picture_reply(raw, slot=None):
+    """{"kind": str|None, "look": str|None} from a reply begun on _PICTURE_REPLY_START (put back
+    on the front here). LOOK loses a leading article - it is interpolated after "a" by every
+    prompt that reads a typed line - and any clause that says what the thing ISN'T, which krea2
+    would draw (see _strip_negations); then _picture_look_finish."""
+    got = {"kind": None, "look": None}
+    for line in _ascii_ify(_PICTURE_REPLY_START + (raw or "")).splitlines():
+        m = _PICTURE_LABEL_RE.match(line.strip().strip(_STORY_STRIP))
+        if not m or got[m.group(1).lower()]:
+            continue
+        value = re.sub(r"^(?:a|an|the)\s+", "", m.group(2).strip().strip(_STORY_STRIP),
+                       flags=re.IGNORECASE).rstrip(".,;:!").strip()
+        if m.group(1).upper() == "KIND":
+            if 1 <= len(value.split()) <= 3:
+                got["kind"] = value.lower()
+        else:
+            words = _strip_negations(value).split()[:PICTURE_LOOK_MAX_WORDS]
+            if len(words) >= 2:
+                got["look"] = " ".join(words).rstrip(".,;:!")
+    if got["look"]:
+        got["look"] = _picture_look_finish(slot, got["kind"], got["look"])
+    return got
+
+
+def _stage_picture(data_url, tag):
+    """Write one attached picture into ComfyUI's input folder for a LoadImage node, and return
+    the name it is under - or None, and the caller carries on without it."""
+    try:
+        name = f"{tag}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+        with open(os.path.join(COMFY_INPUT_DIR, name), "wb") as f:
+            f.write(base64.b64decode(data_url.split(",", 1)[-1]))
+        return name
+    except Exception as e:
+        print(f"[pictures] could not stage the {tag} picture ({e})")
+        return None
+
+
+# The follow-up for a player or enemy LOOK that stops above the waist. Wording alone did not
+# get the lower half reliably: the top-to-bottom order in _PICTURE_ROLES and the cut-off rule in
+# _PICTURE_WHERE lifted it on the player to 11 of 11, but the enemy - whose line has to cover
+# objects too, so can only ASK for legs conditionally - still came back waist-up on 1-2 of 3
+# reads of a chest-up photo and 3 of 3 of a head-only one. So when the LOOK names nothing below
+# the waist, one short call on the same picture asks for just that part - only for a KIND that
+# has legs (_PICTURE_LEGGED_KINDS), so a pendant keeps none.
+_PICTURE_LOWER_WORDS_RE = re.compile(
+    r"\b(?:pants|trousers|jeans|slacks|shorts|skirts?|dress|gown|leggings|tights|overalls|"
+    r"jumpsuit|legs?|knees?|thighs?|feet|foot|barefoot|shoes?|boots?|sneakers|trainers|sandals|"
+    r"heels|slippers|socks|paws?|hooves|hoofs?|talons|base|wheels?|tracks)\b", re.IGNORECASE)
+
+_PICTURE_LOWER_USER = """This picture shows {role}. An artist is drawing it from this description:
+
+{kind}: {look}
+
+The picture and the description both stop above the waist, but the artist has to draw ALL of it,
+down to the ground. Every person and every animal has legs even when the picture leaves them
+out, so INVENT them: write what it has from the waist down - trousers or a skirt and shoes, or
+legs and feet or paws - in 3 to 10 words, chosen to suit the rest of the description. Write
+NONE only for an object that never has legs at all, such as a sword, a lamp or a pendant.
+
+Reply using EXACTLY this one label. No preamble, no commentary:
+
+LOWER: <3 to 10 words, or NONE>"""
+
+_PICTURE_LOWER_START = "LOWER:"
+
+
+# Only a KIND in here gets the follow-up. The model cannot be trusted to say NONE for an object
+# itself: worded so that it stopped answering NONE for a man whose legs were out of frame, it
+# gave a close-up of a pendant "black trousers, sturdy boots" 3 of 3. So the call is made in
+# code, on KIND's head noun, and an unknown kind is left waist-up rather than risk legs on a lamp.
+_PICTURE_LEGGED_KINDS = _PERSON_ENEMY_NOUNS | frozenset("""
+    character creature monster figure humanoid hero heroine villain warrior knight wizard witch
+    soldier ninja pirate robot android cyborg alien zombie skeleton ghoul goblin orc troll elf
+    dwarf ogre demon devil vampire werewolf mascot doll clown
+    cat kitten kitty dog puppy pup bear cub fox wolf rabbit bunny hare mouse rat hamster squirrel
+    raccoon pig piglet cow bull calf horse pony donkey goat sheep lamb lion tiger leopard cheetah
+    panther monkey ape gorilla chimp chimpanzee frog toad duck duckling chicken chick hen rooster
+    bird owl penguin parrot dinosaur dragon lizard gecko panda koala kangaroo deer elephant
+    otter ferret hedgehog capybara meerkat sloth llama alpaca camel giraffe hippo rhino
+""".split())
+
+
+def _picture_legged_kind(kind):
+    words = re.findall(r"[a-z]+", (kind or "").lower())
+    if not words:
+        return False
+    head = words[-1]
+    return head in _PICTURE_LEGGED_KINDS or (head.endswith("s") and head[:-1] in _PICTURE_LEGGED_KINDS)
+
+
+def _picture_needs_lower(slot, kind, look):
+    return (slot in ("player", "enemy") and bool(look) and _picture_legged_kind(kind)
+            and not _PICTURE_LOWER_WORDS_RE.search(look))
+
+
+def _picture_lower_prompt(slot, kind, look):
+    role = _PICTURE_ROLES[slot][0]
+    return (
+        "<|im_start|>system\n" + PICTURE_SYSTEM + "<|im_end|>\n"
+        "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
+        + _PICTURE_LOWER_USER.format(role=role, kind=kind or "subject", look=look)
+        + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n" + _PICTURE_LOWER_START
+    )
+
+
+def parse_picture_lower(raw):
+    """The waist-down words from a _PICTURE_LOWER_USER reply, or None for NONE / an unusable
+    reply. Only what names a lower half is kept, so a reply that wandered off the question
+    adds nothing to the LOOK."""
+    text = _ascii_ify(_PICTURE_LOWER_START + (raw or "")).strip().splitlines()[0]
+    value = re.sub(r"^\s*LOWER\s*:\s*", "", text, flags=re.IGNORECASE)
+    value = re.sub(r"^(?:and|with)\s+", "", value.strip().strip(_STORY_STRIP),
+                   flags=re.IGNORECASE).rstrip(".,;:!").strip()
+    value = _strip_negations(value)
+    if not value or re.match(r"none\b", value, re.IGNORECASE):
+        return None
+    # "black pants, brown shoes, slight smile": keep the parts that are about the lower half.
+    parts = [p.strip() for p in value.split(",") if _PICTURE_LOWER_WORDS_RE.search(p)]
+    if not parts:
+        return None
+    return " ".join(", ".join(parts).split()[:12])
+
+
+def _describe_attempt(slot, image_name, prompt=None):
+    payload = {
+        # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+        "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                   "class_type": "CLIPLoader"},
+        "pic_img": {"inputs": {"image": image_name}, "class_type": "LoadImage"},
+        "pic_gen": {
+            "inputs": {
+                "clip": ["k_clip", 0],
+                "image": ["pic_img", 0],
+                "prompt": prompt or _picture_prompt(slot),
+                "max_length": PICTURE_MAX_TOKENS,
+                "sampling_mode": "on",
+                "sampling_mode.temperature": PICTURE_TEMPERATURE,
+                "sampling_mode.top_k": 64,
+                "sampling_mode.top_p": 0.95,
+                "sampling_mode.min_p": 0.05,
+                "sampling_mode.repetition_penalty": 1.05,
+                "sampling_mode.seed": random.randint(0, 2**32 - 1),
+                "thinking": False,
+                "use_default_template": False,
+            },
+            "class_type": "TextGenerate",
+        },
+        "pic_out": {"inputs": {"source": ["pic_gen", 0]}, "class_type": "PreviewAny"},
+    }
+    raw = _submit_and_collect_text(payload, "pic_out", job_key="pictures")
+    return raw if prompt else parse_picture_reply(raw, slot)
+
+
+def _picture_add_lower(slot, image_name, got):
+    """Finish a waist-up player/enemy LOOK with its lower half - see _PICTURE_LOWER_USER.
+    Leaves `got` as it was when the LOOK already has one, the answer is NONE, or the call fails."""
+    if not _picture_needs_lower(slot, got.get("kind"), got.get("look")):
+        return got
+    try:
+        lower = parse_picture_lower(_describe_attempt(
+            slot, image_name, prompt=_picture_lower_prompt(slot, got.get("kind"), got["look"])))
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[pictures Error] {slot} lower half: {e}")
+        return got
+    if lower:
+        print(f"[pictures] {slot}: waist-up LOOK finished with {lower!r}")
+        got = dict(got, look=f"{got['look']}, {lower}")
+    return got
+
+
+def describe_pictures(pictures):
+    """{slot: {"kind", "look"}} for every PICTURE_SLOTS line in `pictures` ({slot: data URL}).
+    Never raises except to cancel: a picture that could not be read comes back with both None,
+    which resolve_named_styles draws from _PICTURE_FALLBACK_LOOK instead - still named, just
+    not drawn like the picture. One retry on a fresh seed for a reply with no usable LOOK, and
+    one follow-up for a player/enemy LOOK that stops above the waist (_picture_add_lower)."""
+    slots = [s for s in PICTURE_SLOTS if (pictures or {}).get(s)]
+    if not slots:
+        return {}
+    PROGRESS.add_job("pictures", "Studying your pictures with Qwen3-VL...",
+                     2 * len(slots), PICTURE_MAX_TOKENS * len(slots))
+    out = {}
+    t0 = time.time()
+    for slot in slots:
+        got = {"kind": None, "look": None}
+        image_name = _stage_picture(pictures[slot], f"picture_{slot}")
+        for _ in range(2 if image_name else 0):
+            try:
+                got = _describe_attempt(slot, image_name)
+            except GenerationCancelled:
+                raise
+            except Exception as e:
+                print(f"[pictures Error] {slot}: {e}")
+                break
+            if got["look"]:
+                break
+        if image_name and got["look"]:
+            got = _picture_add_lower(slot, image_name, got)
+        out[slot] = got
+        print(f"[pictures] {slot}: {got['kind'] or '(no kind)'} - {got['look'] or '(unread)'}")
+    PROGRESS.finish_job("pictures")
+    print(f"[pictures] {len(slots)} picture(s) read in {time.time()-t0:.1f}s")
+    return out
+
+
+def _picture_name(typed):
+    """The name typed on a pictured line, the way parse_named_styles capitalises a quoted one -
+    quote marks dropped, since the whole line is the name. "" when nothing was typed."""
+    words = _ascii_ify((typed or "").replace('"', " ")).split()
+    return " ".join(w[:1].upper() + w[1:] for w in words)
+
+
+def _picture_entity(slot, typed, pic):
+    """The resolve_named_styles entity for a pictured line, or None.
+
+    Named: an entity like a quoted name's, with the picture's KIND as its kind - so the hero,
+    the boss and the location take the name, and a named wall gets its door sign. Unnamed: None,
+    and the story names the thing itself - except on the WALL, which still gets a nameless,
+    kindless entity. That is only for _theme_bucket, which sends any wall with an entity down
+    the designed path: the buckets are keyword matches, and a LOOK that happens to say "forest"
+    would otherwise be drawn as the stock forest instead of the one in the picture. Nothing that
+    reads an entity's name does so without a kind (_door_sign, _theme_brief_surfaces,
+    generate_story_names, parse_story_block)."""
+    name = _picture_name(typed)
+    base = {"source": "picture", "known": False, "landmarks": None, "span": None}
+    if name:
+        return dict(base, raw=(typed or "").strip(), name=name,
+                    kind=pic.get("kind") or _PICTURE_FALLBACK_KIND[slot])
+    if slot == "wall" and pic.get("look"):
+        return dict(base, raw="", name=None, kind=None)
+    return None
+
+
+def _save_session_pictures(folder, pictures):
+    """Write each attached picture beside a saved run as PICTURE_FILENAME. Re-encoded rather than
+    copied, so what lands on disk is a plain JPEG whatever the page sent. Returns the slots that
+    were written."""
+    saved = []
+    for slot in PICTURE_SLOTS:
+        data_url = (pictures or {}).get(slot)
+        if not data_url:
+            continue
+        try:
+            img = Image.open(io.BytesIO(base64.b64decode(data_url.split(",", 1)[-1])))
+            img.convert("RGB").save(os.path.join(folder, PICTURE_FILENAME.format(slot)),
+                                    "JPEG", quality=90)
+            saved.append(slot)
+        except Exception as e:
+            print(f"[history] the {slot} picture was not saved with the run ({e})")
+    return saved
 
 
 THEME_BRIEF_SYSTEM = (
@@ -5006,6 +5595,10 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # the reliability numbers here were measured on, and dropping a label off the short shape
     # to save a line the designer answers well enough is not worth re-measuring.
     literal = None if (enemy_named and enemy_named.get("kind")) else _enemy_literal(enemy_style)
+    # A typed PERSON is kept exactly as typed - the designer re-themes people to match the
+    # dungeon and that is how "Lady in the red dress" became a red robot (see _enemy_is_person).
+    if literal is None and _enemy_is_person(enemy_style):
+        literal = _theme_inline(enemy_style.strip())
 
     def _attempt():
         payload = {
@@ -8272,9 +8865,20 @@ ENEMY_MIN_FILL = 0.55
 # (RAM stick spanning the full height), 0.367 (boss dog's feet planted on the bottom edge).
 # 0.60 clears every legitimate case while a genuinely chopped subject leaves a long flat run.
 ENEMY_MAX_BORDER = 0.60
+# The same test, tighter, for the BOTTOM edge of a PERSON (_enemy_is_person). 0.60 was set on
+# monsters and RAM sticks, and it passed a "Lady in the red dress" walker cut off at mid-thigh
+# at 0.56 - a three-quarter shot drawn at the idle's scale as a legless giant (2026-09-23).
+# Measured on 32 healthy lady frames: feet/hem on the bottom row cover 0.00-0.11 for the walker
+# and flyer, and up to 0.35 for the boss, whose floor-length ball gown sweeps the edge.
+ENEMY_PERSON_FEET_MAX = {"walker": 0.25, "flyer": 0.25, "boss": 0.45}
 
 
-def _enemy_frame_problem(img_path, thresh=50):
+def _person_feet_max(enemy_style, variant):
+    """The bottom-edge bound for this foe, or None when it is not a person."""
+    return ENEMY_PERSON_FEET_MAX.get(variant) if _enemy_is_person(enemy_style) else None
+
+
+def _enemy_frame_problem(img_path, thresh=50, feet_max=None):
     """Judge a background-removed enemy frame. Returns None when it is fine, otherwise a
     short reason string ('too small' / 'clipped' / 'empty') for the regen path to log and act
     on. Deliberately two-sided: the failure that actually bites is the subject coming out
@@ -8295,6 +8899,8 @@ def _enemy_frame_problem(img_path, thresh=50):
                     alpha[:, 0].mean(), alpha[:, -1].mean())
         if worst > ENEMY_MAX_BORDER:
             return f"clipped ({worst:.0%} of one border is solid)"
+        if feet_max is not None and alpha[-1, :].mean() > feet_max:
+            return f"clipped (legs run off the bottom edge, {alpha[-1, :].mean():.0%} solid)"
         return None
     except Exception as e:
         print(f"[Enemy Frame Check Error] {os.path.basename(img_path)}: {e}")
@@ -8320,7 +8926,7 @@ def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="wa
                           size, size, steps, random.randint(1, 1000000000), prefix)
         last = _krea2_submit_and_collect(payload, ["enemy"])["enemy"]
         keep_largest_figure(last, thresh=50)
-        problem = _enemy_frame_problem(last)
+        problem = _enemy_frame_problem(last, feet_max=_person_feet_max(enemy_style, variant))
         if problem is None:
             print(f"[krea2] {variant} enemy regen attempt {i + 1} is clean")
             return last
@@ -8344,7 +8950,7 @@ def _krea2_regen_pose_frame(look, enemy_style, guard, pose, seed, size, steps, p
     _krea2_add_branch(payload, "pose", prompt_text, size, size, steps, seed, prefix)
     fp = _krea2_submit_and_collect(payload, ["pose"])["pose"]
     keep_largest_figure(fp, thresh=50)
-    problem = _enemy_frame_problem(fp)
+    problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, variant))
     print(f"[krea2] {variant} {pose} reframe at a wider margin is "
           f"{problem or 'clean'}")
     return None if problem else fp
@@ -8678,7 +9284,7 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
             if not fp:
                 continue
             keep_largest_figure(fp, thresh=50)
-            problem = _enemy_frame_problem(fp)
+            problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, v))
             if problem and f == "idle":
                 print(f"[krea2] {prefix} {v} idle enemy is {problem} - regenerating it alone")
                 look = species[v]["look"] if species else None
@@ -9061,7 +9667,7 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       steps=KREA2_STEPS_DEFAULT, player_image=None,
                       sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT,
-                      last_attack_frame=False, ending_video="off"):
+                      last_attack_frame=False, ending_video="off", pictures=None):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model.
@@ -9077,9 +9683,12 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     frame version 2.
     ending_video is the Options pair of that name, resolved by the request handler: "off",
     "loading" (the cutscene is filmed here, as the run's last stage) or "background" (the run is
-    saved without it and start_ending_video_job films it while the player plays)."""
+    saved without it and start_ending_video_job films it while the player plays).
+    pictures is {slot: data URL} for each mad-lib line the player attached a reference picture
+    to - on those lines the typed words are its name. See the Reference pictures section."""
     global gen_progress
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
+    pictures = {s: pictures[s] for s in PICTURE_SLOTS if (pictures or {}).get(s)}
     gen_progress["is_generating"] = True
     gen_progress["completed_bundle"] = None
     gen_progress["error"] = None
@@ -9098,8 +9707,12 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         # cat) changes what the set designer is asked for (want_surfaces below) and what every
         # LLM call downstream is fed, so nothing else can run ahead of it. See
         # resolve_named_styles; on any failure `named` degrades to all-None and every one of
-        # its fields below is just the raw typed word again - today's behaviour.
-        named = resolve_named_styles(wall_style, player_style, weapon_style, enemy_style)
+        # its fields below is just the raw typed word again - today's behaviour. An attached
+        # picture is read before that, because on its line the typed words are a name and the
+        # picture's LOOK is what every later step draws.
+        looks = describe_pictures(pictures)
+        named = resolve_named_styles(wall_style, player_style, weapon_style, enemy_style,
+                                     pictures=looks)
 
         # THE SET DESIGNER RUNS FIRST - everything downstream wants its output. When the typed
         # theme matches one of the hand-tuned keyword buckets those surface prompts are
@@ -9108,7 +9721,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         # quoted wall name always takes this path too - see _theme_bucket.
         brief = generate_theme_brief(named["text"]["wall"], named["text"]["weapon"],
                                      named["text"]["enemy"],
-                                     want_surfaces=(_theme_bucket(wall_style, named["wall"]) is None),
+                                     want_surfaces=(_theme_bucket(named["text"]["wall"], named["wall"]) is None),
                                      wall_named=named["wall"], enemy_named=named["enemy"])
 
         # The story is published on its own, minutes ahead of the bundle, so the frontend can
@@ -9116,10 +9729,11 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         # words as much as possible - prose generation, where an abstract theme is no handicap
         # - but takes the same named-entity rewrite as everything else, so a literal quote mark
         # never reaches this call either, and a quoted field names the location/hero/boss
-        # outright (see parse_story_block).
+        # outright (see parse_story_block). The "story" text is "text" plus the names typed
+        # beside a picture, which is how a named weapon gets called by its name.
         gen_progress["current_step"] = 1
-        story = generate_intro_story(named["text"]["wall"], named["text"]["player"],
-                                     named["text"]["weapon"], named["text"]["enemy"],
+        story = generate_intro_story(named["story"]["wall"], named["story"]["player"],
+                                     named["story"]["weapon"], named["story"]["enemy"],
                                      player_image, named=named)
         gen_progress["story"] = story
 
@@ -9178,12 +9792,17 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # 2 when the Last Attack Frame option was on for this run, so the foes below carry
             # a "strike" frame; 1 otherwise. Read back by save_dungeon_session for History.
             "frame_version": FRAME_VERSION_STRIKE if last_attack_frame else FRAME_VERSION_BASE,
-            "wall_style": wall_style,
+            # game.js picks the victory track and tints the textures from this. Beside a
+            # picture the typed words are only a name, so the picture's LOOK stands in.
+            "wall_style": named["text"]["wall"] if "wall" in looks else wall_style,
             # What the set designer resolved the typed words into, or None if it was
             # skipped or failed. Kept so a bad render can be diagnosed from the saved
             # session alone - the raw typed words are on the meta, but they are not
             # what actually got drawn.
             "theme_brief": brief,
+            # What Qwen3-VL read each attached picture as ({slot: {kind, look}}), or None when
+            # nothing was attached - diagnosis, same as theme_brief.
+            "picture_looks": looks or None,
             # What each quoted proper name (resolve_named_styles) resolved to - None-valued
             # entries and all, so a saved session can be diagnosed the same way theme_brief
             # already is. None when nothing in any field was quoted.
@@ -9227,7 +9846,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         # from the in-game quit menu, which is just a history_delete for this id.
         history_id = save_dungeon_session(gen_progress["completed_bundle"],
                              wall_style, player_style, weapon_style, enemy_style,
-                             sound_mode, ending_video_path=ending_path)
+                             sound_mode, ending_video_path=ending_path, pictures=pictures)
         gen_progress["completed_bundle"]["history_id"] = history_id
         # Background mode starts filming the moment the run is on disk - while the player is
         # still reading the crawl, which is free time the render would otherwise not get.
@@ -9619,11 +10238,13 @@ def start_card_backfill():
 
 
 def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_style,
-                         sound_mode="music_and_sound", ending_video_path=None):
+                         sound_mode="music_and_sound", ending_video_path=None, pictures=None):
     """Persist a finished bundle under dungeon_sessions/. Returns the new id, or None if
     anything went wrong - a history save must never turn a good run into a failed one.
     `ending_video_path` is the cutscene render_ending_video filmed during the run, if any; it
-    is copied in beside the bundle as ENDING_FILENAME."""
+    is copied in beside the bundle as ENDING_FILENAME. `pictures` is the run's attached
+    reference pictures ({slot: data URL}), kept as PICTURE_FILENAME files so History's Prompts
+    can put them back on the menu with the names typed beside them."""
     if not bundle:
         return None
     session_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -9646,6 +10267,8 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             except Exception as e:
                 # The run is still worth keeping - it just ends at the stairs.
                 print(f"[history] ending cutscene not saved with the run ({e})")
+        saved_pictures = _save_session_pictures(folder, pictures)
+        picture_looks = bundle.get("picture_looks") or {}
 
         story = bundle.get("story") or {}
         meta = {
@@ -9681,6 +10304,12 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             # What each quoted proper name resolved to, or None. Sessions saved before this
             # existed have neither key, same convention as theme_brief above.
             "named_styles": bundle.get("named_styles"),
+            # {slot: {kind, look}} for each line that had a reference picture, and whether the
+            # picture itself is on disk beside the run - the _style fields above are only NAMES
+            # on those lines. Sessions saved before pictures were read have no key.
+            "pictures": {slot: dict(picture_looks.get(slot) or {}, saved=slot in saved_pictures)
+                         for slot in PICTURE_SLOTS
+                         if slot in picture_looks or slot in saved_pictures} or None,
             "location": story.get("location", ""),
             "hero": story.get("hero", ""),
             "foe": story.get("foe", ""),
@@ -11157,6 +11786,28 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        # A reference picture a saved run was made with - History's Prompts button puts it back
+        # on its mad-lib line (see save_dungeon_session). `slot` is checked against
+        # PICTURE_SLOTS, never joined into a path as given.
+        elif urllib.parse.urlparse(self.path).path == "/api/history_picture":
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            folder = _session_dir(params.get("id", [""])[0])
+            slot = params.get("slot", [""])[0]
+            path = (os.path.join(folder, PICTURE_FILENAME.format(slot))
+                    if folder and slot in PICTURE_SLOTS else None)
+            if path and os.path.exists(path):
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(os.path.getsize(path)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(path, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+                return
+            self.send_response(404)
+            self.end_headers()
+            return
+
         # Where a run's ending cutscene stands - polled by game.js while a background render is
         # filming, and asked once on entry to learn whether a clip is already there.
         elif urllib.parse.urlparse(self.path).path == "/api/ending_video_status":
@@ -11419,9 +12070,15 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 data = json.loads(body)
                 wall_style = data.get("wall_style", "Windows 95")
                 player_style = data.get("player_style", "")
-                player_image = data.get("player_image", None)
                 weapon_style = data.get("weapon_style", "")
                 enemy_style = data.get("enemy_style", "")
+                # One reference picture per mad-lib line, as a data URL - on a line that has
+                # one, its _style above is the thing's NAME (see the Reference pictures
+                # section). The player's also still goes to the story call as it always has.
+                pictures = {s: data.get(f"{s}_image") for s in PICTURE_SLOTS}
+                pictures = {s: v for s, v in pictures.items()
+                            if isinstance(v, str) and v.startswith("data:image/")}
+                player_image = pictures.get("player")
                 mode = data.get("mode", "v3_flux")
                 # v6-only; v5/v3/v4 ignore this. Matches the setup screen's default option.
                 sound_mode = data.get("sound_mode", "music_and_sound")
@@ -11486,14 +12143,16 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                          kwargs={"player_image": player_image, "sound_mode": sound_mode,
                                                  "gfx": gfx, "gfx_name": graphics_quality,
                                                  "last_attack_frame": last_attack_frame,
-                                                 "ending_video": ending_video},
+                                                 "ending_video": ending_video,
+                                                 "pictures": pictures},
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,
                                          args=(wall_style, player_style, player_image, mode, weapon_style, enemy_style),
                                          daemon=True)
                 print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx} "
-                      f"last_attack_frame={last_attack_frame} ending_video={ending_video}")
+                      f"last_attack_frame={last_attack_frame} ending_video={ending_video} "
+                      f"pictures={sorted(pictures) or 'none'}")
                 t.start()
                 GEN_THREAD = t
                 return

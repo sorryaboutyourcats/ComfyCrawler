@@ -365,7 +365,9 @@ ck("Manhattan, the real city" in named_prompt, "the rewritten theme line did not
 # the short (bucketed) shape is unreachable when a wall name is present - _theme_bucket always
 # returns None for a named entity, and run_batch_v6_krea's want_surfaces is derived from it.
 v6_src = inspect.getsource(srv.run_batch_v6_krea)
-ck('want_surfaces=(_theme_bucket(wall_style, named["wall"]) is None)' in v6_src,
+# named["text"]["wall"], not the raw wall_style: identical for typed words (quotes aside, which
+# bypass the bucket anyway), but on a pictured wall the raw field is only the dungeon's NAME.
+ck('want_surfaces=(_theme_bucket(named["text"]["wall"], named["wall"]) is None)' in v6_src,
    "run_batch_v6_krea no longer derives want_surfaces from the named-aware bucket dispatcher")
 
 print("FAIL" if fails else "all set-designer checks passed")

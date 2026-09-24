@@ -1382,7 +1382,11 @@
        At rest every transform here resolves to the identity - --par-x is 0 and both scales are
        1 - which is deliberate, and the reason the scales are variables rather than constants:
        an over-scaled layer would mean the tile visibly jumped the moment these two loaded. The
-       zoom is something hovering does, not something arriving does. */
+       zoom is something hovering does, not something arriving does.
+
+       .par-scene is the thing being leaned over: what the pointer hovers, what a held finger
+       marks .is-held, and what holds the perspective. A gallery tile is one; the picture on a
+       shared link's box (#sharedRunScene) is the other. */
     .hist-tile__bg,
     .hist-tile__hero {
       opacity: 0;
@@ -1399,7 +1403,7 @@
       transform: scale(var(--bg-scale))
                  translate3d(calc(var(--par-x, 0) * -8px), calc(var(--par-y, 0) * -6px), 0);
     }
-    .hist-tile.is-held .hist-tile__bg { --bg-scale: 1.16; }
+    .par-scene.is-held .hist-tile__bg { --bg-scale: 1.16; }
 
     /* The hero goes WITH the cursor and goes far - the near thing, and the one the eye is on.
        transform-origin at the floor line because their feet are planted on the bottom edge of
@@ -1414,13 +1418,13 @@
                  translate3d(calc(var(--par-x, 0) * 20px), calc(var(--par-y, 0) * 12px), 0);
       filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
     }
-    .hist-tile.is-held .hist-tile__hero { --hero-scale: 1.06; }
+    .par-scene.is-held .hist-tile__hero { --hero-scale: 1.06; }
     /* The same zoom for the mouse, but only where hovering is real. A phone's :hover sticks to
        whatever was last tapped, so without the gate a tapped tile would sit there zoomed in
        long after the finger was gone; a held finger sets .is-held above instead. */
     @media (hover: hover) {
-      .hist-tile:hover .hist-tile__bg { --bg-scale: 1.16; }
-      .hist-tile:hover .hist-tile__hero { --hero-scale: 1.06; }
+      .par-scene:hover .hist-tile__bg { --bg-scale: 1.16; }
+      .par-scene:hover .hist-tile__hero { --hero-scale: 1.06; }
     }
 
     /* And the picture itself turns toward the cursor, on the perspective the tile provides.
@@ -1430,7 +1434,7 @@
        the grid-area note below) - so the buttons stay square to the screen while the picture
        behind them turns. That is on purpose: they are controls, and a tilted button is a worse
        thing to hit than a flat one. */
-    .hist-tile { perspective: 600px; }
+    .par-scene { perspective: 600px; }
     .hist-tile__art.is-parallax {
       transition: transform 90ms ease-out;
       transform: rotateY(calc(var(--par-x, 0) * 5deg)) rotateX(calc(var(--par-y, 0) * -5deg));
@@ -1439,12 +1443,12 @@
     /* Only the tile under the cursor gets its layers promoted. A grid of thirty tiles is sixty
        full-size pictures, and promoting all of them up front costs more video memory than the
        window is worth - only one of them can be moving at a time. */
-    .hist-tile:hover .hist-tile__bg,
-    .hist-tile:hover .hist-tile__hero,
-    .hist-tile:hover .hist-tile__art.is-parallax,
-    .hist-tile.is-held .hist-tile__bg,
-    .hist-tile.is-held .hist-tile__hero,
-    .hist-tile.is-held .hist-tile__art.is-parallax { will-change: transform; }
+    .par-scene:hover .hist-tile__bg,
+    .par-scene:hover .hist-tile__hero,
+    .par-scene:hover .hist-tile__art.is-parallax,
+    .par-scene.is-held .hist-tile__bg,
+    .par-scene.is-held .hist-tile__hero,
+    .par-scene.is-held .hist-tile__art.is-parallax { will-change: transform; }
 
     /* Coming to rest. game.js drops .is-parallax-live when the pointer leaves, which lands the
        transitions on a longer ease than the one they track the cursor with - so letting go of a
@@ -1469,6 +1473,19 @@
       user-select: none;
     }
     .hist-tile__art img { -webkit-user-drag: none; }
+
+    /* The shared link's box (#modalSharedRun) shows the run's card at the top, with the same
+       lean as a gallery tile. The padding is the room a tile's own 3px gives the picture to
+       turn in without its near edge running over the frame. The width is whatever still lets
+       the whole box fit the window's height - the title, names and buttons need about 13rem
+       around the picture - so a phone held sideways gets a smaller card, not a box whose
+       Play button falls off the bottom of the screen. vh first for browsers without dvh. */
+    #sharedRunScene {
+      padding: 3px;
+      width: min(100%, calc((100vh - 13rem) * 4 / 3));
+      width: min(100%, calc((100dvh - 13rem) * 4 / 3));
+      min-width: 9rem;
+    }
 
     /* Hovering (or arrowing onto) a tile brings up its three actions over the picture: play it,
        star it, watch or film its ending. They are always in the DOM and only faded out, never
@@ -1793,6 +1810,20 @@
     .quick-ideas-list { display: contents; }
     .quick-ideas-hint { display: none; }
 
+    /* A mad-lib line's picture button: 🖼️ until the line has a picture, then that picture's own
+       thumbnail (setSlotPicture in game.js toggles .has-picture). It shares a centring
+       .madlib-pics wrapper with the ✕ beside it because a thumbnail moves the button's baseline
+       to the image's bottom edge - lined up by baseline with the line, the ✕ sat 8px low. */
+    .madlib-attach .attach-thumb {
+      display: none;
+      width: 1.25rem;
+      height: 1.25rem;
+      object-fit: cover;
+      border: 1px solid #000;
+    }
+    .madlib-attach.has-picture .attach-thumb { display: block; }
+    .madlib-attach.has-picture .attach-icon { display: none; }
+
     /* ---- Setup screen on a phone ------------------------------------------------------------
        The main menu was laid out for a desktop window and simply wrapped at phone width, and
        where each thing wrapped to depended on how long its words happened to be: STYLE's blank
@@ -1884,8 +1915,17 @@
         font-size: 1.125rem;
       }
       #screenSetup .madlib-attach .attach-word { display: none; }
-      /* An attached picture's badge covers the blank; a thumbnail as big as it will hold. */
-      #screenSetup .madlib-field img { width: 1.75rem; height: 1.75rem; }
+      #screenSetup .madlib-pics { flex: none; }
+      /* An attached picture's thumbnail fills its button, as big as it will hold. */
+      #screenSetup .madlib-attach .attach-thumb { width: 1.75rem; height: 1.75rem; }
+      /* The ✕ that takes a picture off: as tall as the 🖼️ beside it for the thumb, narrower so
+         the blank keeps its room. No display here - the .hidden it starts with has to win. */
+      #screenSetup .madlib-detach {
+        flex: none;
+        width: 1.75rem;
+        height: 2.25rem;
+        padding: 0;
+      }
 
       /* Quick ideas: the label and 🎲 on a line of their own, and under them every idea in one
          row that scrolls sideways - nothing is trimmed away at this width, a swipe reaches the
@@ -2044,66 +2084,78 @@
       </div>
 
       <!-- Mad Libs Style Prompt Input. madlib-box / madlib-line / madlib-lead / madlib-field /
-           madlib-attach are hooks for the phone stylesheet only (see "Setup screen on a phone"
-           in the <style> block) - on a desktop-wide window they do nothing. -->
+           madlib-pics / madlib-attach / madlib-detach are hooks for the phone stylesheet (see
+           "Setup screen on a phone" in the <style> block); on a desktop-wide window only
+           madlib-attach's thumbnail swap does anything. -->
       <div class="madlib-box win95-box p-4 bg-[#faf9f5] border-2 border-slate-400 flex flex-col gap-4">
-        <!-- Line 1: Dungeon Style -->
+        <!-- Every line takes one reference picture as well as words. With a picture on it, the
+             line is in NAME mode: the picture is what the thing looks like, and whatever is typed
+             in the blank is what it is called - its small print (data-label) reads NAME until
+             the picture comes off. The 🖼️ button turns into the picture's thumbnail (a click
+             picks another) and a ✕ appears beside it. All of that is setSlotPicture in game.js;
+             the ids follow the convention pictureSlotEls reads. -->
+
+        <!-- Line 1: Dungeon Style / Picture -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
           <label for="wallPromptInput" class="madlib-lead font-bold whitespace-nowrap">The dungeon looks like</label>
 
           <div class="madlib-field inline-flex flex-col items-center flex-1 min-w-[200px]">
-            <input 
-              type="text" 
-              id="wallPromptInput" 
+            <input
+              type="text"
+              id="wallPromptInput"
               class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors"
-              value="" 
+              value=""
               placeholder='fill in style... or a "name in quotes"'
+              aria-describedby="wallPromptLabel"
             />
-            <span class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
+            <span id="wallPromptLabel" data-label="STYLE" class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
               STYLE
             </span>
           </div>
+
+          <input type="file" id="wallFileInput" accept="image/*" class="hidden" />
+
+          <!-- The word is its own span so a phone can drop it and keep the picture (see
+               .attach-word); aria-label names the button either way. -->
+          <span class="madlib-pics inline-flex items-center gap-1">
+            <button id="btnAttachWallImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" aria-label="Attach a dungeon picture">
+              <span class="attach-icon" aria-hidden="true">🖼️</span><img id="wallImageThumb" class="attach-thumb" src="" alt="" /><span class="attach-word">Attach</span>
+            </button>
+            <button id="btnClearWallImage" type="button" class="madlib-detach hidden win95-btn px-1.5 py-1 text-xs text-red-700 font-bold hover:bg-red-200" title="Take the picture off this line" aria-label="Remove the dungeon picture">✕</button>
+          </span>
         </div>
 
-        <!-- Line 2: Player Style / Upload -->
+        <!-- Line 2: Player Style / Picture -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
           <label for="playerPromptInput" class="madlib-lead font-bold whitespace-nowrap">The player is&nbsp;a</label>
 
           <div class="madlib-field inline-flex flex-1 min-w-[180px] relative items-center">
             <div class="w-full flex flex-col items-center">
-              <input 
-                type="text" 
-                id="playerPromptInput" 
-                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors disabled:opacity-40 disabled:bg-slate-200 disabled:cursor-not-allowed"
-                value="" 
+              <input
+                type="text"
+                id="playerPromptInput"
+                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors"
+                value=""
                 placeholder="fill in character..."
+                aria-describedby="playerPromptLabel"
               />
-              <span id="playerPromptLabel" class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
+              <span id="playerPromptLabel" data-label="CHARACTER" class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
                 CHARACTER
               </span>
             </div>
-
-            <!-- Selected Image Badge -->
-            <div id="playerImageBadge" class="hidden absolute inset-0 bg-yellow-100 border border-amber-500 rounded px-2 py-0.5 flex items-center justify-between text-xs text-slate-800 z-10">
-              <div class="flex items-center gap-1.5 truncate">
-                <img id="playerImageThumb" class="w-5 h-5 object-cover rounded border border-black pixelated" src="" alt="Player thumb" />
-                <span id="playerImageName" class="font-bold truncate text-xs">photo.png</span>
-              </div>
-              <button id="btnClearPlayerImage" type="button" class="win95-btn px-1.5 py-0 text-xs text-red-700 font-bold hover:bg-red-200" title="Remove image">✕</button>
-            </div>
           </div>
 
-          <!-- Hidden File Input -->
           <input type="file" id="playerFileInput" accept="image/*" class="hidden" />
 
-          <!-- Attach Image Button. The word is its own span so a phone can drop it and keep the
-               picture (see .attach-word); aria-label names the button either way. -->
-          <button id="btnAttachPlayerImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" title="Attach Player Photo / Image" aria-label="Attach a player image">
-            <span aria-hidden="true">🖼️</span><span class="attach-word">Attach</span>
-          </button>
+          <span class="madlib-pics inline-flex items-center gap-1">
+            <button id="btnAttachPlayerImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" aria-label="Attach a player picture">
+              <span class="attach-icon" aria-hidden="true">🖼️</span><img id="playerImageThumb" class="attach-thumb" src="" alt="" /><span class="attach-word">Attach</span>
+            </button>
+            <button id="btnClearPlayerImage" type="button" class="madlib-detach hidden win95-btn px-1.5 py-1 text-xs text-red-700 font-bold hover:bg-red-200" title="Take the picture off this line" aria-label="Remove the player picture">✕</button>
+          </span>
         </div>
 
-        <!-- Line 3: Weapon Style / Upload (reads on from the player line above) -->
+        <!-- Line 3: Weapon Style / Picture (reads on from the player line above) -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
           <label for="weaponPromptInput" class="madlib-lead font-bold whitespace-nowrap">...and their weapon is&nbsp;a</label>
 
@@ -2112,32 +2164,28 @@
               <input
                 type="text"
                 id="weaponPromptInput"
-                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors disabled:opacity-40 disabled:bg-slate-200 disabled:cursor-not-allowed"
+                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors"
                 value=""
                 placeholder="fill in weapon..."
+                aria-describedby="weaponPromptLabel"
               />
-              <span class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
+              <span id="weaponPromptLabel" data-label="WEAPON" class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
                 WEAPON
               </span>
-            </div>
-
-            <div id="weaponImageBadge" class="hidden absolute inset-0 bg-yellow-100 border border-amber-500 rounded px-2 py-0.5 flex items-center justify-between text-xs text-slate-800 z-10">
-              <div class="flex items-center gap-1.5 truncate">
-                <img id="weaponImageThumb" class="w-5 h-5 object-cover rounded border border-black pixelated" src="" alt="Weapon thumb" />
-                <span id="weaponImageName" class="font-bold truncate text-xs">weapon.png</span>
-              </div>
-              <button id="btnClearWeaponImage" type="button" class="win95-btn px-1.5 py-0 text-xs text-red-700 font-bold hover:bg-red-200" title="Remove image">✕</button>
             </div>
           </div>
 
           <input type="file" id="weaponFileInput" accept="image/*" class="hidden" />
 
-          <button id="btnAttachWeaponImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" title="Attach Weapon Image" aria-label="Attach a weapon image">
-            <span aria-hidden="true">🖼️</span><span class="attach-word">Attach</span>
-          </button>
+          <span class="madlib-pics inline-flex items-center gap-1">
+            <button id="btnAttachWeaponImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" aria-label="Attach a weapon picture">
+              <span class="attach-icon" aria-hidden="true">🖼️</span><img id="weaponImageThumb" class="attach-thumb" src="" alt="" /><span class="attach-word">Attach</span>
+            </button>
+            <button id="btnClearWeaponImage" type="button" class="madlib-detach hidden win95-btn px-1.5 py-1 text-xs text-red-700 font-bold hover:bg-red-200" title="Take the picture off this line" aria-label="Remove the weapon picture">✕</button>
+          </span>
         </div>
 
-        <!-- Line 4: Enemy Style / Upload -->
+        <!-- Line 4: Enemy Style / Picture -->
         <div class="madlib-line text-base md:text-lg text-slate-900 flex flex-wrap items-baseline gap-2">
           <label for="enemyPromptInput" class="madlib-lead font-bold whitespace-nowrap">The enemy is&nbsp;a</label>
 
@@ -2146,29 +2194,25 @@
               <input
                 type="text"
                 id="enemyPromptInput"
-                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors disabled:opacity-40 disabled:bg-slate-200 disabled:cursor-not-allowed"
+                class="w-full bg-transparent border-b-2 border-black text-blue-900 font-bold text-base md:text-xl px-2 py-0 text-center outline-none focus:border-blue-800 transition-colors"
                 value=""
                 placeholder='fill in enemy... or "Name" the cat'
+                aria-describedby="enemyPromptLabel"
               />
-              <span class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
+              <span id="enemyPromptLabel" data-label="ENEMY" class="text-[10px] font-sans font-black tracking-widest text-slate-500 uppercase mt-0.5 select-none">
                 ENEMY
               </span>
-            </div>
-
-            <div id="enemyImageBadge" class="hidden absolute inset-0 bg-yellow-100 border border-amber-500 rounded px-2 py-0.5 flex items-center justify-between text-xs text-slate-800 z-10">
-              <div class="flex items-center gap-1.5 truncate">
-                <img id="enemyImageThumb" class="w-5 h-5 object-cover rounded border border-black pixelated" src="" alt="Enemy thumb" />
-                <span id="enemyImageName" class="font-bold truncate text-xs">enemy.png</span>
-              </div>
-              <button id="btnClearEnemyImage" type="button" class="win95-btn px-1.5 py-0 text-xs text-red-700 font-bold hover:bg-red-200" title="Remove image">✕</button>
             </div>
           </div>
 
           <input type="file" id="enemyFileInput" accept="image/*" class="hidden" />
 
-          <button id="btnAttachEnemyImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" title="Attach Enemy Image" aria-label="Attach an enemy image">
-            <span aria-hidden="true">🖼️</span><span class="attach-word">Attach</span>
-          </button>
+          <span class="madlib-pics inline-flex items-center gap-1">
+            <button id="btnAttachEnemyImage" type="button" class="madlib-attach win95-btn px-2.5 py-1 text-xs text-black flex items-center gap-1 hover:bg-slate-300 active:translate-y-0.5" aria-label="Attach an enemy picture">
+              <span class="attach-icon" aria-hidden="true">🖼️</span><img id="enemyImageThumb" class="attach-thumb" src="" alt="" /><span class="attach-word">Attach</span>
+            </button>
+            <button id="btnClearEnemyImage" type="button" class="madlib-detach hidden win95-btn px-1.5 py-1 text-xs text-red-700 font-bold hover:bg-red-200" title="Take the picture off this line" aria-label="Remove the enemy picture">✕</button>
+          </span>
         </div>
 
         <!-- Quick Presets - game.js reshuffles these on every visit to the menu (Windows 95 pinned
@@ -2335,10 +2379,10 @@
 
           <span class="win95-sep self-stretch my-0.5" aria-hidden="true"></span>
 
-          <!-- Undo / Redo walk the mad-lib above as ONE document - all four fields plus the
-               three attached images - because that is how the menu edits it: a Quick idea
+          <!-- Undo / Redo walk the mad-lib above as ONE document - all four fields plus their
+               four attached pictures - because that is how the menu edits it: a Quick idea
                rewrites four fields at once, a History row's Prompts button does the same, and
-               attaching a photo blanks the field under it. A browser's own Ctrl+Z can't cover
+               attaching a picture blanks the field beside it. A browser's own Ctrl+Z can't cover
                any of that; it only ever knows the single field the caret is sitting in.
                Both ship disabled - game.js enables each one the moment there is a step for it
                to walk to, and keeps the depth in the tooltip. -->
@@ -3059,6 +3103,44 @@
       </div>
     </div>
 
+    <!-- SHARED RUN - what a showcase link with ?run=<id> opens onto (a row's 🔗 copies one).
+         A page opened from a link has had no click yet, so the browser would keep the story's
+         narration and music silent; this box's Play button is that click, and then walks the
+         same path as the row's ▶ Start. Filled in by openSharedRun() in game.js - every string
+         here came out of a language model, so it goes in through textContent. -->
+    <div id="modalSharedRun" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl max-h-[92vh] flex flex-col">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>🔗 You've been sent a dungeon</span>
+          <button id="btnCloseSharedRun" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" aria-label="Close">✕</button>
+        </div>
+
+        <div id="sharedRunFound" class="px-3 flex flex-col items-center gap-2">
+          <!-- The same leaning picture a gallery tile has - openSharedRun fills #sharedRunArt
+               with the card and its two parallax layers. See #sharedRunScene in the style. -->
+          <div id="sharedRunScene" class="par-scene win95-inset">
+            <div id="sharedRunArt" class="hist-tile__art"></div>
+          </div>
+          <div class="w-full text-center">
+            <div id="sharedRunTitle" class="text-sm font-black text-slate-900 truncate"></div>
+            <div id="sharedRunCast" class="text-[11px] font-bold text-blue-900 truncate"></div>
+          </div>
+        </div>
+        <p id="sharedRunMissing" class="px-3 py-4 text-xs font-bold text-slate-700 text-center hidden">
+          That dungeon isn't in this showcase &ndash; it may have been taken down. Here are the ones that are.
+        </p>
+
+        <div class="px-3 pt-3 pb-3 flex justify-end gap-2">
+          <button id="btnSharedRunBrowse" class="win95-btn px-3 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
+            Browse all dungeons
+          </button>
+          <button id="btnSharedRunPlay" class="win95-btn px-5 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold">
+            ▶ PLAY
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- HISTORY MODAL DIALOG -->
     <!-- Every finished dungeon is kept server-side under dungeon_sessions/. This window
          lists them (server: /api/history) and lets the player start one again without
@@ -3704,6 +3786,7 @@
           <div id="battleStatsBox" class="win95-box p-1.5 flex flex-col gap-1 flex-shrink-0 bg-slate-100">
             <div class="flex items-center justify-between gap-1">
               <span id="heroStatusLabel" class="text-[10px] font-bold text-slate-700 truncate flex-1 min-w-0">WARRIOR STATUS:</span>
+              <span id="difficultyBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 border border-slate-400 flex-shrink-0 uppercase">Medium</span>
               <span id="playerLevelBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-yellow-300 text-yellow-900 border border-yellow-600 flex-shrink-0">LV 1</span>
             </div>
             <div class="flex items-center gap-2">

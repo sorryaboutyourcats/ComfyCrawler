@@ -13,13 +13,14 @@ def original_bucket(wall_style):
     if any(k in ui for k in ['glitch','glitched','datamosh','databend','databent']): return "glitch"
     if any(k in ui for k in ['mario','mushroom','mushrooms']): return "mario"
     if any(k in ui for k in ['lsd']): return "lsd"
+    if any(k in ui for k in ['matrix','digital rain','code rain','falling code']): return "matrix"
     if any(k in ui for k in ['sci-fi','sci fi','spaceship','space station','alien ship','future']): return "scifi"
     if any(k in ui for k in ['win95','windows 95','windows','win 95','brick','95','retro brick']): return "win95"
     if any(k in ui for k in ['forest','nature','jungle','woods','woodland','trees','tree','garden','swamp']): return "forest"
     if any(k in ui for k in ['taco','tacos','burrito','mexican','nacho','fajita']): return "taco"
     if mw('ladies',ui) or mw('lady',ui) or mw('women',ui) or mw('woman',ui) or mw('girls',ui) or mw('girl',ui): return "ladies"
     if mw('people',ui) or mw('person',ui) or mw('crowd',ui) or mw('characters',ui) or mw('men',ui) or mw('man',ui) or mw('guys',ui): return "people"
-    if any(k in ui for k in ['cyber','neon','cyberpunk','matrix','circuits','tech']): return "cyber"
+    if any(k in ui for k in ['cyber','neon','cyberpunk','circuits','tech']): return "cyber"
     if any(k in ui for k in ['moss','stone','castle','dungeon','ancient','cave','rock']): return "stone"
     if any(k in ui for k in ['candy','gingerbread','sweet','peppermint','cake','chocolate','cookie']): return "candy"
     if any(k in ui for k in ['cat','cats','kitten','kittens','feline','dog','dogs','puppy','animal']): return "cat"
@@ -36,7 +37,9 @@ CASES = ["Windows 95 3D maze","Deep Forest","Cyber Neon","Mossy Stone","Candy Ca
          # the 2026-09-10 named-aesthetic buckets, and the collisions they must survive
          "LSD dream emulator","LSD Dream Emulator","lsd","LSD","acid","Acid Bath","glitch",
          "glitched photos","mario mushrooms","Super Mario","mushrooms","datamosh",
-         "a psychedelic lsd dream emulator level"]
+         "a psychedelic lsd dream emulator level",
+         # 2026-09-23: the Matrix's green code rain left the cyan 'cyber' bucket
+         "The Matrix","matrix digital rain","digital rain","cyber matrix","neon code rain"]
 
 FAKE = {"wall":"XX-WALL","floor":"XX-FLOOR","ceiling":"XX-CEIL","lantern":"XX-LANT",
         "door":"XX-DOOR","switch":"XX-SWITCH","weapon":"XX-W","enemy":"XX-E"}
@@ -70,6 +73,12 @@ _FAKE_NAMED = {"kind": "city", "name": "X"}
 for s in ("wall street", "rockefeller center", "st patricks cathedral", "route 95"):
     if srv._theme_bucket(s, _FAKE_NAMED) is not None:
         print(f"  a named entity failed to bypass the bucket for {s!r}"); bad += 1
+
+# ...except a bucket whose key IS the name (_STYLE_BUCKETS_QUOTE_SAFE): a quoted "The Matrix"
+# is asking for exactly the green rain, so it must still reach it.
+for s in ("The Matrix, the real film digital rain", "The Matrix"):
+    if srv._theme_bucket(s, _FAKE_NAMED) != "matrix":
+        print(f"  the quote-safe matrix bucket was bypassed for {s!r}"); bad += 1
 
 # generic path with no brief must be unchanged; with a brief must use every slot
 w,c,f,l = srv.get_surface_prompts("internet")

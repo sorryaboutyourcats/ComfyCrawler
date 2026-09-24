@@ -251,18 +251,11 @@
     let lastAttackFrameMode = 'off';
     const wallPromptInput = document.getElementById('wallPromptInput');
     const playerPromptInput = document.getElementById('playerPromptInput');
-    const playerFileInput = document.getElementById('playerFileInput');
-    const btnAttachPlayerImage = document.getElementById('btnAttachPlayerImage');
-    const playerImageBadge = document.getElementById('playerImageBadge');
-    const playerImageThumb = document.getElementById('playerImageThumb');
-    const playerImageName = document.getElementById('playerImageName');
-    const btnClearPlayerImage = document.getElementById('btnClearPlayerImage');
-    let uploadedPlayerImageDataUrl = null;
-
     const weaponPromptInput = document.getElementById('weaponPromptInput');
     const enemyPromptInput = document.getElementById('enemyPromptInput');
-    // Attached reference images, keyed the same way the request payload expects them.
-    const attachedImages = { player: null, weapon: null, enemy: null };
+    // Attached reference pictures, one per mad-lib line, keyed the same way the request payload
+    // expects them (<key>_image). A line holding one is in NAME mode - see setSlotPicture.
+    const attachedImages = { wall: null, player: null, weapon: null, enemy: null };
 
     const btnCreate = document.getElementById('btnCreate');
     const btnSettings = document.getElementById('btnSettings');
@@ -1611,12 +1604,8 @@
       if (currentRunHistoryPrompts) {
         const prompts = currentRunHistoryPrompts;
         currentRunHistoryPrompts = null;
-        asOneSetupStep(() => {
-          fillPromptField(wallPromptInput, prompts.wall, null);
-          fillPromptField(playerPromptInput, prompts.player, 'player');
-          fillPromptField(weaponPromptInput, prompts.weapon, 'weapon');
-          fillPromptField(enemyPromptInput, prompts.enemy, 'enemy');
-        });
+        // Not awaited: a saved picture is a moment's fetch, and the menu comes up meanwhile.
+        refillPromptFields(prompts);
       }
       stopConfetti();
       victoryModal.classList.add('hidden');
@@ -1864,6 +1853,17 @@
       selectedDifficulty = id;
       if (gridDesc) gridDesc.textContent = DIFFICULTIES[id].desc;
       difficultySelects.forEach((sel) => { sel.value = id; });
+      updateDifficultyBadge();
+    }
+
+    // The stats box's difficulty chip: the run's own pick once one is under way (changing the
+    // dropdown mid-run only applies to the next dungeon), otherwise the current selection.
+    function updateDifficultyBadge() {
+      const badge = document.getElementById('difficultyBadge');
+      if (!badge) return;
+      const id = (runTally && runTally.difficulty) || selectedDifficulty;
+      badge.textContent = id;
+      badge.title = `Difficulty: ${id}`;
     }
 
     // Every select drives the same setDifficulty, which then writes the pick back into all of
@@ -2142,6 +2142,123 @@
         }
       });
     }
+
+    // ---- Shared runs: ?run=<id> in the showcase export ----------------------
+    // A row's 🔗 copies a link straight to one dungeon; opening it puts a small box over the
+    // gallery with that run's card and a Play button. The box is not ceremony: a page opened
+    // from a link has had no click yet, so the browser keeps every sound off, and the story
+    // would roll with no narrator and no music. Play is that click, and then it is exactly the
+    // row's ▶ Start. Showcase-only - a localhost link is no use to anyone it gets sent to, and
+    // the export is the edition that gets shared.
+    const sharedRunId = SHOWCASE_MODE
+      ? new URLSearchParams(window.location.search).get('run') : null;
+    const modalSharedRun = document.getElementById('modalSharedRun');
+    const sharedRunFound = document.getElementById('sharedRunFound');
+    const sharedRunScene = document.getElementById('sharedRunScene');
+    const sharedRunArt = document.getElementById('sharedRunArt');
+    const sharedRunTitle = document.getElementById('sharedRunTitle');
+    const sharedRunCast = document.getElementById('sharedRunCast');
+    const sharedRunMissing = document.getElementById('sharedRunMissing');
+    const btnSharedRunPlay = document.getElementById('btnSharedRunPlay');
+    const btnSharedRunBrowse = document.getElementById('btnSharedRunBrowse');
+    const btnCloseSharedRun = document.getElementById('btnCloseSharedRun');
+    let sharedRunEntry = null;
+
+    // Run once, after the first refreshHistory has the export's listing in hand.
+    function openSharedRun() {
+      if (!modalSharedRun) return;
+      const entry = Array.isArray(historyEntries)
+        ? historyEntries.find(e => e && e.id === sharedRunId) || null : null;
+      sharedRunEntry = entry;
+      if (sharedRunFound) sharedRunFound.classList.toggle('hidden', !entry);
+      if (sharedRunMissing) sharedRunMissing.classList.toggle('hidden', !!entry);
+      if (btnSharedRunPlay) btnSharedRunPlay.classList.toggle('hidden', !entry);
+      if (entry) {
+        // The same picture a gallery tile leans, leaning the same way. No hold before a finger
+        // takes over, unlike on a tile - there is no list under this one to scroll. Wired here
+        // rather than up top because wireTileParallax's settings are declared further down.
+        if (sharedRunArt) {
+          sharedRunArt.replaceChildren();
+          sharedRunArt.classList.remove('is-parallax');   // earned again once the new pair loads
+          const layered = fillCardArt(sharedRunArt, entry, (img, src) => { img.src = src; });
+          if (layered && sharedRunScene && !sharedRunArt.dataset.parallaxWired) {
+            sharedRunArt.dataset.parallaxWired = '1';
+            wireTileParallax(sharedRunScene, sharedRunArt, 0);
+          }
+        }
+        if (sharedRunTitle) sharedRunTitle.textContent = historyTitleOf(entry);
+        if (sharedRunCast) {
+          const castBits = [entry.hero, entry.boss].filter(Boolean);
+          sharedRunCast.textContent = castBits.length
+            ? castBits.join('  vs  ')
+            : [entry.player_style, entry.enemy_style].filter(Boolean).join('  vs  ');
+        }
+      }
+      modalSharedRun.classList.remove('hidden');
+      focusFirstIn(modalSharedRun, entry ? btnSharedRunPlay : btnSharedRunBrowse);
+    }
+
+    function closeSharedRun() {
+      if (modalSharedRun) modalSharedRun.classList.add('hidden');
+    }
+
+    if (modalSharedRun) {
+      modalSharedRun.addEventListener('click', (e) => {
+        if (e.target === modalSharedRun) closeSharedRun();
+      });
+    }
+    if (btnCloseSharedRun) btnCloseSharedRun.addEventListener('click', closeSharedRun);
+    if (btnSharedRunBrowse) btnSharedRunBrowse.addEventListener('click', closeSharedRun);
+    if (btnSharedRunPlay) {
+      btnSharedRunPlay.addEventListener('click', () => {
+        const entry = sharedRunEntry;
+        closeSharedRun();
+        if (entry) startHistoryDungeon(entry);
+      });
+    }
+
+    // The link a row's 🔗 hands out: this page's own address, so it keeps whatever folder the
+    // export is hosted under, with only ?run - a visitor's ?agent is theirs, not the link's.
+    function sharedRunUrl(id) {
+      return window.location.origin + window.location.pathname + '?run=' + encodeURIComponent(id);
+    }
+
+    // navigator.clipboard is absent on a plain-http export and refused when the page is not
+    // focused (see btnCopyDiscord above), so the old select-and-copy trick is the fallback.
+    // Unlike the Discord handle the link is not on screen to copy by hand, so a failure says so
+    // on the button itself.
+    async function copyRunLink(entry, btn, glyph) {
+      const url = sharedRunUrl(entry.id);
+      let ok = false;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+          ok = true;
+        }
+      } catch (_) { ok = false; }
+      if (!ok) {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        const back = document.activeElement;
+        try { ta.select(); ok = document.execCommand('copy'); } catch (_) { ok = false; }
+        ta.remove();
+        if (back && back.focus) back.focus({ preventScroll: true });
+      }
+      const label = btn.getAttribute('aria-label') || '';
+      if (btn._linkTimer) clearTimeout(btn._linkTimer);
+      else btn.dataset.linkLabel = label;
+      glyph.textContent = ok ? '✅' : '✕';
+      btn.setAttribute('aria-label', ok ? 'Link copied' : 'Could not copy the link');
+      btn._linkTimer = setTimeout(() => {
+        btn._linkTimer = null;
+        glyph.textContent = '🔗';
+        btn.setAttribute('aria-label', btn.dataset.linkLabel || label);
+      }, 1500);
+    }
     btnCloseSettings.addEventListener('click', () => modalSettings.classList.add('hidden'));
     // OK applies ComfyUI edits that were never applied; if the server refuses them (a malformed
     // address, or a run in progress) Options stays open on the reason instead of losing them.
@@ -2178,9 +2295,9 @@
     // ==========================================
     // MAD-LIB UNDO / REDO
     // ==========================================
-    // The menu edits the four mad-lib fields and the three image slots as ONE document, not as
-    // seven independent controls: a Quick idea rewrites four fields in a click, a History row's
-    // Prompts button does the same, and attaching a photo blanks and locks the field under it.
+    // The menu edits the four mad-lib fields and their four picture slots as ONE document, not
+    // as eight independent controls: a Quick idea rewrites four fields in a click, a History
+    // row's Prompts button does the same, and attaching a picture blanks the field beside it.
     // The browser's own Ctrl+Z cannot cover any of that - it only knows the single <input> the
     // caret is in - so the click that wiped four filled-in fields had nothing behind it. This
     // stack does, and it survives leaving for a dungeon and coming back, because nothing on the
@@ -2197,13 +2314,67 @@
     // reach back through one sentence.
     const SETUP_BURST_MS = 600;
 
-    // The wall line takes no image, so it has no slot; the other three are wired by the same
-    // id convention wireImageAttach uses (<key>PromptInput, <key>ImageBadge, ...).
+    // Every line takes a picture too, wired by the id convention pictureSlotEls reads
+    // (<key>PromptInput, <key>ImageThumb, btnAttach<Key>Image, ...).
     const SETUP_TEXT_FIELDS = [
       ['wall', wallPromptInput], ['player', playerPromptInput],
       ['weapon', weaponPromptInput], ['enemy', enemyPromptInput],
     ].filter(([, el]) => el);
-    const SETUP_IMAGE_SLOTS = ['player', 'weapon', 'enemy'];
+    const SETUP_IMAGE_SLOTS = ['wall', 'player', 'weapon', 'enemy'];
+
+    // What a line's picture shows, for its buttons' tooltips and screen-reader names.
+    const PICTURE_SLOT_NOUN = { wall: 'dungeon', player: 'player', weapon: 'weapon', enemy: 'enemy' };
+    // A line with a picture is in NAME mode: the picture is what the thing looks like and the
+    // words on the line are what it is called (server.py, "Reference pictures").
+    const PICTURE_NAME_PLACEHOLDER = 'give it a name (optional)';
+
+    function pictureSlotEls(key) {
+      const Key = key.charAt(0).toUpperCase() + key.slice(1);
+      return {
+        input: document.getElementById(key + 'PromptInput'),
+        label: document.getElementById(key + 'PromptLabel'),
+        file: document.getElementById(key + 'FileInput'),
+        thumb: document.getElementById(key + 'ImageThumb'),
+        attach: document.getElementById('btnAttach' + Key + 'Image'),
+        clear: document.getElementById('btnClear' + Key + 'Image'),
+      };
+    }
+
+    // Everything a line shows about its picture, written from one place - attaching, changing
+    // and removing one, undo/redo, and History's Prompts all come through here. With a picture
+    // the 🖼️ button becomes its thumbnail (a click picks another), a ✕ beside it takes it off,
+    // and the line's small print reads NAME instead of STYLE / CHARACTER / WEAPON / ENEMY. The
+    // field itself stays open either way - it is where the name goes. What was typed is left
+    // to the caller: attaching and removing blank it, a change or an undo does not.
+    function setSlotPicture(key, url, fileName) {
+      const el = pictureSlotEls(key);
+      attachedImages[key] = url || null;
+      const has = !!attachedImages[key];
+      const noun = PICTURE_SLOT_NOUN[key];
+      if (el.thumb) el.thumb.src = has ? url : '';
+      if (el.attach) {
+        el.attach.classList.toggle('has-picture', has);
+        el.attach.dataset.fileName = has ? (fileName || '') : '';
+        const word = el.attach.querySelector('.attach-word');
+        if (word) word.textContent = has ? 'Change' : 'Attach';
+        el.attach.title = has
+          ? 'Change the ' + noun + ' picture' + (fileName ? ' (' + fileName + ')' : '')
+          : 'Attach a picture of the ' + noun + ' - what you type beside it becomes its name';
+        el.attach.setAttribute('aria-label', has ? 'Change the ' + noun + ' picture'
+                                                 : 'Attach ' + (/^[aeiou]/.test(noun) ? 'an ' : 'a ') + noun + ' picture');
+      }
+      if (el.clear) el.clear.classList.toggle('hidden', !has);
+      if (el.label) el.label.textContent = has ? 'NAME' : el.label.dataset.label;
+      if (el.input) {
+        if (el.input.dataset.stylePlaceholder === undefined) {
+          el.input.dataset.stylePlaceholder = el.input.placeholder;
+        }
+        el.input.placeholder = has ? PICTURE_NAME_PLACEHOLDER : el.input.dataset.stylePlaceholder;
+      }
+      // An <input type=file> holds on to the last file picked. Clearing it when the slot ends
+      // up empty means picking that same photo again still fires a change event.
+      if (el.file && !has) el.file.value = '';
+    }
 
     // A phone or tablet. On one of those, focusing a field from inside a tap brings the on-screen
     // keyboard up over the bottom half of the menu, CREATE and all - so every move below that
@@ -2271,8 +2442,8 @@
       SETUP_TEXT_FIELDS.forEach(([key, el]) => { snap.text[key] = el.value; });
       SETUP_IMAGE_SLOTS.forEach((key) => {
         const url = attachedImages[key];
-        const nameEl = document.getElementById(key + 'ImageName');
-        snap.images[key] = url ? { url, name: nameEl ? nameEl.textContent : '' } : null;
+        const attach = pictureSlotEls(key).attach;
+        snap.images[key] = url ? { url, name: attach ? attach.dataset.fileName || '' : '' } : null;
       });
       return snap;
     }
@@ -2291,27 +2462,13 @@
       return true;
     }
 
-    // Put a snapshot back on screen. Image state lives in three places at once - attachedImages,
-    // the badge DOM, and the disabled flag on the field beneath it - so all three are rewritten
-    // from the one record here, exactly as attach and clear write them by hand.
+    // Put a snapshot back on screen - the pictures through setSlotPicture, the same writer
+    // attach and remove use, so a line's thumbnail, ✕ and NAME label come back with it.
     function applySetupSnapshot(snap) {
       SETUP_TEXT_FIELDS.forEach(([key, el]) => { el.value = snap.text[key] || ''; });
       SETUP_IMAGE_SLOTS.forEach((key) => {
         const img = snap.images[key];
-        const badge = document.getElementById(key + 'ImageBadge');
-        const thumb = document.getElementById(key + 'ImageThumb');
-        const nameEl = document.getElementById(key + 'ImageName');
-        const fileInput = document.getElementById(key + 'FileInput');
-        const promptInput = document.getElementById(key + 'PromptInput');
-        attachedImages[key] = img ? img.url : null;
-        if (key === 'player') uploadedPlayerImageDataUrl = attachedImages[key];
-        if (thumb) thumb.src = img ? img.url : '';
-        if (nameEl) nameEl.textContent = img ? img.name : '';
-        if (badge) badge.classList.toggle('hidden', !img);
-        // An <input type=file> holds on to the last file picked. Clearing it when the slot ends
-        // up empty means picking that same photo again still fires a change event.
-        if (fileInput && !img) fileInput.value = '';
-        if (promptInput) promptInput.disabled = !!img;
+        setSlotPicture(key, img ? img.url : null, img ? img.name : '');
       });
     }
 
@@ -2426,9 +2583,9 @@
       const btn = document.getElementById('btnFillIn');
       if (!btn) return;
       const label = btn.querySelector('span');
-      // A field with a photo attached is disabled and stands as already answered - the photo -
-      // same rule Fill-in itself uses, so attaching a photo to every field also flips this.
-      const allFilled = SETUP_TEXT_FIELDS.every(([, el]) => el.disabled || el.value.trim());
+      // A line with a picture stands as already answered - the picture - same rule Fill-in
+      // itself uses, so attaching a picture to every line also flips this.
+      const allFilled = SETUP_TEXT_FIELDS.every(([key, el]) => attachedImages[key] || el.value.trim());
       if (label) label.textContent = allFilled ? '🔀 Randomize all' : '🔮 Fill-in';
       btn.title = allFilled
         ? 'Every field is filled in - randomize all four'
@@ -2481,8 +2638,8 @@
     updateUndoRedoButtons();
 
     // Each quick idea fills in the whole setup - dungeon look plus the player, weapon and
-    // enemy - so one click gives a coherent theme instead of just a wall style. Fields that
-    // are locked to an uploaded image are left alone.
+    // enemy - so one click gives a coherent theme instead of just a wall style. Lines with a
+    // picture are left alone: the picture is their look, and their words are its name.
     const PRESET_IDEAS = {
       // "stick of computer RAM", not "stick of ram": lowercase "ram" is a male sheep, and the
       // generator drew exactly that - a brawny humanoid brute. Verified side by side on the
@@ -2567,12 +2724,12 @@
         // All four fields go down as one undo step, so walking a Quick idea back restores
         // whatever was typed before it in a single Ctrl+Z rather than four.
         asOneSetupStep(() => {
-          wallPromptInput.value = val.toLowerCase();
+          if (!attachedImages.wall) wallPromptInput.value = val.toLowerCase();
           const idea = PRESET_IDEAS[val];
           if (idea) {
-            if (playerPromptInput && !playerPromptInput.disabled) playerPromptInput.value = idea.player;
-            if (weaponPromptInput && !weaponPromptInput.disabled) weaponPromptInput.value = idea.weapon;
-            if (enemyPromptInput && !enemyPromptInput.disabled) enemyPromptInput.value = idea.enemy;
+            if (playerPromptInput && !attachedImages.player) playerPromptInput.value = idea.player;
+            if (weaponPromptInput && !attachedImages.weapon) weaponPromptInput.value = idea.weapon;
+            if (enemyPromptInput && !attachedImages.enemy) enemyPromptInput.value = idea.enemy;
           }
         });
         // Don't leave the focus ring stranded on a preset deep in the grid. Landing it on
@@ -2868,6 +3025,7 @@
 
     function updateProgressionHUD() {
       if (playerLevelBadge) playerLevelBadge.textContent = `LV ${progression.level}`;
+      updateDifficultyBadge();
       if (playerXpBar) {
         playerXpBar.style.width = `${Math.min(100, (progression.xp / progression.xpToNext) * 100)}%`;
       }
@@ -4673,7 +4831,9 @@ void main() {
 
     function prepareEndingCutscene() {
       resetEndingCutscene();
-      if (!endingVideoOn || !currentRunHistoryId) return;
+      if (!currentRunHistoryId) return;
+      // The Ending Video setting only decides whether a clip gets made. A run that already has
+      // one plays it either way, so the status is still asked - it just never starts a render.
       endingRunId = currentRunHistoryId;
       // Nothing to poll in the showcase export: no server to film a clip, so this dungeon either
       // shipped with one or never gets one. pollEndingStatus there would 404, land on its
@@ -4684,7 +4844,7 @@ void main() {
         if (entry && entry.has_ending_video) loadEndingClip(endingRunId);
         return;
       }
-      pollEndingStatus(endingRunId, endingBackgroundOn);
+      pollEndingStatus(endingRunId, endingVideoOn && endingBackgroundOn);
     }
 
     async function pollEndingStatus(id, mayStart) {
@@ -4800,7 +4960,7 @@ void main() {
 
     // The boss's health just hit zero. True when a cutscene is taking the ending over.
     function startEndingCutscene() {
-      if (!endingVideoOn || !endingClipUrl || endingRunId !== currentRunHistoryId) return false;
+      if (!endingClipUrl || endingRunId !== currentRunHistoryId) return false;
       if (endingPhase !== 'idle') return true;
       endingPhase = 'pending';
       releaseHeldKeys();
@@ -10831,17 +10991,12 @@ void main() {
       }
     });
 
-    // One attach/clear implementation shared by the player, weapon and enemy madlib lines, rather
-    // than three near-identical copies. `key` indexes into attachedImages.
-    function wireImageAttach(key, ids) {
-      const promptInput = document.getElementById(ids.prompt);
-      const fileInput = document.getElementById(ids.file);
-      const attachBtn = document.getElementById(ids.attach);
-      const badge = document.getElementById(ids.badge);
-      const thumb = document.getElementById(ids.thumb);
-      const nameEl = document.getElementById(ids.name);
-      const clearBtn = document.getElementById(ids.clear);
+    // One attach/change/remove implementation shared by all four mad-lib lines, rather than
+    // four near-identical copies. `key` indexes into attachedImages.
+    function wireImageAttach(key) {
+      const { input: promptInput, file: fileInput, attach: attachBtn, clear: clearBtn } = pictureSlotEls(key);
       if (!promptInput || !fileInput || !attachBtn) return;
+      setSlotPicture(key, null);   // the resting tooltip and label, from the one writer
 
       attachBtn.addEventListener('click', () => fileInput.click());
 
@@ -10863,18 +11018,19 @@ void main() {
             cv.getContext('2d').drawImage(img, 0, 0, w, h);
             const dataUrl = cv.toDataURL('image/jpeg', 0.88);
 
-            attachedImages[key] = dataUrl;
-            if (key === 'player') uploadedPlayerImageDataUrl = dataUrl;
-            if (thumb) thumb.src = dataUrl;
-            if (nameEl) nameEl.textContent = file.name;
-            if (badge) badge.classList.remove('hidden');
-            promptInput.disabled = true;
-            promptInput.value = "";
-            // Attaching throws away whatever was typed on this line, so it is an undo step -
-            // and one step, not "field blanked" plus "image added". Recorded here inside the
-            // decode callback rather than at the click, because until now there was nothing
-            // to record: the file is still being read at that point.
+            // A first picture turns the line from a description into a name, so whatever was
+            // typed goes - the picture describes the thing now, and those words left behind
+            // would become its name. Changing the picture keeps the name already typed. Either
+            // way it is one undo step, not "field blanked" plus "picture added". Recorded here
+            // inside the decode callback rather than at the click, because until now there was
+            // nothing to record: the file is still being read at that point.
+            const first = !attachedImages[key];
+            setSlotPicture(key, dataUrl, file.name);
+            if (first) promptInput.value = '';
             recordSetupChange(null);
+            // Straight into the blank for the name. Not on touch, where it would bring the
+            // keyboard up over the menu (see setupOnTouch).
+            if (!setupOnTouch) promptInput.focus({ preventScroll: true });
           };
           img.src = event.target.result;
         };
@@ -10884,34 +11040,19 @@ void main() {
       if (clearBtn) {
         clearBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          fileInput.value = "";
-          attachedImages[key] = null;
-          if (key === 'player') uploadedPlayerImageDataUrl = null;
-          if (thumb) thumb.src = "";
-          if (nameEl) nameEl.textContent = "";
-          if (badge) badge.classList.add('hidden');
-          promptInput.disabled = false;
-          promptInput.focus();
+          setSlotPicture(key, null);
+          // The name goes with the picture it named: left on a line with no picture, it would
+          // be drawn as a description - a sword called "The Beast" would come back a beast.
+          promptInput.value = '';
           recordSetupChange(null);
+          // The ✕ just hid itself, so the focus needs somewhere to land: the blank on a
+          // keyboard, the 🖼️ button on touch, which puts no keyboard up.
+          (setupOnTouch ? attachBtn : promptInput).focus({ preventScroll: true });
         });
       }
     }
 
-    wireImageAttach('player', {
-      prompt: 'playerPromptInput', file: 'playerFileInput', attach: 'btnAttachPlayerImage',
-      badge: 'playerImageBadge', thumb: 'playerImageThumb', name: 'playerImageName',
-      clear: 'btnClearPlayerImage'
-    });
-    wireImageAttach('weapon', {
-      prompt: 'weaponPromptInput', file: 'weaponFileInput', attach: 'btnAttachWeaponImage',
-      badge: 'weaponImageBadge', thumb: 'weaponImageThumb', name: 'weaponImageName',
-      clear: 'btnClearWeaponImage'
-    });
-    wireImageAttach('enemy', {
-      prompt: 'enemyPromptInput', file: 'enemyFileInput', attach: 'btnAttachEnemyImage',
-      badge: 'enemyImageBadge', thumb: 'enemyImageThumb', name: 'enemyImageName',
-      clear: 'btnClearEnemyImage'
-    });
+    SETUP_IMAGE_SLOTS.forEach((key) => wireImageAttach(key));
 
     function imageToTexture(img, flipX = false) {
       const cv = document.createElement('canvas');
@@ -11027,6 +11168,7 @@ void main() {
       updateProgressionHUD();
       runTally = freshRunTally();
       runTally.difficulty = selectedDifficulty;
+      updateDifficultyBadge();
       runAttempt = 1;
       runDeaths = 0;
       // Does this run have an ending cutscene, or one filming? currentRunHistoryId is already
@@ -11520,7 +11662,7 @@ void main() {
     function topmostOpenDialog() {
       const stack = [modalDownloadStopConfirm, modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm,
                      modalHistoryConfirm, modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm,
-                     modalHistory, modalSettings, modalAbout, modalMakeOwn];
+                     modalHistory, modalSettings, modalAbout, modalMakeOwn, modalSharedRun];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -12325,15 +12467,15 @@ void main() {
     // whatever is already there. Every field already filled -> the button reads "Randomize all"
     // instead, and a click replaces all four with a whole new set, the same way a Quick idea
     // does. All four empty is Fill-in too, and the server invents a whole set for that same
-    // reason - the two only differ once something is typed. A field with a photo attached is
-    // disabled and counts as filled either way - the photo is the answer for that line, and
-    // this never overwrites it or asks the model to replace it, only to write around it.
+    // reason - the two only differ once something is typed. A line with a picture counts as
+    // filled either way - the picture is the answer for that line, and its words are a name -
+    // so this never overwrites it or asks the model to replace it, only to write around it.
     const btnFillIn = document.getElementById('btnFillIn');
     if (btnFillIn) {
       const btnFillInLabel = btnFillIn.querySelector('span');
 
-      const fieldIsOpen = (el) => !el.disabled && !el.value.trim();
-      const allFieldsFilled = () => SETUP_TEXT_FIELDS.every(([, el]) => el.disabled || el.value.trim());
+      const fieldIsOpen = (key, el) => !attachedImages[key] && !el.value.trim();
+      const allFieldsFilled = () => SETUP_TEXT_FIELDS.every(([key, el]) => attachedImages[key] || el.value.trim());
 
       // A short word on the button itself, then back to whichever resting label fits the fields
       // now - the setup row has no spare line for a message, and adding one would wrap it.
@@ -12355,12 +12497,14 @@ void main() {
         const randomize = allFieldsFilled();
         const fields = {};
         SETUP_TEXT_FIELDS.forEach(([key, el]) => {
-          // A photo-filled field is described rather than blank either way, so the model still
-          // writes the other fields to go with it instead of inventing a hero that gets thrown
+          // A pictured line is described rather than blank either way, so the model still
+          // writes the other lines to go with it instead of inventing a hero that gets thrown
           // away. Otherwise: Randomize all blanks every field out to ask for a whole new set;
           // Fill-in sends each one as it stands, so only its own gaps come back.
-          fields[key] = el.disabled ? (el.value.trim() || 'an attached photo')
-                                    : (randomize ? '' : el.value.trim());
+          const name = el.value.trim();
+          fields[key] = attachedImages[key]
+            ? (name ? 'an attached photo of ' + name : 'an attached photo')
+            : (randomize ? '' : name);
         });
 
         fillInFlight = true;
@@ -12399,11 +12543,11 @@ void main() {
         let firstFilled = null;
         asOneSetupStep(() => {
           SETUP_TEXT_FIELDS.forEach(([key, el]) => {
-            if (!got[key] || el.disabled) return;
+            if (!got[key] || attachedImages[key]) return;
             // Fill-in only ever writes into a field still empty on arrival, so anything typed
             // while waiting survives; Randomize all replaces every field regardless, same as a
             // Quick idea, which is the point of asking for it by name.
-            if (!randomize && !fieldIsOpen(el)) return;
+            if (!randomize && !fieldIsOpen(key, el)) return;
             el.value = got[key];
             if (!firstFilled) firstFilled = el;
           });
@@ -12422,7 +12566,9 @@ void main() {
 
     btnCreate.addEventListener('click', async () => {
       if (SHOWCASE_MODE) return;   // no server to generate anything with in this export
-      const wallStyle = wallPromptInput.value.trim() || "Windows 95";
+      // With a picture on the dungeon line, a blank there is a dungeon left for the story to
+      // name, not one to draw as Windows 95 - the picture is what gets drawn.
+      const wallStyle = wallPromptInput.value.trim() || (attachedImages.wall ? "" : "Windows 95");
       // A quoted name ("alley pond park") is a server-side marker, not display text - strip it
       // here so a fallback title (used only when the story itself has no location) never shows a
       // stray quote mark.
@@ -12444,7 +12590,7 @@ void main() {
       appContainer.className = 'win95-box p-1 text-black mode-progress';
 
       generateAuthentic3DMaze(numGrids);
-      buildExitStairsTexture(wallStyle, wallTexture);
+      buildExitStairsTexture(wallStyle || "Windows 95", wallTexture);
 
       const startTime = Date.now();
       progTimer.textContent = "0.0s";
@@ -12458,9 +12604,11 @@ void main() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            // Beside a <line>_image, its <line>_style is that picture's name, not a description.
             wall_style: wallStyle,
+            wall_image: attachedImages.wall || null,
             player_style: playerPromptInput ? playerPromptInput.value.trim() : "",
-            player_image: uploadedPlayerImageDataUrl || null,
+            player_image: attachedImages.player || null,
             weapon_style: weaponPromptInput ? weaponPromptInput.value.trim() : "",
             weapon_image: attachedImages.weapon || null,
             enemy_style: enemyPromptInput ? enemyPromptInput.value.trim() : "",
@@ -12769,10 +12917,19 @@ void main() {
     // what a tile can show, having no room for an info line of its own.
     function historyPromptLines(entry) {
       const lines = [];
-      if (entry.wall_style) lines.push('Dungeon: ' + entry.wall_style);
-      if (entry.player_style) lines.push('Player: ' + entry.player_style);
-      if (entry.weapon_style) lines.push('Weapon: ' + entry.weapon_style);
-      if (entry.enemy_style) lines.push('Enemy: ' + entry.enemy_style);
+      // A line made from a picture shows 🖼️ in front of its words - which there are a name.
+      const pictures = entry.pictures || {};
+      [['wall', 'Dungeon'], ['player', 'Player'], ['weapon', 'Weapon'], ['enemy', 'Enemy']]
+        .forEach(([key, label]) => {
+          const typed = entry[key + '_style'];
+          if (pictures[key]) lines.push(label + ': 🖼️ ' + (typed || '(picture, unnamed)'));
+          else if (typed) lines.push(label + ': ' + typed);
+        });
+      // What each attached picture was read as - the words that actually got drawn in its place.
+      const read = NAME_FIELD_ORDER
+        .filter(k => pictures[k] && pictures[k].look)
+        .map(k => '  ' + k + ': ' + pictures[k].look);
+      if (read.length) lines.push('', 'Pictures read as:', ...read);
       // When the typed words were abstract ("internet", "memes"), the server's set designer
       // resolved them into the concrete materials and objects that actually got drawn. Show
       // those under the typed words, so a surprising-looking dungeon explains itself. Absent
@@ -12924,6 +13081,18 @@ void main() {
           + (promptBits.length ? '\n\n' + promptBits.join('\n') : '');
         btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
         row.appendChild(btnPrompts);
+      } else {
+        // The export's second verb in Prompts' place: a link straight to this dungeon (see
+        // openSharedRun). The glyph has its own span so the ✅ flash leaves the word alone.
+        const btnLink = document.createElement('button');
+        btnLink.type = 'button';
+        btnLink.className = 'hist-link win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
+        btnLink.innerHTML = '<span class="hist-link-glyph">🔗</span><span class="hist-btn-word"> Link</span>';
+        btnLink.setAttribute('aria-label', 'Copy a link to ' + historyTitleOf(entry));
+        btnLink.title = 'Copy a link straight to this dungeon - whoever opens it lands on its story';
+        btnLink.addEventListener('click', () =>
+          copyRunLink(entry, btnLink, btnLink.querySelector('.hist-link-glyph')));
+        row.appendChild(btnLink);
       }
 
       // The run's ending movie: plays it once the run has been beaten, films it if the run never
@@ -13119,6 +13288,70 @@ void main() {
       historyCardWatcher.observe(img);
     }
 
+    // A run's picture, built into a .hist-tile__art: the flat card, and the same card again in
+    // two pieces for the parallax. A gallery tile shows one and so does a shared link's box
+    // (openSharedRun). `load(img, src)` is how each picture is fetched - a tile passes
+    // queueHistoryCard, the box just sets src. True when the two layers were asked for, which
+    // is when there is anything for wireTileParallax to lean.
+    function fillCardArt(art, entry, load) {
+      // The listing's own 96px thumbnail goes down first, blown up and blurred. The card is a
+      // separate request per tile - and on a run saved before tiles existed the server has to
+      // draw it before it can answer - so without this the grid would be black rectangles for
+      // as long as that takes. It also stays as the fallback: a run whose card cannot be drawn
+      // at all keeps the blur rather than a hole.
+      if (entry.thumb) {
+        const under = document.createElement('img');
+        under.src = entry.thumb;
+        under.alt = '';
+        under.className = 'hist-tile__under';
+        art.appendChild(under);
+      } else {
+        const glyph = document.createElement('span');
+        glyph.className = 'text-3xl select-none opacity-40';
+        glyph.textContent = '🏰';
+        art.appendChild(glyph);
+      }
+      if (!entry.id) return false;
+
+      const card = document.createElement('img');
+      // No .pixelated class: the page already applies image-rendering: pixelated to every
+      // img, and this one is no exception - a tile should look like the game does.
+      card.className = 'hist-tile__card';
+      card.alt = '';
+      card.decoding = 'async';
+      card.addEventListener('load', () => card.classList.add('is-loaded'));
+      // No card for this run (an older static export, or a bundle with nothing drawable in
+      // it): drop the empty image and leave the blurred thumbnail showing.
+      card.addEventListener('error', () => card.remove());
+      art.appendChild(card);
+      load(card, historyCardSrc(entry.id));
+
+      // The same picture again, in two pieces, for the parallax. Through the same `load` as
+      // the card - for a tile that is the queue, and three images a tile is precisely the
+      // pile-up it exists to keep off a server answering one request at a time - and laid over
+      // the flat card they replace, which they match pixel for pixel, so there is nothing to
+      // see when they arrive. Only once BOTH are up does the picture start moving: half a pair
+      // would be a hero with no corridor behind them. Asked for on touch screens too - a
+      // finger drives the same effect there (see wireTileParallax).
+      let loaded = 0;
+      ['bg', 'hero'].forEach(layer => {
+        const img = document.createElement('img');
+        img.className = `hist-tile__${layer}`;
+        img.alt = '';
+        img.decoding = 'async';
+        img.addEventListener('load', () => {
+          if (++loaded === 2) art.classList.add('is-parallax');
+        });
+        // No layer for this run - an export made before they existed, or a bundle that
+        // would not open a second time. The picture keeps its flat card and simply doesn't
+        // move, which is what it did before any of this.
+        img.addEventListener('error', () => img.remove());
+        art.appendChild(img);
+        load(img, historyCardSrc(entry.id, layer));
+      });
+      return true;
+    }
+
     // ---- The hover parallax -----------------------------------------------------------------
     // A tile's picture is flat, but the thing it is a picture OF has depth: a figure standing
     // some way down a corridor. So when the mouse is over a tile the two are pulled apart - the
@@ -13146,7 +13379,9 @@ void main() {
     const TILE_HOLD_MS = 140;
     const TILE_HOLD_SLOP = 10;
 
-    function wireTileParallax(tile, art) {
+    // `tile` is the .par-scene being leaned over - a gallery tile, or the frame around a shared
+    // link's picture. `holdMs` is how long a finger has to stay put before it takes over.
+    function wireTileParallax(tile, art, holdMs = TILE_HOLD_MS) {
       let pending = null;
       // Where the picture sits inside its tile, and how big it is. Captured at the start of a
       // hover or a hold and kept for its length, because it CANNOT be read off the screen while
@@ -13247,7 +13482,7 @@ void main() {
         touchId = t.identifier;
         startX = lastX = t.clientX;
         startY = lastY = t.clientY;
-        holdTimer = setTimeout(() => {
+        const earnHold = () => {
           holdTimer = 0;
           held = true;
           measure();
@@ -13255,7 +13490,11 @@ void main() {
           // :hover sticks to whatever was last tapped, so it can't be trusted to mean "now".
           tile.classList.add('is-held');
           track(lastX, lastY);
-        }, TILE_HOLD_MS);
+        };
+        // No wait at all where there is no list under the picture to scroll (holdMs 0): a
+        // finger landing on it can only mean the picture.
+        if (holdMs > 0) holdTimer = setTimeout(earnHold, holdMs);
+        else earnHold();
       }, { passive: true });
 
       art.addEventListener('touchmove', e => {
@@ -13281,7 +13520,7 @@ void main() {
 
     function buildHistoryTile(entry) {
       const tile = document.createElement('div');
-      tile.className = 'hist-row hist-tile win95-box';
+      tile.className = 'hist-row hist-tile par-scene win95-box';
       tile.dataset.id = entry.id || '';
       const isCurrentRun = !!(entry.id && entry.id === currentRunHistoryId);
       if (isCurrentRun) {
@@ -13298,67 +13537,9 @@ void main() {
       art.className = 'hist-tile__art';
       art.title = historyTileTooltip(entry, castText);
 
-      // The listing's own 96px thumbnail goes down first, blown up and blurred. The card is a
-      // separate request per tile - and on a run saved before tiles existed the server has to
-      // draw it before it can answer - so without this the grid would be black rectangles for
-      // as long as that takes. It also stays as the fallback: a run whose card cannot be drawn
-      // at all keeps the blur rather than a hole.
-      if (entry.thumb) {
-        const under = document.createElement('img');
-        under.src = entry.thumb;
-        under.alt = '';
-        under.className = 'hist-tile__under';
-        art.appendChild(under);
-      } else {
-        const glyph = document.createElement('span');
-        glyph.className = 'text-3xl select-none opacity-40';
-        glyph.textContent = '🏰';
-        art.appendChild(glyph);
-      }
-
-      if (entry.id) {
-        const card = document.createElement('img');
-        // No .pixelated class: the page already applies image-rendering: pixelated to every
-        // img, and this one is no exception - a tile should look like the game does.
-        card.className = 'hist-tile__card';
-        card.alt = '';
-        card.decoding = 'async';
-        card.addEventListener('load', () => card.classList.add('is-loaded'));
-        // No card for this run (an older static export, or a bundle with nothing drawable in
-        // it): drop the empty image and leave the blurred thumbnail showing.
-        card.addEventListener('error', () => card.remove());
-        art.appendChild(card);
-        // Not card.src = ... : see queueHistoryCard. The picture is fetched when the tile is
-        // actually scrolled to, and only ever one at a time.
-        queueHistoryCard(card, historyCardSrc(entry.id));
-
-        // The same picture again, in two pieces, for the hover parallax. Through the same queue
-        // as everything else - three images a tile is precisely the pile-up that queue exists
-        // to keep off a server answering one request at a time - and laid over the flat card
-        // they replace, which they match pixel for pixel, so there is nothing to see when they
-        // arrive. Only once BOTH are up does the picture start moving: half a pair would be a
-        // hero with no corridor behind them. Asked for on touch screens too - a held finger
-        // drives the same effect there (see wireTileParallax).
-        {
-          let loaded = 0;
-          ['bg', 'hero'].forEach(layer => {
-            const img = document.createElement('img');
-            img.className = `hist-tile__${layer}`;
-            img.alt = '';
-            img.decoding = 'async';
-            img.addEventListener('load', () => {
-              if (++loaded === 2) art.classList.add('is-parallax');
-            });
-            // No layer for this run - an export made before they existed, or a bundle that
-            // would not open a second time. The tile keeps its flat card and simply doesn't
-            // move, which is what it did before any of this.
-            img.addEventListener('error', () => img.remove());
-            art.appendChild(img);
-            queueHistoryCard(img, historyCardSrc(entry.id, layer));
-          });
-          wireTileParallax(tile, art);
-        }
-      }
+      // Not straight to img.src: see queueHistoryCard. The pictures are fetched when the tile is
+      // actually scrolled to, and only ever one at a time.
+      if (fillCardArt(art, entry, queueHistoryCard)) wireTileParallax(tile, art);
 
       // What the run IS, readable without hovering: which one is running behind this window,
       // and whether it is starred. The actions below only appear on hover, and these two are
@@ -13412,6 +13593,17 @@ void main() {
         : 'Play ' + historyTitleOf(entry));
       btnStart.addEventListener('click', () => startHistoryDungeon(entry));
       acts.appendChild(btnStart);
+
+      if (SHOWCASE_MODE) {
+        const btnLink = document.createElement('button');
+        btnLink.type = 'button';
+        btnLink.className = 'hist-link win95-btn text-black hover:bg-blue-200';
+        btnLink.textContent = '🔗';
+        btnLink.title = '';   // same empty-title reasoning as btnStart just above
+        btnLink.setAttribute('aria-label', 'Copy a link to ' + historyTitleOf(entry));
+        btnLink.addEventListener('click', () => copyRunLink(entry, btnLink, btnLink));
+        acts.appendChild(btnLink);
+      }
 
       const btnStar = document.createElement('button');
       btnStar.type = 'button';
@@ -13889,9 +14081,9 @@ void main() {
         const entry = historyEntries.find(e => e.id === job.session);
         if (entry) entry.has_ending_video = true;
       }
-      // History is open over the very run it was filmed for, with Ending Video on: that run's
-      // cutscene should pick it up now rather than only on the next visit.
-      if (endingVideoOn && job.session === endingRunId && !endingClipUrl && !endingPollTimer) {
+      // History is open over the very run it was filmed for: that run's cutscene should pick it
+      // up now rather than only on the next visit, whatever the Ending Video setting says.
+      if (job.session === endingRunId && !endingClipUrl && !endingPollTimer) {
         pollEndingStatus(endingRunId, false);
       }
     }
@@ -14562,10 +14754,7 @@ void main() {
         setTabTitlePercent(100);
         currentRunHistoryId = entry.id || null;
         currentRunFavorite = !!entry.favorite;
-        currentRunHistoryPrompts = {
-          wall: entry.wall_style || '', player: entry.player_style || '',
-          weapon: entry.weapon_style || '', enemy: entry.enemy_style || ''
-        };
+        currentRunHistoryPrompts = historyPromptsOf(entry);
         armEnterDungeon(bundle);
         if (progHeaderIcon) progHeaderIcon.textContent = '📜';
         if (progHeaderText) progHeaderText.textContent = 'Loaded from History!';
@@ -14598,28 +14787,60 @@ void main() {
     // tooltips, but feeding those back in would generate from a different starting point
     // than the one that produced this dungeon.
 
-    // The ✕ on each mad-lib line's image badge. An attached image blanks and disables its
-    // field, so a slot holding one has to give the image up before saved wording can land
-    // there. Routed through the badge's own button rather than reimplemented, so the
-    // thumbnail, the file input and attachedImages all clear exactly as they do by hand.
-    // The wall line takes no image and so has no entry here.
-    const PROMPT_SLOT_CLEAR_BTN = {
-      player: 'btnClearPlayerImage',
-      weapon: 'btnClearWeaponImage',
-      enemy: 'btnClearEnemyImage'
-    };
+    // The four lines a saved run was made from, as the refill below takes them: its typed words,
+    // plus its id and its `pictures` record (server.py save_dungeon_session) so the lines that
+    // were drawn from a picture can get that picture back.
+    function historyPromptsOf(entry) {
+      return {
+        wall: entry.wall_style || '', player: entry.player_style || '',
+        weapon: entry.weapon_style || '', enemy: entry.enemy_style || '',
+        id: entry.id || null, pictures: entry.pictures || null
+      };
+    }
 
-    function fillPromptField(input, value, slotKey) {
-      if (!input) return;
-      if (input.disabled && slotKey) {
-        const clearBtn = document.getElementById(PROMPT_SLOT_CLEAR_BTN[slotKey]);
-        if (clearBtn) clearBtn.click();      // drops the image and re-enables the field
+    function blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    // Write a saved run's lines back into the mad-lib - History's Prompts, and the menu coming
+    // back up after a History replay. A line that was drawn from a picture gets that picture
+    // back with its name beside it; every other line loses whatever picture it has now. The
+    // pictures are all fetched before anything is written, so the refill is still ONE undo
+    // step. A picture that can't be fetched (a run saved before pictures were kept) leaves its
+    // line the words the picture was read as - what was actually drawn - rather than the bare
+    // name, which would be drawn literally.
+    async function refillPromptFields(prompts) {
+      const pictures = prompts.pictures || {};
+      const fetched = {};
+      if (!SHOWCASE_MODE && prompts.id) {
+        await Promise.all(SETUP_IMAGE_SLOTS.filter((key) => pictures[key] && pictures[key].saved)
+          .map(async (key) => {
+            try {
+              const res = await fetch(`${SERVER_URL}/api/history_picture?id=${encodeURIComponent(prompts.id)}&slot=${key}`);
+              if (res.ok) fetched[key] = await blobToDataUrl(await res.blob());
+            } catch (err) { /* falls back to the words, below */ }
+          }));
       }
-      if (input.disabled) return;            // nothing freed it - don't report a fill that missed
-      input.value = (value || '').trim();
-      // Shared with undo/redo, which flashes the same fields for the same reason - see
-      // flashPromptField up by the mad-lib history.
-      flashPromptField(input);
+      asOneSetupStep(() => {
+        SETUP_TEXT_FIELDS.forEach(([key, el]) => {
+          let value = prompts[key] || '';
+          if (fetched[key]) {
+            setSlotPicture(key, fetched[key], 'from History');
+          } else {
+            setSlotPicture(key, null);
+            if (pictures[key]) value = pictures[key].look || '';
+          }
+          el.value = value.trim();
+          // Shared with undo/redo, which flashes the same fields for the same reason - see
+          // flashPromptField up by the mad-lib history.
+          flashPromptField(el);
+        });
+      });
     }
 
     function useHistoryPrompts(entry) {
@@ -14639,7 +14860,7 @@ void main() {
       applyHistoryPrompts(entry);
     }
 
-    function applyHistoryPrompts(entry) {
+    async function applyHistoryPrompts(entry) {
       closeHistory();
       // Cleared before the openSetupScreen() call below rather than after: that call has its
       // own auto-refill for a run started from History (see currentRunHistoryPrompts), and
@@ -14650,20 +14871,13 @@ void main() {
       // reached mid-run once the player has said yes in the box above.
       if (screenSetup.classList.contains('hidden')) openSetupScreen();
 
-      // One undo step for the whole refill, images dropped included - this overwrites four
-      // fields at once, so walking it back has to put all four of them back at once too.
-      asOneSetupStep(() => {
-        fillPromptField(wallPromptInput, entry.wall_style, null);
-        fillPromptField(playerPromptInput, entry.player_style, 'player');
-        fillPromptField(weaponPromptInput, entry.weapon_style, 'weapon');
-        fillPromptField(enemyPromptInput, entry.enemy_style, 'enemy');
-      });
+      // One undo step for the whole refill, pictures included - this overwrites four lines at
+      // once, so walking it back has to put all four of them back at once too.
+      await refillPromptFields(historyPromptsOf(entry));
 
       // Same landing as a Quick idea: the top of the filled-in mad-lib, reading down, with
-      // Enter from any field still firing CREATE. Clearing an attached image above focuses
-      // that line's input, so this has to come last to win. On touch it goes the other way:
-      // nothing is left focused, or the keyboard comes up over the refilled menu (see
-      // setupOnTouch) - and that same image clear may have focused a line already.
+      // Enter from any field still firing CREATE. On touch it goes the other way: nothing is
+      // left focused, or the keyboard comes up over the refilled menu (see setupOnTouch).
       if (setupOnTouch) {
         const active = document.activeElement;
         if (active && SETUP_TEXT_FIELDS.some(([, el]) => el === active)) active.blur();
@@ -14797,6 +15011,9 @@ void main() {
       } else if (modalMakeOwn && !modalMakeOwn.classList.contains('hidden')) {
         e.preventDefault();
         closeMakeOwn();
+      } else if (modalSharedRun && !modalSharedRun.classList.contains('hidden')) {
+        e.preventDefault();
+        closeSharedRun();
       } else if (modalHistory && !modalHistory.classList.contains('hidden')) {
         e.preventDefault();
         closeHistory();
@@ -15397,7 +15614,9 @@ void main() {
       document.querySelectorAll('[data-showcase-only]').forEach((el) => el.classList.remove('hidden'));
       screenSetup.classList.add('hidden');
       if (screenShowcase) screenShowcase.classList.remove('hidden');
-      refreshHistory();
+      // A shared link's box goes up over the gallery once the listing it looks the run up in
+      // has arrived - see openSharedRun.
+      refreshHistory().then(() => { if (sharedRunId) openSharedRun(); });
     } else {
       // Catches the reload-out-of-a-cancel case: this page is brand new, but the server may
       // still be stopping the run the previous page abandoned on its way out.
@@ -15570,6 +15789,7 @@ void main() {
       if (agentShown(modalHistory)) return 'history';
       if (agentShown(modalSettings)) return 'options';
       if (agentShown(modalAbout)) return 'about';
+      if (agentShown(modalSharedRun)) return 'shared-run';
       return null;
     }
 
@@ -15579,6 +15799,7 @@ void main() {
       if (agentShown(modalHistory)) closeHistory();
       if (agentShown(modalSettings)) modalSettings.classList.add('hidden');
       if (agentShown(modalAbout)) closeAbout();
+      if (agentShown(modalSharedRun)) closeSharedRun();
     }
 
     function agentMarkerAt(x, y) {
