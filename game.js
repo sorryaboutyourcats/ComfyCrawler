@@ -1621,7 +1621,10 @@
       // its words to their blanks now that they have a width (see fitPromptField).
       fitPromptFields();
       if (SHOWCASE_MODE) {
-        refreshHistory();        // re-read the manifest so a just-played run's beaten/favorite shows
+        // Re-read the manifest so a just-played run's beaten/favorite shows, then put the run
+        // that was just played back under the cursor - after the re-read, which may redraw
+        // every tile and would take the focus with it.
+        refreshHistory().then(() => revealShowcaseRun(showcaseRevealId, true));
       } else {
         shuffleQuickIdeas();     // fresh Quick idea order on every return to the menu
       }
@@ -2176,6 +2179,10 @@
       const entry = Array.isArray(historyEntries)
         ? historyEntries.find(e => e && e.id === sharedRunId) || null : null;
       sharedRunEntry = entry;
+      if (entry) {
+        showcaseRevealId = entry.id;
+        revealShowcaseRun(entry.id, false);   // just the scroll - the box has the cursor
+      }
       if (sharedRunFound) sharedRunFound.classList.toggle('hidden', !entry);
       if (sharedRunMissing) sharedRunMissing.classList.toggle('hidden', !!entry);
       if (btnSharedRunPlay) btnSharedRunPlay.classList.toggle('hidden', !entry);
@@ -2209,13 +2216,21 @@
       if (modalSharedRun) modalSharedRun.classList.add('hidden');
     }
 
+    // Every way out of the box except Play: the gallery behind it already has the run
+    // scrolled into view (openSharedRun), and now the cursor goes onto it too, so the visitor
+    // who closed the box to look around can still find what they were sent.
+    function dismissSharedRun() {
+      closeSharedRun();
+      if (sharedRunEntry) revealShowcaseRun(sharedRunEntry.id, true);
+    }
+
     if (modalSharedRun) {
       modalSharedRun.addEventListener('click', (e) => {
-        if (e.target === modalSharedRun) closeSharedRun();
+        if (e.target === modalSharedRun) dismissSharedRun();
       });
     }
-    if (btnCloseSharedRun) btnCloseSharedRun.addEventListener('click', closeSharedRun);
-    if (btnSharedRunBrowse) btnSharedRunBrowse.addEventListener('click', closeSharedRun);
+    if (btnCloseSharedRun) btnCloseSharedRun.addEventListener('click', dismissSharedRun);
+    if (btnSharedRunBrowse) btnSharedRunBrowse.addEventListener('click', dismissSharedRun);
     if (btnSharedRunPlay) {
       btnSharedRunPlay.addEventListener('click', () => {
         const entry = sharedRunEntry;
@@ -12812,6 +12827,37 @@ void main() {
     // separate from renderHistoryList rather than folding a mode flag into it: that function
     // also carries the "Similar only" filter and the scroll-to-current-run behaviour, both
     // meaningless with no live run or mad-lib draft to compare against.
+    // The run the gallery brings back into view on its next return: the one a shared link
+    // pointed at, then whichever run was started last. Set in openSharedRun and
+    // loadHistoryDungeon, used by openSetupScreen.
+    let showcaseRevealId = null;
+
+    // Scrolls a run's row or tile to the middle of the gallery (the list's own scroll on a
+    // desktop, the page's on a phone, where the body scrolls - scrollIntoView covers both, and
+    // this is the page itself rather than a list inside a modal, so dragging the page along
+    // is the point). With `focus`, the cursor also goes onto its ▶, which brings up a tile's
+    // action strip, and it pulses once the way History's current row does, so a mouse user
+    // (who gets no focus ring) sees where it landed too.
+    function revealShowcaseRun(id, focus) {
+      if (!SHOWCASE_MODE || !id || !showcaseList) return;
+      const el = Array.prototype.find.call(showcaseList.querySelectorAll('.hist-row'),
+        r => r.dataset.id === id);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      if (!focus) return;
+      const start = el.querySelector('.hist-start');
+      if (start) start.focus({ preventScroll: true });
+      el.classList.remove('hist-row--found');
+      void el.offsetWidth;   // restart the pulse if it is somehow still running
+      el.classList.add('hist-row--found');
+      const done = (e) => {
+        if (e.target !== el) return;   // a marquee inside the row ending is not the pulse
+        el.classList.remove('hist-row--found');
+        el.removeEventListener('animationend', done);
+      };
+      el.addEventListener('animationend', done);
+    }
+
     function renderShowcaseList() {
       if (!showcaseList) return;
       if (!Array.isArray(historyEntries) || !historyEntries.length) {
@@ -14696,6 +14742,7 @@ void main() {
     // bundle comes from and that the progress readout is already finished on arrival.
     async function loadHistoryDungeon(entry) {
       closeHistory();
+      if (SHOWCASE_MODE && entry && entry.id) showcaseRevealId = entry.id;
 
       // Reachable straight from an active run (the quit-confirm box opens History without
       // leaving it first, and the player has said yes to ending it by now) - tear down
@@ -15023,7 +15070,7 @@ void main() {
         closeMakeOwn();
       } else if (modalSharedRun && !modalSharedRun.classList.contains('hidden')) {
         e.preventDefault();
-        closeSharedRun();
+        dismissSharedRun();
       } else if (modalHistory && !modalHistory.classList.contains('hidden')) {
         e.preventDefault();
         closeHistory();

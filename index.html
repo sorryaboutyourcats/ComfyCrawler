@@ -1230,6 +1230,13 @@
       box-shadow: inset 4px 0 #000080, inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
     }
     .hist-row--found { animation: histFound 1100ms ease-out; }
+    /* A row that is NOT the current run - the gallery's just-played or linked run once back on
+       the menu - fades from the yellow to its own ground rather than to the current row's
+       blue, which it would then drop out of with a jump. */
+    .hist-row--found:not(.hist-row--current) { animation-name: histFoundPlain; }
+    @keyframes histFoundPlain {
+      0% { background-color: #ffe066; }
+    }
     @keyframes histFound {
       0%   { background-color: #ffe066; }
       55%  { background-color: #eef4ff; }
