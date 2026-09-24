@@ -146,6 +146,7 @@
     const difficultySelectShowcase = document.getElementById('difficultySelectShowcase');
     const difficultySelectHistory = document.getElementById('difficultySelectHistory');
     const difficultySelectGallery = document.getElementById('difficultySelectGallery');
+    const difficultySelectShared = document.getElementById('difficultySelectShared');
     const gridDesc = document.getElementById('gridDesc');
     // Options' Off / On pair for Last Attack Frame - see setLastAttackFrame.
     const lastAttackFrameRow = document.getElementById('lastAttackFrameRow');
@@ -1834,7 +1835,8 @@
     // them (History's and the showcase gallery's) can be up alongside another, so "the other
     // one" was never a safe assumption, and a fourth made the copy-pasted pairs silly.
     const difficultySelects = [difficultySelect, difficultySelectShowcase,
-                               difficultySelectHistory, difficultySelectGallery].filter(Boolean);
+                               difficultySelectHistory, difficultySelectGallery,
+                               difficultySelectShared].filter(Boolean);
 
     // Hovering any difficulty dropdown shows how the three differ, side by side. Hand-written
     // from DIFFICULTIES (and BASE_MAX_HP / BASE_MAX_STM for Medium) - retune one, update this.
@@ -2150,8 +2152,12 @@
     // would roll with no narrator and no music. Play is that click, and then it is exactly the
     // row's ▶ Start. Showcase-only - a localhost link is no use to anyone it gets sent to, and
     // the export is the edition that gets shared.
-    const sharedRunId = SHOWCASE_MODE
-      ? new URLSearchParams(window.location.search).get('run') : null;
+    const sharedRunParams = new URLSearchParams(window.location.search);
+    const sharedRunId = SHOWCASE_MODE ? sharedRunParams.get('run') : null;
+    // The difficulty the sender had picked when they copied the link. Only a starting point:
+    // the box's dropdown shows it, the visitor can still change it, and it is not saved over
+    // the visitor's own stored pick unless they touch the dropdown themselves.
+    const sharedRunDifficulty = sharedRunParams.get('difficulty');
     const modalSharedRun = document.getElementById('modalSharedRun');
     const sharedRunFound = document.getElementById('sharedRunFound');
     const sharedRunScene = document.getElementById('sharedRunScene');
@@ -2174,6 +2180,7 @@
       if (sharedRunMissing) sharedRunMissing.classList.toggle('hidden', !!entry);
       if (btnSharedRunPlay) btnSharedRunPlay.classList.toggle('hidden', !entry);
       if (entry) {
+        if (sharedRunDifficulty && DIFFICULTIES[sharedRunDifficulty]) setDifficulty(sharedRunDifficulty);
         // The same picture a gallery tile leans, leaning the same way. No hold before a finger
         // takes over, unlike on a tile - there is no list under this one to scroll. Wired here
         // rather than up top because wireTileParallax's settings are declared further down.
@@ -2218,9 +2225,11 @@
     }
 
     // The link a row's 🔗 hands out: this page's own address, so it keeps whatever folder the
-    // export is hosted under, with only ?run - a visitor's ?agent is theirs, not the link's.
+    // export is hosted under, with only ?run and the difficulty picked right now - a visitor's
+    // ?agent is theirs, not the link's.
     function sharedRunUrl(id) {
-      return window.location.origin + window.location.pathname + '?run=' + encodeURIComponent(id);
+      return window.location.origin + window.location.pathname + '?run=' + encodeURIComponent(id)
+        + '&difficulty=' + encodeURIComponent(selectedDifficulty);
     }
 
     // navigator.clipboard is absent on a plain-http export and refused when the page is not
@@ -13089,7 +13098,8 @@ void main() {
         btnLink.className = 'hist-link win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
         btnLink.innerHTML = '<span class="hist-link-glyph">🔗</span><span class="hist-btn-word"> Link</span>';
         btnLink.setAttribute('aria-label', 'Copy a link to ' + historyTitleOf(entry));
-        btnLink.title = 'Copy a link straight to this dungeon - whoever opens it lands on its story';
+        btnLink.title = 'Copy a link straight to this dungeon, at the difficulty picked now'
+          + ' - whoever opens it lands on its story';
         btnLink.addEventListener('click', () =>
           copyRunLink(entry, btnLink, btnLink.querySelector('.hist-link-glyph')));
         row.appendChild(btnLink);

@@ -198,6 +198,12 @@
       outline: 2px dotted #000080;
       outline-offset: 1px;
     }
+    /* The shared link's box is the exception: its two buttons keep the browser's own focus
+       ring, and its difficulty dropdown sits right beside them, so it gets that same ring back
+       (revert = the browser's :focus-visible default) instead of the dotted one above. */
+    #modalSharedRun select:focus-visible {
+      outline: revert;
+    }
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
       color: white;
@@ -3130,11 +3136,24 @@
           That dungeon isn't in this showcase &ndash; it may have been taken down. Here are the ones that are.
         </p>
 
-        <div class="px-3 pt-3 pb-3 flex justify-end gap-2">
-          <button id="btnSharedRunBrowse" class="win95-btn px-3 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300">
-            Browse all dungeons
+        <div class="px-3 pt-3 pb-3 flex items-stretch gap-2 max-[400px]:gap-1.5">
+          <!-- Starts on the difficulty the link was copied at (&difficulty= - see openSharedRun),
+               and stays the visitor's to change: a saved run's maze is re-rolled at whatever is
+               picked when it starts (see loadHistoryDungeon). One more copy of the same setting,
+               kept in step by difficultySelects in game.js. It takes whatever width the two
+               buttons leave, so the row runs edge to edge under the picture. -->
+          <select id="difficultySelectShared" class="win95-input flex-1 min-w-0 text-xs font-bold cursor-pointer px-2 max-[400px]:px-1.5 py-1.5" aria-label="Difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+          <!-- "dungeons" drops off below 400px: a small phone has room for the dropdown and both
+               buttons on one line only if this one is short. &nbsp;, not a plain space: a
+               .win95-btn is inline-flex, which trims a space at the start of the span. -->
+          <button id="btnSharedRunBrowse" class="win95-btn px-3 max-[400px]:px-2 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300 whitespace-nowrap">
+            Browse all<span class="max-[400px]:hidden">&nbsp;dungeons</span>
           </button>
-          <button id="btnSharedRunPlay" class="win95-btn px-5 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold">
+          <button id="btnSharedRunPlay" class="win95-btn px-5 max-[400px]:px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold whitespace-nowrap">
             ▶ PLAY
           </button>
         </div>
