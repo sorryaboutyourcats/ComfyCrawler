@@ -2067,6 +2067,120 @@
       soundModeSelect.addEventListener('change', () => prefs.set(SOUND_MODE_KEY, soundModeSelect.value));
     }
 
+    // Secret Settings (index.html #secretSettingsSection): five presses in a row on the gear in
+    // Options' title bar show it, five more hide it again, and the page remembers which. "In a
+    // row" = each press within SECRET_CLICK_GAP ms of the last; a slower press starts the count
+    // over. Generation-only, like Generation Settings, so the showcase export ignores the gear.
+    const SECRET_SETTINGS_KEY = 'comfycrawler.secretSettings';
+    const SECRET_CLICKS = 5;
+    const SECRET_CLICK_GAP = 1500;
+    const btnOptionsGear = document.getElementById('btnOptionsGear');
+    const secretSettingsSection = document.getElementById('secretSettingsSection');
+    let secretClicks = 0;
+    let secretLastClick = 0;
+
+    function showSecretSettings(shown) {
+      if (!secretSettingsSection) return;
+      secretSettingsSection.classList.toggle('hidden', !shown);
+    }
+    showSecretSettings(!SHOWCASE_MODE && prefs.get(SECRET_SETTINGS_KEY) === 'shown');
+    if (btnOptionsGear) {
+      btnOptionsGear.addEventListener('click', () => {
+        if (SHOWCASE_MODE || !secretSettingsSection) return;
+        const now = Date.now();
+        secretClicks = (now - secretLastClick <= SECRET_CLICK_GAP) ? secretClicks + 1 : 1;
+        secretLastClick = now;
+        if (secretClicks < SECRET_CLICKS) return;
+        secretClicks = 0;
+        const shown = secretSettingsSection.classList.contains('hidden');
+        showSecretSettings(shown);
+        prefs.set(SECRET_SETTINGS_KEY, shown ? 'shown' : 'hidden');
+        // Point at what just appeared, without taking the cursor off the gear - pressing on
+        // hides it again from exactly where you are.
+        if (shown) secretSettingsSection.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    // Attachments (Generation Settings): how a picture attached to a mad-lib line reaches the art -
+    // 'reference' (the default: FLUX Kontext draws from the picture itself) or 'describe'
+    // (Qwen3-VL writes it down and the art is drawn from the words). server.py PICTURE_MODES.
+    const PICTURE_MODE_KEY = 'comfycrawler.pictureMode';
+    const PICTURE_MODES = ['reference', 'describe'];
+    const pictureModeSelect = document.getElementById('pictureModeSelect');
+    if (pictureModeSelect && PICTURE_MODES.includes(prefs.get(PICTURE_MODE_KEY))) {
+      pictureModeSelect.value = prefs.get(PICTURE_MODE_KEY);
+    }
+    if (pictureModeSelect) {
+      pictureModeSelect.addEventListener('change', () => prefs.set(PICTURE_MODE_KEY, pictureModeSelect.value));
+    }
+
+    // Attachments notice (index.html #modalAttachNotice): the first press of any line's Attach
+    // button while Attachments is on 'reference' opens it instead of the file picker - pictures
+    // make creating a dungeon slower, and 'describe' is the faster way. It cannot be closed for
+    // ATTACH_NOTICE_WAIT ms; OK then carries on into the picker that press was for, and ✕, ESC or
+    // the menu behind it just close it. Remembered once closed, whichever way. Never on 'describe':
+    // there pictures add seconds, so there is nothing to warn about and the notice is saved for
+    // if the player switches back.
+    const ATTACH_NOTICE_KEY = 'comfycrawler.attachNoticeSeen';
+    const ATTACH_NOTICE_WAIT = 3000;
+    const modalAttachNotice = document.getElementById('modalAttachNotice');
+    const btnAttachNoticeOk = document.getElementById('btnAttachNoticeOk');
+    const btnAttachNoticeClose = document.getElementById('btnAttachNoticeClose');
+    let attachNoticeSlot = null;   // the line whose Attach press opened it
+    let attachNoticeReady = false;
+
+    function attachNoticeDue() {
+      return !SHOWCASE_MODE && !!(modalAttachNotice && btnAttachNoticeOk && btnAttachNoticeClose)
+        && !!pictureModeSelect && pictureModeSelect.value === 'reference'
+        && prefs.get(ATTACH_NOTICE_KEY) !== 'seen';
+    }
+
+    // OK is only aria-disabled while it counts down, not disabled, so the keyboard cursor can
+    // sit on it from the start and Enter works the moment the count runs out.
+    function paintAttachNotice(secondsLeft) {
+      const waiting = secondsLeft > 0;
+      btnAttachNoticeOk.textContent = waiting ? 'OK (' + secondsLeft + ')' : 'OK';
+      btnAttachNoticeOk.setAttribute('aria-disabled', waiting ? 'true' : 'false');
+      btnAttachNoticeClose.disabled = waiting;
+    }
+
+    function openAttachNotice(key) {
+      attachNoticeSlot = key;
+      attachNoticeReady = false;
+      modalAttachNotice.classList.remove('hidden');
+      const until = Date.now() + ATTACH_NOTICE_WAIT;
+      const tick = () => {
+        const left = Math.ceil((until - Date.now()) / 1000);
+        paintAttachNotice(left);
+        if (left > 0) setTimeout(tick, (until - Date.now()) - (left - 1) * 1000);
+        else attachNoticeReady = true;
+      };
+      tick();
+      focusFirstIn(modalAttachNotice, btnAttachNoticeOk);
+    }
+
+    // `pick` carries on into the file picker - only from OK, whose click is the user gesture a
+    // picker needs. Focus goes back to the Attach button first, so a cancelled picker leaves
+    // the cursor where the player started.
+    function closeAttachNotice(pick) {
+      if (!attachNoticeReady) return;
+      modalAttachNotice.classList.add('hidden');
+      prefs.set(ATTACH_NOTICE_KEY, 'seen');
+      const slot = attachNoticeSlot ? pictureSlotEls(attachNoticeSlot) : null;
+      attachNoticeSlot = null;
+      if (!slot) return;
+      if (slot.attach) slot.attach.focus({ preventScroll: true });
+      if (pick && slot.file) slot.file.click();
+    }
+
+    if (modalAttachNotice && btnAttachNoticeOk && btnAttachNoticeClose) {
+      btnAttachNoticeOk.addEventListener('click', () => closeAttachNotice(true));
+      btnAttachNoticeClose.addEventListener('click', () => closeAttachNotice(false));
+      modalAttachNotice.addEventListener('click', (e) => {
+        if (e.target === modalAttachNotice) closeAttachNotice(false);
+      });
+    }
+
     // Raises Sound Generation to at least `rank` (0 skip / 1 sound_only / 2 music_and_sound) -
     // never lowers it. Called when a model download unlocks a level the player hadn't already
     // reached, so finishing "Sound effects" or "Music" from the setup screen turns sound on
@@ -11022,7 +11136,12 @@ void main() {
       if (!promptInput || !fileInput || !attachBtn) return;
       setSlotPicture(key, null);   // the resting tooltip and label, from the one writer
 
-      attachBtn.addEventListener('click', () => fileInput.click());
+      // The very first press may open the Attachments notice instead (see openAttachNotice),
+      // whose OK then opens this same picker.
+      attachBtn.addEventListener('click', () => {
+        if (attachNoticeDue()) openAttachNotice(key);
+        else fileInput.click();
+      });
 
       fileInput.addEventListener('change', (e) => {
         const file = e.target.files && e.target.files[0];
@@ -11551,6 +11670,7 @@ void main() {
       if (modalAbout && !modalAbout.classList.contains('hidden')) return;
       if (modalHistory && !modalHistory.classList.contains('hidden')) return;
       if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
+      if (modalAttachNotice && !modalAttachNotice.classList.contains('hidden')) return;
       if (e.target && e.target.tagName === 'TEXTAREA') return;
       // Now that the arrow keys can park the focus ring on any button here, Enter belongs to
       // whatever is focused: a Quick idea, Options and History activate themselves (CREATE
@@ -11686,7 +11806,7 @@ void main() {
     function topmostOpenDialog() {
       const stack = [modalDownloadStopConfirm, modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm,
                      modalHistoryConfirm, modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm,
-                     modalHistory, modalSettings, modalAbout, modalMakeOwn, modalSharedRun];
+                     modalHistory, modalSettings, modalAbout, modalMakeOwn, modalSharedRun, modalAttachNotice];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
 
@@ -12637,6 +12757,8 @@ void main() {
             weapon_image: attachedImages.weapon || null,
             enemy_style: enemyPromptInput ? enemyPromptInput.value.trim() : "",
             enemy_image: attachedImages.enemy || null,
+            // Whether those pictures are drawn from or only described - see pictureModeSelect.
+            picture_mode: pictureModeSelect ? pictureModeSelect.value : 'reference',
             mode: activeMode,
             sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound',
             graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal',
@@ -12685,7 +12807,10 @@ void main() {
             setTabTitlePercent(p.percent);
             // Live sub-job detail ("slash2 - step 5/8"), shown inline between the status
             // message and the percent rather than on its own centered line below.
-            if (p.phase) progPhaseText.textContent = p.phase;
+            // Cleared along with the server's, which empties it when a new job starts - kept
+            // only while non-empty, the last job's "turn - step 19/20" sat under "Posing your
+            // hero with Kontext..." until the first step of the next one.
+            progPhaseText.textContent = p.phase || '';
 
             // The story lands minutes ahead of the art - start reading immediately.
             if (p.story && !crawlStarted) startCrawl(p.story);
@@ -15032,7 +15157,12 @@ void main() {
     // this never fires over it.
     window.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' && e.code !== 'Escape') return;
-      if (modalLoadingExitConfirm && !modalLoadingExitConfirm.classList.contains('hidden')) {
+      if (modalAttachNotice && !modalAttachNotice.classList.contains('hidden')) {
+        // Does nothing until its countdown runs out (closeAttachNotice checks), and never opens
+        // the file picker - ESC is backing out, and a browser won't take it as a gesture anyway.
+        e.preventDefault();
+        closeAttachNotice(false);
+      } else if (modalLoadingExitConfirm && !modalLoadingExitConfirm.classList.contains('hidden')) {
         // Backing out means carrying on generating / reading.
         e.preventDefault();
         closeLoadingExitConfirm();

@@ -885,14 +885,28 @@ class ProgressTracker:
 
     def add_job(self, key, label, weight, units):
         """Register a job that only happens sometimes - the portrait regeneration pass
-        fires only when Kontext's edit barely moved the face."""
+        fires only when Kontext's edit barely moved the face.
+
+        A job the plan already guessed at (a retry that is more likely than not, sized for
+        its usual case) is resized to what it turned out to be instead, as long as it has
+        not started yet."""
         with self._lock:
-            if not self._active or key in self._weights:
+            if not self._active or key in self._done or key == self._current:
                 return
-            self._order.append(key)
+            if key not in self._weights:
+                self._order.append(key)
             self._labels[key] = label
             self._weights[key] = max(1.0, float(weight))
             self._units[key] = max(1.0, float(units))
+        self._publish()
+
+    def skip_job(self, key):
+        """A planned job that turned out not to be needed counts as done now. Left in the
+        denominator it would hold the bar short all the way to the end and then jump."""
+        with self._lock:
+            if not self._active or key not in self._weights or key == self._current:
+                return
+            self._done.add(key)
         self._publish()
 
     def begin_job(self, key):
@@ -998,15 +1012,32 @@ class ProgressTracker:
 
     _NODE_SUFFIXES = ("_samp", "_dec", "_save", "_mask", "_maskinv", "_pos", "_neg", "_lat")
 
+    # Node ids that read as nothing on the loading screen: the schnell surfaces job's one-letter
+    # tags ("w - step 1/4") and the sfx pack's footstep ("step - step 5/8").
+    _NODE_NAMES = {"w": "wall", "c": "ceiling", "f": "floor", "d": "door", "l": "lantern",
+                   "s": "switch", "step": "footstep"}
+
     def _node_detail(self, node_id, value, mx):
-        if node_id == "story_gen":
-            return "writing - %d words so far" % int(value * 0.75)
+        # Every Qwen3-VL text job (TextGenerate, "gen" or "<what>_gen") counts tokens against its
+        # CAP, not the reply's length: the set designer finished ~140 tokens into its 520, so its
+        # "theme gen - step 142/520" read as a quarter done at the moment it was done. Words so
+        # far are true however long the reply turns out.
+        if node_id == "gen" or node_id.endswith("_gen"):
+            words = int(value * 0.75)
+            if node_id == "story_gen":
+                return "writing - %d words so far" % words
+            return "%d word%s so far" % (words, "" if words == 1 else "s")
         name = node_id
         for suffix in self._NODE_SUFFIXES:
             if name.endswith(suffix):
                 name = name[: -len(suffix)]
                 break
         name = name.replace("enemy_", "").replace("_", " ").strip() or node_id
+        name = self._NODE_NAMES.get(name, name)
+        # The one krea2 job draws the hero's frames among the foes' ("walker idle", "boss block"),
+        # where a bare "idle" or "block" could be either. Called under self._lock.
+        if self._current == "frames" and name in V6_FRAME_NAMES:
+            name = "hero " + name
         return "%s - step %d/%d" % (name, int(value), int(mx))
 
     def _on_message(self, raw):
@@ -1391,6 +1422,83 @@ def _fix_offtheme_door(d_path, w_path, door_line, wall_line, tile_px, wall_named
         return d_path
     print(f"[surface] re-rolled door at ring saturation {alt_ring:.1f}")
     return alt
+
+
+# A PICTURED wall's door, set into the wall itself. Reported on the Windows XP hill photo: the
+# corridor was the hill and the sky, and the door cell a red brick wall with a door in it - the
+# designed DOOR line ("solid red plastic brick door ... archway framed in same material") took
+# its bricks from the weapon, and nothing in a door prompt ever sees the wall texture. The ring
+# guard above cannot catch it either: a brick surround is colourful, just the wrong colour.
+# A typed theme's wall is a material the door prompt can name again; a photographed view is not
+# something FLUX will paint twice the same way - the horizon lands at another height, the hills
+# change shape. So the door is drawn alone on white, cut out, and pasted onto the finished wall
+# texture: the cell around it IS the corridor wall, horizon and all.
+_DOOR_CUTOUT_TAIL = ("Exactly one door, centered, isolated on a plain flat pure white background, "
+                     "no scene, no floor, no room, no shadow.")
+
+# game.js's WALL_TEX_VSPAN, (1 + WALL_HEIGHT) / 2: only this middle part of a wall texture's height
+# is ever on screen, so the pasted door stands on its bottom edge - the floor line. Keep in step.
+DOOR_WALL_VSPAN = (1 + 0.62) / 2
+DOOR_CUTOUT_MAX_W = 0.84     # of the cell; buildOpenDoorTexture's side posts are 13% each
+DOOR_CUTOUT_MAX_H = 0.96     # of the visible band, so the arch clears its top edge
+
+
+def _door_is_cutout(wall_named):
+    return bool(wall_named and wall_named.get("source") == "picture")
+
+
+def _door_fill_leaf(door):
+    """The cut-out door (RGBA, cropped to its box) with whatever its archway encloses made solid
+    again. A WHITE leaf on the white ground it is drawn on is invisible to BiRefNet - "solid
+    white door leaf made of plush material" came back as a stone arch round an empty hole - but
+    the render's own pixels are still under the transparency. Closing the box's bottom edge (the
+    floor the door stands on) and flood-filling from outside finds everything the arch and jambs
+    wall in; that is door, and gets its alpha back."""
+    from PIL import ImageChops, ImageDraw
+    alpha = door.getchannel("A")
+    mask = alpha.point(lambda a: 255 if a > 40 else 0)
+    w, h = mask.size
+    padded = Image.new("L", (w + 2, h + 2), 0)
+    padded.paste(mask, (1, 1))
+    ImageDraw.Draw(padded).line([(1, h), (w, h)], fill=255)
+    ImageDraw.floodfill(padded, (0, 0), 128)
+    hole = padded.crop((1, 1, w + 1, h + 1)).point(lambda v: 255 if v == 0 else 0)
+    if hole.getbbox():
+        door = door.copy()
+        door.putalpha(ImageChops.lighter(alpha, hole))
+    return door
+
+
+def _door_onto_wall(cut_path, w_path):
+    """The door cut-out `cut_path` pasted onto the finished wall texture `w_path`, standing on
+    the floor line of the band game.js shows. Returns the new path, or None when either will
+    not read - the caller keeps the door render it already has.
+
+    The wall goes in MIRRORED: buildDoorTexture flips the door image so its handle reads right
+    on the face the player walks up to, where the raycaster flips it back - but it flips the
+    wall cells either side of it too. Pre-mirroring the wall here is what lines the door cell's
+    horizon up with its neighbours on that face."""
+    try:
+        wall = Image.open(w_path).convert("RGB").transpose(Image.FLIP_LEFT_RIGHT)
+        door = Image.open(cut_path).convert("RGBA")
+        box = door.getchannel("A").point(lambda a: 255 if a > 40 else 0).getbbox()
+        if not box:
+            print("[surface] the door cut-out came back empty - keeping the full door render")
+            return None
+        door = _door_fill_leaf(door.crop(box))
+        w, h = wall.size
+        band_h = h * DOOR_WALL_VSPAN
+        floor_y = round((h - band_h) / 2 + band_h)
+        scale = min(w * DOOR_CUTOUT_MAX_W / door.width, band_h * DOOR_CUTOUT_MAX_H / door.height)
+        door = door.resize((max(1, round(door.width * scale)), max(1, round(door.height * scale))),
+                           Image.LANCZOS)
+        wall.paste(door, ((w - door.width) // 2, floor_y - door.height), door)
+        out = os.path.splitext(cut_path)[0] + "_onwall.png"
+        wall.save(out, format="PNG")
+        return out
+    except Exception as e:
+        print(f"[surface] could not set the door into the wall: {e}")
+        return None
 
 
 def make_seamless_4way(img_path, blend_pixels=12):
@@ -3169,6 +3277,18 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
         door_p = (f"{brief['door']}, fully closed, flat straight-on orthographic front view, "
                   f"{NO_MARGINS}, zero perspective, zero horizon, zero sky, no room around it, "
                   f"{_door_sign(wall_named)}.")
+        # A PICTURED wall's door is drawn on its own and set into the finished wall texture
+        # (_door_onto_wall), so it is asked for as a cut-out rather than a full cell - see
+        # _door_is_cutout for why.
+        # The door LEADS and the designed line only describes its leaf, as in _DOOR_RESCUE: on
+        # white with nothing else to anchor it, "solid slab of molded plastic, red jumpsuit
+        # pattern embossed, black shoe silhouette carved into surface" was drawn as a person in
+        # a red jumpsuit.
+        if _door_is_cutout(wall_named):
+            door_p = (f"A single closed door standing upright in its own archway frame, the door "
+                      f"leaf {_theme_inline(brief['door'])}, the whole door and frame in view from "
+                      f"top to bottom, flat straight-on front view, {_door_sign(wall_named)}. "
+                      f"{_DOOR_CUTOUT_TAIL}")
         switch_p = (f"{brief['switch']}, mounted on a small plate as a lever switch handle, "
                     f"the handle resting in its neutral position. " + _GATE_TAIL)
 
@@ -4923,6 +5043,15 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pi
 # "The Beast" on a krea2 prompt comes back as a beast (the same trap as "stick of ram" drawing a
 # sheep). Only the crawl hears it, through resolve_named_styles' "story" text.
 PICTURE_SLOTS = ("wall", "player", "weapon", "enemy")
+# How an attached picture reaches the art - the "Attachments" row in Options' Generation
+# Settings. "reference" (the default): the picture itself is a FLUX Kontext
+# ReferenceLatent and the art is drawn FROM it - see the Kontext reference pictures section.
+# "describe": what this section describes, the picture read into words and drawn from those.
+# Both read the picture with Qwen3-VL first: the story, the sound, the set designer and the
+# names all need it in words either way, and "describe" is also where every reference asset
+# falls back to when its Kontext job fails.
+PICTURE_MODES = ("reference", "describe")
+PICTURE_MODE_DEFAULT = "reference"
 PICTURE_MAX_TOKENS = 120
 PICTURE_TEMPERATURE = 0.5
 PICTURE_LOOK_MAX_WORDS = 36
@@ -4946,7 +5075,9 @@ _PICTURE_ROLES = {
     "player": ("the hero the player plays as",
                "the person or character alone, not the background, in order from top to bottom: "
                "build, hair and face, then their top, then their legwear, then their shoes. "
-               "Leave out anything they are holding"),
+               "If it is a person dressed up in a costume, KIND is person and the LOOK is a person "
+               "in that costume: name the character it copies, then describe the costume as it "
+               "really looks. Leave out anything they are holding"),
     "weapon": ("the weapon the hero fights with",
                "the object alone, not the background: its shape, materials, colours and markings"),
     "enemy": ("the enemy the dungeon is full of",
@@ -4977,12 +5108,14 @@ LOOK: <one line>"""
 # a sprite prompt draws that too. The place is the one line where the setting IS the subject.
 _PICTURE_WHERE = {
     "wall": "Describe the place itself, not any people or animals in it.",
-    "player": ("Say nothing about where they are or what is behind them. If the picture cuts "
+    "player": ("Say nothing about where they are or what is behind them, and nothing about their "
+               "pose or what they are doing - only what they look like. If the picture cuts "
                "them off - only the head, or only down to the chest or waist - still describe "
                "ALL of them down to the feet: give them legwear and shoes that suit the rest of "
                "the outfit, and end the LOOK on them."),
     "weapon": "Say nothing about where it is or what it is lying on.",
-    "enemy": ("Say nothing about where it is or what it is sitting on. If the picture cuts it "
+    "enemy": ("Say nothing about where it is or what it is sitting on, and nothing about its "
+              "pose or what it is doing - only what it looks like. If the picture cuts it "
               "off - only the head, or only down to the chest or waist - still describe ALL of "
               "it down to the feet: give it the legs, lower body and footwear that suit the "
               "part you can see, and end the LOOK on them."),
@@ -4993,6 +5126,22 @@ _PICTURE_WHERE = {
 # about: the idle came out a chest-up bust on the walker, flyer AND boss, only the block
 # frame (whose clause names the feet) whole. Same lesson as the ARMS guard's note above
 # ENEMY_BLOCK_POSES: a description with no lower half gets drawn with no lower half.
+#
+# Why "nothing about its pose". A GIF frame of a cat-headed dancer came back "..., black shoes,
+# and jumping mid-air" on 7 of 8 reads, and a pose in the LOOK is a pose in EVERY frame - the
+# idle, the block and the flyer all leapt, and the set designer's short ENEMY line kept "white
+# cat mid-leap" and dropped the red jumpsuit. With the clause: 0 of 8, suit and shoes kept on
+# all 8, and the player reads (a man in a crowd photo, Elmo) came back steadier, not worse.
+# _PICTURE_POSE_RE cuts what still gets through.
+#
+# Why the costume sentence on the player. A photo of someone in a baggy homemade Elmo suit read
+# "elmo, red fuzzy creature ..." 3 of 4 (and "mascot" once), and a character the image models
+# know by name is drawn as THAT character - the clean TV Muppet, in both Attachments modes, where
+# the player had asked for the costume in the picture. With it: KIND person 4 of 4, "red furry
+# Elmo costume with large white eyes ..." (see _picture_look_finish for the "person in a" join),
+# and krea2 drew a person in a red fur suit rather than the Muppet 3 of 3. A first wording that
+# only said "say it is a costume" wrote "red fuzzy costume ..." with nobody in it and no Elmo.
+# The man-in-a-cap photo read the same with and without it, 4 of 4 each.
 
 # The reply is begun on its first label, the way _NAMING_REPLY_START begins the naming call's -
 # a small model handed a blank reply opens with "Sure! Here is..." as often as not.
@@ -5017,11 +5166,32 @@ _PICTURE_SETTING_RE = re.compile(
     r"\s+(?:on|in|against|atop|by|beside|next|near|under|in\s+front)\b"
     r"(?!\s+(?:its|his|her|their|two|four|all|both|hind|tip-?toes?)\b)"
     r"|\b(?:in|against)\s+(?:the|a)\s+background\b|\bin\s+the\s+distance\b", re.IGNORECASE)
+# What the subject was DOING in the picture, which _PICTURE_WHERE asks the model to leave out -
+# see the note above it. Cut from the match to the end of its clause, like a setting. A word
+# for clothing after it is a look, not a pose: "running shoes", "dancing shoes".
+_PICTURE_POSE_RE = re.compile(
+    r"(?:^|\s)(?:(?:and|while|is)\s+)?"
+    r"(?:(?:jumping|leaping|dancing|running|kicking|punching|falling|spinning|lunging|posing|"
+    r"crouching|squatting)\b(?!\s+(?:shoes?|sneakers|trainers|boots|shorts|tights|pants|suit|"
+    r"gear|outfit|clothes|leotard)\b)|(?:in\s+)?mid[- ](?:air|leap|jump|stride|dance|kick|"
+    r"swing|step|motion)\b)", re.IGNORECASE)
+
+
+# A hand held up in a wave, on any drawn line. Every read of a white plush toy ended "and one
+# raised hand waving gently", and as the WEAPON that made the HERO wave - the right hand raised
+# and open in all six krea2 frames, the plush hanging off the other arm. Asking the describer
+# for no pose on the weapon line made it worse (KIND "creature", the raised hand still there), so
+# it is cut here, clause and all. Only a raised HAND, ARM or PAW: "raised studs" and "raised
+# lettering" are how an object's surface detail is described.
+_PICTURE_GESTURE_RE = re.compile(
+    r"\bwav(?:e|es|ing)\b|\b(?:raised|raising|lifted|lifting|outstretched)\s+(?:\w+\s+)?"
+    r"(?:hands?|arms?|paws?)\b", re.IGNORECASE)
 
 
 def _picture_look_finish(slot, kind, look):
-    """The two things the model was asked for and does not reliably do, done in code. Cut the
-    setting off (see _PICTURE_SETTING_RE). Then put the KIND back in front when LOOK never says
+    """The things the model was asked for and does not reliably do, done in code. Cut the
+    setting off (see _PICTURE_SETTING_RE), and on a player or enemy the pose it was caught in
+    (_PICTURE_POSE_RE). Then put the KIND back in front when LOOK never says
     it: asked to describe a fly swatter it wrote "blue plastic with grid pattern, long handle" -
     every word true, and krea2 would never draw a fly swatter from it. Same lesson as
     krea2_species_prompt's re-anchoring of the typed noun: a describer writes the details and
@@ -5029,7 +5199,13 @@ def _picture_look_finish(slot, kind, look):
     if slot != "wall":
         parts = []
         for part in look.split(","):
+            # A gesture is dropped with its whole clause - see _PICTURE_GESTURE_RE.
+            if _PICTURE_GESTURE_RE.search(part):
+                continue
             m = _PICTURE_SETTING_RE.search(part)
+            if slot in ("player", "enemy"):
+                p = _PICTURE_POSE_RE.search(part)
+                m = p if p and (not m or p.start() < m.start()) else m
             part = (part[:m.start()] if m else part).strip()
             if m:
                 part = re.sub(r"\s+(?:and|with|or)$", "", part, flags=re.IGNORECASE)
@@ -5041,7 +5217,11 @@ def _picture_look_finish(slot, kind, look):
     if kind:
         head = kind.split()[-1]
         if not re.search(r"\b" + re.escape(head) + r"(?:e?s)?\b", look, re.IGNORECASE):
-            look = f"{kind}, {look}"
+            # "person, red furry Elmo costume with ..." reads as two things; a costume is worn.
+            if head.lower() in _PERSON_ENEMY_NOUNS and re.search(r"\bcostumes?\b", look, re.I):
+                look = f"{kind} in {_a_or_an(look)}"
+            else:
+                look = f"{kind}, {look}"
     return look
 
 
@@ -5092,6 +5272,31 @@ def _stage_picture(data_url, tag):
         return name
     except Exception as e:
         print(f"[pictures] could not stage the {tag} picture ({e})")
+        return None
+
+
+def _stage_reference(data_url, tag, long_side=None):
+    """Write one attached picture into ComfyUI's input folder as a FLUX Kontext reference and
+    return its name, or None. Unlike _stage_picture's straight copy (Qwen3-VL takes anything),
+    this one is flattened onto white - Kontext wants full RGB, the same reason the walker is
+    composited onto white in generate_kontext_enemy_variants - and scaled so its long side is
+    KONTEXT_REF_PX, rounded to the 16px the Flux latent patches in. A phone photo sent at full
+    size would otherwise cost the sampler thousands of extra reference tokens on every image."""
+    long_side = long_side or KONTEXT_REF_PX
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(data_url.split(",", 1)[-1])))
+        img = img.convert("RGBA")
+        flat = Image.new("RGB", img.size, (255, 255, 255))
+        flat.paste(img, (0, 0), img)
+        scale = long_side / float(max(flat.size))
+        w = max(16, int(round(flat.width * scale / 16.0)) * 16)
+        h = max(16, int(round(flat.height * scale / 16.0)) * 16)
+        flat = flat.resize((w, h), Image.LANCZOS)
+        name = f"{tag}_ref_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+        flat.save(os.path.join(COMFY_INPUT_DIR, name), format="PNG")
+        return name
+    except Exception as e:
+        print(f"[pictures] could not stage the {tag} picture as a reference ({e})")
         return None
 
 
@@ -5209,7 +5414,9 @@ def _describe_attempt(slot, image_name, prompt=None):
         },
         "pic_out": {"inputs": {"source": ["pic_gen", 0]}, "class_type": "PreviewAny"},
     }
-    raw = _submit_and_collect_text(payload, "pic_out", job_key="pictures")
+    # One job per picture in the progress plan (see _plan_v6) - a retry or the lower-half
+    # follow-up lands on a job that is already done, and so costs the bar nothing.
+    raw = _submit_and_collect_text(payload, "pic_out", job_key=f"picture_{slot}")
     return raw if prompt else parse_picture_reply(raw, slot)
 
 
@@ -5241,8 +5448,6 @@ def describe_pictures(pictures):
     slots = [s for s in PICTURE_SLOTS if (pictures or {}).get(s)]
     if not slots:
         return {}
-    PROGRESS.add_job("pictures", "Studying your pictures with Qwen3-VL...",
-                     2 * len(slots), PICTURE_MAX_TOKENS * len(slots))
     out = {}
     t0 = time.time()
     for slot in slots:
@@ -5261,8 +5466,9 @@ def describe_pictures(pictures):
         if image_name and got["look"]:
             got = _picture_add_lower(slot, image_name, got)
         out[slot] = got
+        # A picture that would not stage never reached ComfyUI - its planned job is not coming.
+        PROGRESS.skip_job(f"picture_{slot}")
         print(f"[pictures] {slot}: {got['kind'] or '(no kind)'} - {got['look'] or '(unread)'}")
-    PROGRESS.finish_job("pictures")
     print(f"[pictures] {len(slots)} picture(s) read in {time.time()-t0:.1f}s")
     return out
 
@@ -5339,7 +5545,8 @@ _THEME_BRIEF_SURFACES = """- WALL: what covers the corridor walls - what you wou
 
 def _theme_brief_surfaces(wall_named=None):
     """The slot-description block above, plain for an ordinary typed theme, or with one
-    appended sentence for a named place. Appended as a SENTENCE describing what the LANTERN,
+    appended sentence for a named place (and one for a pictured one - see the end). Appended as
+    a SENTENCE describing what the LANTERN,
     DOOR and SWITCH slots should draw FROM, not as a new rule in _theme_rules - that block's
     own comment records what a 6.6KB rules block already cost this model in reliability, and a
     named place is rare enough that it does not earn a permanent tax on every other run.
@@ -5361,6 +5568,19 @@ def _theme_brief_surfaces(wall_named=None):
         else:
             body += f"a {kind}. "
         body += "Never write its name into the picture - the name is spoken, not painted.\n"
+    # A pictured wall (_picture_entity - named or not) is already a real place, not an idea to
+    # interpret. Without this the designer re-imagined the Windows XP hill photo differently
+    # every run - "green grassy wallpaper with scattered white cloud motifs, stitched in bold
+    # blue thread" on 3 of 5, a floor of "mossy concrete" or "mossy tiles" on 3 of 5 - and pulled
+    # the weapon and enemy into the place ("plastic brick fragments" underfoot). With it, 5 of 5
+    # came back the view itself ("endless green grass under bright blue sky... painted edge to
+    # edge"), a grass floor and a clear sky ceiling, and FLUX schnell painted all four walls
+    # tried as the hill and sky.
+    if wall_named and wall_named.get("source") == "picture":
+        body += ("\nThe THEME was read from a photograph of a place, so paint that place as it "
+                 "is: the WALL is the view in the photograph painted edge to edge, the FLOOR is "
+                 "the ground in it and the CEILING is what is overhead in it - all three taken "
+                 "from the THEME alone, never from the WEAPON or the ENEMY.\n")
     return body
 
 # The rules, split by which request shape needs them and numbered at build time.
@@ -5564,7 +5784,8 @@ def parse_theme_brief(text, slots):
 
 
 def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=True,
-                         wall_named=None, enemy_named=None):
+                         wall_named=None, enemy_named=None, enemy_pictured=False,
+                         weapon_pictured=False):
     """Turn the typed words into concrete drawable material. Never raises: on any failure
     returns None and every caller falls back to interpolating the typed words raw, which is
     exactly what shipped before this stage existed.
@@ -5598,6 +5819,14 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # A typed PERSON is kept exactly as typed - the designer re-themes people to match the
     # dungeon and that is how "Lady in the red dress" became a red robot (see _enemy_is_person).
     if literal is None and _enemy_is_person(enemy_style):
+        literal = _theme_inline(enemy_style.strip())
+    # `enemy_pictured`: `enemy_style` is the LOOK Qwen3-VL read off an attached picture, and it
+    # is kept the same way, whatever it is. The designer's ENEMY line is at most eight words,
+    # and cut to fit it dropped exactly what made the picture that picture - a cat-headed dancer
+    # read as "white cat ... wearing a red jumpsuit and black shoes" came back "white cat
+    # mid-leap", and every foe of that run was a plain white cat. The Kontext foe drawing reads
+    # this line too (generate_krea2_posed_bundle), so it matters in both Attachments modes.
+    if enemy_pictured and (enemy_style or "").strip():
         literal = _theme_inline(enemy_style.strip())
 
     def _attempt():
@@ -5647,10 +5876,17 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
             return {"enemy": literal} if literal else None
         if literal:
             brief["enemy"] = literal
+        # A pictured WEAPON's LOOK is kept the same way. The designer re-imagined "soft white
+        # plush with rounded limbs, smiling face" as a "plush white cat", and the hero held a
+        # cat. (Its failure paths above need nothing: they already fall back to `weapon_style`,
+        # which on a pictured line IS the LOOK.)
+        weapon_kept = weapon_pictured and bool((weapon_style or "").strip())
+        if weapon_kept:
+            brief["weapon"] = _theme_inline(weapon_style.strip())
         for s in slots:
             got = brief.get(s)
-            if s == "enemy" and literal:
-                print(f"[theme] {s:8s} {got}  (hand-tuned, the designed line is ignored)")
+            if (s == "enemy" and literal) or (s == "weapon" and weapon_kept):
+                print(f"[theme] {s:8s} {got}  (kept as given, the designed line is ignored)")
                 continue
             print(f"[theme] {s:8s} {got if got else '(missing - using the typed words)'}")
         print(f"[theme] set designed in {time.time()-t0:.1f}s")
@@ -5872,6 +6108,17 @@ KONTEXT_EXPRESSION_EDITS = {
 }
 
 
+# The retry's wording: the same expressions with a looser keep. "Keep the exact same face ...
+# change nothing else" holds a photo-drawn bust so still that the block glare moved 1.1 and 1.5
+# (the second at the retry's guidance) and 2.8 even at 9.0 on the reported face - glasses, a big
+# head of hair. Keeping the PERSON rather than the exact face, at the retry's guidance, gave a
+# clear bared-teeth block (3.7) and a pained hurt (7.1), glasses still on. At 4.0 the same keep
+# took the glasses off for the hurt's squeezed-shut eyes, so it is the retry's alone.
+_KEEP_RETRY = "Keep the same person, hair, glasses, skin, clothing, lighting and framing."
+KONTEXT_EXPRESSION_RETRY = {n: t.replace(_KEEP, _KEEP_RETRY)
+                            for n, t in KONTEXT_EXPRESSION_EDITS.items()}
+
+
 def krea2_portrait_prompt(player_style, expression=None):
     p = player_style.strip() if (player_style and player_style.strip()) else "armored warrior knight"
     expr = expression or KREA2_PORTRAIT_EXPRESSIONS["idle"]
@@ -5910,7 +6157,7 @@ def _portrait_frame_diff(idle_path, frame_path):
 
 
 def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False,
-                            job_key="portrait_edits"):
+                            job_key="portrait_edits", edits=None):
     """One Kontext job: edit the RGB idle image `idle_in` (a filename in COMFY_INPUT_DIR)
     into each expression name in `targets`. `with_idle=True` also emits a background-removed
     copy of the idle itself (matting only, no sampler) so every frame shares the same matte.
@@ -5928,7 +6175,7 @@ def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False,
         _kontext_alpha_nodes(b, "idle", "load", "kxp")
         want = ["idle"] + want
     for name in targets:
-        b[f"{name}_pos"] = {"inputs": {"text": KONTEXT_EXPRESSION_EDITS[name], "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
+        b[f"{name}_pos"] = {"inputs": {"text": (edits or KONTEXT_EXPRESSION_EDITS)[name], "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
         b[f"{name}_ref"] = {"inputs": {"conditioning": [f"{name}_pos", 0], "latent": ["enc", 0]}, "class_type": "ReferenceLatent"}
         b[f"{name}_g"]   = {"inputs": {"conditioning": [f"{name}_ref", 0], "guidance": guidance}, "class_type": "FluxGuidance"}
         b[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
@@ -5942,19 +6189,9 @@ def _kontext_expression_job(idle_in, targets, guidance, seed, with_idle=False,
     return _krea2_submit_and_collect(b, want, timeout=400, job_key=job_key)
 
 
-def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
-    """Four HUD portrait busts: a krea2 idle, then FLUX.1 Kontext expression edits of it.
-
-    Job A (krea2): one idle bust at `size` px, plain RGB.
-    Job B (Kontext, `_kontext_expression_job`): edit the idle into attack/block/hurt (no
-    FluxKontextImageScale - see KONTEXT_PORTRAIT_RES). Any reaction frame that comes back
-    within KONTEXT_PORTRAIT_MIN_DIFF of the idle (the edit did nothing - common for a
-    glasses-wearer's 'mouth closed' block) is regenerated once at a higher guidance + a
-    fresh seed. Returns a 4-list in PORTRAIT_FRAME_NAMES order (each background-removed,
-    bad frames fall back to idle); None if even idle fails."""
-    seed = random.randint(1, 1000000000)
-
-    # --- Job A: krea2 idle bust (no background removal - Kontext needs the full RGB) ---
+def _krea2_portrait_idle(player_style, size, seed):
+    """generate_kontext_portrait_set's job A from the words: one krea2 idle bust at `size` px,
+    plain RGB. Returns its path."""
     a = _krea2_loaders()
     a["idle_pos"] = {"inputs": {"text": krea2_portrait_prompt(player_style), "clip": ["k_clip", 0]}, "class_type": "CLIPTextEncode"}
     a["idle_neg"] = {"inputs": {"conditioning": ["idle_pos", 0]}, "class_type": "ConditioningZeroOut"}
@@ -5966,7 +6203,71 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
                       "class_type": "KSampler"}
     a["idle_dec"] = {"inputs": {"samples": ["idle_samp", 0], "vae": ["k_vae", 0]}, "class_type": "VAEDecode"}
     a["idle_save"] = {"inputs": {"filename_prefix": f"kxp_src_{int(time.time()*1000)}", "images": ["idle_dec", 0]}, "class_type": "SaveImage"}
-    idle_src = _krea2_submit_and_collect(a, ["idle"], job_key="portrait_idle")["idle"]
+    return _krea2_submit_and_collect(a, ["idle"], job_key="portrait_idle")["idle"]
+
+
+# A bust drawn from the player's picture sometimes keeps the picture's framing. Reported from play:
+# a TV still of a man at the edge of the shot came back as half a face cut off by the frame's
+# right edge, and with half a face to work on the block and hurt edits moved 1.3 and 0.7 - the
+# portrait never changed. Measured as how far the matted figure's horizontal centre of mass sits
+# from the middle: 8 centred busts of that same picture read 0.00-0.04; the half face 0.25.
+# kontext_bust_prompt now asks for the face centred as well (4 of 4 head-and-shoulders, against
+# 2 extreme close-ups of 4 without), and this catches what still gets through.
+KONTEXT_BUST_MAX_OFFSET = 0.15
+KONTEXT_BUST_ATTEMPTS = 3
+
+
+def _bust_offset(matted_path):
+    """How far (0-0.5, of the width) the matted bust's horizontal centre of mass sits from the
+    middle of the frame; 0.5 when nothing survived the matte."""
+    import numpy as np
+    try:
+        a = np.asarray(Image.open(matted_path).convert("RGBA").getchannel("A"), dtype=float)
+    except Exception as e:
+        print(f"[Kontext Portrait] could not measure the bust: {e}")
+        return 0.0
+    cols = (a > 40).sum(axis=0)
+    if not cols.sum():
+        return 0.5
+    cx = (cols * np.arange(a.shape[1])).sum() / cols.sum() / a.shape[1]
+    return abs(cx - 0.5)
+
+
+def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=None):
+    """Four HUD portrait busts: a krea2 idle, then FLUX.1 Kontext expression edits of it.
+
+    Job A (krea2): one idle bust at `size` px, plain RGB. With `ref` - the player's picture,
+    staged as a Kontext reference - it is a Kontext drawing of the face in that picture instead
+    (kontext_bust_prompt), and falls back to krea2 if that job fails.
+    Job B (Kontext, `_kontext_expression_job`): edit the idle into attack/block/hurt (no
+    FluxKontextImageScale - see KONTEXT_PORTRAIT_RES). Any reaction frame that comes back
+    within KONTEXT_PORTRAIT_MIN_DIFF of the idle (the edit did nothing - common for a
+    glasses-wearer's 'mouth closed' block) is regenerated once at a higher guidance + a
+    fresh seed. Returns a 4-list in PORTRAIT_FRAME_NAMES order (each background-removed,
+    bad frames fall back to idle); None if even idle fails."""
+    seed = random.randint(1, 1000000000)
+
+    # --- Job A: the idle bust (no background removal - Kontext needs the full RGB) ---
+    idle_src = None
+    if ref:
+        try:
+            # Redrawn when the face is pushed off to one side - see KONTEXT_BUST_MAX_OFFSET. The
+            # last try is kept whatever it is.
+            for attempt in range(KONTEXT_BUST_ATTEMPTS):
+                got = _kontext_ref_job([ref], {"idle": kontext_bust_prompt(player_style)},
+                                       seed + attempt, size=size, keep_rgb=True, prefix="kxp_src",
+                                       job_key="portrait_idle" if not attempt else None)
+                idle_src = got["idle_rgb"]
+                offset = _bust_offset(got["idle"])
+                if offset <= KONTEXT_BUST_MAX_OFFSET:
+                    break
+                print(f"[Kontext Portrait] bust drawn {offset:.2f} off centre - redrawing it")
+        except GenerationCancelled:
+            raise
+        except Exception as e:
+            print(f"[Kontext Ref Error] portrait: {e} - painting it from the words instead")
+    if not idle_src:
+        idle_src = _krea2_portrait_idle(player_style, size, seed)
 
     idle_in = f"kxp_src_{int(time.time()*1000)}.png"
     shutil.copy(idle_src, os.path.join(COMFY_INPUT_DIR, idle_in))
@@ -5975,16 +6276,30 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES):
     reactions = [n for n in PORTRAIT_FRAME_NAMES if n != "idle"]
     paths = _kontext_expression_job(idle_in, reactions, KONTEXT_PORTRAIT_GUIDANCE, seed, with_idle=True)
 
-    stuck = [n for n in reactions
-             if _portrait_frame_diff(paths["idle"], paths[n]) < KONTEXT_PORTRAIT_MIN_DIFF]
+    diffs = {n: _portrait_frame_diff(paths["idle"], paths[n]) for n in reactions}
+    stuck = [n for n in reactions if diffs[n] < KONTEXT_PORTRAIT_MIN_DIFF]
     if stuck:
         print(f"[Kontext Portrait] {stuck} barely changed - regenerating at higher guidance")
         PROGRESS.add_job("portrait_regen", "Re-rolling the portraits that did not move...",
-                         15 * len(stuck), len(stuck) * KONTEXT_STEPS)
+                         9 * len(stuck), len(stuck) * KONTEXT_STEPS)   # seconds - see _plan_v6
+        # A bust drawn from the player's PICTURE (`ref`) retries with the looser keep, and keeps
+        # a retry only if it moved further. Reported from play: a photo-drawn bust's hurt frame
+        # came back a clear grimace that measured 3.0 (a big head of hair dilutes the face's
+        # share of the picture), was re-rolled as "stuck", and the 1.7 retry replaced it - the
+        # portrait never changed for hurt. A bust from typed words keeps the retry it has always
+        # had, taken as it comes: the user asked for typed runs to stay exactly as they are.
         retry = _kontext_expression_job(idle_in, stuck, KONTEXT_PORTRAIT_GUIDANCE + 2.5,
-                                        random.randint(1, 1000000000),
-                                        job_key="portrait_regen")
-        paths.update(retry)
+                                        random.randint(1, 1000000000), job_key="portrait_regen",
+                                        edits=KONTEXT_EXPRESSION_RETRY if ref else None)
+        for n in stuck:
+            if not ref:
+                paths[n] = retry[n]
+                continue
+            d = _portrait_frame_diff(paths["idle"], retry[n])
+            print(f"[Kontext Portrait] {n} retry moved {d:.1f} (was {diffs[n]:.1f})"
+                  f"{' - kept' if d > diffs[n] else ''}")
+            if d > diffs[n]:
+                paths[n] = retry[n]
 
     frames = [paths[n] if crop_portrait_square(paths[n]) else None for n in PORTRAIT_FRAME_NAMES]
     fallback = frames[0] or next((p for p in frames if p), None)
@@ -6010,7 +6325,7 @@ def _save_tight(img_path, thresh=20):
         print(f"[Tight Crop Error] {os.path.basename(img_path)}: {e}")
 
 
-def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=None):
+def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=None, surfaces=None):
     """Just the wall / ceiling / floor thirds of generate_flux_all_assets. v5 keeps FLUX
     schnell for the tiling environment textures and generates everything else with krea2.
 
@@ -6019,7 +6334,12 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
 
     `brief` is a generate_theme_brief() dict (or None); it only reaches the generic branch of
     the two prompt builders, so a bucketed theme renders exactly as it always has. `wall_named`
-    is passed straight through to both - see get_surface_prompts/get_gate_prompts."""
+    is passed straight through to both - see get_surface_prompts/get_gate_prompts.
+
+    `surfaces` is generate_kontext_surfaces()' {"wall", "ceiling", "floor"} (any of them) when
+    the dungeon's picture was sent as a reference: those are not painted here, but go through the
+    same seam blend and rescue passes below. The door, lantern and switch, and any of the three
+    Kontext did not hand back, are painted here."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     PROGRESS.begin_job("surfaces")
     tile_px = gfx["texture"]     # wall / ceiling / floor / door
@@ -6049,9 +6369,11 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
         "1": {"inputs": {"ckpt_name": FLUX_SCHNELL_CKPT}, "class_type": "CheckpointLoaderSimple"},
         "neg": {"inputs": {"text": "cartoon, anime, 2d, low quality, pixelated, 16-bit, clipart, drawing, blurry, watermark", "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
     }
-    payload.update(_surface("w", wall_p))
-    payload.update(_surface("c", ceil_p))
-    payload.update(_surface("f", floor_p))
+    surfaces = surfaces or {}
+    painted = [(tag, slot) for tag, slot in (("w", "wall"), ("c", "ceiling"), ("f", "floor"))
+               if not surfaces.get(slot)]
+    for tag, slot in painted:
+        payload.update(_surface(tag, {"w": wall_p, "c": ceil_p, "f": floor_p}[tag]))
     # Door is a single full-cell surface (one door per map cell), so like the three tiling
     # textures it gets a plain opaque SaveImage - but it is NOT run through make_seamless_4way
     # below, because it must not tile.
@@ -6059,6 +6381,15 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
 
     # BiRefNet loader - shared by the lantern and the switch cutouts below.
     payload["bg_model"] = {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"}
+
+    # A pictured wall's door is also cut out, to be set into the finished wall - see
+    # _door_onto_wall. Only when get_gate_prompts actually asked for a cut-out (a designed door).
+    door_cutout = _door_is_cutout(wall_named) and _DOOR_CUTOUT_TAIL in door_p
+    if door_cutout:
+        payload["d_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": ["d_dec", 0]}, "class_type": "RemoveBackground"}
+        payload["d_maskinv"] = {"inputs": {"mask": ["d_mask", 0]}, "class_type": "InvertMask"}
+        payload["d_cut_save"] = {"inputs": {"filename_prefix": prefixes["d"] + "_cut", "images": ["d_dec", 0], "mask": ["d_maskinv", 0]},
+                                 "class_type": "SaveImageWithAlpha"}
 
     # Switch is an isolated object (a wall lever), matted onto the wall on the client the same
     # way the lantern is - so it gets its own square canvas + BiRefNet cutout. ONE render, of
@@ -6098,7 +6429,8 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
     with urllib.request.urlopen(req) as resp:
         prompt_id = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
 
-    expected = ("w_save", "c_save", "f_save", "d_save", "s_save") + (("l_save",) if lantern_p else ())
+    expected = (tuple(f"{tag}_save" for tag, _ in painted) + ("d_save", "s_save")
+                + (("l_save",) if lantern_p else ()) + (("d_cut_save",) if door_cutout else ()))
     start_time = time.time()
     while time.time() - start_time < 120:
         time.sleep(0.1)
@@ -6116,7 +6448,8 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
             info = outputs[key]["images"][0]
             return os.path.join(COMFY_OUTPUT_DIR, info.get("subfolder", ""), info["filename"])
 
-        w_path, c_path, f_path = _p("w_save"), _p("c_save"), _p("f_save")
+        w_path, c_path, f_path = (surfaces.get(slot) or _p(f"{tag}_save")
+                                  for tag, slot in (("w", "wall"), ("c", "ceiling"), ("f", "floor")))
         # Blank-wall guard, BEFORE the seam blend so whichever texture survives is the one
         # that gets tiled. Gated on the designed path exactly like _lift_dark_surface below,
         # and for the same reason: every hand-tuned bucket wall measures well clear of the
@@ -6134,7 +6467,7 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
         # bucket's wall by hand (rule 1 in get_gate_prompts) and never fails this way. It also
         # needs both designed lines to re-roll from at all. Measured against the wall texture
         # AFTER its own rescue, so the comparison is with the corridor the player will see.
-        if (brief or {}).get("wall") and (brief or {}).get("door"):
+        if (brief or {}).get("wall") and (brief or {}).get("door") and not door_cutout:
             d_path = _fix_offtheme_door(d_path, w_path, brief["door"], brief["wall"],
                                         tile_px, wall_named)
 
@@ -6150,6 +6483,9 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
             for pth, lbl in ((w_path, "wall"), (c_path, "ceiling"), (f_path, "floor"),
                              (d_path, "door")):
                 _lift_dark_surface(pth, lbl)
+        # After the lift, so the door is set into the wall exactly as it ships.
+        if door_cutout:
+            d_path = _door_onto_wall(_p("d_cut_save"), w_path) or d_path
         # Switch: one BiRefNet cutout, trimmed to its own alpha box like the lantern.
         s_path = _p("s_save")
         _save_tight(s_path)
@@ -6249,39 +6585,145 @@ def _krea2_submit_and_collect(payload, save_keys, timeout=300, job_key=None, out
 #
 # Measured on the 3090: 8-16s for a full reply, ~13 tok/s.
 
-# Per-job progress weights for the v5/v6 runs. `weight` is a rough relative wall-clock cost
-# and only affects how the phases are paced against each other; `units` is that job's
-# expected total sampler steps (tokens for the story) and is the denominator the live
+# Per-job progress weights for the v5/v6 runs. `weight` is that job's wall-clock SECONDS on the
+# RTX 3090 at "normal" graphics, model loads included, and only paces the phases against each
+# other - the bar is the sum of finished seconds over planned seconds; `units` is that job's
+# expected total sampler steps (tokens for the text jobs) and is the denominator the live
 # per-step fraction from ComfyUI's socket is measured against.
-def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, ending_video="off"):
+#
+# WHY SECONDS. The weights used to be loose relative guesses, and adding the Attachments
+# pictures broke them: on the user's all-pictured run of 2026-09-24 the four Kontext pose stages
+# were weighted 110 for ~330s of work while the portrait edits and the music were weighted 75
+# for ~35s, so the bar crawled to ~48% by six minutes in and then ran up the last half in about
+# four - the "jumped from 40-50 to 100" report. Measured per job from ComfyUI's log ("Prompt
+# executed in ...") over real runs: anything added later should be given its seconds the same
+# way, not a guess.
+PICTURE_SLOT_WORDS = {"wall": "dungeon", "player": "hero", "weapon": "weapon", "enemy": "enemy"}
+# The one krea2 job that draws every frame no picture is drawing: the UNET's load, then each frame
+# (all 17 frames took 137s on the describe-mode run of 2026-09-24).
+KREA2_LOAD_SEC = 15
+KREA2_FRAME_SEC = 7
+
+
+def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, ending_video="off",
+             refs=(), pictured=(), picture_mode=None):
+    """`pictured` is the slots with an attached picture and `picture_mode` Options' Attachments
+    row; `refs` is the pictured slots that go in as a Kontext reference (see
+    generate_krea2_posed_bundle): each one swaps its krea2 share of "frames" for its own Kontext
+    stages. A pictured slot NOT in `refs` is drawn from Qwen3-VL's description of its picture,
+    and its stages say so - between the two, every stage of a pictured line names which way the
+    picture is being used."""
     st = int(steps)
-    plan = [
+    hero_ref = "player" in refs or "weapon" in refs
+    enemy_ref = "enemy" in refs
+    described = [s for s in PICTURE_SLOTS if s in pictured and s not in refs]
+    kx = KONTEXT_STEPS
+
+    def _from_words(slots):
+        n = len([s for s in slots if s in described])
+        return (" from your picture's description" if n == 1
+                else " from your pictures' descriptions" if n else "")
+
+    plan = []
+    # One job per picture: the first also loads Qwen3-VL (~8s against ~3s for the rest). The
+    # label is where the loading screen first says which Attachments setting is in use.
+    for i, s in enumerate(s for s in PICTURE_SLOTS if s in pictured):
+        what = PICTURE_SLOT_WORDS[s]
+        label = (f"Describing your {what} picture in words with Qwen3-VL..." if picture_mode == "describe"
+                 else f"Studying your {what} picture with Qwen3-VL...")
+        plan.append((f"picture_{s}", label, 3 if i else 8, PICTURE_MAX_TOKENS))
+    plan += [
         # key,             label,                                                    weight, units
-        ("theme_brief",    "Designing the set with Qwen3-VL...",                          6, THEME_BRIEF_MAX_TOKENS),
-        ("names",          "Naming the hero and the boss with Qwen3-VL...",                3, NAMING_TYPICAL_TOKENS),
-        ("story",          "Writing the chronicle with Qwen3-VL...",                      12, STORY_TYPICAL_TOKENS),
-        ("enemy_species",  "Designing three foes with Qwen3-VL...",                        6, ENEMY_SPECIES_MAX_TOKENS),
-        ("surfaces",       "Synthesizing dungeon textures with FLUX.1 [schnell]...",      12, 5 * 4),
-        # Every player pose + every frame of all three foes, all in the one krea2 job - the
-        # strike frames included when the Last Attack Frame option asked for them.
-        ("frames",         "Animating the swing and the walk with krea2 turbo...",        80, (len(V6_FRAME_NAMES) + _enemy_frame_count(last_attack_frame)) * st),
-        # "enemy_variants" is NOT here on purpose. It only runs when the species naming
-        # failed and the flyer/boss have to be derived from the walker instead, so it is
-        # registered with PROGRESS.add_job at that point. A planned job that never runs is
-        # dead weight in the denominator and would strand the bar short of 100%.
-        ("portrait_idle",  "Painting the HUD portrait...",                                 6, st),
-        ("portrait_edits", "Editing portrait reactions with Kontext...",                  45, 3 * KONTEXT_STEPS),
+        ("theme_brief",    "Designing the set with Qwen3-VL...",                         14, THEME_BRIEF_MAX_TOKENS),
+        ("names",          "Naming the hero and the boss with Qwen3-VL...",                5, NAMING_TYPICAL_TOKENS),
+        # 8-21s for the reply, and then ~5s of narration voice before the next job starts.
+        ("story",          "Writing the chronicle with Qwen3-VL...",                      18, STORY_TYPICAL_TOKENS),
+    ]
+    if "wall" in refs:
+        # Three 512px Kontext drawings plus Kontext's first load of the run: 58s and 56s.
+        plan.append(("wall_ref", "Painting the walls from your picture with Kontext...",  57, 3 * kx))
+    # With the walls drawn from the picture, schnell paints only the door, switch and lantern -
+    # but schnell's own load is most of the cost either way (25s both pictured runs).
+    plan.append(("surfaces", f"Synthesizing dungeon textures{_from_words(['wall'])} with FLUX.1 [schnell]...",
+                 25 if "wall" in refs else 30, (3 if "wall" in refs else 6) * 4))
+    if hero_ref:
+        plan += [
+            # Kontext loads again after schnell: 34-36s for the one drawing. Then two one-word
+            # Qwen3-VL checks that run on every pictured hero and belong to no job of their own -
+            # FRONT/BACK (_kontext_turn_hero) and HAND/BACK/NONE (_kontext_hold_weapon), 7-8s
+            # each with the model swaps - so their seconds ride here, the stage they follow.
+            # Left out, the bar stood still through them and fell 10 points behind the clock.
+            ("hero_ref",   "Drawing your hero from your picture with Kontext...",       50, kx),
+            # When the drawing faces front: one turn edit (~29s, Kontext swapping back in) and
+            # the check again - planned for that one try; skipped when it already faced away
+            # (2 runs of 3), and each further try registers 36s of its own, as does each try of
+            # the weapon-into-hand edit (44s, not planned).
+            ("hero_turn",  "Turning your hero to face the dungeon...",                  36, kx),
+            # Eight 512px edits: 142s, 156s and 212s (Kontext ran anywhere from 0.85 to 1.31
+            # s/step across those runs, on the same card).
+            ("hero_poses", "Posing your hero with Kontext...",                         165, 8 * kx),
+            # The frames that barely moved are re-rolled (_kontext_unstick) on 2 runs of 6,
+            # usually just the block - too seldom to plan: planned, it was 20s the bar skipped
+            # past on most runs, which put the 15:05 run of 2026-09-25 ten points behind the
+            # clock. _kontext_unstick registers it when it happens.
+        ]
+    if enemy_ref:
+        edits = len(_enemy_variant_frames("walker", last_attack_frame)) - 1
+        plan += [
+            # 14-28s for the drawing (median 18 over six runs), ~18s an edit for the poses.
+            ("enemy_ref",        "Drawing the enemy from your picture with Kontext...", 19, kx),
+            ("enemy_poses",      "Posing the enemy with Kontext...",             18 * edits, edits * kx),
+            # Re-rolled on 4 runs of 6 (the attack moves 0.3-3.4 on the first try), usually both
+            # frames - planned for one, resized to what stuck or skipped when nothing did. That
+            # balances the runs that re-roll against the ones that skip past it.
+            ("enemy_pose_regen", "Re-posing the enemy frames that did not move...",       20, kx),
+            # The wings-or-rotors question (_vlm_wants_rotors) swaps Qwen3-VL back in: 14-15s.
+            ("enemy_flight",     "Choosing wings or rotors for the flyer with Qwen3-VL...", 15, 1),
+            ("enemy_variants",   "Giving the enemy wings and a boss with Kontext...",   48, 2 * kx),
+        ]
+        # The flyer's and the boss's own pose edits (_kontext_pose_foe), plus the redraw of each
+        # one's idle (KONTEXT_FOE_IDLE) - 14s an edit: 15.1s and 27.3s for the poses alone on a
+        # fast night (2026-09-25 15:05), 55.4s and 58.2s with the idle redraw on a slow one
+        # (16:43, the whole run 43% slower; 20s an edit put the recorded runs 11 points behind).
+        # Neither was re-rolled, so their re-roll is not planned - _kontext_unstick registers it.
+        for v in ("flyer", "boss"):
+            n = len(_enemy_variant_frames(v, last_attack_frame))
+            plan.append((f"{v}_poses", f"Posing the {v} with Kontext...", 14 * n, n * kx))
+    else:
+        plan.append(("enemy_species", "Designing three foes with Qwen3-VL...",           18, ENEMY_SPECIES_MAX_TOKENS))
+    # Every player pose + every frame of all three foes, all in the one krea2 job - the strike
+    # frames included when the Last Attack Frame option asked for them. Only what no picture
+    # is drawing; with both pictured there is no krea2 job at all.
+    krea2_frames = ((0 if hero_ref else len(V6_FRAME_NAMES))
+                    + (0 if enemy_ref else _enemy_frame_count(last_attack_frame)))
+    if krea2_frames:
+        plan.append(("frames", f"Animating the swing and the walk{_from_words(['player', 'weapon', 'enemy'])}"
+                               " with krea2 turbo...",
+                     KREA2_LOAD_SEC + KREA2_FRAME_SEC * krea2_frames, krea2_frames * st))
+    # "enemy_variants" is NOT planned without an enemy picture, on purpose. It only runs when
+    # the species naming failed and the flyer/boss have to be derived from the walker instead,
+    # so it is registered with PROGRESS.add_job at that point. A planned job that never runs is
+    # dead weight in the denominator and would strand the bar short of 100%.
+    # A krea2 idle bust takes ~4s straight after the krea2 frames job, with the UNET still loaded,
+    # and loads it first when there was none.
+    plan += [
+        ("portrait_idle",  "Painting the HUD portrait from your picture with Kontext..." if "player" in refs
+                           else f"Painting the HUD portrait{_from_words(['player'])}...",
+                           14 if "player" in refs else 4 if krea2_frames else 15,
+                           kx if "player" in refs else st),
+        # Three 256px edits take 19-26s with Kontext already loaded - which it is only when the
+        # idle bust above was a Kontext drawing; after a krea2 idle it loads again first (36s).
+        ("portrait_edits", "Editing portrait reactions with Kontext...",
+                           24 if "player" in refs else 36, 3 * KONTEXT_STEPS),
     ]
     # Both audio jobs are skippable via sound_mode - a planned-but-skipped step is the same
     # "dead weight in the denominator" problem noted above, so only plan what will actually run.
     if sound_mode != "skip":
-        # Cheap next to everything above it - measured ~12s for all eight sounds including the
-        # cold model load, against a ~2min bundle - hence the small weight.
-        plan.append(("sfx", "Foleying the dungeon with Stable Audio 3...", 8, len(SFX_NAMES) * SFX_STEPS))
+        # Eleven sounds including Stable Audio 3's cold load: 16s.
+        plan.append(("sfx", "Foleying the dungeon with Stable Audio 3...", 16, len(SFX_NAMES) * SFX_STEPS))
     if sound_mode == "music_and_sound":
-        # Unmeasured weight - two 30s/40-step generations will run far longer than the sfx
-        # pack's eight 2s/8-step ones; correct this once a real run has been timed.
-        plan.append(("music", "Composing dungeon music with Stable Audio 3...", 30, len(MUSIC_NAMES) * MUSIC_STEPS))
+        # Both beds together, the model already warm from the sfx: 9s.
+        plan.append(("music", "Composing dungeon music with Stable Audio 3...", 9, len(MUSIC_NAMES) * MUSIC_STEPS))
     # Only when Options films the ending on the loading screen - the background mode renders it
     # after the run is saved, outside this plan.
     if ending_video == "loading":
@@ -9186,15 +9628,23 @@ def generate_kontext_enemy_variants(walker_path, size=512, variants=None):
     if not wanted:
         return out
 
-    # Only reached when the species naming failed, so the stage is registered now rather than
-    # planned up front - see _plan_v6.
-    PROGRESS.add_job("enemy_variants", "Deriving the flyer and the boss with Kontext...",
-                     40, len(wanted) * KONTEXT_STEPS)
+    # Only reached without an enemy picture when the species naming failed, so the stage is
+    # registered now rather than planned up front - see _plan_v6. With an enemy picture it is
+    # planned, and these leave that plan's entry as it is (same label, same seconds).
+    PROGRESS.add_job("enemy_variants", "Giving the enemy wings and a boss with Kontext...",
+                     48, len(wanted) * KONTEXT_STEPS)
 
     edits = {v: KONTEXT_ENEMY_EDITS[v]["edit"] for v in wanted}
-    if "flyer" in wanted and _vlm_wants_rotors(walker_path):
-        print("[Kontext Enemy] subject is a machine - the flyer gets rotors and thrusters")
-        edits["flyer"] = KONTEXT_THRUSTER_EDIT
+    if "flyer" in wanted:
+        # Its own stage on the bar: Qwen3-VL swapping in and out costs ~15s, which otherwise sat
+        # on the previous stage's label with the bar standing still.
+        PROGRESS.add_job("enemy_flight", "Choosing wings or rotors for the flyer with Qwen3-VL...", 15, 1)
+        PROGRESS.begin_job("enemy_flight")
+        rotors = _vlm_wants_rotors(walker_path)
+        PROGRESS.finish_job("enemy_flight")
+        if rotors:
+            print("[Kontext Enemy] subject is a machine - the flyer gets rotors and thrusters")
+            edits["flyer"] = KONTEXT_THRUSTER_EDIT
 
     try:
         b = {
@@ -9480,9 +9930,734 @@ def krea2_frame_prompts(player_style, weapon_style, brief=None):
     return [base + actions[n] for n in V6_FRAME_NAMES]
 
 
+# ---------------------------------------------------------------------------
+# Kontext reference pictures: an attached picture drawn FROM, not described
+# ---------------------------------------------------------------------------
+# picture_mode "reference" (see PICTURE_MODES). krea2 only draws from words - it has no IPAdapter
+# and no ControlNet - so the one model in the pipeline that takes a picture as input is FLUX.1
+# Kontext, which is already loaded for the HUD portrait expressions. Each pictured asset is made
+# in TWO stages, the same way the portraits are:
+#   1. DRAW: one Kontext generation onto an empty latent with the picture(s) as ReferenceLatent,
+#      asked to redraw what the picture shows as the game's asset - the hero from behind, the foe
+#      facing the viewer, a flat tiling surface.
+#   2. POSE: Kontext EDITS of that one drawing, one per animation frame, each ending on a "keep it
+#      exactly the same" tail.
+# Measured while building it (a crowd photo, a cat-headed dancer in a red jumpsuit, a pile of
+# toy bricks and the Windows XP hill, 2026-09-24):
+#  * ONE stage, with every frame drawn straight from the photo, gave three different characters:
+#    one from behind, one from the side and one in pixel art. Editing a single drawing holds the
+#    identity and the back view across every frame, the way the portrait edits hold a face.
+#  * "video game character SPRITE" draws pixel art. KONTEXT_REF_STYLE's "realistic 3D-rendered
+#    video game character" matches krea2's look, so a pictured hero doesn't look like it came
+#    from another game.
+#  * The LOOK Qwen3-VL wrote stays in the instruction, because it's what picks out WHICH person
+#    in a crowded photo: of eight people it drew the one in the white cap it had described.
+#  * A foe pose that only says where to go ("it lunges forward, surging toward the viewer")
+#    comes back as the idle, like krea2's weak pose clauses do. Naming the limbs, at guidance
+#    3.5, moves it: the pose frames measure 12-16 away from their drawing (_portrait_frame_diff),
+#    against 1.5 for an edit that did nothing.
+#  * A surface instruction that doesn't tell it to drop the scene hands back the photo itself,
+#    horizon and all. "Remove any horizon ... no scenery" plus the brief's material line works.
+KONTEXT_REF_PX = 512           # long side a reference picture is staged at (_stage_reference)
+KONTEXT_REF_GUIDANCE = KONTEXT_GUIDANCE
+KONTEXT_REF_STYLE = ("a detailed, realistic 3D-rendered video game character with sharp detailed "
+                     "textures and even lighting, like a modern game's character model")
+KONTEXT_REF_FOE_STYLE = ("a detailed, realistic 3D-rendered video game enemy with sharp detailed "
+                         "textures and even lighting")
+# A pose frame closer than this to the drawing it was edited from (_portrait_frame_diff, grey
+# mean-abs 0-255) did not move, so it is regenerated once at higher guidance - the portraits'
+# safety net. Measured: moved poses 12-16, a do-nothing edit 1.5, a barely-shifted stance 6.7.
+KONTEXT_POSE_MIN_DIFF = 6.0
+
+# The hero's eight pose edits (idle is the drawing itself). Same poses as krea2_frame_prompts,
+# written as edits of a character who is already standing there. The pose itself says "the
+# weapon", and _hero_weapon_keep names it afterwards: the overhead poses are sword language, and
+# with only "keep the weapon" a bundle of toy bricks turned into a whip or a sabre in 3 of 4
+# windup/slash3 edits - naming it kept the bricks 4 of 4.
+#
+# NO SHIELD until the block. Reported from play: the pictured hero wore its shield "like a
+# bookbag" and the block frame did not read as blocking. Kontext draws "a round battle shield
+# on the left arm" in a back view slung across the back on straps, every frame, and no block
+# edit can lift a shield off someone's back. Every way of putting it in a hand instead was
+# measured on the Elmo + toy-bricks pictures and failed some other way: held in the drawing
+# ("in the left hand ... at their left side") turned the hero round to face the camera 5 of 8
+# (the photo was front-on) and dropped the weapon; added afterwards by an edit, it landed in the
+# one hand a back view shows and covered the weapon 3 of 4, "on the opposite side from the
+# weapon" or not. With the user's OK the hero now carries only the weapon and the BLOCK edit
+# raises a shield from the free hand - a clear high guard 8 of 8, still facing away 6 of 8. The
+# cost, measured and accepted: the weapon usually leaves the frame while blocking (7 of 8).
+# Nothing else may name a shield ("keep the ... shield" and "weapon and shield flung wide" would
+# put one back), so the KEEP tail below has none.
+# TURNED AROUND before it is posed. Reported from play: Elmo facing the camera in all nine frames,
+# the player looking at their own hero's face instead of over its shoulder at the enemy. Kontext
+# keeps the way the photo faces, and a front-on photo outvotes "seen strictly from directly
+# behind" in the drawing's own instruction - how often varies by picture and seed (5 of 8 of one
+# wording faced front). This edit turned all 6 front-facing drawings tried away from the camera
+# (4 fully from behind, 2 three-quarter), weapon still in hand, and left all 8 drawings that
+# already faced away as they were. It is still only run when _vlm_hero_view says the drawing
+# faces front, and re-run on a fresh seed until it doesn't (KONTEXT_HERO_TURN_ATTEMPTS in all):
+# each turn is another chance to lose what the hero holds - a plush toy weapon went 1 of 3. It
+# never says "face": naming the face turned the hero round 2 of 3 (see the shield note below),
+# and neither does it name the weapon, whose own description can ("soft white plush toy with
+# rounded limbs, smiling face" left Elmo facing front 2 of 3, and 2 of 4 with "face" cut out).
+KONTEXT_HERO_TURN = ("Turn this character around so their back is to the camera and they look "
+                     "away into the distance: we see the back of their head, their back, the "
+                     "backs of their arms and legs and the heels of their feet. Keep the exact "
+                     "same character, body, clothing, colours and art style, and whatever they "
+                     "hold still in their hand. The whole figure stays in frame from head to feet "
+                     "on the plain white background.")
+KONTEXT_HERO_TURN_ATTEMPTS = 3
+
+# Which way the drawn hero faces, asked of Qwen3-VL (_vlm_hero_view). Asked through
+# _vlm_wants_rotors' default chat template it wrote a paragraph and never reached a verdict on 10
+# of 15 drawings; with the reply begun on "ANSWER:" (the _PICTURE_REPLY_START trick) it gave one
+# word, and on 15 drawings of Elmo called every full front FRONT and every back view BACK. It is
+# strict: a three-quarter back view with the nose in profile reads FRONT, which only costs a turn
+# that leaves such a view as it is or better. Holding-the-weapon was asked too and dropped: a plush
+# toy standing at Elmo's side, his hand on it, read NO on all 9.
+_HERO_VIEW_Q = ("Is this character seen from the FRONT or from the BACK? FRONT means we can see "
+                "their eyes or mouth. BACK means the back of their head is towards us. Reply FRONT "
+                "or BACK.")
+
+# THE WEAPON IN THE HAND, before anything is posed. Reported from play: a plush toy weapon rode
+# on Elmo's back through every frame, the slashes swung an empty arm, and the windup drew a
+# curved sword into it. The drawing had put the plush on his back, and no pose edit moves it:
+# "swing the plush down and forward" left it there 8 of 8. So the drawing is asked where its
+# weapon is (_HERO_WEAPON_Q - "is it holding X?" had read a plush at Elmo's side as NO 9 of 9;
+# this three-way question matched 11 of 11 labelled drawings), and one that is not in a hand gets
+# KONTEXT_HERO_HOLD, re-run until it is (KONTEXT_HERO_HOLD_ATTEMPTS). The hold edit takes the
+# weapon's own picture as a second reference when there is one: either way it worked 2 of 4 -
+# the rest dropped the weapon or left it on the back - hence the check. "Like a club" drew a
+# club and a pipe; it is not in there.
+_HERO_WEAPON_Q = ("Where is the {w}? Reply HAND if one of the character's hands is gripping it "
+                  "and holding it away from their body. Reply BACK if it sits on their back or "
+                  "shoulder. Reply NONE if there is no {w} in the picture.")
+KONTEXT_HERO_HOLD = ("They hold {w} in their free hand instead of on their back: gripped by one end, "
+                     "dangling from their hand and held out to the side away from their body, "
+                     "clearly visible. Keep the exact same character, clothing, colours and art "
+                     "style, the strict back view facing away from the camera, and the plain white "
+                     "background. The whole figure stays in frame from head to feet.")
+KONTEXT_HERO_HOLD_ATTEMPTS = 3
+
+# How the weapon is held in every pose edit. Reported from play: a pictured sword (photographed
+# lying diagonally) held by its blade in the windup and doubled in a slash - with the sword's
+# picture passed to every pose edit as a second reference, Kontext copied the sword out of the
+# picture as a loose object and laid a hand on it. Without that reference and with this line,
+# windup/slash1/slash2 x 3 seeds held it by the hilt, one sword, 9 of 9 (8 of 9 with the
+# reference kept, one sword floating free).
+KONTEXT_HERO_GRIP = ("Their hand grips the {w} by its handle, the rest of it pointing away from "
+                     "the hand. Only one {w}.")
+KONTEXT_HERO_KEEP = ("Keep the exact same character, face, hair, clothing, colours, weapon and art "
+                     "style, the strict back view facing away from the camera, and the plain white "
+                     "background. The whole figure stays in frame from head to feet.")
+# The block edit barely moved at KONTEXT_REF_GUIDANCE on both full runs (0.2 and 0.3 from the
+# idle, against 9-23 for every other pose) and moved 22 at the retry's +2.5 - so it starts
+# there. That spared the retry on the next run (16.5) but not the one after (0.6, caught by
+# _kontext_unstick at 20.9): it makes the retry rarer, it does not replace it.
+KONTEXT_HERO_POSE_GUIDANCE = {"block": KONTEXT_REF_GUIDANCE + 2.5}
+KONTEXT_HERO_POSES = {
+    "block":  ("Change the character's pose: still facing away from the camera, they raise a round "
+               "wooden battle shield with an iron rim in their free hand up beside their head into "
+               "a high guard, and drop into a low braced crouch, knees bent. Their other hand still "
+               "grips the weapon, lowered and drawn back, clearly visible. One shield only."),
+    "windup": ("Change the character's pose: they raise the weapon high overhead, cocked back "
+               "behind their shoulder, winding up to strike."),
+    "slash1": ("Change the character's pose: they swing the weapon down and forward through a "
+               "fast diagonal arc, mid-swing, the arm stretched out ahead of them."),
+    "slash2": ("Change the character's pose: they swing the weapon all the way down and across "
+               "their body in a full follow-through, arms extended."),
+    "slash3": ("Change the character's pose: they recover from the swing, the weapon trailing low "
+               "across the far side of their body, their weight settling back to centre."),
+    "hurt":   ("Change the character's pose: they stagger backward off balance, recoiling from a "
+               "hit, the weapon and their free arm flung wide."),
+    # Opposite phases of one stride, as in krea2_frame_prompts - see V6_WALK_FRAME_INDICES.
+    "walk1":  ("Change the character's pose: they are mid-stride, the right leg swung forward and "
+               "planted with the weight rolling onto it, the left leg stretched out long behind."),
+    "walk2":  ("Change the character's pose: they are mid-stride, the left leg swung forward and "
+               "planted with the weight rolling onto it, the right leg stretched out long behind."),
+}
+
+# The foe's pose edits. A pictured foe is always drawn "ready to fight" as a character, and
+# Kontext gives even a pile of toy bricks arms and feet for that - so these name limbs, which is
+# what makes them move (see above). A drawing with no arms to raise just comes back unchanged,
+# fails the diff check twice, and is dropped; the frontend then uses the idle for that pose.
+KONTEXT_FOE_KEEP = ("Keep it exactly the same - identical shape, colours, markings, details and "
+                    "art style - still facing the viewer, with the whole of it in frame from top "
+                    "to bottom on the plain white background.")
+KONTEXT_FOE_POSES = {
+    "attack": ("Change its pose into a vicious attack: it lunges forward with one arm swung high "
+               "and slashing down at the viewer, claws or fist out, leaning hard into the blow "
+               "with one foot stepping forward."),
+    "block":  ("Change its pose into a hard defensive guard: both arms raised and crossed in "
+               "front of its chest, elbows tucked in, shoulders hunched, feet planted wide apart "
+               "on the ground."),
+    # The effect leads, as it does in ENEMY_FRAME_POSES - an effect tacked on after the pose
+    # gets drawn tiny or not at all.
+    ENEMY_STRIKE_FRAME: ("Add a huge bright explosion of orange fire and yellow sparks bursting "
+                         "out against its leading edge where its blow connects, overlapping it, "
+                         "as it lunges forward with one arm swung high and slashing down at the "
+                         "viewer, leaning hard into the blow."),
+}
+
+
+def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=False):
+    """Stage 1 for the hero: the idle frame, drawn from the player's picture, the weapon's, or
+    both - chained in that order, which is what "the first picture" / "the second picture" mean.
+    The descriptions are the same words krea2 would have been given (the LOOK beside a picture),
+    kept so a crowd photo still says which person, and so a weapon picture of a whole PILE of
+    bricks is held as the brief's one brick."""
+    p = (player_desc or "").strip() or "armored warrior knight"
+    w = (weapon_desc or "").strip() or "sword"
+    if player_pic:
+        who = (f"Redraw the {p} from {'the first picture' if weapon_pic else 'this picture'} as "
+               f"{KONTEXT_REF_STYLE}.")
+        keep = " Keep their exact face, hair, clothing and colours."
+    else:
+        who = f"Draw {_a_or_an(p)} as {KONTEXT_REF_STYLE}."
+        keep = ""
+    # The weapon gets a sentence of its own, AFTER the figure. Spliced into the figure's
+    # sentence ("holding the {w} from the second picture as a weapon") it broke on the first
+    # real run: the brief's line was "pile of colorful plastic bricks held in hand, each with
+    # visible stud tops", the splice made that ungrammatical, and the hero came out
+    # empty-handed in all nine frames. As its own sentence, "clearly visible and held out from
+    # the body", the same line was in the hand 3 of 3 seeds.
+    if weapon_pic:
+        weapon = (f"the object from {'the second picture' if player_pic else 'this picture'}, "
+                  f"{w.rstrip('.')}")
+    else:
+        weapon = _a_or_an(w.rstrip("."))
+    # No shield here - it is only raised in the block edit (see KONTEXT_HERO_KEEP).
+    return (f"{who} The full body from head to feet, seen strictly from directly behind in a "
+            f"third-person back view, facing away from the camera, standing at the ready. "
+            f"In the right hand they grip their weapon, "
+            f"clearly visible and held out from the body: {weapon}.{keep} Standing large and "
+            f"upright, filling the frame from top to bottom. Plain solid pure white background, "
+            f"nothing else in frame.")
+
+
+def _hero_weapon_keep(weapon_desc):
+    w = (weapon_desc or "").strip().rstrip(".") or "sword"
+    return f"The weapon stays exactly as it is - the same {w} - only its position changes."
+
+
+def kontext_foe_prompt(look):
+    """Stage 1 for the pictured foe: the walker's idle frame."""
+    subject = (look or "").strip() or "creature"
+    return (f"Redraw the {subject} from this picture on its own as {KONTEXT_REF_FOE_STYLE}, "
+            f"facing the viewer, ready to fight. Keep it exactly as it looks in the picture - the "
+            f"same shape, colours, markings and details. The whole of it in view from top to "
+            f"bottom, standing large and filling the frame. Plain solid pure white background, "
+            f"nothing else in frame.")
+
+
+def kontext_bust_prompt(player_desc):
+    """Stage 1 for the HUD portrait: the idle bust the expression edits start from. Same framing
+    as krea2_portrait_prompt, but the face is the picture's."""
+    p = (player_desc or "").strip() or "armored warrior knight"
+    return (f"Redraw the {p} from this picture as a head and shoulders portrait bust facing the "
+            f"viewer, the whole head and face centred in the middle of the frame, "
+            f"with a calm, steady expression, the head filling the upper frame and the "
+            f"shoulders squared at the bottom. Keep their exact face, hair, headwear and "
+            f"clothing. Video game status-screen portrait, Doom and Valbrace style, dramatic "
+            f"lighting. Plain uncluttered solid background.")
+
+
+# A brief line written from a landscape photo keeps the landscape in it - the Bliss hill's
+# ceiling came back as "blue sky painted overhead with white cloud decals and thin black horizon
+# line", which outvoted "remove any horizon" and left a green hill in the ceiling's corner. Any
+# comma or "and" part of a line that names one of these is dropped (the rest still says what the
+# surface is made of).
+_SURFACE_SCENERY_RE = re.compile(r"\b(?:horizons?|landscapes?|hills?|hillsides?|scenery|vista|"
+                                 r"skyline|distance)\b", re.IGNORECASE)
+
+
+def _surface_line(line):
+    parts = []
+    for part in (line or "").strip().rstrip(".").split(","):
+        keep = [p for p in re.split(r"\s+and\s+", part) if not _SURFACE_SCENERY_RE.search(p)]
+        if keep:
+            parts.append(" and ".join(p.strip() for p in keep))
+    return ", ".join(p for p in parts if p) or (line or "").strip().rstrip(".")
+
+
+def kontext_surface_prompt(line):
+    """One tiling surface from the dungeon's picture. `line` is the brief's material for it."""
+    return ("Create a flat, seamless tiling texture taken from this picture's colours and "
+            "materials. Only the surface itself fills the whole image edge to edge, seen "
+            "straight on and evenly lit. Remove any horizon, landscape and scenery entirely - "
+            "no perspective, no people, no objects standing in it. The surface: "
+            f"{_surface_line(line)}.")
+
+
+def _kontext_loaders():
+    return {
+        "unet": {"inputs": {"unet_name": KONTEXT_UNET, "weight_dtype": "default"}, "class_type": "UNETLoader"},
+        "clip": {"inputs": {"clip_name1": FLUX_T5, "clip_name2": FLUX_CLIP_L, "type": "flux"}, "class_type": "DualCLIPLoader"},
+        "vae":  {"inputs": {"vae_name": FLUX_AE}, "class_type": "VAELoader"},
+        "bg_model": {"inputs": {"bg_removal_name": BIREFNET_MODEL}, "class_type": "LoadBackgroundRemovalModel"},
+    }
+
+
+def _kontext_ref_job(refs, branches, seed, size=None, guidance=KONTEXT_REF_GUIDANCE, alpha=True,
+                     keep_rgb=False, with_source=False, seeds=None, guidances=None, prefix="kxref",
+                     job_key=None):
+    """One Kontext job over the input-folder pictures `refs`, each chained on as a
+    ReferenceLatent in order. Returns {name: path}.
+
+    With `size` every branch DRAWS onto a fresh size x size latent - stage 1. Without it every
+    branch EDITS refs[0], sampling over that picture's own latent at its own size - stage 2, the
+    way _kontext_expression_job edits the idle bust.
+
+    `alpha` mattes each result with BiRefNet; False saves plain RGB (surfaces). `keep_rgb` saves
+    the unmatted RGB as well, keyed "<name>_rgb" - a drawing about to be edited has to go back in
+    as full RGB, while the quality gate needs it cut out. `with_source` mattes refs[0] itself
+    too, keyed "source", so the drawing and its edits share one BiRefNet pass. `seeds` and
+    `guidances` override `seed` and `guidance` per branch."""
+    b = _kontext_loaders()
+    for i, name in enumerate(refs):
+        b[f"ref{i}_load"] = {"inputs": {"image": name}, "class_type": "LoadImage"}
+        b[f"ref{i}_enc"] = {"inputs": {"pixels": [f"ref{i}_load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"}
+    if size:
+        b["draw_lat"] = {"inputs": {"width": size, "height": size, "batch_size": 1}, "class_type": "EmptySD3LatentImage"}
+    latent = ["draw_lat", 0] if size else ["ref0_enc", 0]
+    want = []
+    if with_source:
+        _kontext_alpha_nodes(b, "source", "ref0_load", prefix)
+        want.append("source")
+    stamp = int(time.time() * 1000)
+    for name, text in branches.items():
+        b[f"{name}_pos"] = {"inputs": {"text": text, "clip": ["clip", 0]}, "class_type": "CLIPTextEncode"}
+        cond = f"{name}_pos"
+        for i in range(len(refs)):
+            b[f"{name}_ref{i}"] = {"inputs": {"conditioning": [cond, 0], "latent": [f"ref{i}_enc", 0]}, "class_type": "ReferenceLatent"}
+            cond = f"{name}_ref{i}"
+        b[f"{name}_g"] = {"inputs": {"conditioning": [cond, 0],
+                                     "guidance": (guidances or {}).get(name, guidance)},
+                          "class_type": "FluxGuidance"}
+        b[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
+        b[f"{name}_samp"] = {"inputs": {"seed": (seeds or {}).get(name, seed), "steps": KONTEXT_STEPS,
+                                        "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
+                                        "denoise": 1.0, "model": ["unet", 0], "positive": [f"{name}_g", 0],
+                                        "negative": [f"{name}_neg", 0], "latent_image": latent},
+                             "class_type": "KSampler"}
+        b[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
+        if alpha:
+            _kontext_alpha_nodes(b, name, f"{name}_dec", prefix)
+            want.append(name)
+        if keep_rgb or not alpha:
+            key = f"{name}_rgb" if alpha else name
+            b[f"{key}_save"] = {"inputs": {"filename_prefix": f"{prefix}_{key}_{stamp}",
+                                           "images": [f"{name}_dec", 0]}, "class_type": "SaveImage"}
+            want.append(key)
+    return _krea2_submit_and_collect(b, want, timeout=900, job_key=job_key)
+
+
+def _to_input(path, tag):
+    """Copy a finished image into ComfyUI's input folder so the next job can LoadImage it."""
+    name = f"{tag}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+    shutil.copy(path, os.path.join(COMFY_INPUT_DIR, name))
+    return name
+
+
+def _kontext_unstick(src, paths, edits, job_key, label, prefix, extra_refs=()):
+    """The portraits' safety net, for pose edits: any frame in `paths` that barely moved from
+    paths["idle"] is regenerated once at higher guidance on a fresh seed, and the retry is kept
+    only if it moved further. Returns the frames still stuck after that. `extra_refs` are the
+    references chained on after `src`, as in the edits being retried (a pictured weapon's)."""
+    diffs = {n: _portrait_frame_diff(paths["idle"], paths[n]) for n in edits}
+    stuck = [n for n in edits if diffs[n] < KONTEXT_POSE_MIN_DIFF]
+    print(f"[Kontext Ref] {prefix} pose distances: "
+          + ", ".join(f"{n} {d:.1f}" for n, d in diffs.items()))
+    if not stuck:
+        PROGRESS.skip_job(job_key)   # planned for the usual case - see _plan_v6
+        return []
+    print(f"[Kontext Ref] {prefix} {stuck} barely moved - regenerating at higher guidance")
+    PROGRESS.add_job(job_key, label, 20 * len(stuck), len(stuck) * KONTEXT_STEPS)
+    retry = _kontext_ref_job([src, *extra_refs], {n: edits[n] for n in stuck}, random.randint(1, 1000000000),
+                             guidance=KONTEXT_REF_GUIDANCE + 2.5, prefix=prefix, job_key=job_key)
+    still = []
+    for n in stuck:
+        d = _portrait_frame_diff(paths["idle"], retry[n])
+        print(f"[Kontext Ref] {prefix} {n} retry moved {d:.1f} (was {diffs[n]:.1f})"
+              f"{' - kept' if d > diffs[n] else ''}")
+        if d > diffs[n]:
+            paths[n] = retry[n]
+        if max(d, diffs[n]) < KONTEXT_POSE_MIN_DIFF:
+            still.append(n)
+    return still
+
+
+def _vlm_hero_view(image_path):
+    """"front" or "back" for the hero drawing at `image_path` (see _HERO_VIEW_Q), or None when
+    the question could not be asked or answered."""
+    answer = _vlm_one_word(image_path, _HERO_VIEW_Q, "which way the hero faces")
+    return "back" if answer.startswith("BACK") else "front" if answer.startswith("FRONT") else None
+
+
+def _vlm_weapon_where(image_path, weapon_name):
+    """"hand", "back" or "none" - where the hero drawing's weapon is (see _HERO_WEAPON_Q) - or
+    None when the question could not be asked or answered."""
+    answer = _vlm_one_word(image_path, _HERO_WEAPON_Q.format(w=weapon_name), "where the weapon is")
+    for word in ("HAND", "BACK", "NONE"):
+        if answer.startswith(word):
+            return word.lower()
+    return None
+
+
+def _vlm_one_word(image_path, question, what):
+    """Qwen3-VL's one-word answer to `question` about the image at `image_path`, upper-cased, or
+    "" when it could not be asked. The reply is begun on "ANSWER:" - see _HERO_VIEW_Q."""
+    try:
+        name = f"vlmask_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+        shutil.copy(image_path, os.path.join(COMFY_INPUT_DIR, name))
+        prompt = ("<|im_start|>system\nYou check drawings for a video game. You answer with one "
+                  "word.<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
+                  + question + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nANSWER:")
+        payload = {
+            # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
+            "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                       "class_type": "CLIPLoader"},
+            "img": {"inputs": {"image": name}, "class_type": "LoadImage"},
+            "gen": {"inputs": {"clip": ["k_clip", 0], "image": ["img", 0], "prompt": prompt,
+                               "max_length": 8, "sampling_mode": "off",
+                               "use_default_template": False, "thinking": False},
+                    "class_type": "TextGenerate"},
+            "prev": {"inputs": {"source": ["gen", 0]}, "class_type": "PreviewAny"},
+        }
+        return _submit_and_collect_text(payload, "prev").strip().upper()
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not ask {what}: {e}")
+        return ""
+
+
+def _kontext_turn_hero(drawn, seed):
+    """The hero drawing with its back to the camera - `drawn` itself when it already is, else a
+    KONTEXT_HERO_TURN edit of it, re-run on a fresh seed while it still faces front. The last try
+    is kept even then: a turn never made a back view worse, and the frames have to go on."""
+    view = _vlm_hero_view(drawn)
+    if view == "back":
+        print("[Kontext Ref] hero drawing already faces away")
+        PROGRESS.skip_job("hero_turn")
+        return drawn
+    src = _to_input(drawn, "kxhero_draw")
+    turned = drawn
+    for attempt in range(KONTEXT_HERO_TURN_ATTEMPTS):
+        job = f"hero_turn_retry{attempt}" if attempt else "hero_turn"
+        if attempt:
+            # Seconds, like _plan_v6: the turn edit and the FRONT/BACK check after it.
+            PROGRESS.add_job(job, "Turning your hero to face the dungeon again...", 36, KONTEXT_STEPS)
+        turned = _kontext_ref_job([src], {"turn": KONTEXT_HERO_TURN}, seed + 100 + attempt,
+                                  alpha=False, prefix="kxhero", job_key=job)["turn"]
+        view = _vlm_hero_view(turned)
+        print(f"[Kontext Ref] hero turned around (try {attempt + 1}): {view or 'unread'}")
+        if view != "front":
+            break
+    return turned
+
+
+def _weapon_short(weapon_desc):
+    """The weapon's name without its description - "soft white plush" out of "soft white plush
+    with rounded limbs, smiling face" - to be named inside a pose ("they raise the soft white
+    plush high overhead"). Never "the weapon": that reads as a sword, and a windup drew one."""
+    w = (weapon_desc or "").strip().rstrip(".") or "sword"
+    head = re.split(r",|\s+(?:with|in|and|that|which|made|covered|featuring)\s+", w, 1)[0]
+    words = head.split()
+    return " ".join(words[:6]) if words else "sword"
+
+
+def _kontext_hold_weapon(drawn, weapon_name, weapon_pic, seed):
+    """The hero drawing with its weapon in a hand - `drawn` itself when it already is, else a
+    KONTEXT_HERO_HOLD edit, re-run while the weapon is still on the back or gone. When no try
+    got it into a hand, `drawn` is kept: a weapon on the back still beats none at all."""
+    where = _vlm_weapon_where(drawn, weapon_name)
+    if where in ("hand", None):
+        print(f"[Kontext Ref] hero's {weapon_name}: {where or 'unread'} - left as drawn")
+        return drawn
+    refs = [_to_input(drawn, "kxhero_draw")] + ([weapon_pic] if weapon_pic else [])
+    name = f"the {weapon_name}" + (" from the second picture" if weapon_pic else "")
+    for attempt in range(KONTEXT_HERO_HOLD_ATTEMPTS):
+        job = f"hero_hold{attempt}"
+        # 35.5s per edit (two references) plus ~8s for its check, measured 2026-09-25. Not
+        # planned: most drawings already have it in hand (2 runs of 3), like a turn retry.
+        PROGRESS.add_job(job, "Putting the weapon in your hero's hand...", 44, KONTEXT_STEPS)
+        held = _kontext_ref_job(refs, {"hold": KONTEXT_HERO_HOLD.format(w=name)},
+                                seed + 200 + attempt, alpha=False, prefix="kxhero",
+                                job_key=job)["hold"]
+        now = _vlm_weapon_where(held, weapon_name)
+        print(f"[Kontext Ref] hero's {weapon_name} was {where} - hold edit (try {attempt + 1}): "
+              f"{now or 'unread'}")
+        if now == "hand":
+            return held
+    return drawn
+
+
+def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size):
+    """The nine V6_FRAME_NAMES frames drawn from the player's and/or weapon's picture (`refs`,
+    {slot: staged name}), or None when Kontext failed and the caller should draw them with krea2
+    from the words instead. Frames come back matted; the caller crops them exactly like krea2's."""
+    player_pic, weapon_pic = refs.get("player"), refs.get("weapon")
+    seed = random.randint(1, 1000000000)
+    try:
+        drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
+                                 {"hero": kontext_hero_prompt(player_desc, weapon_desc,
+                                                              bool(player_pic), bool(weapon_pic))},
+                                 seed, size=size, alpha=False, prefix="kxhero",
+                                 job_key="hero_ref")["hero"]
+        # Back to the camera before anything is posed from it - see KONTEXT_HERO_TURN.
+        drawn = _kontext_turn_hero(drawn, seed)
+        # ...and the weapon in a hand - see _HERO_WEAPON_Q.
+        short = _weapon_short(weapon_desc)
+        drawn = _kontext_hold_weapon(drawn, short, weapon_pic, seed)
+        src = _to_input(drawn, "kxhero_src")
+        # Every pose names the weapon it swings ("raise the weapon" on a plush drew a curved
+        # sword) and says how it is held - see KONTEXT_HERO_GRIP. The weapon's picture is NOT
+        # passed along: its look is already in the drawing (and the hold edit above sees it).
+        wname = f"the {short}"
+        grip = KONTEXT_HERO_GRIP.format(w=short)
+        edits = {n: (f"{KONTEXT_HERO_POSES[n].replace('the weapon', wname)} {grip} "
+                     f"{KONTEXT_HERO_KEEP} {_hero_weapon_keep(weapon_desc)}")
+                 for n in V6_FRAME_NAMES if n != "idle"}
+        pose_refs = [src]
+        # A seed per pose: every edit starts from the same drawing, so identity is already held
+        # by the reference, and the two walk edits read almost alike - one shared seed would
+        # hand back the same stride twice.
+        paths = _kontext_ref_job(pose_refs, edits, seed, with_source=True, prefix="kxhero",
+                                 seeds={n: seed + i for i, n in enumerate(edits)},
+                                 guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key="hero_poses")
+        paths["idle"] = paths.pop("source")
+        _kontext_unstick(src, paths, edits, "hero_pose_regen",
+                         "Re-posing the hero frames that did not move...", "kxhero",
+                         extra_refs=pose_refs[1:])
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] hero frames: {e} - drawing them from the words instead")
+        return None
+    print(f"[Kontext Ref] hero drawn from the {'+'.join(s for s in ('player', 'weapon') if refs.get(s))}"
+          f" picture, {len(V6_FRAME_NAMES)} frames at {size}px")
+    return [paths[n] for n in V6_FRAME_NAMES]
+
+
+def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False):
+    """All three foes from the enemy's picture, or None when Kontext failed and the caller should
+    design them from the words instead. The walker is drawn from the picture and posed with
+    KONTEXT_FOE_POSES; the flyer and the boss are the walker's own Kontext edits
+    (generate_kontext_enemy_variants), which is what keeps all three the thing in the picture.
+    Returns {variant: {frame: path}} like _krea2_finish_enemy_variants."""
+    frames = [f for f in _enemy_variant_frames("walker", last_attack_frame) if f != "idle"]
+    feet_max = _person_feet_max(look, "walker")
+    try:
+        # The idle is quality-gated like krea2's (_enemy_frame_problem) and redrawn once on a
+        # fresh seed; a second bad one is kept - it is still the thing in the picture.
+        for attempt in range(2):
+            seed = random.randint(1, 1000000000)
+            drawn = _kontext_ref_job([ref], {"foe": kontext_foe_prompt(look)}, seed, size=size,
+                                     keep_rgb=True, prefix="kxfoe", job_key="enemy_ref")
+            keep_largest_figure(drawn["foe"], thresh=50)
+            problem = _enemy_frame_problem(drawn["foe"], feet_max=feet_max)
+            if not problem:
+                break
+            print(f"[Kontext Ref] walker drawing {attempt + 1} is {problem}")
+        got = _kontext_pose_foe(_to_input(drawn["foe_rgb"], "kxfoe_src"), drawn["foe"], look,
+                                "walker", frames, seed, "enemy_poses", "enemy_pose_regen")
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] enemy: {e} - designing the foes from the words instead")
+        return None
+
+    enemies = {"walker": got}
+    derived = generate_kontext_enemy_variants(got["idle"], size=size, variants=["flyer"])
+    derived["boss"] = _kontext_pictured_boss(got["idle"], ref, size)
+    for v, p in derived.items():
+        p = p or _krea2_regen_enemy(look, size, KREA2_STEPS_DEFAULT, "kxfoe", attempts=1, variant=v)
+        if not p:
+            PROGRESS.skip_job(f"{v}_poses")
+            continue
+        # The flyer and the boss get their own pose edits, the walker's way. Without them they
+        # stood in their one drawing through every attack - reported from play as a boss that
+        # "doesn't look like it's attacking or charging, just looks the same the whole time".
+        vframes = [f for f in _enemy_variant_frames(v, last_attack_frame) if f != "idle"]
+        try:
+            enemies[v] = _kontext_pose_foe(_foe_pose_canvas(p, size, f"kxfoe_{v}"), None, look, v,
+                                           vframes, seed + 1000 * (1 + ENEMY_VARIANT_NAMES.index(v)),
+                                           f"{v}_poses", f"{v}_pose_regen")
+        except GenerationCancelled:
+            raise
+        except Exception as e:
+            print(f"[Kontext Ref Error] {v} poses: {e} - it keeps its one drawing")
+            PROGRESS.skip_job(f"{v}_poses")
+            enemies[v] = {"idle": p}
+    for v, fr in enemies.items():
+        print(f"[Kontext Ref] {v}: {sorted(fr)}")
+    return {v: enemies[v] for v in ENEMY_VARIANT_NAMES if enemies.get(v)}
+
+
+# A PICTURED enemy's boss. KONTEXT_BOSS_EDIT recolours the whole foe "darkened and scorched ...
+# embers in the cracks" - written for objects (a RAM stick, a taco), and on a person it repaints
+# everything that says who they are: skin, face, clothes all charred red-black. Reported from
+# play: the walker and flyer looked like the picture, the boss did not. So a pictured foe's boss
+# keeps the picture's colours and is made bigger and menacing instead, with the picture itself
+# as a second reference to hold it to. Measured on the smiling man in a black tee: 2 of 2 kept
+# face, tee, pendant and jeans, broader with glowing red eyes; a "dark aura of crackling red
+# energy" variant mostly lost the aura to the matte and once turned it into veins on the chest.
+KONTEXT_PICTURED_BOSS_EDIT = (
+    "Make this the boss version of this character: bigger, taller and more imposing, standing "
+    "tall with a fierce, menacing glare and glowing red eyes. Keep exactly the same face, hair, "
+    "clothing, colours and markings as the character in the second picture, so it is still "
+    "clearly the same one. Plain white background.")
+
+
+def _kontext_pictured_boss(walker_path, ref, size):
+    """The pictured foe's boss (KONTEXT_PICTURED_BOSS_EDIT) as a matted cut-out, or None when
+    Kontext failed - the caller then draws one from the words, as for a failed derivation."""
+    try:
+        canvas = _foe_pose_canvas(walker_path, size, "kxenemy_boss")
+        p = _kontext_ref_job([canvas, ref], {"boss": KONTEXT_PICTURED_BOSS_EDIT},
+                             random.randint(1, 1000000000), prefix="kxenemy")["boss"]
+        keep_largest_figure(p, thresh=50)
+        _save_tight(p, thresh=50)
+        return p
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] boss: {e}")
+        return None
+
+
+# A derived flyer's or boss's idle is REDRAWN, in the same job as its poses. Reported from play: a
+# boss with no head. The boss edit (KONTEXT_BOSS_EDIT) had painted a wall of fire behind it, its
+# cut-out kept the fire as a rectangle, and cutting that out again took the scorched head with
+# the fire. Its pose edits came back clean on white - a redraw drops the background - so the idle
+# is one too: 4 of 4 clean, head and all, on that very boss.
+KONTEXT_FOE_IDLE = ("Remove the background behind it completely, so it stands on a plain pure "
+                    "white background, facing the viewer, ready to fight.")
+
+# How much of its square a derived flyer or boss fills when it is staged for its pose edits. The
+# walker is posed from its own drawing, which fills the frame with a thin margin; a derived
+# variant arrives as a tight cut-out, and the lunge needs room to reach into.
+KONTEXT_VARIANT_POSE_FILL = 0.8
+
+
+def _foe_pose_canvas(cut_path, size, tag):
+    """The tight RGBA cut-out at `cut_path` centred on a white `size` square in ComfyUI's input
+    folder, for Kontext to pose - it wants full RGB, as in generate_kontext_enemy_variants.
+    Returns the staged name."""
+    src = Image.open(cut_path).convert("RGBA")
+    scale = size * KONTEXT_VARIANT_POSE_FILL / float(max(src.size))
+    sub = src.resize((max(1, round(src.width * scale)), max(1, round(src.height * scale))),
+                     Image.LANCZOS)
+    canvas = Image.new("RGB", (size, size), (255, 255, 255))
+    canvas.paste(sub, ((size - sub.width) // 2, (size - sub.height) // 2), sub)
+    name = f"{tag}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+    canvas.save(os.path.join(COMFY_INPUT_DIR, name), format="PNG")
+    return name
+
+
+def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key):
+    """{frame: path} for one pictured foe: its idle and a KONTEXT_FOE_POSES edit of `src` (an
+    input-folder name, the foe on white) for each of `frames`, the stuck ones re-rolled
+    (_kontext_unstick) and the bad ones dropped (_enemy_frame_problem) - the frontend shows the
+    idle for a frame it lacks. `idle` is the foe's matted drawing, or None to redraw it from
+    `src` in the same job (KONTEXT_FOE_IDLE). Every frame ends in one shared box, as in
+    _krea2_finish_enemy_variants: the frontend scales the lot by the idle's content, so the foe
+    holds its size and a lunge really reaches further."""
+    feet_max = _person_feet_max(look, variant)
+    edits = {f: f"{KONTEXT_FOE_POSES[f]} {KONTEXT_FOE_KEEP}" for f in frames}
+    job = dict(edits)
+    if idle is None:
+        job["idle"] = f"{KONTEXT_FOE_IDLE} {KONTEXT_FOE_KEEP}"
+    paths = _kontext_ref_job([src], job, seed, prefix="kxfoe", job_key=job_key,
+                             with_source=idle is None)
+    if idle is None:
+        # The redrawn idle, unless it fails the same check every frame gets - then `src` itself,
+        # matted, which is what the idle was before KONTEXT_FOE_IDLE.
+        idle, source = paths.pop("idle"), paths.pop("source")
+        keep_largest_figure(idle, thresh=50)
+        problem = _enemy_frame_problem(idle, feet_max=feet_max)
+        if problem:
+            print(f"[Kontext Ref] {variant} redrawn idle is {problem} - keeping its cut-out")
+            idle = source
+            keep_largest_figure(idle, thresh=50)
+    paths["idle"] = idle
+    still = _kontext_unstick(src, paths, edits, regen_key,
+                             f"Re-posing the {'enemy' if variant == 'walker' else variant} frames "
+                             f"that did not move...", "kxfoe")
+    got = {"idle": idle}
+    for f in frames:
+        if f in still:
+            print(f"[Kontext Ref] {variant} {f} never moved - dropping it, the frontend uses idle")
+            continue
+        keep_largest_figure(paths[f], thresh=50)
+        problem = _enemy_frame_problem(paths[f], feet_max=feet_max)
+        if problem:
+            print(f"[Kontext Ref] {variant} {f} frame is {problem} - dropping it")
+            continue
+        got[f] = paths[f]
+    if len(got) > 1:
+        crop_frames_to_common_bbox(list(got.values()))
+    else:
+        _save_tight(got["idle"], thresh=50)
+    return got
+
+
+def generate_kontext_surfaces(ref, brief, look, size):
+    """{"wall", "ceiling", "floor"} tiling textures from the dungeon's picture, unseamed, or None
+    when Kontext failed and FLUX schnell should paint them from the words as usual. Each one's
+    material is the brief's line for it - the picture supplies what it looks like, the line which
+    part of it this surface is (the sky is the ceiling, the grass the floor)."""
+    lines = {s: (brief or {}).get(s) or f"the {s} of {look or 'this place'}"
+             for s in ("wall", "ceiling", "floor")}
+    try:
+        paths = _kontext_ref_job([ref], {s: kontext_surface_prompt(t) for s, t in lines.items()},
+                                 random.randint(1, 1000000000), size=size, alpha=False,
+                                 prefix="kxwall", job_key="wall_ref")
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] surfaces: {e} - painting them from the words instead")
+        return None
+    # The picture handed straight back is the one way this fails. It happens when the brief's
+    # line describes the whole scene rather than a material ("repeating fields of vibrant green
+    # grass under a bright blue sky, scattered white clouds" came back as the Bliss hill,
+    # horizon and all) - and no wording in the instruction outvotes the line. Only that surface
+    # goes back to FLUX schnell, which paints the same line with its zero-horizon framing.
+    good = {}
+    for s, p in paths.items():
+        split = _surface_scene_split(p)
+        if split > KONTEXT_SURFACE_MAX_SPLIT:
+            print(f"[Kontext Ref] {s} came back as the picture itself (split {split:.0f}) - "
+                  f"painting it from the words instead")
+        else:
+            good[s] = p
+    return good or None
+
+
+# How different a texture's top third is from its bottom third (or its left from its right),
+# as the distance between their mean RGB colours. A tiling surface looks the same all over; a
+# photograph has a sky above and a ground below. Measured: Kontext textures 2-83 (a floor seen
+# at a slight angle is the high end), the two times it returned the picture 207 and 213.
+KONTEXT_SURFACE_MAX_SPLIT = 150
+
+
+def _surface_scene_split(path):
+    import numpy as np
+    try:
+        a = np.asarray(Image.open(path).convert("RGB").resize((64, 64), Image.BILINEAR), dtype=float)
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not measure {os.path.basename(path)}: {e}")
+        return 0.0
+    third = 21
+    top, bottom = a[:third].reshape(-1, 3).mean(0), a[-third:].reshape(-1, 3).mean(0)
+    left, right = a[:, :third].reshape(-1, 3).mean(0), a[:, -third:].reshape(-1, 3).mean(0)
+    return float(max(np.linalg.norm(top - bottom), np.linalg.norm(left - right)))
+
+
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                 steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None,
-                                enemy_named=None, last_attack_frame=False):
+                                enemy_named=None, last_attack_frame=False, refs=None):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames and an enemy, then a
     separate krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {"frames": [7 paths], "enemy": path|None,
@@ -9495,8 +10670,14 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     field's resolve_named_styles() entity (or None) - a quoted individual titles the BOSS
     variant specifically (see parse_story_block for the path that actually reaches the
     screen) and its name is stripped out of the bestiary's own subject below, so three foes
-    don't all end up named after the one boss."""
+    don't all end up named after the one boss.
+
+    `refs` is {slot: staged name} for the pictures Options' Attachments row sends as real
+    references (see the Kontext reference pictures section). A player or weapon picture draws
+    the hero frames with Kontext and an enemy picture draws all three foes; whatever is not
+    pictured, or whose Kontext job failed, is drawn by krea2 from the words as before."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
+    refs = refs or {}
     sq = _round16(gfx["player"])            # the 7 player pose frames
     esq = _round16(gfx["enemy"])            # every frame of all three foes
     frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
@@ -9520,7 +10701,18 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     if enemy_named and enemy_named.get("kind") and not enemy_named.get("known"):
         enemy_style = _strip_proper_name(enemy_style, enemy_named["name"]) or enemy_named["kind"]
 
-    species = generate_enemy_species(enemy_style)
+    # Pictured assets first, in Kontext - each one that comes back None fell over, and is drawn
+    # by krea2 from the words in the job below instead, exactly as if it had had no picture.
+    frame_paths = (generate_kontext_hero_frames(refs, player_style,
+                                                (brief or {}).get("weapon") or weapon_style, sq)
+                   if (refs.get("player") or refs.get("weapon")) else None)
+    ref_enemies = (generate_kontext_reference_enemy(refs["enemy"], enemy_style, esq,
+                                                    last_attack_frame=last_attack_frame)
+                   if refs.get("enemy") else None)
+
+    # A pictured foe is the thing in the picture, not three designed species - the flyer and
+    # the boss are its own Kontext edits, and nothing is left for the bestiary to design.
+    species = None if ref_enemies else generate_enemy_species(enemy_style)
     # Keep the species-level fallback name in step with the title parse_story_block actually
     # uses (game.js reads the story's boss title FIRST and only falls back to this one), so the
     # two can never disagree if the story call itself happened to fail.
@@ -9528,18 +10720,24 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
         species["boss"]["name"] = enemy_named["name"]
 
     payload = _krea2_loaders()
-    frame_prompts = krea2_frame_prompts(player_style, weapon_style, brief)
-    for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
-        _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
-    added, seeds = _krea2_add_enemy_variants(payload, enemy_style, esq, steps, "v6", species=species,
-                                             last_attack_frame=last_attack_frame)
-
-    keys = V6_FRAME_NAMES + [f"enemy_{v}_{f}" for v, fs in added.items() for f in fs]
+    keys, added, seeds = [], {}, {}
+    if frame_paths is None:
+        frame_prompts = krea2_frame_prompts(player_style, weapon_style, brief)
+        for name, prompt_text in zip(V6_FRAME_NAMES, frame_prompts):
+            _krea2_add_branch(payload, name, prompt_text, sq, sq, steps, frame_seed, "v6")
+        keys += V6_FRAME_NAMES
+    if ref_enemies is None:
+        added, seeds = _krea2_add_enemy_variants(payload, enemy_style, esq, steps, "v6",
+                                                 species=species,
+                                                 last_attack_frame=last_attack_frame)
+        keys += [f"enemy_{v}_{f}" for v, fs in added.items() for f in fs]
     t0 = time.time()
-    paths = _krea2_submit_and_collect(payload, keys, job_key="frames")
+    paths = _krea2_submit_and_collect(payload, keys, job_key="frames") if keys else {}
     elapsed = time.time() - t0
 
-    frame_paths = [paths[n] for n in V6_FRAME_NAMES]
+    hero_from_ref = frame_paths is not None
+    if frame_paths is None:
+        frame_paths = [paths[n] for n in V6_FRAME_NAMES]
     for fp in frame_paths:
         keep_largest_figure(fp)
     # One shared bounding box so the character holds still between frames instead of rescaling on
@@ -9551,9 +10749,13 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     _planted = [V6_FRAME_NAMES.index(n) for n in ("idle", "block", "walk1", "walk2")]
     crop_frames_to_common_bbox(frame_paths, bbox_indices=_planted)
 
-    enemies = _krea2_finish_enemy_variants(paths, enemy_style, esq, steps, "v6",
-                                           species=species, generated=added, seeds=seeds)
-    portraits = generate_kontext_portrait_set(player_style, size=gfx["portrait"])
+    ref_drawn = ([s for s in ("player", "weapon") if refs.get(s)] if hero_from_ref else []) + (
+        ["enemy"] if ref_enemies else [])
+    enemies = ref_enemies or _krea2_finish_enemy_variants(paths, enemy_style, esq, steps, "v6",
+                                                          species=species, generated=added,
+                                                          seeds=seeds)
+    portraits = generate_kontext_portrait_set(player_style, size=gfx["portrait"],
+                                              ref=refs.get("player"))
 
     print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
           f"player {sq}x{sq}, enemy {esq}x{esq}, portrait {gfx['portrait']}px, "
@@ -9561,7 +10763,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     return {"frames": frame_paths, "enemy": (enemies.get("walker") or {}).get("idle"),
             "enemies": enemies,
             "enemy_names": ({v: species[v]["name"] for v in species} if species else None),
-            "portrait": portraits[0] if portraits else None, "portraits": portraits}
+            "portrait": portraits[0] if portraits else None, "portraits": portraits,
+            "ref_drawn": ref_drawn}
 
 
 def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
@@ -9667,7 +10870,8 @@ def run_batch_v5_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_style=None,
                       steps=KREA2_STEPS_DEFAULT, player_image=None,
                       sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT,
-                      last_attack_frame=False, ending_video="off", pictures=None):
+                      last_attack_frame=False, ending_video="off", pictures=None,
+                      picture_mode=PICTURE_MODE_DEFAULT):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model.
@@ -9685,10 +10889,20 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     "loading" (the cutscene is filmed here, as the run's last stage) or "background" (the run is
     saved without it and start_ending_video_job films it while the player plays).
     pictures is {slot: data URL} for each mad-lib line the player attached a reference picture
-    to - on those lines the typed words are its name. See the Reference pictures section."""
+    to - on those lines the typed words are its name. See the Reference pictures section.
+    picture_mode is Options' Attachments row (PICTURE_MODES): "reference" also hands each
+    picture to FLUX Kontext to draw that line's art from; "describe" draws it from words only."""
     global gen_progress
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     pictures = {s: pictures[s] for s in PICTURE_SLOTS if (pictures or {}).get(s)}
+    if picture_mode not in PICTURE_MODES:
+        picture_mode = PICTURE_MODE_DEFAULT
+    # Staged up front and cheaply (a resize and a PNG write each) so the plan below knows which
+    # stages will run. A picture that will not stage is simply described, as in "describe".
+    refs = {}
+    if picture_mode == "reference":
+        refs = {s: _stage_reference(pictures[s], f"picture_{s}") for s in pictures}
+        refs = {s: n for s, n in refs.items() if n}
     gen_progress["is_generating"] = True
     gen_progress["completed_bundle"] = None
     gen_progress["error"] = None
@@ -9696,7 +10910,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     gen_progress["total_steps"] = 4
     gen_progress["story"] = None
     gen_progress["phase"] = ""
-    PROGRESS.begin_plan(_plan_v6(steps, sound_mode, last_attack_frame, ending_video))
+    PROGRESS.begin_plan(_plan_v6(steps, sound_mode, last_attack_frame, ending_video, refs=refs,
+                                 pictured=tuple(pictures), picture_mode=picture_mode))
 
     def _b64(path):
         with open(path, "rb") as tf:
@@ -9722,7 +10937,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         brief = generate_theme_brief(named["text"]["wall"], named["text"]["weapon"],
                                      named["text"]["enemy"],
                                      want_surfaces=(_theme_bucket(named["text"]["wall"], named["wall"]) is None),
-                                     wall_named=named["wall"], enemy_named=named["enemy"])
+                                     wall_named=named["wall"], enemy_named=named["enemy"],
+                                     enemy_pictured=bool((looks.get("enemy") or {}).get("look")),
+                                     weapon_pictured=bool((looks.get("weapon") or {}).get("look")))
 
         # The story is published on its own, minutes ahead of the bundle, so the frontend can
         # start the crawl while everything else is still rendering. It keeps the player's OWN
@@ -9738,14 +10955,17 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         gen_progress["story"] = story
 
         gen_progress["current_step"] = 2
+        ref_surfaces = (generate_kontext_surfaces(refs["wall"], brief, named["text"]["wall"],
+                                                  gfx["texture"])
+                        if refs.get("wall") else None)
         w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(
-            named["text"]["wall"], gfx, brief, wall_named=named["wall"])
+            named["text"]["wall"], gfx, brief, wall_named=named["wall"], surfaces=ref_surfaces)
 
         gen_progress["current_step"] = 3
         bundle = generate_krea2_posed_bundle(named["text"]["player"], named["text"]["weapon"],
                                              named["text"]["enemy"], steps, gfx, brief,
                                              enemy_named=named["enemy"],
-                                             last_attack_frame=last_attack_frame)
+                                             last_attack_frame=last_attack_frame, refs=refs)
 
         # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
         # card rather than competing with them. Both calls are skippable via sound_mode. Audio
@@ -9803,6 +11023,13 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # What Qwen3-VL read each attached picture as ({slot: {kind, look}}), or None when
             # nothing was attached - diagnosis, same as theme_brief.
             "picture_looks": looks or None,
+            # How the pictures reached the art (PICTURE_MODES), and which lines were actually
+            # drawn from their picture by Kontext - a line missing from it with "reference"
+            # set fell back to its words. None when nothing was attached.
+            "picture_mode": picture_mode if pictures else None,
+            "picture_refs": (sorted(set(bundle.get("ref_drawn") or ())
+                                    | ({"wall"} if ref_surfaces else set()))
+                             if pictures else None),
             # What each quoted proper name (resolve_named_styles) resolved to - None-valued
             # entries and all, so a saved session can be diagnosed the same way theme_brief
             # already is. None when nothing in any field was quoted.
@@ -10310,6 +11537,11 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             "pictures": {slot: dict(picture_looks.get(slot) or {}, saved=slot in saved_pictures)
                          for slot in PICTURE_SLOTS
                          if slot in picture_looks or slot in saved_pictures} or None,
+            # How those pictures reached the art (PICTURE_MODES) and which lines Kontext really
+            # drew from them - see the bundle keys of the same names. None without pictures, and
+            # absent on runs from before the Attachments option, which were all "describe".
+            "picture_mode": bundle.get("picture_mode"),
+            "picture_refs": bundle.get("picture_refs"),
             "location": story.get("location", ""),
             "hero": story.get("hero", ""),
             "foe": story.get("foe", ""),
@@ -10624,11 +11856,11 @@ ENDING_REF_AUDIO_SEC = 10.0
 ENDING_FILENAME = "ending.mp4"
 # Generous: a cold start has to load a 20GB DiT and a 15GB text encoder before the first step.
 ENDING_TIMEOUT = 45 * 60
-# _plan_v6 weight for the "loading" mode's stage, on the same rough wall-clock scale as the rest of
-# the plan (the krea2 frames job is weight 80 for ~100-170s). Measured on the 3090, sage attention
-# on, 8.0s clip with all six pictures + the battle bed: 512x384 took 198s as the last stage of a
-# real run. For comparison, 640x480 ran 14.9s a step (354s) and 768x576 24.7s a step (570s cold).
-ENDING_PLAN_WEIGHT = 120
+# _plan_v6 weight for the "loading" mode's stage, in seconds like the rest of the plan. Measured on
+# the 3090, sage attention on, 8.0s clip with all six pictures + the battle bed: 512x384 took 198s
+# as the last stage of a real run. For comparison, 640x480 ran 14.9s a step (354s) and 768x576
+# 24.7s a step (570s cold).
+ENDING_PLAN_WEIGHT = 200
 
 
 def ending_video_prompt(pictures, styles, has_audio):
@@ -12079,6 +13311,11 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 pictures = {s: v for s, v in pictures.items()
                             if isinstance(v, str) and v.startswith("data:image/")}
                 player_image = pictures.get("player")
+                # Options' Attachments row - see PICTURE_MODES. Absent (an older page) or
+                # unknown means the default, drawing from the picture itself.
+                picture_mode = data.get("picture_mode", PICTURE_MODE_DEFAULT)
+                if picture_mode not in PICTURE_MODES:
+                    picture_mode = PICTURE_MODE_DEFAULT
                 mode = data.get("mode", "v3_flux")
                 # v6-only; v5/v3/v4 ignore this. Matches the setup screen's default option.
                 sound_mode = data.get("sound_mode", "music_and_sound")
@@ -12122,9 +13359,16 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 gen_progress["total_steps"] = 2
                 gen_progress["story"] = None
                 gen_progress["phase"] = ""
-                gen_progress["status_message"] = (
-                    "Writing the chronicle with Qwen3-VL..." if mode in ("v5_krea", "v6_krea")
-                    else "Synthesizing 3D Dungeon & Character with FLUX.1 [schnell]...")
+                # A v6 run with pictures reads them first - the same words as its picture
+                # stages in _plan_v6, until the plan's own labels take over.
+                if mode == "v6_krea" and pictures and picture_mode == "describe":
+                    gen_progress["status_message"] = "Describing your pictures in words with Qwen3-VL..."
+                elif mode == "v6_krea" and pictures:
+                    gen_progress["status_message"] = "Studying your pictures with Qwen3-VL..."
+                else:
+                    gen_progress["status_message"] = (
+                        "Writing the chronicle with Qwen3-VL..." if mode in ("v5_krea", "v6_krea")
+                        else "Synthesizing 3D Dungeon & Character with FLUX.1 [schnell]...")
                 gen_progress["percent"] = 0
 
                 self.send_response(200)
@@ -12144,7 +13388,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                                  "gfx": gfx, "gfx_name": graphics_quality,
                                                  "last_attack_frame": last_attack_frame,
                                                  "ending_video": ending_video,
-                                                 "pictures": pictures},
+                                                 "pictures": pictures,
+                                                 "picture_mode": picture_mode},
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,
@@ -12152,7 +13397,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                          daemon=True)
                 print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx} "
                       f"last_attack_frame={last_attack_frame} ending_video={ending_video} "
-                      f"pictures={sorted(pictures) or 'none'}")
+                      f"pictures={sorted(pictures) or 'none'}"
+                      f"{f' ({picture_mode})' if pictures else ''}")
                 t.start()
                 GEN_THREAD = t
                 return

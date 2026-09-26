@@ -183,7 +183,8 @@
     #modalQuitConfirm button:focus-visible,
     #modalEraseConfirm button:focus-visible,
     #modalEndingPlayer button:focus-visible,
-    #modalEndingStopConfirm button:focus-visible {
+    #modalEndingStopConfirm button:focus-visible,
+    #modalAttachNotice button:focus-visible {
       outline: 2px dotted #000080;
       outline-offset: -4px;
     }
@@ -203,6 +204,21 @@
        (revert = the browser's :focus-visible default) instead of the dotted one above. */
     #modalSharedRun select:focus-visible {
       outline: revert;
+    }
+    /* Options' title-bar gear (see #btnOptionsGear): a button that looks like the title text
+       beside it. Its focus ring is white, since the navy one above vanishes on the title bar. */
+    .options-gear {
+      background: none;
+      border: 0;
+      padding: 0;
+      font: inherit;
+      color: inherit;
+      line-height: inherit;
+      cursor: default;
+    }
+    #modalSettings .options-gear:focus-visible {
+      outline: 2px dotted #ffffff;
+      outline-offset: 1px;
     }
     .win95-title {
       background: linear-gradient(90deg, #000080, #1084d0);
@@ -397,6 +413,24 @@
     #btnQuitEraseRun:disabled span {
       color: #808080;
       text-shadow: 1px 1px #ffffff;
+    }
+    /* The Attachments notice's first 3 seconds: its ✕ is really disabled, but OK is only
+       aria-disabled, so the keyboard cursor can wait on it for the countdown on its label. Both
+       grey out the Windows 95 way and stay raised when pressed. */
+    #btnAttachNoticeClose:disabled,
+    #btnAttachNoticeOk[aria-disabled="true"] {
+      background: #c0c0c0;
+      color: #808080;
+      text-shadow: 1px 1px #ffffff;
+      cursor: default;
+    }
+    #btnAttachNoticeClose:disabled:active,
+    #btnAttachNoticeOk[aria-disabled="true"]:active {
+      border-top: 2px solid #ffffff;
+      border-left: 2px solid #ffffff;
+      border-right: 2px solid #808080;
+      border-bottom: 2px solid #808080;
+      box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf;
     }
     .dpad-btn {
       width: 44px !important;
@@ -2443,7 +2477,11 @@
            four sections are taller than a short window and the OK button was falling off. -->
       <div class="win95-box w-full max-w-lg p-1 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div class="win95-title flex items-center justify-between mb-2">
-          <span>⚙️ Options</span>
+          <!-- The gear is a button of its own, drawn as plain title text: five presses in a row
+               show or hide the Secret Settings section below (game.js SECRET_CLICKS). A real
+               button so the keyboard can do it too - Enter five times - and focusFirstIn skips
+               the title bar, so the cursor never opens the dialog sitting on it. -->
+          <span class="flex items-center gap-1"><button type="button" id="btnOptionsGear" class="options-gear" aria-label="Options">⚙️</button> Options</span>
           <button id="btnCloseSettings" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
         </div>
 
@@ -2479,17 +2517,40 @@
               Generation Settings
             </div>
 
-            <div id="gfxQualityRow" class="flex flex-col gap-1.5">
-              <label class="text-xs font-bold text-slate-800">
-                Texture and Sprite Generation:
-              </label>
-              <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
-                <option value="normal" selected>High</option>
-                <option value="optimized">Medium</option>
-                <option value="reduced">Low</option>
-              </select>
-              <!-- Hidden for now - may be shown again later. -->
-              <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
+            <!-- Texture and Sprite Generation and Attachments sit side by side, the same pairing
+                 as Sound Generation and Ending Video below: both are "how the art gets drawn".
+                 Stacks back to one column on a narrow window. -->
+            <div id="gfxAndPictureRow" class="flex flex-col sm:flex-row gap-1.5 sm:gap-2">
+              <div id="gfxQualityRow" class="flex flex-col gap-1.5 flex-1 min-w-0">
+                <label class="text-xs font-bold text-slate-800">
+                  Texture and Sprite Generation:
+                </label>
+                <select id="gfxQualitySelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                  <option value="normal" selected>High</option>
+                  <option value="optimized">Medium</option>
+                  <option value="reduced">Low</option>
+                </select>
+                <!-- Hidden for now - may be shown again later. -->
+                <div class="text-[10px] text-slate-500 font-bold" hidden><strong>Optimized</strong> is a middle tier: tiling textures, player frames and enemy sprites at 384&times;384, the switch &amp; lantern cutouts and HUD portraits at 192&times;192. Meaningfully faster than High Quality without Reduced's coarseness. <strong>Reduced</strong> halves the resolution of everything (a 512&times;512 texture becomes 256&times;256) for the fastest, lightest dungeon. <strong>High Quality</strong> is the full-quality default.</div>
+              </div>
+
+              <!-- Attachments: how a picture attached to a mad-lib line reaches the art. "reference"
+                   (the default) hands the picture itself to FLUX Kontext, which draws that line's
+                   hero, foe or walls from it; "describe" has Qwen3-VL write it down and draws from
+                   the words, the way attachments first worked. server.py PICTURE_MODES. The
+                   one-time notice the first Attach click opens (#modalAttachNotice) quotes both
+                   option labels - keep it in step if they change. -->
+              <div id="pictureModeRow" class="flex flex-col gap-1.5 flex-1 min-w-0">
+                <label class="text-xs font-bold text-slate-800" for="pictureModeSelect">
+                  Attachments:
+                </label>
+                <select id="pictureModeSelect" class="win95-input w-full text-xs font-bold cursor-pointer">
+                  <option value="reference" selected
+                          title="FLUX Kontext draws the hero, weapon, foes and walls from the attached picture itself, so they look like it. Takes longer to create.">Use the picture itself (FLUX Kontext)</option>
+                  <option value="describe"
+                          title="Qwen3-VL describes the attached picture in words, and the art is drawn from that description.">Describe the picture in words (Qwen3-VL)</option>
+                </select>
+              </div>
             </div>
 
             <!-- Last Attack Frame: how a foe's attack frame lines up with the blow it throws, which
@@ -2764,6 +2825,47 @@
               OK
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ATTACHMENTS NOTICE - the first press of any mad-lib line's Attach button, while Options'
+         Attachments is on "Use the picture itself", opens this once instead of the file picker:
+         pictures make a dungeon slower to create, and the other setting is the faster way. It
+         cannot be closed for its first 3 seconds - OK counts them down on its own label and the
+         ✕ stays greyed - and then OK carries on into the file picker, while ✕, ESC or the menu
+         behind it just close it. openAttachNotice / closeAttachNotice in game.js. The two
+         setting names quoted below are #pictureModeSelect's option labels. -->
+    <div id="modalAttachNotice" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden"
+         role="dialog" aria-modal="true" aria-labelledby="attachNoticeTitle" aria-describedby="attachNoticeBody">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl max-h-[92vh] overflow-y-auto">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span id="attachNoticeTitle">⚠️ Pictures Take Longer</span>
+          <button id="btnAttachNoticeClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" aria-label="Close" disabled>✕</button>
+        </div>
+
+        <div class="p-4 flex gap-3 items-start">
+          <div class="text-3xl leading-none select-none">⏳</div>
+          <div id="attachNoticeBody" class="flex flex-col gap-1.5 min-w-0">
+            <p class="text-xs font-black text-slate-900">Attaching a picture makes creating a dungeon take longer.</p>
+            <p class="text-[11px] text-slate-700">
+              Right now pictures are set to <b>Use the picture itself</b>: FLUX Kontext draws that
+              line's hero, weapon, foes or walls straight from your picture, so they look like it.
+              With a picture on every line, that can take nearly twice as long.
+            </p>
+            <p class="text-[11px] text-slate-700">
+              <b>To speed it up</b>, open &#9881;&#65039; Options and, under Generation Settings, set
+              Attachments to <b>Describe the picture in words</b>. Qwen3-VL then writes down what
+              your picture shows and the art is drawn from those words instead &ndash; only seconds
+              more, but the art matches the description rather than looking exactly like your picture.
+            </p>
+          </div>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end">
+          <button id="btnAttachNoticeOk" class="win95-btn px-5 py-1.5 text-xs text-black bg-slate-200 hover:bg-slate-300" aria-disabled="true">
+            OK (3)
+          </button>
         </div>
       </div>
     </div>
