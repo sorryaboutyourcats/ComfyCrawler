@@ -3900,6 +3900,30 @@ _SPECIES_PARTS_PERSON = {
 }
 
 
+# Something the typed enemy WEARS ('Alien from "Alien" wearing a cute hat') has to be spelled
+# out in every LOOK line, concretely. krea2 treats "wearing a cute hat" inside the repeated
+# subject name as part of a name and draws a bare foe; the grunt and boss kept their outfits
+# only because the designer happened to write "bright pink knit hat" / "yellow rubber duck
+# feet" into their LOOKs, and the flyer, whose line is all wings, came back bare in both runs.
+# Measured on the flyer alone, same 4 seeds: LOOK without the hat 0/8, "wearing a cute hat"
+# added to the LOOK 0/8, "wearing a bright pink knit hat pulled down on its head" 8/8. A
+# separate "It is plainly wearing X" sentence in the image prompt did not help (duck shoes
+# went from 3/4 to 0/4), so the fix lives here, where the LOOK is written.
+_WORN_RE = re.compile(r"\bwearing\s+(.+?)\s*$", re.I)
+
+
+def _species_worn_rule(enemy_style):
+    """The extra LOOK rule for an enemy typed as 'X wearing Y', or "" when nothing is worn."""
+    m = _WORN_RE.search((enemy_style or "").strip().rstrip("."))
+    if not m:
+        return ""
+    return ("   It is wearing " + m.group(1) + ". Pick ONE colour and material for that item and\n"
+            "   put the very same item on all three foes, the FLYER and the BOSS included. It\n"
+            "   stays an ordinary worn item - it is not how the FLYER flies and not part of the\n"
+            "   BOSS's bulk. Every LOOK must describe it: that colour, that material, and\n"
+            "   exactly where on the body it sits. Rule 4's colours are for their bodies.")
+
+
 def _enemy_species_prompt(enemy_style):
     """Same hand-built chat template as _story_prompt - see there for why the <|im_start|>
     opener and the empty <think> block are both mandatory.
@@ -3910,6 +3934,11 @@ def _enemy_species_prompt(enemy_style):
     template = _ENEMY_SPECIES_USER
     for key, text in parts.items():
         template = template.replace("{" + key + "}", text.rstrip("\n"))
+    worn = _species_worn_rule(enemy_style)
+    if worn:
+        template = template.replace("   jagged teeth, standing on two thick legs\" is WRONG - it forgot to say dragon.",
+                                    "   jagged teeth, standing on two thick legs\" is WRONG - it forgot to say dragon.\n"
+                                    + worn, 1)
     user = template.format(
         enemy=(enemy_style or "").strip() or "things that shamble")
     return (
@@ -5832,7 +5861,7 @@ def parse_theme_brief(text, slots):
 
 def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=True,
                          wall_named=None, enemy_named=None, enemy_pictured=False,
-                         weapon_pictured=False):
+                         weapon_pictured=False, enemy_typed=None):
     """Turn the typed words into concrete drawable material. Never raises: on any failure
     returns None and every caller falls back to interpolating the typed words raw, which is
     exactly what shipped before this stage existed.
@@ -5867,6 +5896,15 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # dungeon and that is how "Lady in the red dress" became a red robot (see _enemy_is_person).
     if literal is None and _enemy_is_person(enemy_style):
         literal = _theme_inline(enemy_style.strip())
+    # A quoted enemy the identity call RECOGNISED is kept as typed too (`enemy_typed`, the
+    # quotes-stripped line). The designer's ENEMY line is at most eight words, and anything
+    # else on the line competes with the name for them: 'Alien from "Alien" wearing a cute hat'
+    # came back "alien wearing pink bowler hat" in 3 of 3 samples, dropping the "from Alien"
+    # that made it the xenomorph, so every foe was a generic alien in a hat. A known character
+    # IS the look - the same reason generate_krea2_posed_bundle never strips a known name.
+    if (literal is None and enemy_named and enemy_named.get("known")
+            and (enemy_typed or "").strip()):
+        literal = _theme_inline(enemy_typed.strip())
     # `enemy_pictured`: `enemy_style` is the LOOK Qwen3-VL read off an attached picture, and it
     # is kept the same way, whatever it is. The designer's ENEMY line is at most eight words,
     # and cut to fit it dropped exactly what made the picture that picture - a cat-headed dancer
@@ -11087,7 +11125,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
                                      want_surfaces=(_theme_bucket(named["text"]["wall"], named["wall"]) is None),
                                      wall_named=named["wall"], enemy_named=named["enemy"],
                                      enemy_pictured=bool((looks.get("enemy") or {}).get("look")),
-                                     weapon_pictured=bool((looks.get("weapon") or {}).get("look")))
+                                     weapon_pictured=bool((looks.get("weapon") or {}).get("look")),
+                                     enemy_typed=named["clean"]["enemy"])
 
         # The story is published on its own, minutes ahead of the bundle, so the frontend can
         # start the crawl while everything else is still rendering. It keeps the player's OWN

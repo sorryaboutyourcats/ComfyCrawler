@@ -370,5 +370,39 @@ v6_src = inspect.getsource(srv.run_batch_v6_krea)
 ck('want_surfaces=(_theme_bucket(named["text"]["wall"], named["wall"]) is None)' in v6_src,
    "run_batch_v6_krea no longer derives want_surfaces from the named-aware bucket dispatcher")
 
+# A RECOGNISED quoted enemy survives the set designer as typed - its eight-word ENEMY line kept
+# the hat and dropped the name: 'Alien from "Alien" wearing a cute hat' came back "alien
+# wearing pink bowler hat", and every foe was a generic alien. An unrecognised one is designed.
+_saved_submit = srv._submit_and_collect_text
+srv._submit_and_collect_text = lambda *a, **k: (
+    "WEAPON: silver neuralyzer with a red lens\nENEMY: alien wearing pink bowler hat")
+try:
+    known = {"name": "Alien", "kind": "creature", "known": True}
+    got = srv.generate_theme_brief("", "a neuralyzer", "Alien from Alien, the real creature "
+                                   "wearing a cute hat", want_surfaces=False, enemy_named=known,
+                                   enemy_typed="Alien from Alien wearing a cute hat")
+    ck(got["enemy"] == "alien from Alien wearing a cute hat",
+       f"a recognised quoted enemy was rewritten: {got['enemy']!r}")
+    got = srv.generate_theme_brief("", "a neuralyzer", "a creature called Zorb wearing a hat",
+                                   want_surfaces=False, enemy_typed="Zorb wearing a hat",
+                                   enemy_named={"name": "Zorb", "kind": "creature", "known": False})
+    ck(got["enemy"] == "alien wearing pink bowler hat",
+       f"an unrecognised quoted enemy should still be designed: {got['enemy']!r}")
+    ck('enemy_typed=named["clean"]["enemy"]' in v6_src,
+       "run_batch_v6_krea no longer hands the set designer the typed enemy line")
+finally:
+    srv._submit_and_collect_text = _saved_submit
+
+# Something the enemy WEARS goes into every LOOK, the flyer's included - left to the designer
+# the flyer's all-wings line dropped it and krea2 drew it bare (hat flyer 0/16 before, 12/12
+# with the rule). Only a "wearing" enemy gets the rule; everything else is byte-identical.
+worn_prompt = srv._enemy_species_prompt("alien from Alien wearing rubber duck shoes")
+ck("It is wearing rubber duck shoes. Pick ONE colour" in worn_prompt,
+   "a worn item did not reach the bestiary's LOOK rules")
+ck(worn_prompt.index("It is wearing") < worn_prompt.index("\n2. "),
+   "the worn-item rule should sit under rule 1")
+ck("It is wearing" not in srv._enemy_species_prompt("alien from Alien"),
+   "an enemy wearing nothing should not get the worn-item rule")
+
 print("FAIL" if fails else "all set-designer checks passed")
 sys.exit(1 if fails else 0)
