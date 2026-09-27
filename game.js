@@ -6897,10 +6897,11 @@ void main() {
       let data;
       try { data = cx.getImageData(0, 0, sw, sh).data; }
       catch (e) { _solidBoxCache.set(img, null); return null; }
-      let minX = sw, minY = sh, maxX = -1, maxY = -1;
+      let minX = sw, minY = sh, maxX = -1, maxY = -1, solid = 0;
       for (let y = 0; y < sh; y++) {
         for (let x = 0; x < sw; x++) {
           if (data[(y * sw + x) * 4 + 3] > 80) {
+            solid++;
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -6908,11 +6909,34 @@ void main() {
           }
         }
       }
+      // `mass` is the solid area per unit of height squared - how much of the screen the
+      // figure covers once it has been scaled to a given height. See slenderBoost.
       const box = maxX < 0 ? null : {
         x: minX / sw, y: minY / sh, w: (maxX - minX + 1) / sw, h: (maxY - minY + 1) / sh,
+        mass: solid / ((maxY - minY + 1) * (maxY - minY + 1)),
       };
       _solidBoxCache.set(img, box);
       return box;
+    }
+
+    // Extra height for a SLENDER foe. Sizing by height alone gives every foe the same height,
+    // but a slim full-length person (an "anime villain lady", a waifu, Sailor Moon, an
+    // Enderman) at that height is a 40px-wide strip, while a gummy bear or a crab fills a
+    // block. Measured over 84 saved runs at walker size, those slim figures covered 0.39-0.46x
+    // the median foe's solid area and read as the small ones. So a foe whose mass falls below
+    // SLENDER_MASS_REF is drawn taller, by the square root of the shortfall (area grows with
+    // the square of the scale) and capped at SLENDER_BOOST_MAX so a slim walker still stands
+    // clearly shorter than its dread boss. Chunky foes get 1 and are untouched. The boss
+    // doesn't take it at all: it is already pinned against the ceiling of the view.
+    //   median walker mass ~0.44; anime villain lady 0.19 -> x1.30, waifu 0.17 -> x1.30,
+    //   Sailor Moon 0.20 -> x1.27, Enderman 0.23 -> x1.19.
+    const SLENDER_MASS_REF = 0.32;
+    const SLENDER_BOOST_MAX = 1.3;
+    function slenderBoost(img, variant) {
+      if (variant === 'boss' || !img || !img.complete || !img.naturalWidth) return 1;
+      const box = solidContentBox(img);
+      if (!box || !(box.mass > 0)) return 1;
+      return Math.min(SLENDER_BOOST_MAX, Math.max(1, Math.sqrt(SLENDER_MASS_REF / box.mass)));
     }
 
     // Draw an enemy frame so its SOLID content is `targetH` px tall (but never wider than
@@ -7342,8 +7366,9 @@ void main() {
         const bottomY = floorY - wallH * (MARKER_HOVER_FRAC + scale.lift) + bob;
 
         const img = markerFrameFor(v.m.variant);
-        const targetH = wallH * MARKER_HEIGHT_FRAC * scale.size;
-        const maxW = wallH * MARKER_WIDTH_FRAC * scale.size;
+        const slim = slenderBoost(img, v.m.variant);
+        const targetH = wallH * MARKER_HEIGHT_FRAC * scale.size * slim;
+        const maxW = wallH * MARKER_WIDTH_FRAC * scale.size * slim;
         let drawW, drawH, drawX, drawY;
         if (img) {
           const box = solidContentBox(img);
@@ -7679,8 +7704,11 @@ void main() {
         if (frame && frame.complete && frame.naturalWidth > 0) {
           // Size by MEASURED solid content, not the raw frame - a small generation still fills
           // the combat view. heightFrac is per-variant: boss looms, flyer is smaller & airborne.
-          let targetH = Math.round(height * cfg.heightFrac * dScale * flySize);
-          let maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale * flySize);
+          // A slim figure is drawn taller so it covers as much of the view as a stocky one -
+          // measured off the idle, like the rest of the sizing, so it holds between poses.
+          const slim = slenderBoost(sizeRef || frame, e.variant);
+          let targetH = Math.round(height * cfg.heightFrac * dScale * flySize * slim);
+          let maxW = Math.round(width * (cfg.widthFrac || 0.7) * dScale * flySize * slim);
           const bobAmp = cfg.fly ? 4 : 3;
           const bob = Math.sin(Date.now() / (cfg.fly ? 110 : 220)) * bobAmp;
           // Hover, but not behind the name plate. A flyer's whole point is being up out of
@@ -13011,14 +13039,30 @@ void main() {
       el.addEventListener('animationend', done);
     }
 
+    // Unlisted runs: starred with no sort number when the export was made, which
+    // tools/export_showcase.py marks `unlisted` in dungeons.json. They ship, and a ?run= link
+    // plays them (openSharedRun searches historyEntries, which still has them), but the gallery
+    // leaves them out. Opening the export with ?unlisted flips that - the gallery then shows
+    // only those runs, so their 🔗 hands out a link at the address the export is really hosted.
+    const SHOWCASE_UNLISTED_VIEW = SHOWCASE_MODE
+      && new URLSearchParams(window.location.search).has('unlisted');
+
+    // The runs the gallery (and an agent's list of dungeons) offers.
+    function showcaseGalleryEntries() {
+      if (!Array.isArray(historyEntries)) return historyEntries;
+      return historyEntries.filter(e => !!(e && e.unlisted) === SHOWCASE_UNLISTED_VIEW);
+    }
+
     function renderShowcaseList() {
       if (!showcaseList) return;
-      if (!Array.isArray(historyEntries) || !historyEntries.length) {
+      const entries = showcaseGalleryEntries();
+      if (!Array.isArray(entries) || !entries.length) {
         showcaseList.innerHTML = '';
         const msg = document.createElement('div');
         msg.className = 'text-xs text-slate-500 font-bold text-center py-8 px-4';
-        msg.textContent = historyEntries === null
+        msg.textContent = entries === null
           ? 'Could not load the saved dungeons.'
+          : SHOWCASE_UNLISTED_VIEW ? 'This showcase has no unlisted dungeons.'
           : 'No dungeons in this showcase yet.';
         showcaseList.appendChild(msg);
         if (showcaseFootNote) showcaseFootNote.textContent = '';
@@ -13029,14 +13073,16 @@ void main() {
       // dropdown History does, driving the same stored pick, so it has to honour it. Not
       // visibleHistoryEntries() - that also applies "Similar only", which has nothing to
       // compare against on this screen (no live run, no mad-lib draft).
-      sortHistoryEntries(historyEntries)
+      sortHistoryEntries(entries)
         .forEach(entry => showcaseList.appendChild(buildHistoryEntryEl(entry)));
       requestAnimationFrame(() => {
         showcaseList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
       });
       if (showcaseFootNote) {
-        const favorites = historyEntries.filter(e => e.favorite).length;
-        showcaseFootNote.textContent = historyEntries.length + ' dungeon' + (historyEntries.length === 1 ? '' : 's')
+        const favorites = entries.filter(e => e.favorite).length;
+        showcaseFootNote.textContent = entries.length + (SHOWCASE_UNLISTED_VIEW ? ' unlisted' : '')
+          + ' dungeon' + (entries.length === 1 ? '' : 's')
+          + (SHOWCASE_UNLISTED_VIEW ? '  ·  only reachable by their 🔗 link' : '')
           + (favorites ? '  ·  ' + favorites + ' favorite' + (favorites === 1 ? '' : 's') : '');
       }
     }
@@ -13978,9 +14024,84 @@ void main() {
         });
     }
 
+    // Switching between rows and tiles keeps the reader's place: the run they were looking at
+    // in one view is on screen, at about the same height, in the other. Without this a tile
+    // grid four across is a quarter the height of the rows, so the same scrollTop lands
+    // somewhere else entirely - run #30 in the list is run #120 in the tiles.
+    //
+    // "Looking at" is the run holding the keyboard cursor when that run is on screen, else the
+    // run nearest the middle of the part of the list actually on screen - unless the list is
+    // scrolled to its top, where the first run is the anchor, so the top stays the top. A
+    // cursor parked on a run scrolled out of sight (openHistory drops it on the first Start)
+    // does not count: the reader scrolled away from it, so it is not what they are looking at.
+    // Measured against the window as well as the list: on a phone the showcase list is as tall
+    // as its content and the page scrolls instead (see revealShowcaseRun).
+    function captureHistoryViewAnchor(list) {
+      if (!list) return null;
+      const box = list.getBoundingClientRect();
+      const top = Math.max(box.top, 0);
+      const bottom = Math.min(box.bottom, window.innerHeight);
+      if (!box.width || bottom <= top) return null;   // closed, or the other screen's list
+      const rows = Array.from(list.querySelectorAll('.hist-row'));
+      if (!rows.length) return null;
+      const onScreen = (r) => {
+        const rect = r.getBoundingClientRect();
+        const mid = (rect.top + rect.bottom) / 2;
+        return mid >= top && mid <= bottom;
+      };
+      const focusedRow = rows.find(r => r.contains(document.activeElement)) || null;
+      let row = focusedRow && onScreen(focusedRow) ? focusedRow : null;
+      if (!row && rows[0].getBoundingClientRect().top >= top - 1) row = rows[0];
+      if (!row) {
+        const midX = (box.left + box.right) / 2;
+        const midY = (top + bottom) / 2;
+        let best = Infinity;
+        rows.forEach(r => {
+          const rect = r.getBoundingClientRect();
+          const d = Math.hypot((rect.left + rect.right) / 2 - midX, (rect.top + rect.bottom) / 2 - midY);
+          if (d < best) { best = d; row = r; }
+        });
+      }
+      return {
+        id: row.dataset.id,
+        top: row.getBoundingClientRect().top,
+        focusId: focusedRow ? focusedRow.dataset.id : null,
+        focusClass: focusedRow
+          ? ['hist-start', 'hist-star', 'hist-movie'].find(c => document.activeElement.classList.contains(c))
+          : null,
+      };
+    }
+
+    function historyRowById(list, id) {
+      return Array.prototype.find.call(list.querySelectorAll('.hist-row'), r => r.dataset.id === id);
+    }
+
+    function restoreHistoryViewAnchor(list, anchor) {
+      if (!list || !anchor) return;
+      const row = historyRowById(list, anchor.id);
+      if (row) {
+        // Shift by however far the rebuild moved it. The History list always scrolls itself
+        // (moving the page behind the modal would be wrong); the showcase list does on a
+        // desktop and hands it to the page on a phone.
+        const delta = row.getBoundingClientRect().top - anchor.top;
+        if (list === historyList || list.scrollHeight > list.clientHeight) list.scrollTop += delta;
+        else window.scrollBy(0, delta);
+      }
+      // The rebuild threw away the focused button along with its row - put the cursor back on
+      // the same button of the same run, or its Start when that button is a row-only one.
+      const focusRow = anchor.focusId && historyRowById(list, anchor.focusId);
+      if (focusRow) {
+        const btn = (anchor.focusClass && focusRow.querySelector('.' + anchor.focusClass))
+          || focusRow.querySelector('.hist-start');
+        if (btn) btn.focus({ preventScroll: true });
+      }
+    }
+
     function setHistoryView(view) {
       const next = view === 'tiles' ? 'tiles' : 'list';
       if (next === historyView) return;
+      const lists = [historyList, SHOWCASE_MODE ? showcaseList : null];
+      const anchors = lists.map(captureHistoryViewAnchor);
       historyView = next;
       prefs.set(HISTORY_VIEW_KEY, historyView);
       applyHistoryView();
@@ -13988,6 +14109,7 @@ void main() {
       // redraw and not a refetch - nothing goes back to the server for it.
       renderHistoryList();
       if (SHOWCASE_MODE) renderShowcaseList();
+      lists.forEach((list, i) => restoreHistoryViewAnchor(list, anchors[i]));
     }
 
     if (btnHistoryViewList) btnHistoryViewList.addEventListener('click', () => setHistoryView('list'));
@@ -14619,14 +14741,27 @@ void main() {
     // run is hidden by it (that is "Similar only"), nothing is written to the bundles, and the
     // server is never asked again - the entries are already in memory.
     const HISTORY_SORT_KEY = 'comfycrawler.historySort';
-    const HISTORY_SORTS = ['default', 'played', 'style', 'player', 'completed', 'random'];
+    // 'newest' / 'oldest' (by the day the dungeon was made) are History-only: the read-only
+    // showcase leaves them out of its dropdown and out of this list, so a pick carried over
+    // from the app reads as Default there instead of an order its menu cannot show.
+    const HISTORY_SORTS = SHOWCASE_MODE
+      ? ['default', 'played', 'style', 'player', 'completed', 'random']
+      : ['default', 'newest', 'oldest', 'played', 'style', 'player', 'completed', 'random'];
     const storedHistorySort = prefs.get(HISTORY_SORT_KEY);
     let historySortMode = HISTORY_SORTS.includes(storedHistorySort) ? storedHistorySort : 'default';
     // Both dropdowns again - History's and the showcase gallery's. They can never be on screen
     // together (the gallery is the screen History opens over), but they share one stored pick,
     // so the one that was not touched still has to be showing it when it next comes up.
     const historySortSelects = [historySort, showcaseSort].filter(Boolean);
-    historySortSelects.forEach((sel) => { sel.value = historySortMode; });
+    if (SHOWCASE_MODE && historySort) {
+      historySort.querySelectorAll('option[value="newest"], option[value="oldest"]').forEach(o => o.remove());
+    }
+    // The showcase gallery's dropdown has no date options, so it shows Default for those.
+    const showHistorySort = (sel, mode) => {
+      sel.value = mode;
+      if (sel.value !== mode) sel.value = 'default';
+    };
+    historySortSelects.forEach((sel) => { showHistorySort(sel, historySortMode); });
 
     // Randomized is a shuffle of the whole list, not a coin flip per comparison: a comparator
     // that answered differently each time it was asked would make the sort itself incoherent.
@@ -14694,6 +14829,10 @@ void main() {
       const out = list.slice();
       if (historySortMode === 'random') {
         out.sort((a, b) => historyRandomRankOf(a) - historyRandomRankOf(b));
+      } else if (historySortMode === 'newest') {
+        out.sort((a, b) => (b.created || 0) - (a.created || 0));
+      } else if (historySortMode === 'oldest') {
+        out.sort((a, b) => (a.created || 0) - (b.created || 0));
       } else if (historySortMode === 'played') {
         out.sort((a, b) => historyPlayedAt(b) - historyPlayedAt(a));
       } else if (historySortMode === 'completed') {
@@ -14712,7 +14851,7 @@ void main() {
       sel.addEventListener('change', () => {
         const next = HISTORY_SORTS.includes(sel.value) ? sel.value : 'default';
         historySortMode = next;
-        historySortSelects.forEach((other) => { other.value = next; });
+        historySortSelects.forEach((other) => { showHistorySort(other, next); });
         prefs.set(HISTORY_SORT_KEY, next);
         // Picking Randomized again is how you ask for a different shuffle - the order only
         // otherwise changes when the window is reopened.
@@ -16390,7 +16529,8 @@ void main() {
       if (dialog) s.dialog = dialog;
       if (screen === 'gallery' || screen === 'menu') {
         s.dungeonsLoaded = historyLoaded;
-        s.dungeonCount = Array.isArray(historyEntries) ? historyEntries.length : 0;
+        const listed = SHOWCASE_MODE ? showcaseGalleryEntries() : historyEntries;
+        s.dungeonCount = Array.isArray(listed) ? listed.length : 0;
       }
       if (screen === 'story') {
         s.dungeon = agentDungeonInfo();
@@ -16532,7 +16672,8 @@ void main() {
 
     async function agentDungeonEntries() {
       if (!historyLoaded || !Array.isArray(historyEntries)) await refreshHistory();
-      return Array.isArray(historyEntries) ? historyEntries : [];
+      const listed = SHOWCASE_MODE ? showcaseGalleryEntries() : historyEntries;
+      return Array.isArray(listed) ? listed : [];
     }
 
     function agentPickEntry(list, which) {
@@ -16668,7 +16809,11 @@ void main() {
         if (generationInFlight) return agentFail('A dungeon is being generated right now - wait for it to finish.');
         const list = await agentDungeonEntries();
         if (!list.length) return agentFail('There are no saved dungeons to play here.');
-        const entry = agentPickEntry(list, which === undefined ? 1 : which);
+        // An unlisted showcase run (showcaseGalleryEntries) is not in the list, but its exact id -
+        // what an agent sent its ?run= link would have - still plays it, as the link itself does.
+        const entry = agentPickEntry(list, which === undefined ? 1 : which)
+          || (Array.isArray(historyEntries)
+            ? historyEntries.find(en => en.id === String(which == null ? '' : which).trim()) : null);
         if (!entry) return agentFail(`No saved dungeon matches ${JSON.stringify(which)} - dungeons() lists them.`);
         const level = opts && opts.difficulty ? String(opts.difficulty).toLowerCase() : null;
         if (level) {

@@ -15,6 +15,10 @@ tools/showcase_ids.txt lists one dungeon_sessions/ id per line (# comments and b
 ignored) - curated by hand, since which saved runs are fit to publish (no real names/brands
 typed while testing, nothing embarrassing) is a judgment call this script does not attempt.
 --favorites also pulls in every run starred in History, trusting the star as that judgment.
+
+A starred run with no sort number (History's hidden numbering view) ships unlisted: out of the
+gallery, playable only by its ?run=<id> link. The export prints those links, and the exported
+page opened with ?unlisted lists just those runs, each with its 🔗.
 """
 import argparse
 import json
@@ -58,6 +62,13 @@ def read_curated_ids(path):
             if line:
                 ids.append(line)
     return ids
+
+
+def is_unlisted(meta):
+    """A starred run with no sort number is exported but kept out of the gallery - reachable
+    only through its ?run=<id> link. A star alone says "worth keeping and sharing"; the number
+    is what says "put it on the shelf, and where"."""
+    return bool(meta.get("favorite")) and not isinstance(meta.get("sort_number"), (int, float))
 
 
 def _stats_in(folder):
@@ -134,6 +145,13 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False):
             print(f"[showcase] skipping {session_id} - not found in {server.SESSIONS_DIR} "
                   "(deleted since curation?)")
             continue
+        # A copy: the listing may be server.py's own cached dicts, and `unlisted` is the
+        # export's business only.
+        meta = dict(meta)
+        # Starred but never given a sort number (History's hidden numbering view): shipped, and
+        # playable from its ?run= link, but left out of the gallery - see is_unlisted.
+        if is_unlisted(meta):
+            meta["unlisted"] = True
         kept.append(meta)
 
     if not kept:
@@ -198,6 +216,17 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False):
     print(f"[showcase] copied {sync.copied} file(s) ({copied_mb:.1f} MB), "
           f"{sync.skipped} already up to date, {sync.removed} removed")
     print(f"[showcase] try it: cd {out_dir} && python -m http.server 8000")
+    unlisted = [meta for meta in kept if meta.get("unlisted")]
+    if unlisted:
+        # The gallery has no row to copy these links from, so they are handed out here - and
+        # the export's own ?unlisted page lists just these, each with its 🔗 giving the full
+        # link at whatever address the export ends up hosted on.
+        print(f"[showcase] {len(unlisted)} unlisted run(s) - starred with no sort number, so "
+              "hidden from the gallery but playable by link. Links (after the showcase's address), "
+              "or open <address>/?unlisted to copy them:")
+        for meta in unlisted:
+            title = (meta.get("location") or meta.get("wall_style") or "Unnamed Dungeon").strip()
+            print(f"    ?run={meta['id']}   {title}")
 
 
 if __name__ == "__main__":
