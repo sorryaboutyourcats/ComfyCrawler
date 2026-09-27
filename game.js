@@ -276,6 +276,7 @@
     const historyList = document.getElementById('historyList');
     const historyFootNote = document.getElementById('historyFootNote');
     const btnCloseHistory = document.getElementById('btnCloseHistory');
+    const historyTitleIcon = document.getElementById('historyTitleIcon');
     const btnHistoryOk = document.getElementById('btnHistoryOk');
     const historySimilarOnly = document.getElementById('historySimilarOnly');
     const historySimilarOnlyLabel = document.getElementById('historySimilarOnlyLabel');
@@ -359,6 +360,8 @@
     const btnQuitToMenu = document.getElementById('btnQuitToMenu');
     const btnQuitToHistory = document.getElementById('btnQuitToHistory');
     const btnQuitEraseRun = document.getElementById('btnQuitEraseRun');
+    const btnQuitFavorite = document.getElementById('btnQuitFavorite');
+    const quitFavoriteLabel = document.getElementById('quitFavoriteLabel');
     const modalEraseConfirm = document.getElementById('modalEraseConfirm');
     const eraseConfirmName = document.getElementById('eraseConfirmName');
     const btnEraseConfirmClose = document.getElementById('btnEraseConfirmClose');
@@ -1655,15 +1658,33 @@
       // failed), so there is nothing to erase - and "Back to Main Menu" already discards it.
       // A starred run is locked the same way its trash can in History is: without this the
       // server would refuse the delete and the player would land on the menu thinking it went.
-      if (btnQuitEraseRun) {
-        const locked = isFavoriteHistoryId(currentRunHistoryId);
-        btnQuitEraseRun.disabled = !currentRunHistoryId || locked;
-        btnQuitEraseRun.title = !currentRunHistoryId
-          ? 'This run was never saved to History, so there is nothing to erase.'
-          : locked ? 'This run is a favorite. Unstar it in History to erase it.' : '';
-      }
+      paintQuitFavorite();
       modalQuitConfirm.classList.remove('hidden');
       focusFirstIn(modalQuitConfirm, btnQuitToMenu);
+    }
+
+    // The quit box's star and the Erase lock it implies, repainted in place on every toggle so
+    // the keyboard cursor stays on the star. Reads currentRunFavorite first - historyEntries is
+    // still [] if History was never opened this session - with the list as a backstop.
+    function paintQuitFavorite() {
+      const fav = currentRunFavorite || isFavoriteHistoryId(currentRunHistoryId);
+      if (btnQuitFavorite) {
+        btnQuitFavorite.disabled = !currentRunHistoryId;
+        btnQuitFavorite.classList.toggle('is-selected', fav);
+        btnQuitFavorite.setAttribute('aria-pressed', fav ? 'true' : 'false');
+        if (quitFavoriteLabel) quitFavoriteLabel.textContent = fav ? '⭐ Favorited' : '☆ Favorite This Run';
+        btnQuitFavorite.title = !currentRunHistoryId
+          ? 'This run has no saved History entry to favorite.'
+          : fav
+            ? 'Favorite - locked against deleting in History. Click to unstar it.'
+            : 'Favorite this dungeon - it cannot be deleted from History while it is starred';
+      }
+      if (btnQuitEraseRun) {
+        btnQuitEraseRun.disabled = !currentRunHistoryId || fav;
+        btnQuitEraseRun.title = !currentRunHistoryId
+          ? 'This run was never saved to History, so there is nothing to erase.'
+          : fav ? 'This run is a favorite. Unstar it to erase it.' : '';
+      }
     }
 
     function closeQuitConfirm() {
@@ -1725,6 +1746,8 @@
     });
     // Asks first - the erase itself lives behind the confirm box's own Erase button.
     if (btnQuitEraseRun) btnQuitEraseRun.addEventListener('click', openEraseConfirm);
+    // The Victory box's toggle - same server call, same History sync - repaints this box too.
+    if (btnQuitFavorite) btnQuitFavorite.addEventListener('click', toggleVictoryFavorite);
     // Clicking the darkened game visible behind the box backs out the same as its own ✕ -
     // there is deliberately no separate Cancel button (see the HTML comment on the modal).
     if (modalQuitConfirm) {
@@ -12738,6 +12761,11 @@ void main() {
 
       const startTime = Date.now();
       progTimer.textContent = "0.0s";
+      // The readout still holds the last run's 100% and "Done." until the first poll lands,
+      // which flashed a full bar before dropping to 0 - start it from empty instead.
+      progStatusText.textContent = 'Initializing generator...';
+      progPercentText.textContent = '0%';
+      paintProgressChunks(0);
       setTabTitlePercent(0);
       genClockTimer = setInterval(() => {
         progTimer.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
@@ -13155,12 +13183,111 @@ void main() {
       return bits;
     }
 
+    // ---- The hidden numbering view -----------------------------------------------------------
+    // Ten clicks on the window's 📜 puts a number box at the front of every row; ten more take
+    // them away again. Whatever is typed there is the run's sort_number in its meta.json, and
+    // the Default sort puts numbered runs first, lowest number first (sortHistoryEntries). It
+    // stays on until toggled off or the page reloads. Never in SHOWCASE_MODE - there is no
+    // server there to save a number to, and the numbers the export ships with are already in
+    // its dungeons.json.
+    let historyNumbering = false;
+    let historyTitleIconClicks = 0;
+
+    function historyHasSortNumber(entry) {
+      return !!entry && Number.isFinite(entry.sort_number);
+    }
+
+    if (historyTitleIcon) historyTitleIcon.addEventListener('click', () => {
+      if (SHOWCASE_MODE) return;
+      if (++historyTitleIconClicks < 10) return;
+      historyTitleIconClicks = 0;
+      historyNumbering = !historyNumbering;
+      // The boxes live on rows only - a tile has no room for one - so opening the view from the
+      // tiles switches to the list, or the ten clicks would look like they did nothing.
+      if (historyNumbering && historyView === 'tiles') setHistoryView('list');
+      else renderHistoryList();
+    });
+
+    // Saves as it is typed - a short pause after the last keystroke, or straight away when the
+    // box loses focus. Saves go out one after another rather than side by side, so a slow one
+    // can never land after the number typed over it. The list is not re-sorted as numbers go
+    // in (the row being typed into would jump out from under the cursor); reopening the window
+    // shows the new order.
+    function buildHistoryNumberInput(entry) {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.inputMode = 'numeric';
+      input.autocomplete = 'off';
+      input.maxLength = 6;
+      input.className = 'hist-number win95-input w-12 shrink-0 text-xs font-bold text-center';
+      input.value = historyHasSortNumber(entry) ? String(entry.sort_number) : '';
+      input.placeholder = '#';
+      input.setAttribute('aria-label', 'Sort number for ' + historyTitleOf(entry));
+      const hint = 'Where this run goes in the Default sort - lowest number first, runs with no'
+        + ' number after. Saves as you type; blank takes the number off.';
+      input.title = hint;
+
+      let lastSent = input.value;
+      let chain = Promise.resolve();
+      let timer = null;
+      let flashTimer = null;
+
+      function flash(color, title) {
+        input.style.background = color;
+        input.title = title;
+        clearTimeout(flashTimer);
+        if (color === '#dcfce7') {
+          flashTimer = setTimeout(() => { input.style.background = ''; input.title = hint; }, 700);
+        }
+      }
+
+      function save() {
+        clearTimeout(timer);
+        const value = input.value.trim();
+        if (value === lastSent) return;
+        lastSent = value;
+        chain = chain.then(async () => {
+          try {
+            const res = await fetch(`${SERVER_URL}/api/history_sort_number`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: entry.id, sort_number: value === '' ? null : Number(value) })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!data.success) throw new Error(data.error || 'The server refused the number.');
+            entry.sort_number = data.sort_number;
+            // A newer number may already be waiting behind this one - only the last says saved.
+            if (value === lastSent) flash('#dcfce7', hint);
+          } catch (err) {
+            console.error('History sort number error:', err);
+            // Let the next blur try the same number again rather than calling it sent.
+            if (value === lastSent) lastSent = null;
+            flash('#fee2e2', 'Not saved: ' + err.message);
+          }
+        });
+      }
+
+      input.addEventListener('input', () => {
+        const digits = input.value.replace(/\D+/g, '');
+        if (digits !== input.value) input.value = digits;
+        clearTimeout(timer);
+        timer = setTimeout(save, 400);
+      });
+      input.addEventListener('blur', save);
+      // Enter saves now rather than after the pause.
+      input.addEventListener('keydown', (e) => {
+        if (e.code === 'Enter' || e.code === 'NumpadEnter') save();
+      });
+      return input;
+    }
+
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
       row.className = 'hist-row win95-box p-1.5 flex items-center gap-2';
       // So a row can be found and repainted in place by its run - the movie button's progress
       // ticks along without rebuilding the list (see repaintHistoryMovies).
       row.dataset.id = entry.id || '';
+      if (historyNumbering && !SHOWCASE_MODE) row.appendChild(buildHistoryNumberInput(entry));
       // History can be opened over a still-running game (the quit box's "Load a Different
       // Dungeon"), so one of these rows may be the dungeon the player is standing in. Mark it
       // here; the CSS gives it the selected-row look and renderHistoryList scrolls to it.
@@ -13224,10 +13351,15 @@ void main() {
         : [entry.player_style, entry.enemy_style].filter(Boolean).join('  vs  ');
       col.appendChild(cast);
 
-      const meta = document.createElement('div');
-      meta.className = 'hist-meta text-[10px] text-slate-600 font-bold truncate';
-      meta.textContent = historyMetaBits(entry).join('  ·  ');
-      col.appendChild(meta);
+      // The info line (wall style, date, size, quality, music, ending) - dropped in
+      // SHOWCASE_MODE, where a visitor has no use for a run's file size or graphics tier
+      // and the title/cast lines already carry what matters.
+      if (!SHOWCASE_MODE) {
+        const meta = document.createElement('div');
+        meta.className = 'hist-meta text-[10px] text-slate-600 font-bold truncate';
+        meta.textContent = historyMetaBits(entry).join('  ·  ');
+        col.appendChild(meta);
+      }
 
       row.appendChild(col);
 
@@ -14012,6 +14144,7 @@ void main() {
           if (entry) entry.favorite = currentRunFavorite;
         }
         paintVictoryFavorite();
+        paintQuitFavorite();
         return;
       }
       try {
@@ -14035,6 +14168,7 @@ void main() {
         if (entry) entry.favorite = currentRunFavorite;
       }
       paintVictoryFavorite();
+      paintQuitFavorite();
     }
     if (btnVictoryFavorite) btnVictoryFavorite.addEventListener('click', toggleVictoryFavorite);
 
@@ -14542,11 +14676,21 @@ void main() {
       return Math.max(entry.last_played || 0, entry.beaten_at || 0, entry.created || 0);
     }
 
-    // Always a copy, and never a re-sort of historyEntries itself - "Default" has to still mean
-    // the order the server handed over (newest first), which is the order that array is in.
-    // Every sort here is stable, so runs that tie fall back to exactly that default order.
+    // Always a copy, and never a re-sort of historyEntries itself - the order the server handed
+    // over (newest first) has to survive, since it is what everything here falls back to.
+    // Every sort here is stable, so runs that tie fall back to exactly that order.
     function sortHistoryEntries(list) {
-      if (!Array.isArray(list) || historySortMode === 'default') return list;
+      if (!Array.isArray(list)) return list;
+      if (historySortMode === 'default') {
+        // The numbers given in the hidden numbering view (buildHistoryNumberInput): numbered
+        // runs first, lowest number first, then every unnumbered run newest first as before.
+        if (!list.some(historyHasSortNumber)) return list;
+        return list.slice().sort((a, b) => {
+          const an = historyHasSortNumber(a), bn = historyHasSortNumber(b);
+          if (an && bn) return a.sort_number - b.sort_number;
+          return (bn ? 1 : 0) - (an ? 1 : 0);
+        });
+      }
       const out = list.slice();
       if (historySortMode === 'random') {
         out.sort((a, b) => historyRandomRankOf(a) - historyRandomRankOf(b));
@@ -14776,6 +14920,7 @@ void main() {
 
     function closeHistory() {
       if (modalHistory) modalHistory.classList.add('hidden');
+      historyTitleIconClicks = 0;   // the ten clicks have to land in one visit
       closeDeleteConfirm();
       closeLeaveRunConfirm();
       closeEndingPlayer();

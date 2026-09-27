@@ -408,11 +408,11 @@ srv._krea2_submit_and_collect = lambda b, keys, **kw: (krea2_keys.append(list(ke
 srv.keep_largest_figure = lambda *a, **kw: None
 srv.crop_frames_to_common_bbox = lambda *a, **kw: None
 srv._krea2_finish_enemy_variants = lambda *a, **kw: {"walker": {"idle": "krea2_walker.png"}}
-srv.generate_kontext_portrait_set = lambda style, size=256, ref=None: (portrait_refs.append(ref)
+srv.generate_kontext_portrait_set = lambda style, size=256, ref=None, form=None: (portrait_refs.append(ref)
                                                                       or ["p.png"] * 4)
 try:
-    srv.generate_kontext_hero_frames = lambda refs, p, w, size: [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
-    srv.generate_kontext_reference_enemy = lambda ref, look, size, last_attack_frame=False: {
+    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None: [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
+    srv.generate_kontext_reference_enemy = lambda ref, look, size, last_attack_frame=False, form=None: {
         "walker": {"idle": "kx_walker.png"}}
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={
         "player": "me.png", "weapon": "brick.png", "enemy": "cat.png"})
@@ -423,7 +423,7 @@ try:
        f"ref_drawn / portrait ref: {out['ref_drawn']} {portrait_refs}")
 
     krea2_keys.clear()
-    srv.generate_kontext_hero_frames = lambda refs, p, w, size: None      # Kontext fell over
+    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None: None      # Kontext fell over
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={"weapon": "brick.png",
                                                                        "enemy": "cat.png"})
     ck(krea2_keys and krea2_keys[0] == srv.V6_FRAME_NAMES,
@@ -560,6 +560,94 @@ ck("_kontext_pictured_boss(" in ref_src and 'variants=["flyer"]' in ref_src,
 ck("second picture" in srv.KONTEXT_PICTURED_BOSS_EDIT and "scorched" not in srv.KONTEXT_PICTURED_BOSS_EDIT
    and srv.KONTEXT_ENEMY_EDITS["boss"]["edit"] == srv.KONTEXT_BOSS_EDIT,
    "the pictured boss edit must keep the picture, and typed runs the old recolour")
+
+# A pictured OBJECT player or enemy is made a character built from it, not a man in its colours
+# (a blue sports car came back a man in a blue sweater, a silver one's block frame a man in
+# black); people, animals, plush toys and unread pictures are drawn as they always were.
+for kind, want in (("car", True), ("sports car", True), ("brick", True), ("fish", True),
+                   ("man", False), ("cat", False), ("robot", False), ("plush", False),
+                   ("teddy bear", False), (None, False), ("", False)):
+    ck(srv._picture_is_object(kind) == want, f"_picture_is_object({kind!r}) should be {want}")
+car = {"kind": "car", "look": "blue sports car with black rims", "form": "robot"}
+ck(srv._picture_form_look(car) == "robot built out of a blue sports car with black rims, the whole car forming its upper body",
+   srv._picture_form_look(car))
+bricks = {"kind": "brick", "look": "pile of plastic bricks", "form": "living"}
+ck(srv._picture_form_look(bricks) == "living brick character with arms and legs, pile of plastic bricks",
+   srv._picture_form_look(bricks))
+ck(srv._picture_form_look({"kind": "man", "look": "man in a cap"}) == "man in a cap",
+   "a person's LOOK must be left alone")
+formed = srv.resolve_named_styles("", "Skyline", "", "", pictures={"player": car})
+ck(formed["text"]["player"] == formed["clean"]["player"] == srv._picture_form_look(car)
+   and formed["story"]["player"].endswith("called Skyline"),
+   f"the character, not the bare car, is what every reader gets: {formed['text']['player']!r}")
+# describe_pictures asks the machine question of an object player's or enemy's photo only.
+_saved = (srv._stage_picture, srv._describe_attempt, srv._vlm_wants_rotors, srv.COMFY_INPUT_DIR)
+try:
+    asked = []
+    srv.COMFY_INPUT_DIR = "in"
+    srv._stage_picture = lambda url, tag: tag + ".png"
+    reads = {"picture_player": {"kind": "car", "look": "blue sports car"},
+             "picture_enemy": {"kind": "car", "look": "silver sports car"}}
+    srv._describe_attempt = lambda slot, name, prompt=None: "NONE" if prompt else dict(reads[name[:-4]])
+    srv._vlm_wants_rotors = lambda path: asked.append(os.path.basename(path)) or True
+    got = srv.describe_pictures({"player": "x", "enemy": "y"})
+    ck(got["player"].get("form") == got["enemy"].get("form") == "robot"
+       and asked == ["picture_player.png", "picture_enemy.png"], f"form: {got} asked {asked}")
+    reads["picture_weapon"] = {"kind": "sword", "look": "steel sword"}
+    asked.clear()
+    ck("form" not in srv.describe_pictures({"weapon": "z"})["weapon"] and not asked,
+       "a weapon is never made a character")
+    srv._vlm_wants_rotors = lambda path: False
+    ck(srv.describe_pictures({"player": "x"})["player"]["form"] == "living", "a non-machine is living")
+    reads["picture_player"] = {"kind": "man", "look": "man in a cap"}
+    asked.clear(); srv._vlm_wants_rotors = lambda path: asked.append(path) or True
+    ck("form" not in srv.describe_pictures({"player": "x"})["player"] and not asked,
+       "a person must not be asked the machine question")
+finally:
+    srv._stage_picture, srv._describe_attempt, srv._vlm_wants_rotors, srv.COMFY_INPUT_DIR = _saved
+hero_car = srv.kontext_hero_prompt(srv._picture_form_look(car), "sword", True, True, form=car)
+ck(hero_car.startswith("Turn the car from the first picture into") and "robot" in hero_car
+   and "blue sports car with black rims" in hero_car and "face" not in hero_car.lower()
+   and "hair" not in hero_car.lower(), f"object hero prompt: {hero_car!r}")
+ck(srv.kontext_hero_prompt("man in a cap", "sword", True, False, form=None)
+   == srv.kontext_hero_prompt("man in a cap", "sword", True, False),
+   "a person's hero prompt must not change")
+ck(srv.kontext_hero_prompt("sword", "sword", False, True, form=car).startswith("Draw a sword"),
+   "a form without a player picture must not reach the prompt")
+bust_bricks = srv.kontext_bust_prompt("x", bricks)
+ck("living character built out of the brick" in bust_bricks and "centred in the middle" in bust_bricks,
+   bust_bricks)
+ck(srv.kontext_bust_prompt("man") == srv.kontext_bust_prompt("man", None), "a person's bust changed")
+src_bundle = inspect.getsource(srv.generate_krea2_posed_bundle)
+ck("form=hero_form" in src_bundle and "form=enemy_form" in src_bundle,
+   "the player's / enemy's form no longer reach the Kontext drawers")
+ecar = {"kind": "car", "look": "silver sports car with black stripes", "form": "robot"}
+foe_car = srv.kontext_foe_prompt(srv._picture_form_look(ecar), ecar)
+ck(foe_car.startswith("Turn the car from this picture into") and "whole car" in foe_car
+   and "upper body" in foe_car and "silver sports car with black stripes" in foe_car
+   and "face" not in foe_car.lower(), f"object foe prompt: {foe_car!r}")
+ck(srv.kontext_foe_prompt("man in a tee") == srv.kontext_foe_prompt("man in a tee", None),
+   "a person's foe prompt must not change")
+ck("_kontext_pictured_boss(got[\"idle\"], ref, size, form)" in ref_src
+   and "kontext_foe_prompt(look, form)" in ref_src, "the enemy's form no longer reaches its drawings")
+# ...and a pictured object's boss stays that object (a car's boss came back an ogre with red eyes).
+_saved = (srv._kontext_ref_job, srv._foe_pose_canvas, srv.keep_largest_figure, srv._save_tight)
+try:
+    edits = []
+    srv._foe_pose_canvas = lambda *a: "canvas.png"
+    srv.keep_largest_figure = srv._save_tight = lambda *a, **kw: None
+    srv._kontext_ref_job = lambda refs, br, seed, **kw: edits.append(br["boss"]) or {"boss": "b.png"}
+    srv._kontext_pictured_boss("w.png", "ref.png", 512, ecar)
+    srv._kontext_pictured_boss("w.png", "ref.png", 512, {"kind": "fish", "look": "fish", "form": "living"})
+    srv._kontext_pictured_boss("w.png", "ref.png", 512, None)
+    srv._kontext_pictured_boss("w.png", "ref.png", 512)
+    ck(edits[0].startswith("Make this robot the boss version of itself")
+       and "the car in the second picture" in edits[0] and "face" not in edits[0],
+       f"a robot boss must stay the robot built out of that car: {edits[0]!r}")
+    ck("same fish character" in edits[1], f"a living boss: {edits[1]!r}")
+    ck(edits[2] == edits[3] == srv.KONTEXT_PICTURED_BOSS_EDIT, "a person's boss edit changed")
+finally:
+    srv._kontext_ref_job, srv._foe_pose_canvas, srv.keep_largest_figure, srv._save_tight = _saved
 
 # Every pose says how the weapon is held, and no longer hands Kontext the weapon's picture (it
 # copied a diagonally-photographed sword as a loose object, held by the blade).

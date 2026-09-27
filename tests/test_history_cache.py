@@ -82,6 +82,22 @@ try:
     if rows()[A].get("favorite") is not True or rows()[A].get("beaten") is not True:
         fail("a later write dropped an earlier flag from the listing")
 
+    # The hidden numbering view's sort number: typed text in, a whole number (or nothing) out.
+    if srv.set_dungeon_session_sort_number(A, "7") != (True, 7) or rows()[A].get("sort_number") != 7:
+        fail("a typed sort number was not saved and listed as a whole number")
+    if srv.set_dungeon_session_sort_number(A, "") != (True, None) or rows()[A].get("sort_number") is not None:
+        fail("a blanked sort number still lists against its run")
+    for junk in ("abc", -1, True, "1.5"):
+        try:
+            srv.set_dungeon_session_sort_number(A, junk)
+            fail(f"sort number {junk!r} was accepted")
+        except ValueError:
+            pass
+    if srv.set_dungeon_session_sort_number("20260101-000009-zzzzzz", 3) is not None:
+        fail("numbering a run that is not there did not say so")
+    if rows()[A].get("favorite") is not True:
+        fail("saving a sort number dropped the star")
+
     # A clip landing beside the bundle shows up even though meta.json was not rewritten for it.
     with open(os.path.join(TMP, B, srv.ENDING_FILENAME), "wb") as f:
         f.write(b"not really an mp4")

@@ -85,7 +85,7 @@ Acting:
 
 Open the page with `?agent`. In the read-only edition, pick a dungeon in the list and press its Start button. Then press Enter to walk in once the story is up.
 
-- **Exploring:** W / ↑ forward, S / ↓ back, A / ← turn left, D / → turn right, Space or Enter to use (throw a switch you are facing). The sidebar has a minimap and a tile count. The status bar under the view says "Location: Spot (x, y) [Facing …]". Switches are not marked on the minimap. Find them in the 3D view: a lever on a wall.
+- **Exploring:** W / ↑ forward, S / ↓ back, A / ← turn left, D / → turn right, Space or Enter to use (throw a switch you are facing). The sidebar has a minimap and a tile count. The status bar under the view shows the run's difficulty (the position readout "Spot (x, y) [Facing …]" is still in the page as the hidden #statusPos element). Switches are not marked on the minimap. Find them in the 3D view: a lever on a wall.
 - **Fighting in agent mode:** every key press is one turn (10 ticks, 1/6 s). A or ← steps left, D or → steps right, S or ↓ guards, W or ↑ strikes, and Space, `.` or Enter waits. The fight stays frozen between presses, and the combat text stays on screen until your next one. The sidebar says "TURN-BASED (agent)" while this is on.
 - **Level-up:** press 1–4.
 - **The end:** when the run ends, the victory or death box shows the run report. Copy it from there.

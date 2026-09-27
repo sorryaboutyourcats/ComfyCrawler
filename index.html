@@ -195,7 +195,8 @@
        outward: these have no bevel for an inward ring to sit inside the way a button's does. */
     #modalSettings select:focus-visible,
     #modalSettings input:focus-visible,
-    #modalHistory select:focus-visible {
+    #modalHistory select:focus-visible,
+    #modalHistory input.hist-number:focus-visible {
       outline: 2px dotted #000080;
       outline-offset: 1px;
     }
@@ -3277,7 +3278,8 @@
     <div id="modalHistory" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
       <div class="win95-box w-full max-w-4xl p-1 shadow-2xl max-h-[92vh] flex flex-col">
         <div class="win95-title flex items-center justify-between mb-2">
-          <span>📜 History</span>
+          <!-- Ten clicks on the 📜 opens the hidden numbering view - see historyNumbering in game.js. -->
+          <span><span id="historyTitleIcon" class="select-none">📜</span> History</span>
           <button id="btnCloseHistory" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
         </div>
 
@@ -3288,7 +3290,8 @@
 
         <!-- What order the saved runs come in. A view of the same list - no run is hidden by it
              (that's "Similar only" in the footer). Default is the order the server hands them
-             over in, newest first; the rest are computed in sortHistoryEntries() in game.js,
+             over in, newest first, except that runs given a number in the hidden numbering view
+             (ten clicks on the 📜 above) come first, lowest number first; the rest are computed in sortHistoryEntries() in game.js,
              and the pick is remembered. Two of them read stamps written while playing rather
              than anything about the run itself: "Recently played" uses last_played, written
              every time a dungeon is entered, and "Completed" orders the beaten ones by
@@ -3558,6 +3561,11 @@
           </button>
           <button id="btnQuitToHistory" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-blue-900 bg-blue-100 hover:bg-blue-200">
             <span class="text-xs font-black">📜 Load a Different Dungeon</span>
+          </button>
+          <!-- Same star as the Victory box's, for a run worth keeping that the player is
+               leaving before the boss. Starring also locks Erase below, as in History. -->
+          <button id="btnQuitFavorite" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-yellow-900 bg-yellow-100 hover:bg-yellow-200">
+            <span id="quitFavoriteLabel" class="text-xs font-black">☆ Favorite This Run</span>
           </button>
           <button id="btnQuitEraseRun" class="win95-btn w-full px-2 py-1.5 flex flex-col items-center text-red-900 bg-red-100 hover:bg-red-200">
             <span class="text-xs font-black">🗑️ Erase Current Run</span>
@@ -3882,7 +3890,10 @@
           </div>
 
           <div class="win95-box px-2 py-1 text-xs flex justify-between items-center gap-2 text-slate-800 flex-shrink-0 overflow-hidden box-border h-7">
-            <span class="truncate pr-1">Location: <strong id="statusPos">Spot (1, 1) [Facing EAST]</strong></span>
+            <!-- The Location readout is kept (hidden) so game.js still has somewhere to write it;
+                 the run's difficulty took its place. -->
+            <span class="hidden">Location: <strong id="statusPos">Spot (1, 1) [Facing EAST]</strong></span>
+            <span id="difficultyBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 border border-slate-400 flex-shrink-0 uppercase">Medium</span>
             <!-- The manual BATTLE (Space) toggle used to live here. Battles now begin by
                  walking onto one of the enemy markers roaming the maze, so there is nothing
                  to toggle - and Space is the Use key. -->
@@ -3914,7 +3925,6 @@
           <div id="battleStatsBox" class="win95-box p-1.5 flex flex-col gap-1 flex-shrink-0 bg-slate-100">
             <div class="flex items-center justify-between gap-1">
               <span id="heroStatusLabel" class="text-[10px] font-bold text-slate-700 truncate flex-1 min-w-0">WARRIOR STATUS:</span>
-              <span id="difficultyBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 border border-slate-400 flex-shrink-0 uppercase">Medium</span>
               <span id="playerLevelBadge" class="text-[9px] font-black px-1.5 py-0.2 rounded bg-yellow-300 text-yellow-900 border border-yellow-600 flex-shrink-0">LV 1</span>
             </div>
             <div class="flex items-center gap-2">

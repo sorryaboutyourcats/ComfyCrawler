@@ -5006,7 +5006,7 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pi
     text, clean, story = {}, {}, {}
     for k, v in fields.items():
         if k in pictures:
-            look = pictures[k].get("look") or _PICTURE_FALLBACK_LOOK[k]
+            look = _picture_form_look(pictures[k]) or _PICTURE_FALLBACK_LOOK[k]
             name = _picture_name(v)
             text[k] = clean[k] = look
             story[k] = f"{look}, called {name}" if (name and look) else (name or look)
@@ -5353,6 +5353,47 @@ def _picture_legged_kind(kind):
     return head in _PICTURE_LEGGED_KINDS or (head.endswith("s") and head[:-1] in _PICTURE_LEGGED_KINDS)
 
 
+# Things that are not alive and have legs but already are a character's body - a plush toy, a
+# statue - and are drawn as they are. Everything else outside _PICTURE_LEGGED_KINDS is an OBJECT.
+_PICTURE_FIGURE_KINDS = frozenset("""
+    plush plushie toy figurine statue sculpture puppet teddy minifigure mannequin
+""".split())
+
+
+def _picture_is_object(kind):
+    """True for a KIND with no body of its own - a car, a pile of bricks, a fish. None (unread)
+    is not: an unread picture is drawn the way it always was."""
+    words = re.findall(r"[a-z]+", (kind or "").lower())
+    return bool(words) and not _picture_legged_kind(kind) and words[-1] not in _PICTURE_FIGURE_KINDS
+
+
+# A PLAYER or ENEMY picture of an object becomes a character built from it. Reported from play: a
+# photo of a blue sports car as the player came back as a man in a blue sweater - every hero
+# prompt says "character ... head to feet ... right hand ... face, hair, clothing", and with a car
+# to go on, Kontext kept the one thing it could, the colour. The typed "pickup truck robot" had
+# always worked, because the word robot was in it. The enemy the same: a silver car walker is
+# still a car, and its block edit ("both arms raised and crossed in front of its chest") drew a
+# man in black with no car at all - reported. So an object's form is picked here and its LOOK
+# rewritten to match (_picture_form_look), which every drawer, the story and the sound all read,
+# and the Kontext prompts ask for the transformation outright (KONTEXT_OBJECT_FORMS).
+# Which form: _vlm_wants_rotors' machine question, asked of the photo - a machine or vehicle is
+# a robot built out of it, anything else a living version of itself with arms and legs. On the
+# photos: both cars, an exhaust pipe and a pile of plastic bricks read robot (a LEGO-style robot
+# 2 of 2), a fish and a sword living.
+# The LOOK alone ("Redraw the humanoid robot built from a blue sports car...") drew the man 1 of 2.
+_PICTURE_FORMS = ("robot", "living")
+
+
+def _picture_form_look(pic):
+    """What a pictured line is drawn as: its LOOK, or the character its object LOOK becomes."""
+    look, form = pic.get("look"), pic.get("form")
+    if not look or form not in _PICTURE_FORMS:
+        return look
+    if form == "robot":
+        return f"robot built out of {_a_or_an(look)}, the whole {pic['kind']} forming its upper body"
+    return f"living {pic['kind']} character with arms and legs, {look}"
+
+
 def _picture_needs_lower(slot, kind, look):
     return (slot in ("player", "enemy") and bool(look) and _picture_legged_kind(kind)
             and not _PICTURE_LOWER_WORDS_RE.search(look))
@@ -5465,6 +5506,12 @@ def describe_pictures(pictures):
                 break
         if image_name and got["look"]:
             got = _picture_add_lower(slot, image_name, got)
+        if (image_name and got["look"] and slot in ("player", "enemy")
+                and _picture_is_object(got["kind"])):
+            # An object for a hero or a foe is made a character - see _picture_form_look.
+            machine = _vlm_wants_rotors(os.path.join(COMFY_INPUT_DIR, image_name))
+            got = dict(got, form="robot" if machine else "living")
+            print(f"[pictures] {slot} is a {got['kind']} - drawn as a {got['form']} character")
         out[slot] = got
         # A picture that would not stage never reached ComfyUI - its planned job is not coming.
         PROGRESS.skip_job(f"picture_{slot}")
@@ -6233,12 +6280,13 @@ def _bust_offset(matted_path):
     return abs(cx - 0.5)
 
 
-def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=None):
+def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=None, form=None):
     """Four HUD portrait busts: a krea2 idle, then FLUX.1 Kontext expression edits of it.
 
     Job A (krea2): one idle bust at `size` px, plain RGB. With `ref` - the player's picture,
     staged as a Kontext reference - it is a Kontext drawing of the face in that picture instead
-    (kontext_bust_prompt), and falls back to krea2 if that job fails.
+    (kontext_bust_prompt, with `form` for an object made a character), and falls back to krea2
+    if that job fails.
     Job B (Kontext, `_kontext_expression_job`): edit the idle into attack/block/hurt (no
     FluxKontextImageScale - see KONTEXT_PORTRAIT_RES). Any reaction frame that comes back
     within KONTEXT_PORTRAIT_MIN_DIFF of the idle (the edit did nothing - common for a
@@ -6254,7 +6302,7 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
             # Redrawn when the face is pushed off to one side - see KONTEXT_BUST_MAX_OFFSET. The
             # last try is kept whatever it is.
             for attempt in range(KONTEXT_BUST_ATTEMPTS):
-                got = _kontext_ref_job([ref], {"idle": kontext_bust_prompt(player_style)},
+                got = _kontext_ref_job([ref], {"idle": kontext_bust_prompt(player_style, form)},
                                        seed + attempt, size=size, keep_rgb=True, prefix="kxp_src",
                                        job_key="portrait_idle" if not attempt else None)
                 idle_src = got["idle_rgb"]
@@ -10100,15 +10148,46 @@ KONTEXT_FOE_POSES = {
 }
 
 
-def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=False):
+# A pictured OBJECT hero or foe (_picture_form_look) is asked for the transformation in so many
+# words - see the note above _PICTURE_FORMS for what the plain "Redraw the ..." did with a car.
+# {k} is the picture's KIND, and the prompt gives its LOOK as read (the object, not the
+# character). Its keep line names no face, hair or clothing, which an object hasn't got and
+# Kontext would invent a man for.
+# ROBOT: the user asked for the pickup truck robot - the truck itself as the upper body on robot
+# limbs - not a humanoid in car-coloured armour. The first wording ("the car's own recognisable
+# parts, panels and colours form the robot's head, chest, arms and legs") gave that 2 of 3 on the
+# hero, 0 of 3 on more seeds, and a grey robot with headlight eyes on the foe; "the whole car,
+# still in one piece ... forms the robot's upper body" gave it 3 of 3 on both, same seeds. The foe
+# then poses as the robot: attack and block 4 of 4 kept the car on top, where the bare car's block
+# had drawn a man.
+KONTEXT_OBJECT_FORMS = {
+    "robot": ("a robot built out of that {k}, like a transforming robot caught halfway through "
+              "transforming: the whole {k}, still in one piece and plainly recognisable, forms the "
+              "robot's upper body, with big mechanical robot arms and legs unfolding out from under "
+              "it"),
+    "living": ("a living {k} character that stands and walks on two legs, with arms and legs of "
+               "its own - its body is the {k} itself, with the same shape, colours and markings, "
+               "like a cartoon mascot"),
+}
+
+
+def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=False, form=None):
     """Stage 1 for the hero: the idle frame, drawn from the player's picture, the weapon's, or
     both - chained in that order, which is what "the first picture" / "the second picture" mean.
     The descriptions are the same words krea2 would have been given (the LOOK beside a picture),
     kept so a crowd photo still says which person, and so a weapon picture of a whole PILE of
-    bricks is held as the brief's one brick."""
+    bricks is held as the brief's one brick. `form` is the player picture's describe_pictures
+    reading when it is an object made a character (KONTEXT_OBJECT_FORMS)."""
     p = (player_desc or "").strip() or "armored warrior knight"
     w = (weapon_desc or "").strip() or "sword"
-    if player_pic:
+    shape = (form or {}).get("form") if player_pic else None
+    if shape in KONTEXT_OBJECT_FORMS:
+        k = form["kind"]
+        who = (f"Turn the {k} from {'the first picture' if weapon_pic else 'this picture'} into "
+               f"{KONTEXT_REF_STYLE}: {KONTEXT_OBJECT_FORMS[shape].format(k=k)}. "
+               f"The {k}: {form['look']}.")
+        keep = f" Keep the {k}'s exact colours, markings and details."
+    elif player_pic:
         who = (f"Redraw the {p} from {'the first picture' if weapon_pic else 'this picture'} as "
                f"{KONTEXT_REF_STYLE}.")
         keep = " Keep their exact face, hair, clothing and colours."
@@ -10140,8 +10219,16 @@ def _hero_weapon_keep(weapon_desc):
     return f"The weapon stays exactly as it is - the same {w} - only its position changes."
 
 
-def kontext_foe_prompt(look):
-    """Stage 1 for the pictured foe: the walker's idle frame."""
+def kontext_foe_prompt(look, form=None):
+    """Stage 1 for the pictured foe: the walker's idle frame. `form` is the enemy picture's
+    describe_pictures reading when it is an object made a character (KONTEXT_OBJECT_FORMS)."""
+    if (form or {}).get("form") in KONTEXT_OBJECT_FORMS:
+        k = form["kind"]
+        return (f"Turn the {k} from this picture into {KONTEXT_REF_FOE_STYLE}: "
+                f"{KONTEXT_OBJECT_FORMS[form['form']].format(k=k)}. The {k}: {form['look']}. "
+                f"Facing the viewer, ready to fight. Keep the {k}'s exact colours, markings and "
+                f"details. The whole of it in view from head to feet, standing large and filling "
+                f"the frame. Plain solid pure white background, nothing else in frame.")
     subject = (look or "").strip() or "creature"
     return (f"Redraw the {subject} from this picture on its own as {KONTEXT_REF_FOE_STYLE}, "
             f"facing the viewer, ready to fight. Keep it exactly as it looks in the picture - the "
@@ -10150,9 +10237,35 @@ def kontext_foe_prompt(look):
             f"nothing else in frame.")
 
 
-def kontext_bust_prompt(player_desc):
+# The bust of an object made a character (KONTEXT_OBJECT_FORMS), drawn from the photo like any
+# other. Measured, 2-3 seeds each: the "living" wording 3 of 3 a brick character and 3 of 3 a
+# fish character with eyes and a mouth - its first wording ("its head and body are the brick
+# itself") drew the pile of bricks and nobody, 2 of 2. The robot's first wording drew a blue
+# helmet round a silver man's face (shipped once, "less like a human" asked for); naming the face
+# a "mechanical robot faceplate with glowing eyes" made it a robot head 3 of 3. Drawing the bust
+# from the hero's own drawing instead was worse: the robot got a man's face.
+KONTEXT_BUST_FORMS = {
+    "robot": ("a robot built out of that {k}, like a transforming robot caught halfway through "
+              "transforming: the {k}'s own parts, still plainly recognisable, form its head and "
+              "shoulders, and its face is a mechanical robot faceplate with glowing eyes"),
+    "living": ("a living character built out of the {k} - its head and shoulders are made of the "
+               "{k} itself, with the same colours, materials and markings, and it has eyes and a "
+               "mouth of its own, like a cartoon mascot"),
+}
+
+
+def kontext_bust_prompt(player_desc, form=None):
     """Stage 1 for the HUD portrait: the idle bust the expression edits start from. Same framing
-    as krea2_portrait_prompt, but the face is the picture's."""
+    as krea2_portrait_prompt, but the face is the picture's - or, for an object made a character
+    (`form`, see kontext_hero_prompt), the character built from it."""
+    if (form or {}).get("form") in KONTEXT_BUST_FORMS:
+        k = form["kind"]
+        return (f"Turn the {k} from this picture into a head and shoulders portrait bust of "
+                f"{KONTEXT_BUST_FORMS[form['form']].format(k=k)}. The {k}: {form['look']}. It "
+                f"faces the viewer, the whole head centred in the middle of the frame, with a "
+                f"calm, steady expression, the head filling the upper frame and the shoulders "
+                f"squared at the bottom. Video game status-screen portrait, Doom and Valbrace "
+                f"style, dramatic lighting. Plain uncluttered solid background.")
     p = (player_desc or "").strip() or "armored warrior knight"
     return (f"Redraw the {p} from this picture as a head and shoulders portrait bust facing the "
             f"viewer, the whole head and face centred in the middle of the frame, "
@@ -10393,16 +10506,18 @@ def _kontext_hold_weapon(drawn, weapon_name, weapon_pic, seed):
     return drawn
 
 
-def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size):
+def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None):
     """The nine V6_FRAME_NAMES frames drawn from the player's and/or weapon's picture (`refs`,
     {slot: staged name}), or None when Kontext failed and the caller should draw them with krea2
-    from the words instead. Frames come back matted; the caller crops them exactly like krea2's."""
+    from the words instead. Frames come back matted; the caller crops them exactly like krea2's.
+    `form` - see kontext_hero_prompt."""
     player_pic, weapon_pic = refs.get("player"), refs.get("weapon")
     seed = random.randint(1, 1000000000)
     try:
         drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
                                  {"hero": kontext_hero_prompt(player_desc, weapon_desc,
-                                                              bool(player_pic), bool(weapon_pic))},
+                                                              bool(player_pic), bool(weapon_pic),
+                                                              form=form)},
                                  seed, size=size, alpha=False, prefix="kxhero",
                                  job_key="hero_ref")["hero"]
         # Back to the camera before anything is posed from it - see KONTEXT_HERO_TURN.
@@ -10440,11 +10555,13 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size):
     return [paths[n] for n in V6_FRAME_NAMES]
 
 
-def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False):
+def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, form=None):
     """All three foes from the enemy's picture, or None when Kontext failed and the caller should
     design them from the words instead. The walker is drawn from the picture and posed with
     KONTEXT_FOE_POSES; the flyer and the boss are the walker's own Kontext edits
     (generate_kontext_enemy_variants), which is what keeps all three the thing in the picture.
+    `form` is the picture's describe_pictures reading when it is an object made a character -
+    see kontext_foe_prompt and _kontext_pictured_boss.
     Returns {variant: {frame: path}} like _krea2_finish_enemy_variants."""
     frames = [f for f in _enemy_variant_frames("walker", last_attack_frame) if f != "idle"]
     feet_max = _person_feet_max(look, "walker")
@@ -10453,7 +10570,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False):
         # fresh seed; a second bad one is kept - it is still the thing in the picture.
         for attempt in range(2):
             seed = random.randint(1, 1000000000)
-            drawn = _kontext_ref_job([ref], {"foe": kontext_foe_prompt(look)}, seed, size=size,
+            drawn = _kontext_ref_job([ref], {"foe": kontext_foe_prompt(look, form)}, seed, size=size,
                                      keep_rgb=True, prefix="kxfoe", job_key="enemy_ref")
             keep_largest_figure(drawn["foe"], thresh=50)
             problem = _enemy_frame_problem(drawn["foe"], feet_max=feet_max)
@@ -10470,7 +10587,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False):
 
     enemies = {"walker": got}
     derived = generate_kontext_enemy_variants(got["idle"], size=size, variants=["flyer"])
-    derived["boss"] = _kontext_pictured_boss(got["idle"], ref, size)
+    derived["boss"] = _kontext_pictured_boss(got["idle"], ref, size, form)
     for v, p in derived.items():
         p = p or _krea2_regen_enemy(look, size, KREA2_STEPS_DEFAULT, "kxfoe", attempts=1, variant=v)
         if not p:
@@ -10510,12 +10627,35 @@ KONTEXT_PICTURED_BOSS_EDIT = (
     "clearly the same one. Plain white background.")
 
 
-def _kontext_pictured_boss(walker_path, ref, size):
-    """The pictured foe's boss (KONTEXT_PICTURED_BOSS_EDIT) as a matted cut-out, or None when
+# ...and the boss of a pictured OBJECT made a character (KONTEXT_OBJECT_FORMS). Reported from
+# play: a silver sports car's boss came back a black armoured ogre with red eyes - asked to keep
+# a car's "face, hair, clothing" and give it "glowing red eyes", Kontext drew the creature that
+# has them. Measured on the bare car first: a generic "boss version of this car" kept the car but
+# painted it black 3 of 3 - what held the silver was naming the object's own parts and colours
+# against the photo. On the robot-car walker this one kept the silver car on robot legs 2 of 2,
+# its headlights glowing red; on the living fish, the fish 2 of 2.
+KONTEXT_FORM_BOSS_EDITS = {
+    "robot": ("Make this robot the boss version of itself: bigger, taller and more imposing, with "
+              "a fierce red glow shining from its eyes and lights. Keep exactly the same {k} "
+              "parts, colours and markings - the ones from the {k} in the second picture - so it "
+              "is still clearly the same robot built out of that {k}. Plain white background."),
+    "living": ("Make this character the boss version of itself: bigger, taller and more imposing, "
+               "with a fierce red glow shining from its eyes. Keep exactly the same {k} body, "
+               "colours and markings - the ones from the {k} in the second picture - so it is "
+               "still clearly the same {k} character. Plain white background."),
+}
+
+
+def _kontext_pictured_boss(walker_path, ref, size, form=None):
+    """The pictured foe's boss (KONTEXT_PICTURED_BOSS_EDIT, or KONTEXT_FORM_BOSS_EDITS for an
+    object made a character - `form`, see kontext_foe_prompt) as a matted cut-out, or None when
     Kontext failed - the caller then draws one from the words, as for a failed derivation."""
+    edit = KONTEXT_PICTURED_BOSS_EDIT
+    if (form or {}).get("form") in KONTEXT_FORM_BOSS_EDITS:
+        edit = KONTEXT_FORM_BOSS_EDITS[form["form"]].format(k=form["kind"])
     try:
         canvas = _foe_pose_canvas(walker_path, size, "kxenemy_boss")
-        p = _kontext_ref_job([canvas, ref], {"boss": KONTEXT_PICTURED_BOSS_EDIT},
+        p = _kontext_ref_job([canvas, ref], {"boss": edit},
                              random.randint(1, 1000000000), prefix="kxenemy")["boss"]
         keep_largest_figure(p, thresh=50)
         _save_tight(p, thresh=50)
@@ -10657,7 +10797,8 @@ def _surface_scene_split(path):
 
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                 steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None,
-                                enemy_named=None, last_attack_frame=False, refs=None):
+                                enemy_named=None, last_attack_frame=False, refs=None,
+                                pictures=None):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames and an enemy, then a
     separate krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {"frames": [7 paths], "enemy": path|None,
@@ -10675,9 +10816,14 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     `refs` is {slot: staged name} for the pictures Options' Attachments row sends as real
     references (see the Kontext reference pictures section). A player or weapon picture draws
     the hero frames with Kontext and an enemy picture draws all three foes; whatever is not
-    pictured, or whose Kontext job failed, is drawn by krea2 from the words as before."""
+    pictured, or whose Kontext job failed, is drawn by krea2 from the words as before.
+    `pictures` is describe_pictures' reading of them: the player's and enemy's `form` (an object
+    made a character, _picture_form_look)."""
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     refs = refs or {}
+    hero_form, enemy_form = (((pictures or {}).get(s) or {}) for s in ("player", "enemy"))
+    hero_form = hero_form if hero_form.get("form") else None
+    enemy_form = enemy_form if enemy_form.get("form") else None
     sq = _round16(gfx["player"])            # the 7 player pose frames
     esq = _round16(gfx["enemy"])            # every frame of all three foes
     frame_seed = random.randint(1, 1000000000)     # ONE seed across all seven frames
@@ -10704,10 +10850,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     # Pictured assets first, in Kontext - each one that comes back None fell over, and is drawn
     # by krea2 from the words in the job below instead, exactly as if it had had no picture.
     frame_paths = (generate_kontext_hero_frames(refs, player_style,
-                                                (brief or {}).get("weapon") or weapon_style, sq)
+                                                (brief or {}).get("weapon") or weapon_style, sq,
+                                                form=hero_form)
                    if (refs.get("player") or refs.get("weapon")) else None)
     ref_enemies = (generate_kontext_reference_enemy(refs["enemy"], enemy_style, esq,
-                                                    last_attack_frame=last_attack_frame)
+                                                    last_attack_frame=last_attack_frame,
+                                                    form=enemy_form)
                    if refs.get("enemy") else None)
 
     # A pictured foe is the thing in the picture, not three designed species - the flyer and
@@ -10755,7 +10903,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                                           species=species, generated=added,
                                                           seeds=seeds)
     portraits = generate_kontext_portrait_set(player_style, size=gfx["portrait"],
-                                              ref=refs.get("player"))
+                                              ref=refs.get("player"), form=hero_form)
 
     print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
           f"player {sq}x{sq}, enemy {esq}x{esq}, portrait {gfx['portrait']}px, "
@@ -10965,7 +11113,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
         bundle = generate_krea2_posed_bundle(named["text"]["player"], named["text"]["weapon"],
                                              named["text"]["enemy"], steps, gfx, brief,
                                              enemy_named=named["enemy"],
-                                             last_attack_frame=last_attack_frame, refs=refs)
+                                             last_attack_frame=last_attack_frame, refs=refs,
+                                             pictures=looks)
 
         # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
         # card rather than competing with them. Both calls are skippable via sound_mode. Audio
@@ -11094,6 +11243,26 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     finally:
         PROGRESS.end_plan()
         gen_progress["is_generating"] = False
+        _comfy_free_models()
+
+
+# The end of every run hands ComfyUI's memory back. Reported from play: the computer froze for
+# a few seconds as a run with four pictures started. ComfyUI keeps every model a run loaded
+# parked in RAM afterwards - measured 31 GB of the machine's 32 GB committed while idle, 2 GB
+# available, most of it pushed out to the pagefile - so the next run's first model load made
+# Windows page the user's other programs out to make room. A run re-reads its models from disk
+# anyway (a four-picture run read ~110 GB: Kontext, schnell and Qwen3-VL keep evicting each
+# other), so keeping them parked between runs saved nothing. ComfyUI acts on this between
+# prompts, never inside one, so a background ending movie already queued is not disturbed.
+def _comfy_free_models():
+    try:
+        req = urllib.request.Request(f"{COMFY_URL}/free",
+                                     data=json.dumps({"unload_models": True, "free_memory": True}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).read()
+        print("[comfy] asked ComfyUI to unload its models and free their memory")
+    except Exception as e:
+        print(f"[comfy] could not ask ComfyUI to free its memory ({e})")
 
 
 # ---------------------------------------------------------------------------
@@ -11758,6 +11927,31 @@ def set_dungeon_session_favorite(session_id, favorite):
     meta = _update_session_meta(folder, {"favorite": bool(favorite)})
     print(f"[history] {'favorited' if meta['favorite'] else 'unfavorited'} {session_id}")
     return meta["favorite"]
+
+
+def set_dungeon_session_sort_number(session_id, number):
+    """The hand-given place of one saved dungeon in History's Default sort, typed into the hidden
+    numbering view (ten clicks on the window's 📜). A whole number 0 or up, or None/"" to take it
+    back out of the numbered order. Returns (True, number as written), or None if the session is
+    not there. Raises ValueError for anything else, rather than storing a number nobody typed.
+    Stored in meta.json, so the showcase export's dungeons.json carries it too."""
+    if number is None or (isinstance(number, str) and not number.strip()):
+        number = None
+    else:
+        if isinstance(number, bool):
+            raise ValueError("The number has to be a whole number.")
+        try:
+            number = int(str(number).strip())
+        except ValueError:
+            raise ValueError("The number has to be a whole number.")
+        if number < 0:
+            raise ValueError("The number cannot be negative.")
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return None
+    _update_session_meta(folder, {"sort_number": number})
+    print(f"[history] sort number {number} for {session_id}")
+    return True, number
 
 
 def mark_dungeon_session_beaten(session_id):
@@ -13606,6 +13800,28 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     body, code = {"success": True, "favorite": favorite}, 200
             except Exception as e:
                 print(f"[history] favorite failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/history_sort_number":
+            # A number typed into the hidden numbering view. Body is {id, sort_number}, a blank
+            # or null number taking the run back out of the numbered order. Saved as it is typed.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                saved = set_dungeon_session_sort_number(data.get("id"), data.get("sort_number"))
+                if saved is None:
+                    body, code = {"success": False, "error": "That saved dungeon is gone."}, 404
+                else:
+                    body, code = {"success": True, "sort_number": saved[1]}, 200
+            except ValueError as e:
+                body, code = {"success": False, "error": str(e)}, 400
+            except Exception as e:
+                print(f"[history] sort number failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")

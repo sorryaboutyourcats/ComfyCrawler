@@ -4,6 +4,7 @@ no ComfyUI, no GPU, no Python server needed to play them back. See DISTRIBUTION_
 
 Usage:
     python tools/export_showcase.py [--out showcase] [--ids tools/showcase_ids.txt] [--clean]
+                                    [--favorites]
 
 Incremental by default: a file already in the export with the same size and modified time as
 its source is left alone (copy2 carries the mtime over, so an unchanged bundle always matches),
@@ -13,6 +14,7 @@ the output folder first and copies everything, the way every export used to.
 tools/showcase_ids.txt lists one dungeon_sessions/ id per line (# comments and blank lines
 ignored) - curated by hand, since which saved runs are fit to publish (no real names/brands
 typed while testing, nothing embarrassing) is a judgment call this script does not attempt.
+--favorites also pulls in every run starred in History, trusting the star as that judgment.
 """
 import argparse
 import json
@@ -110,14 +112,21 @@ class _Sync:
         return total
 
 
-def export_showcase(out_dir, ids_path, clean=False):
-    ids = read_curated_ids(ids_path)
+def export_showcase(out_dir, ids_path, clean=False, favorites=False):
+    ids = read_curated_ids(ids_path) if os.path.exists(ids_path) or not favorites else []
+    all_sessions = {s["id"]: s for s in server.list_dungeon_sessions()}
+    if favorites:
+        # Starred History runs join the hand-curated list. The star skips the publish-safety
+        # review showcase_ids.txt stands for, so this is opt-in and says what it added.
+        starred = [sid for sid, meta in all_sessions.items()
+                   if meta.get("favorite") and sid not in ids]
+        ids += starred
+        print(f"[showcase] --favorites added {len(starred)} starred run(s) to the list")
     if not ids:
         print(f"[showcase] {ids_path} lists no ids yet - nothing to export. "
               "Add one dungeon_sessions/ id per line (see the file's own comment) and run again.")
         return
 
-    all_sessions = {s["id"]: s for s in server.list_dungeon_sessions()}
     kept = []
     for session_id in ids:
         meta = all_sessions.get(session_id)
@@ -200,5 +209,8 @@ if __name__ == "__main__":
     parser.add_argument("--clean", action="store_true",
                          help="Wipe the output folder and copy everything, instead of only "
                               "what changed since the last export")
+    parser.add_argument("--favorites", action="store_true",
+                         help="Also export every run starred in History, on top of the curated "
+                              "id list")
     args = parser.parse_args()
-    export_showcase(args.out, args.ids, clean=args.clean)
+    export_showcase(args.out, args.ids, clean=args.clean, favorites=args.favorites)
