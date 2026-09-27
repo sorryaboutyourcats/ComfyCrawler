@@ -3292,9 +3292,13 @@
           <button id="btnCloseHistory" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200">✕</button>
         </div>
 
-        <div class="px-3 text-[11px] text-slate-700 font-bold">
+        <div class="px-3 text-[11px] text-slate-700 font-bold" data-generation-only>
           Dungeons you've made. Starting one skips generation completely &ndash; same
           hero, foes, art and narration, on a freshly drawn maze at your current difficulty.
+        </div>
+        <div class="px-3 text-[11px] text-slate-700 font-bold hidden" data-showcase-only>
+          ComfyCrawler already generated showcase. Each run keeps the hero, foes,
+          art and story it was made with, on a newly drawn maze at your difficulty.
         </div>
 
         <!-- What order the saved runs come in. A view of the same list - no run is hidden by it

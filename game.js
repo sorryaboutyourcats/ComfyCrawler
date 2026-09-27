@@ -13119,9 +13119,12 @@ void main() {
     // cursor off a button someone is reaching for.
     let historyRenderedSignature = null;
 
+    // The running run is part of it: rows carry its NOW PLAYING tag (and LAST PLAYED only while
+    // nothing runs), so quitting to the showcase gallery - whose re-read comes back unchanged,
+    // last_played already stamped in memory at entry - must still redraw them.
     function historyListingSignature() {
       try {
-        return JSON.stringify(historyEntries);
+        return JSON.stringify([currentRunHistoryId, historyEntries]);
       } catch (_) {
         return null;      // never matches, so a listing that will not stringify always redraws
       }
@@ -13349,9 +13352,10 @@ void main() {
     // merely made most recently is not one that was played last. A scan per row, which is
     // nothing next to building the row itself.
     function lastPlayedRunId() {
-      if (currentRunHistoryId || !Array.isArray(historyEntries)) return null;
+      const listed = historyListedEntries();
+      if (currentRunHistoryId || !Array.isArray(listed)) return null;
       let best = null;
-      historyEntries.forEach(e => {
+      listed.forEach(e => {
         if (e.id && (e.last_played || 0) > 0 && (!best || e.last_played > best.last_played)) best = e;
       });
       return best ? best.id : null;
@@ -14930,15 +14934,23 @@ void main() {
       });
     });
 
-    // The subset of historyEntries the list is actually showing right now, in the order the
-    // Sort dropdown asks for - every saved run, unless "Similar only" is both checked and has
-    // something to filter by.
+    // The runs History offers at all. In the showcase that is the gallery's own set, so an
+    // unlisted run stays hidden here exactly as it is on the main menu (and ?unlisted shows
+    // only those, here too); everywhere else it is every saved run.
+    function historyListedEntries() {
+      return SHOWCASE_MODE ? showcaseGalleryEntries() : historyEntries;
+    }
+
+    // The subset of historyListedEntries the list is actually showing right now, in the order
+    // the Sort dropdown asks for - every listed run, unless "Similar only" is both checked and
+    // has something to filter by.
     function visibleHistoryEntries() {
-      if (!Array.isArray(historyEntries)) return historyEntries;
+      const listed = historyListedEntries();
+      if (!Array.isArray(listed)) return listed;
       syncHistorySimilarOnly();
       let filtered = (!historySimilarOnly || !historySimilarOnly.checked)
-        ? historyEntries
-        : historyEntries.filter(entry =>
+        ? listed
+        : listed.filter(entry =>
             historyEntryMatchesReference(entry, historySimilarReference()));
       if (historyStarredOnly) filtered = filtered.filter(e => e.favorite);
       return sortHistoryEntries(filtered);
@@ -14951,7 +14963,7 @@ void main() {
         if (historyFootNote) historyFootNote.textContent = '';
         return;
       }
-      if (!historyEntries.length) {
+      if (!historyListedEntries().length) {
         setHistoryMessage('No dungeons saved yet. Every dungeon you CREATE is kept here, so you can play it again without generating it again.');
         if (historyFootNote) historyFootNote.textContent = '';
         return;
@@ -14959,7 +14971,7 @@ void main() {
       const visible = visibleHistoryEntries();
       if (!visible.length) {
         setHistoryMessage(historyStarredOnly
-          && !(historySimilarOnly && historySimilarOnly.checked && historyEntries.some(e => e.favorite))
+          && !(historySimilarOnly && historySimilarOnly.checked && historyListedEntries().some(e => e.favorite))
           ? 'No starred dungeons yet. Click the ★ below to show them all.'
           : 'No saved runs look like the prompt on the main menu. Uncheck "Similar only" to see them all.');
         renderHistoryFootNote();
@@ -15008,18 +15020,19 @@ void main() {
     // "12 dungeons · 3 favorites · 410.2 MB on disk". Its own function so a star toggle can
     // recount without rebuilding the rows above it.
     function renderHistoryFootNote() {
-      if (!historyFootNote || !Array.isArray(historyEntries)) return;
-      const total = historyEntries.reduce((sum, e) => sum + (e.size || 0), 0);
+      const listed = historyListedEntries();
+      if (!historyFootNote || !Array.isArray(listed)) return;
+      const total = listed.reduce((sum, e) => sum + (e.size || 0), 0);
       const size = historySizeText(total);
-      const favs = historyEntries.filter(e => e.favorite).length;
+      const favs = listed.filter(e => e.favorite).length;
       // Disk usage and favorites still describe the whole library even while filtered - only
       // the headline count narrows, so it reads "3 of 12" rather than a plain "3 dungeons"
       // that would make the filter look like the entire saved history.
       const visible = visibleHistoryEntries();
       const similar = historySimilarOnly && historySimilarOnly.checked;
-      const countText = visible.length === historyEntries.length
-        ? historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
-        : visible.length + ' of ' + historyEntries.length + ' dungeons'
+      const countText = visible.length === listed.length
+        ? listed.length + (listed.length === 1 ? ' dungeon' : ' dungeons')
+        : visible.length + ' of ' + listed.length + ' dungeons'
           + (historyStarredOnly ? ' starred' : '')
           + (historyStarredOnly && similar ? ' and' : '')
           + (similar ? ' similar to this prompt' : '');

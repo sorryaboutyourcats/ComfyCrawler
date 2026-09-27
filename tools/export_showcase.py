@@ -4,7 +4,8 @@ no ComfyUI, no GPU, no Python server needed to play them back. See DISTRIBUTION_
 
 Usage:
     python tools/export_showcase.py [--out showcase] [--ids tools/showcase_ids.txt] [--clean]
-                                    [--favorites]
+                                    [--favorites | --only-favorites]
+                                    [--base-url mowmeow.net/ComfyCrawlerTest/]
 
 Incremental by default: a file already in the export with the same size and modified time as
 its source is left alone (copy2 carries the mtime over, so an unchanged bundle always matches),
@@ -15,10 +16,12 @@ tools/showcase_ids.txt lists one dungeon_sessions/ id per line (# comments and b
 ignored) - curated by hand, since which saved runs are fit to publish (no real names/brands
 typed while testing, nothing embarrassing) is a judgment call this script does not attempt.
 --favorites also pulls in every run starred in History, trusting the star as that judgment.
+--only-favorites exports just the starred runs, ignoring showcase_ids.txt entirely.
 
 A starred run with no sort number (History's hidden numbering view) ships unlisted: out of the
 gallery, playable only by its ?run=<id> link. The export prints those links, and the exported
-page opened with ?unlisted lists just those runs, each with its 🔗.
+page opened with ?unlisted lists just those runs, each with its 🔗. With --base-url (where the
+export will be hosted) those printed links come out whole, ready to paste.
 """
 import argparse
 import json
@@ -69,6 +72,18 @@ def is_unlisted(meta):
     only through its ?run=<id> link. A star alone says "worth keeping and sharing"; the number
     is what says "put it on the shelf, and where"."""
     return bool(meta.get("favorite")) and not isinstance(meta.get("sort_number"), (int, float))
+
+
+def normalize_base_url(base_url):
+    """'mowmeow.net/ComfyCrawlerTest' -> 'https://mowmeow.net/ComfyCrawlerTest/': https:// when
+    no scheme was typed, and a trailing slash so ?run= lands on the folder's index.html rather
+    than a sibling path."""
+    base_url = base_url.strip()
+    if not base_url:
+        return ""
+    if "://" not in base_url:
+        base_url = "https://" + base_url
+    return base_url if base_url.endswith("/") else base_url + "/"
 
 
 def _stats_in(folder):
@@ -123,8 +138,11 @@ class _Sync:
         return total
 
 
-def export_showcase(out_dir, ids_path, clean=False, favorites=False):
-    ids = read_curated_ids(ids_path) if os.path.exists(ids_path) or not favorites else []
+def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url="",
+                    only_favorites=False):
+    favorites = favorites or only_favorites
+    ids = [] if only_favorites else (
+        read_curated_ids(ids_path) if os.path.exists(ids_path) or not favorites else [])
     all_sessions = {s["id"]: s for s in server.list_dungeon_sessions()}
     if favorites:
         # Starred History runs join the hand-curated list. The star skips the publish-safety
@@ -132,7 +150,11 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False):
         starred = [sid for sid, meta in all_sessions.items()
                    if meta.get("favorite") and sid not in ids]
         ids += starred
-        print(f"[showcase] --favorites added {len(starred)} starred run(s) to the list")
+        if only_favorites:
+            print(f"[showcase] --only-favorites: exporting the {len(starred)} starred run(s), "
+                  f"ignoring {os.path.basename(ids_path)}")
+        else:
+            print(f"[showcase] --favorites added {len(starred)} starred run(s) to the list")
     if not ids:
         print(f"[showcase] {ids_path} lists no ids yet - nothing to export. "
               "Add one dungeon_sessions/ id per line (see the file's own comment) and run again.")
@@ -221,12 +243,14 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False):
         # The gallery has no row to copy these links from, so they are handed out here - and
         # the export's own ?unlisted page lists just these, each with its 🔗 giving the full
         # link at whatever address the export ends up hosted on.
+        base_url = normalize_base_url(base_url)
+        where = "" if base_url else " (after the showcase's address)"
         print(f"[showcase] {len(unlisted)} unlisted run(s) - starred with no sort number, so "
-              "hidden from the gallery but playable by link. Links (after the showcase's address), "
-              "or open <address>/?unlisted to copy them:")
+              f"hidden from the gallery but playable by link. Links{where}, "
+              f"or open {base_url or '<address>/'}?unlisted to copy them:")
         for meta in unlisted:
             title = (meta.get("location") or meta.get("wall_style") or "Unnamed Dungeon").strip()
-            print(f"    ?run={meta['id']}   {title}")
+            print(f"    {base_url}?run={meta['id']}   {title}")
 
 
 if __name__ == "__main__":
@@ -241,5 +265,13 @@ if __name__ == "__main__":
     parser.add_argument("--favorites", action="store_true",
                          help="Also export every run starred in History, on top of the curated "
                               "id list")
+    parser.add_argument("--only-favorites", action="store_true",
+                         help="Export only the runs starred in History, ignoring the curated "
+                              "id list")
+    parser.add_argument("--base-url", default="",
+                         help="Where the export will be hosted (e.g. mowmeow.net/ComfyCrawlerTest/) "
+                              "- unlisted runs' links are then printed in full; https:// is "
+                              "assumed when no scheme is given")
     args = parser.parse_args()
-    export_showcase(args.out, args.ids, clean=args.clean, favorites=args.favorites)
+    export_showcase(args.out, args.ids, clean=args.clean, favorites=args.favorites,
+                    base_url=args.base_url, only_favorites=args.only_favorites)
