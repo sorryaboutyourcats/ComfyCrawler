@@ -292,6 +292,12 @@
     const btnHistoryViewTiles = document.getElementById('btnHistoryViewTiles');
     const btnShowcaseViewList = document.getElementById('btnShowcaseViewList');
     const btnShowcaseViewTiles = document.getElementById('btnShowcaseViewTiles');
+    // Every run or only the starred ones - again one button in each footer, one setting.
+    // See setHistoryStarredOnly.
+    const btnHistoryStarredOnly = document.getElementById('btnHistoryStarredOnly');
+    const btnShowcaseStarredOnly = document.getElementById('btnShowcaseStarredOnly');
+    const HISTORY_STARRED_ONLY_KEY = 'comfycrawler.historyStarredOnly';
+    let historyStarredOnly = prefs.get(HISTORY_STARRED_ONLY_KEY) === 'on';
     const btnOpenSessionsFolder = document.getElementById('btnOpenSessionsFolder');
     const btnOpenAssetsFolder = document.getElementById('btnOpenAssetsFolder');
     const modalHistoryConfirm = document.getElementById('modalHistoryConfirm');
@@ -13068,12 +13074,20 @@ void main() {
         if (showcaseFootNote) showcaseFootNote.textContent = '';
         return;
       }
+      // The ★ button: the count below still describes the whole gallery, only the tiles narrow.
+      const shown = historyStarredOnly ? entries.filter(e => e.favorite) : entries;
       showcaseList.innerHTML = '';
+      if (!shown.length) {
+        const msg = document.createElement('div');
+        msg.className = 'text-xs text-slate-500 font-bold text-center py-8 px-4';
+        msg.textContent = 'No starred dungeons yet. Click the ★ below to show them all.';
+        showcaseList.appendChild(msg);
+      }
       // sortHistoryEntries, not historyEntries raw: the gallery's footer carries the same Sort
       // dropdown History does, driving the same stored pick, so it has to honour it. Not
       // visibleHistoryEntries() - that also applies "Similar only", which has nothing to
       // compare against on this screen (no live run, no mad-lib draft).
-      sortHistoryEntries(entries)
+      sortHistoryEntries(shown)
         .forEach(entry => showcaseList.appendChild(buildHistoryEntryEl(entry)));
       requestAnimationFrame(() => {
         showcaseList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
@@ -13083,7 +13097,8 @@ void main() {
         showcaseFootNote.textContent = entries.length + (SHOWCASE_UNLISTED_VIEW ? ' unlisted' : '')
           + ' dungeon' + (entries.length === 1 ? '' : 's')
           + (SHOWCASE_UNLISTED_VIEW ? '  ·  only reachable by their 🔗 link' : '')
-          + (favorites ? '  ·  ' + favorites + ' favorite' + (favorites === 1 ? '' : 's') : '');
+          + (favorites ? '  ·  ' + favorites + ' favorite' + (favorites === 1 ? '' : 's') : '')
+          + (historyStarredOnly ? '  ·  showing starred only' : '');
       }
     }
 
@@ -13327,6 +13342,29 @@ void main() {
       return input;
     }
 
+    // The run this player was in most recently, for the LAST PLAYED tag on its row - only while
+    // no run is going (lastPlayedRunId is null during one): mid-run the row that matters is the
+    // one tagged NOW PLAYING, and a second tag would just compete with it. Only the real
+    // last_played stamp counts, not historyPlayedAt's created/beaten stand-ins - a run that was
+    // merely made most recently is not one that was played last. A scan per row, which is
+    // nothing next to building the row itself.
+    function lastPlayedRunId() {
+      if (currentRunHistoryId || !Array.isArray(historyEntries)) return null;
+      let best = null;
+      historyEntries.forEach(e => {
+        if (e.id && (e.last_played || 0) > 0 && (!best || e.last_played > best.last_played)) best = e;
+      });
+      return best ? best.id : null;
+    }
+
+    function buildLastPlayedTag() {
+      const tag = document.createElement('span');
+      tag.className = 'hist-last-played text-[9px] font-black px-1.5 py-0.5 shrink-0';
+      tag.textContent = 'LAST PLAYED';
+      tag.title = 'The dungeon you played most recently';
+      return tag;
+    }
+
     function buildHistoryRow(entry) {
       const row = document.createElement('div');
       row.className = 'hist-row win95-box p-1.5 flex items-center gap-2';
@@ -13384,7 +13422,7 @@ void main() {
         tag.textContent = 'NOW PLAYING';
         tag.title = 'This is the dungeon running behind this window';
         titleLine.appendChild(tag);
-      }
+      } else if (entry.id && entry.id === lastPlayedRunId()) titleLine.appendChild(buildLastPlayedTag());
       const frameVerTag = buildFrameVersionTag(entry);
       if (frameVerTag) titleLine.appendChild(frameVerTag);
       col.appendChild(titleLine);
@@ -13912,7 +13950,7 @@ void main() {
         tag.className = 'hist-now-playing text-[9px] font-black px-1.5 py-0.5 shrink-0';
         tag.textContent = 'NOW PLAYING';
         tags.appendChild(tag);
-      }
+      } else if (entry.id && entry.id === lastPlayedRunId()) tags.appendChild(buildLastPlayedTag());
       const frameVerTag = buildFrameVersionTag(entry);
       if (frameVerTag) tags.appendChild(frameVerTag);
       badges.appendChild(tags);
@@ -14117,6 +14155,37 @@ void main() {
     if (btnShowcaseViewList) btnShowcaseViewList.addEventListener('click', () => setHistoryView('list'));
     if (btnShowcaseViewTiles) btnShowcaseViewTiles.addEventListener('click', () => setHistoryView('tiles'));
     applyHistoryView();
+
+    // ---- Starred only ----------------------------------------------------------------------
+    // The ★ in both footers: every run, or only the starred ones. A filter like "Similar only",
+    // and the two stack. Remembered, and shared between History and the showcase gallery the
+    // same way the view and sort picks are. Un-starring a run while this is on leaves its row
+    // where it is until the list is next drawn, so it does not vanish from under the cursor.
+    // historyStarredOnly itself is declared up top with its buttons, since both lists read it.
+
+    function paintHistoryStarredOnly() {
+      [btnHistoryStarredOnly, btnShowcaseStarredOnly].forEach(btn => {
+        if (!btn) return;
+        btn.classList.toggle('is-selected', historyStarredOnly);
+        btn.setAttribute('aria-pressed', historyStarredOnly ? 'true' : 'false');
+        btn.title = historyStarredOnly
+          ? 'Showing only starred dungeons - click to show them all'
+          : 'Show only starred dungeons (click again to show them all)';
+      });
+    }
+
+    function setHistoryStarredOnly(on) {
+      historyStarredOnly = !!on;
+      prefs.set(HISTORY_STARRED_ONLY_KEY, historyStarredOnly ? 'on' : 'off');
+      paintHistoryStarredOnly();
+      renderHistoryList();
+      if (SHOWCASE_MODE) renderShowcaseList();
+    }
+
+    [btnHistoryStarredOnly, btnShowcaseStarredOnly].forEach(btn => {
+      if (btn) btn.addEventListener('click', () => setHistoryStarredOnly(!historyStarredOnly));
+    });
+    paintHistoryStarredOnly();
     // Both buttons ship `disabled` in the markup already (see index.html); this just wires the
     // live flag behind that up front, so it agrees with the DOM from the first paint.
     updateHistoryLoadControls();
@@ -14730,7 +14799,7 @@ void main() {
     // already sitting in the markup has a live flag behind it. "Similar only" is folded into
     // syncHistorySimilarOnly instead, since it already recomputes on every render.
     function updateHistoryLoadControls() {
-      [btnHistoryViewList, btnHistoryViewTiles].forEach(btn => {
+      [btnHistoryViewList, btnHistoryViewTiles, btnHistoryStarredOnly].forEach(btn => {
         if (btn) btn.disabled = !historyLoaded;
       });
       syncHistorySimilarOnly();
@@ -14867,10 +14936,11 @@ void main() {
     function visibleHistoryEntries() {
       if (!Array.isArray(historyEntries)) return historyEntries;
       syncHistorySimilarOnly();
-      const filtered = (!historySimilarOnly || !historySimilarOnly.checked)
+      let filtered = (!historySimilarOnly || !historySimilarOnly.checked)
         ? historyEntries
         : historyEntries.filter(entry =>
             historyEntryMatchesReference(entry, historySimilarReference()));
+      if (historyStarredOnly) filtered = filtered.filter(e => e.favorite);
       return sortHistoryEntries(filtered);
     }
 
@@ -14888,7 +14958,10 @@ void main() {
       }
       const visible = visibleHistoryEntries();
       if (!visible.length) {
-        setHistoryMessage('No saved runs look like the prompt on the main menu. Uncheck "Similar only" to see them all.');
+        setHistoryMessage(historyStarredOnly
+          && !(historySimilarOnly && historySimilarOnly.checked && historyEntries.some(e => e.favorite))
+          ? 'No starred dungeons yet. Click the ★ below to show them all.'
+          : 'No saved runs look like the prompt on the main menu. Uncheck "Similar only" to see them all.');
         renderHistoryFootNote();
         return;
       }
@@ -14943,9 +15016,13 @@ void main() {
       // the headline count narrows, so it reads "3 of 12" rather than a plain "3 dungeons"
       // that would make the filter look like the entire saved history.
       const visible = visibleHistoryEntries();
+      const similar = historySimilarOnly && historySimilarOnly.checked;
       const countText = visible.length === historyEntries.length
         ? historyEntries.length + (historyEntries.length === 1 ? ' dungeon' : ' dungeons')
-        : visible.length + ' of ' + historyEntries.length + ' dungeons similar to this prompt';
+        : visible.length + ' of ' + historyEntries.length + ' dungeons'
+          + (historyStarredOnly ? ' starred' : '')
+          + (historyStarredOnly && similar ? ' and' : '')
+          + (similar ? ' similar to this prompt' : '');
       historyFootNote.textContent =
         countText
         + (favs ? '  ·  ' + favs + (favs === 1 ? ' favorite' : ' favorites') : '')
@@ -15418,7 +15495,12 @@ void main() {
     if (btnHistory) btnHistory.addEventListener('click', openHistory);
     if (btnCloseHistory) btnCloseHistory.addEventListener('click', closeHistory);
     if (btnHistoryOk) btnHistoryOk.addEventListener('click', closeHistory);
-    if (historySimilarOnly) historySimilarOnly.addEventListener('change', renderHistoryList);
+    // Unchecking brings back the whole list, which drops the live run's row somewhere among
+    // thirty others - so go find it again, the same way opening History from a run does.
+    if (historySimilarOnly) historySimilarOnly.addEventListener('change', () => {
+      if (!historySimilarOnly.checked) historyRevealCurrent = !!currentRunHistoryId;
+      renderHistoryList();
+    });
     if (btnOpenSessionsFolder) btnOpenSessionsFolder.addEventListener('click', () => openServerFolder('sessions'));
     if (btnOpenAssetsFolder) btnOpenAssetsFolder.addEventListener('click', () => openServerFolder('assets'));
     if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);

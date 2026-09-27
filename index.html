@@ -1284,6 +1284,13 @@
       color: #ffffff;
       letter-spacing: 0.04em;
     }
+    /* LAST PLAYED (lastPlayedRunId in game.js), shown on the menu when no run is going: the
+       same bar in its inactive-window grey - the run that WAS the active one. */
+    .hist-last-played {
+      background: linear-gradient(90deg, #808080, #b5b5b5);
+      color: #ffffff;
+      letter-spacing: 0.04em;
+    }
     /* A row's frame version (buildFrameVersionTag in game.js): version 1 - every run made
        without Last Attack Frame - is the common case and gets no chip; only version 2 shows
        one, a sunken grey chip on a pale amber ground, so the runs that carry the strike frame
@@ -1316,7 +1323,8 @@
        "Similar only" gets the same treatment through its own opacity-50 class, already
        toggled by syncHistorySimilarOnly for the "nothing to compare against" case. */
     #btnHistoryViewList:disabled,
-    #btnHistoryViewTiles:disabled {
+    #btnHistoryViewTiles:disabled,
+    #btnHistoryStarredOnly:disabled {
       opacity: 0.5;
       cursor: default;
     }
@@ -1830,7 +1838,8 @@
     .hist-trash:disabled:active,
     .hist-movie:disabled:active,
     #btnHistoryViewList:disabled:active,
-    #btnHistoryViewTiles:disabled:active {
+    #btnHistoryViewTiles:disabled:active,
+    #btnHistoryStarredOnly:disabled:active {
       border-top: 2px solid #ffffff;
       border-left: 2px solid #ffffff;
       border-right: 2px solid #808080;
@@ -3357,6 +3366,13 @@
                 &#9638;
               </button>
             </div>
+            <!-- Every saved run, or only the starred ones. One remembered setting shared with the
+                 showcase gallery's copy of this button - see setHistoryStarredOnly in game.js.
+                 Disabled until the first listing lands, like the pair above. -->
+            <button id="btnHistoryStarredOnly" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300 shrink-0" disabled
+                    aria-pressed="false" title="Show only starred dungeons (click again to show them all)">
+              &#9733;
+            </button>
             <!-- Filters the list above to runs whose dungeon style is close to a reference -
                  the dungeon actually being played when History is opened over a live run, else
                  whatever is on the main menu's mad-lib fields right now. See
@@ -3726,6 +3742,13 @@
               &#9638;
             </button>
           </div>
+
+          <!-- Every dungeon here, or only the starred ones - the History window's button again,
+               sharing its stored pick. See setHistoryStarredOnly in game.js. -->
+          <button id="btnShowcaseStarredOnly" class="win95-btn px-2 py-1.5 text-xs text-black hover:bg-slate-300 shrink-0"
+                  aria-pressed="false" title="Show only starred dungeons (click again to show them all)">
+            &#9733;
+          </button>
 
           <!-- The only way into Options in this export: its usual button lives in Setup's own
                footer row, which this screen replaces wholesale. Opens the same #modalSettings via
