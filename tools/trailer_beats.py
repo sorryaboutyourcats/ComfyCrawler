@@ -153,7 +153,7 @@ def describe(r):
 
 def write_trailer_json(r, target):
     rel = os.path.relpath(os.path.abspath(r["file"]), REPO_DIR).replace(os.sep, "/")
-    path = os.path.join(REPO_DIR, target)
+    path = os.path.join(REPO_DIR, "trailers", target)
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     data["music"] = {"file": rel, "bpm": r["bpm"], "beats": r["beats"]}
@@ -168,7 +168,7 @@ def main(argv=None):
     ap.add_argument("files", nargs="+")
     ap.add_argument("--write", nargs="?", const="trailer.json", default=None, metavar="JSON",
                     help="store the (single) track's beat grid as that trailer's music "
-                         "(default trailer.json; trailer2.json for /trailer2)")
+                         "(default trailer.json; trailer2.json for /trailer2; both in trailers/)")
     args = ap.parse_args(argv)
     files = [f for pat in args.files for f in (glob.glob(pat) or [pat])]
     if args.write and len(files) != 1:

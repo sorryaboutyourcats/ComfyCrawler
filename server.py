@@ -3866,8 +3866,13 @@ _SPECIES_PARTS = {
    then all three stay that object. Give it machinery, mountings, housings and moving parts.
    Faces, limbs, claws, scales and feathers would replace it with a monster.
 """,
-    "rule_colour": """4. Give the three clearly different colours, so a player tells them apart instantly in a
-   dark corridor.
+    # "Three clearly different colours" alone recoloured the SUBJECT itself: "spaghetti
+    # monster" came back as olive-green, brown and crimson noodle heaps that read as moss or
+    # rope - only the pale-yellow ones ever read as pasta (4 runs, 2026-09-29).
+    "rule_colour": """4. Tell the three apart instantly in a dark corridor with clearly different colours. If
+   {enemy} is known by its colour - pasta is pale yellow, a pumpkin is orange, slime is green -
+   all three keep that colour on their bodies; put the differences in the other colours
+   instead: eyes, sauce, glow, trim, markings.
 """,
     "rule_lift": """3. Say how the FLYER stays up, with something that suits {enemy} specifically: feathered
    wings, membrane wings, insect wings, spinning rotor blades, glowing thrusters, a gasbag.
@@ -5913,6 +5918,19 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # this line too (generate_krea2_posed_bundle), so it matters in both Attachments modes.
     if enemy_pictured and (enemy_style or "").strip():
         literal = _theme_inline(enemy_style.strip())
+    # A typed enemy that is already a real subject carrying its own description is kept as
+    # typed too - the designer is for turning abstract words into something drawable, and a
+    # description the player wrote is not its to swap. "spaghetti monster covered in red tomato
+    # sauce" came back "spaghetti Monster wearing a crown of cherry tomatoes" and then "...a
+    # crown of tomato sauce", and _species_worn_rule put that crown on every foe while the
+    # sauce itself was gone. Same test as _theme_enemy_subject's "real head": two words before
+    # the joiner, so a bare "person with a chat bubble" still goes to the designer.
+    if literal is None and enemy_style and not (enemy_named and enemy_named.get("kind")):
+        typed = enemy_style.strip()
+        m = _THEME_ENEMY_JOINER.search(typed)
+        if (m and len(typed[:m.start()].split()) >= 2
+                and len(typed.split()) <= THEME_ENEMY_MAX_WORDS):
+            literal = _theme_inline(typed)
 
     def _attempt():
         payload = {
@@ -6215,6 +6233,25 @@ def krea2_portrait_prompt(player_style, expression=None):
     )
 
 
+# Something typed onto the player's FACE ('"Will Smith" with red tomato sauce around the mouth
+# like he just ate some pasta') never reaches the HUD bust from the words. krea2 draws the famous
+# face and drops the rest: 0 of 9 busts on 3 seeds had any sauce, whether the detail trailed the
+# name (as now), sat in its own sentence after it, or LED the prompt. A Kontext edit of the
+# finished idle - "Add <the typed detail>. Keep the exact same face..." - put it on 3 of 3, and
+# it survived the attack edit made from that bust, so every expression frame carries it. The
+# body sprites are back views, so the bust is the only place a face detail can show at all.
+_PORTRAIT_FACE_WORDS = re.compile(
+    r"\b(?:face|mouth|lips?|chin|cheeks?|teeth|nose|forehead|beard|mustache|moustache|"
+    r"eyes?|eyebrows?|jaw)\b", re.I)
+
+
+def _portrait_face_detail(player_style):
+    """The part of the typed player line that describes their face, or None."""
+    m = _THEME_ENEMY_JOINER.search(player_style or "")
+    detail = player_style[m.end():].strip(" .,") if m else ""
+    return detail if detail and _PORTRAIT_FACE_WORDS.search(detail) else None
+
+
 def _kontext_alpha_nodes(payload, name, image_node, prefix):
     """RemoveBackground -> InvertMask -> SaveImageWithAlpha for one image node."""
     payload[f"{name}_mask"] = {"inputs": {"bg_removal_model": ["bg_model", 0], "image": [image_node, 0]}, "class_type": "RemoveBackground"}
@@ -6357,6 +6394,25 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
 
     idle_in = f"kxp_src_{int(time.time()*1000)}.png"
     shutil.copy(idle_src, os.path.join(COMFY_INPUT_DIR, idle_in))
+
+    # --- Job A2: a typed face detail, painted onto the idle - see _PORTRAIT_FACE_WORDS ---
+    face = _portrait_face_detail(player_style)
+    if face:
+        try:
+            edit = f"Add {face}. Keep the exact same face, expression, skin, lighting and framing."
+            got = _kontext_expression_job(idle_in, ["face"], KONTEXT_PORTRAIT_GUIDANCE, seed,
+                                          job_key=None, edits={"face": edit})["face"]
+            # The job hands back a matted RGBA; Kontext needs a plain RGB bust to edit next.
+            im = Image.open(got).convert("RGBA")
+            flat = Image.new("RGBA", im.size, (110, 100, 95, 255))
+            flat.alpha_composite(im)
+            idle_in = f"kxp_face_{int(time.time()*1000)}.png"
+            flat.convert("RGB").save(os.path.join(COMFY_INPUT_DIR, idle_in))
+            print(f"[Kontext Portrait] painted the face detail on: {face!r}")
+        except GenerationCancelled:
+            raise
+        except Exception as e:
+            print(f"[Kontext Portrait] face detail {face!r} failed ({e}) - keeping the plain bust")
 
     # --- Job B: Kontext expression edits (+ retry for any frame that barely moved) ---
     reactions = [n for n in PORTRAIT_FRAME_NAMES if n != "idle"]
@@ -7125,8 +7181,11 @@ def _read_kind(answer):
 # Billy" is a cat. Only the part before the first of these is kept, and of that only the last
 # three words, which in English is where the noun is: "pink and green cat" -> "green cat".
 # "of" is deliberately not a cut: "stick of RAM" is a stick of RAM, not a stick.
+# The two-word joiners go first so the cut lands before their verb, not after it: cut at the
+# bare "in", "spaghetti monster covered in red tomato sauce" named its boss "Monster Covered".
 _WHAT_CUT_RE = re.compile(
-    r",|\s+(?:in|with|from|on|wearing|holding|carrying|that|who|which|called|named)\s+",
+    r",|\s+(?:(?:covered|coated|dripping|dressed|made)\s+(?:in|with|of)|"
+    r"in|with|from|on|wearing|holding|carrying|that|who|which|called|named)\s+",
     re.IGNORECASE)
 _WHAT_EDGE_WORDS = frozenset(("a", "an", "the", "and", "or", "of"))
 _WHAT_IRREGULAR_PLURALS = {"people": "Person", "men": "Man", "women": "Woman", "mice": "Mouse"}
@@ -9353,13 +9412,14 @@ def generate_victory_candidates():
 
 # ---- The /trailer page's music ------------------------------------------
 # Each trailer in TRAILERS (<site>/trailer, /trailer2 - one trailer.js, one <name>.json cast
-# each) has one track under its whole 30 seconds, and every cut lands on one of its beats. The trailer shapes the arc itself - a low-pass that opens at the drop, a tape-stop
+# each, all kept in trailers/ but served from the site root) has one track under its whole 30 seconds, and every cut lands on one of its beats. The trailer shapes the arc itself - a low-pass that opens at the drop, a tape-stop
 # before the boss, a hard stop on the last beat - so what it wants from the model is not a song
 # with its own intro and ending but a steady, driving, full-energy cue at a known tempo.
 # 128 BPM puts 64 beats at almost exactly 30 seconds; tools/trailer_beats.py measures what
 # actually came back. Rendered long enough to cover 64 beats at a slightly slower tempo plus
 # the first beat's offset.
 TRAILERS = ("trailer", "trailer2", "trailer11", "trailer12", "trailer12m")
+TRAILERS_DIR = os.path.join(PROJECT_DIR, "trailers")
 TRAILER_MUSIC_FILES = tuple(f"{name}_music.wav" for name in TRAILERS)
 TRAILER_CUE_SECONDS = 34.0
 _TRAILER_TAIL = (" Instrumental video game trailer music, 128 BPM, a strong clear steady beat, "
@@ -13827,7 +13887,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # injects trailer.js in TRAILER_MODE), so the ordinary page never downloads either.
         elif self.path in ("/trailer.js",) + tuple(f"/{t}.json" for t in TRAILERS):
             name = self.path.lstrip("/")
-            path = os.path.join(PROJECT_DIR, name)
+            path = os.path.join(TRAILERS_DIR, name)
             if os.path.exists(path):
                 with open(path, "rb") as f:
                     content = f.read()

@@ -32,8 +32,8 @@ def read(name):
     with open(os.path.join(ROOT, name), encoding="utf-8") as f:
         return f.read()
 
-GAME, TRAILER, PAGE = read("game.js"), read("trailer.js"), read("index.html")
-RAW = {name: json.loads(read(f"{name}.json")) for name in srv.TRAILERS}
+GAME, TRAILER, PAGE = read("game.js"), read("trailers/trailer.js"), read("index.html")
+RAW = {name: json.loads(read(f"trailers/{name}.json")) for name in srv.TRAILERS}
 # A json that "extends" another is read merged over it - as trailer.js and the export read it.
 CFGS = {name: ({**RAW[cfg["extends"]], **cfg} if cfg.get("extends") else cfg) for name, cfg in RAW.items()}
 ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
@@ -164,7 +164,7 @@ ck(CFGS["trailer"]["music"]["file"] != CFGS["trailer2"]["music"]["file"], "the t
 
 # ---- the export ships them ----
 for name in ["trailer.js"] + [f"{t}.json" for t in srv.TRAILERS]:
-    ck(name in export_showcase.STATIC_SHELL_FILES, f"the showcase export ships {name}")
+    ck(name in export_showcase.TRAILER_SHELL_FILES, f"the showcase export ships {name}")
 files = export_showcase.trailer_files(list(CFGS.values()))
 fights = {hook.get("id")} | {x["id"] for x in v1.get("montage", [])}
 for x in v1.get("rush", []):

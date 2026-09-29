@@ -1,6 +1,5 @@
 """Exports a curated set of already-generated dungeons into a self-contained static folder -
-no ComfyUI, no GPU, no Python server needed to play them back. See DISTRIBUTION_PLAN.md
-("Option D1") for why this exists.
+no ComfyUI, no GPU, no Python server needed to play them back.
 
 Usage:
     python tools/export_showcase.py [--out showcase] [--ids tools/showcase_ids.txt] [--clean]
@@ -24,7 +23,8 @@ page opened with ?unlisted lists just those runs, each with its 🔗. With --bas
 export will be hosted) those printed links come out whole, ready to paste.
 
 The 30-second trailers ship too, at <export>/trailer/, /trailer2/ and /trailer11/ (trailer.js,
-each one's cast in trailer.json / trailer2.json / trailer11.json - server.TRAILERS). Every dungeon a trailer names has to be one
+each one's cast in trailer.json / trailer2.json / trailer11.json - server.TRAILERS, all kept in
+the repo's trailers/ folder and shipped flat beside the page). Every dungeon a trailer names has to be one
 this export ships - the curation above is what decides what goes public, and a trailer does not
 get to skip it - so a missing one stops the export. Each trailer dungeon also gets a trimmed copy
 of its bundle for the trailers to download instead (see trailer_files).
@@ -47,8 +47,9 @@ SOUND_WHITELIST = server.STATIC_SOUND_FILES
 
 # llms.txt is the machine players' manual (what the game is, window.ComfyCrawler, what to report
 # back) - the showcase is the edition most of them will actually reach, so it ships there too.
-STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png", "llms.txt",
-                      "trailer.js"] + [f"{name}.json" for name in server.TRAILERS]
+STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png", "llms.txt"]
+# Kept in the repo's trailers/ folder, served (and exported) at the site root beside the page.
+TRAILER_SHELL_FILES = ["trailer.js"] + [f"{name}.json" for name in server.TRAILERS]
 
 # The page's typeface, referenced by index.html's own @font-face as fonts/<name>. Shipped with
 # the export for the same reason tailwind.css is: a visitor's phone has no Comic Sans, and
@@ -109,7 +110,7 @@ def read_trailers():
     that "extends" another is merged over it, key by key - the same way trailer.js reads it."""
     raw = {}
     for name in server.TRAILERS:
-        path = os.path.join(REPO_DIR, f"{name}.json")
+        path = os.path.join(server.TRAILERS_DIR, f"{name}.json")
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 raw[name] = json.load(f)
@@ -349,6 +350,7 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
             f.write(html.replace(HTML_CHARSET_TAG, HTML_CHARSET_TAG + TRAILER_BASE_TAG, 1))
 
     sync.folder(REPO_DIR, out_dir, STATIC_SHELL_FILES)
+    sync.folder(server.TRAILERS_DIR, out_dir, TRAILER_SHELL_FILES)
     sync.folder(os.path.join(REPO_DIR, "fonts"), os.path.join(out_dir, "fonts"), FONT_FILES)
     # prune: a track dropped from STATIC_MUSIC stops shipping instead of lingering in the export.
     sync.folder(os.path.join(REPO_DIR, "sounds"), os.path.join(out_dir, "sounds"),

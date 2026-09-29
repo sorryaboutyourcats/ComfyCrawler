@@ -16,3 +16,4 @@ comfy_settings.json.tmp
 page_settings.json
 page_settings.json.tmp
 node_modules/
+.claude/
