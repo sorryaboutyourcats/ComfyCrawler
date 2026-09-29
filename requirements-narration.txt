@@ -1,7 +1,7 @@
 # Optional: local neural text-to-speech for the intro narration, CPU-only (no VRAM contention with
 # ComfyUI). Kept out of requirements.txt because it pulls in onnxruntime, which can clash with the
 # onnxruntime-gpu other custom nodes install - so inside ComfyUI it's opt-in. Without it (or without
-# the voice models in piper_voices/ - see server.py PIPER_VOICES_DIR) runs are simply not narrated.
+# the voice models in data/piper_voices/ - see server.py PIPER_VOICES_DIR) runs are simply not narrated.
 #   standalone:     pip install -r requirements.txt -r requirements-narration.txt
 #   inside ComfyUI: <ComfyUI's python> -m pip install -r requirements-narration.txt
 piper-tts>=1.8.0

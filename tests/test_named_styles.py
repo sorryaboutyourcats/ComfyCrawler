@@ -88,7 +88,7 @@ ck(srv._theme_bucket("mossy stone", None) == srv._style_bucket("mossy stone"),
 # Manhattan, Central Park, Apple Store and Rome are the deliberate exceptions: their data-val is
 # &quot;-encoded so the browser hands the click handler a quoted string and the wall theme
 # renders the real place. Every other preset must stay a plain description.
-html_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "index.html")
+html_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "index.html")
 with open(html_path, encoding="utf-8") as f:
     html = f.read()
 import re as _re, html as _htmllib

@@ -32,8 +32,8 @@ def read(name):
     with open(os.path.join(ROOT, name), encoding="utf-8") as f:
         return f.read()
 
-GAME, TRAILER, PAGE = read("game.js"), read("trailers/trailer.js"), read("index.html")
-RAW = {name: json.loads(read(f"trailers/{name}.json")) for name in srv.TRAILERS}
+GAME, TRAILER, PAGE = read("web/game.js"), read("web/trailers/trailer.js"), read("web/index.html")
+RAW = {name: json.loads(read(f"web/trailers/{name}.json")) for name in srv.TRAILERS}
 # A json that "extends" another is read merged over it - as trailer.js and the export read it.
 CFGS = {name: ({**RAW[cfg["extends"]], **cfg} if cfg.get("extends") else cfg) for name, cfg in RAW.items()}
 ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
@@ -61,7 +61,7 @@ for name in srv.TRAILERS:
     if not RAW[name].get("extends"):
         ck(music == f"{name}_music.wav", f"{name}.json plays sounds/{name}_music.wav (names {music})")
     ck(music in srv.STATIC_SOUND_FILES, f"{music} is on the /sounds/ whitelist")
-    if os.path.exists(os.path.join(ROOT, "sounds", music)):
+    if os.path.exists(os.path.join(ROOT, "web", "sounds", music)):
         status, _, body = cn.forward(srv, "GET", "/sounds/" + music, [])
         ck(status == 200 and body[:4] == b"RIFF", f"GET /sounds/{music} serves the track")
     else:

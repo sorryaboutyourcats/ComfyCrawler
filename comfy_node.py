@@ -101,8 +101,9 @@ def loopback_url(listen, port, tls=False):
 
 def choose_data_dir(repo_dir, user_dir):
     """Where saved dungeons, the page's saved settings and the recent-cast-name memory live. A dungeon_sessions folder that
-    already sits beside server.py is kept - a development checkout loaded into ComfyUI keeps its
-    History. Otherwise ComfyUI's user folder, which a node update or uninstall never touches."""
+    already sits in the checkout's data/ folder (repo_dir here) is kept - a development checkout
+    loaded into ComfyUI keeps its History. Otherwise ComfyUI's user folder, which a node update or
+    uninstall never touches."""
     if os.path.isdir(os.path.join(repo_dir, "dungeon_sessions")):
         return repo_dir
     return os.path.join(user_dir, "comfycrawler")
@@ -198,7 +199,8 @@ def _point_at_comfyui(srv):
                           # rather than the first - see comfy_model_file_dir in server.py.
                           "model_dirs": lambda folder: list(folder_paths.get_folder_paths(folder) or [])}
     srv.COMFY_URL = url
-    data_dir = choose_data_dir(srv.PROJECT_DIR, folder_paths.get_user_directory())
+    srv.migrate_legacy_data()   # a checkout's old root-level dungeon_sessions -> data/ first
+    data_dir = choose_data_dir(srv.DATA_DIR, folder_paths.get_user_directory())
     srv.SESSIONS_DIR = os.path.join(data_dir, "dungeon_sessions")
     srv.RECENT_CAST_PATH = os.path.join(data_dir, "recent_cast_names.json")
     # Beside the saved dungeons, so a checkout run both ways shares one set of Options.

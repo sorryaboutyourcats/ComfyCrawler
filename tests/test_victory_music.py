@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
 srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
 
-GAME_JS = open(os.path.join(ROOT, "game.js"), encoding="utf-8").read()
+GAME_JS = open(os.path.join(ROOT, "web", "game.js"), encoding="utf-8").read()
 bad = 0
 
 
@@ -49,7 +49,7 @@ if front and front[0] != "victory":
 
 # ---- every track in the pool is actually shipped --------------------------------
 for name in front:
-    path = os.path.join(ROOT, "sounds", f"{name}_music.wav")
+    path = os.path.join(ROOT, "web", "sounds", f"{name}_music.wav")
     if not os.path.exists(path):
         fail(f"{name}: no sounds/{name}_music.wav - that style's win would play in silence "
              f"(generate it with: python server.py --gen-{name}-music)")

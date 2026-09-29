@@ -44,7 +44,33 @@ COMFY_URL = "http://127.0.0.1:8188"
 COMFY_INPUT_DIR = None
 COMFY_OUTPUT_DIR = None
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-SESSIONS_DIR = os.path.join(PROJECT_DIR, "dungeon_sessions")
+# Everything the browser downloads (the page, game.js, fonts, sounds, trailers). Served from the
+# site root all the same - /game.js, /sounds/... - so only the disk side knows about this folder.
+WEB_DIR = os.path.join(PROJECT_DIR, "web")
+# Everything a checkout writes as it runs (saved dungeons, settings, logs, voices) - gitignored.
+DATA_DIR = os.path.join(PROJECT_DIR, "data")
+SESSIONS_DIR = os.path.join(DATA_DIR, "dungeon_sessions")
+
+# What DATA_DIR holds, which until 2026-09-29 sat loose beside this file.
+_LEGACY_DATA = ("dungeon_sessions", "piper_voices", "comfy_settings.json", "page_settings.json",
+                "recent_cast_names.json", "server.log", "server.log.1")
+
+
+def migrate_legacy_data():
+    """Move a checkout's data from beside server.py into DATA_DIR, so a pull that brings in the
+    data/ folder keeps its History, Options and voices. A rename on the same drive, so even a
+    few GB of dungeon_sessions moves at once. Anything already in DATA_DIR is left alone, and a
+    move that fails is reported, not raised - the server starts either way. Called before the
+    log opens (run as the server) and before the node picks its data folder."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    for name in _LEGACY_DATA:
+        old, new = os.path.join(PROJECT_DIR, name), os.path.join(DATA_DIR, name)
+        if os.path.exists(old) and not os.path.exists(new):
+            try:
+                shutil.move(old, new)
+                print(f"[data] moved {name} into data/")
+            except Exception as e:
+                print(f"[data] could not move {name} into data/: {e}")
 
 # The two folders /api/open_folder will open by name. A KEY comes in over the wire, never a path,
 # so no request can name a directory of its own. "sessions" is what the trash can in the History
@@ -77,7 +103,7 @@ def _open_folder_now(folder):
 #      passes both), else <base>/input and <base>/output, where <base> is --base-directory or the
 #      folder ComfyUI's own custom_nodes sits in - the same way its folder_paths.py derives them.
 COMFY_URL_CANDIDATES = ("http://127.0.0.1:8188", "http://127.0.0.1:8000")
-COMFY_SETTINGS_PATH = os.path.join(PROJECT_DIR, "comfy_settings.json")
+COMFY_SETTINGS_PATH = os.path.join(DATA_DIR, "comfy_settings.json")
 COMFY_SETTING_ENV = {"url": "COMFYUI_URL", "input_dir": "COMFYUI_INPUT_DIR", "output_dir": "COMFYUI_OUTPUT_DIR",
                      "models_dir": "COMFYUI_MODELS_DIR"}
 _COMFY_RESOLVED = False
@@ -181,7 +207,7 @@ def _comfy_setting(key, saved):
 # has none, so choices made before this existed carry over. Values are strings, like
 # localStorage's; keys are game.js's own `comfycrawler.*` names. The node points
 # PAGE_SETTINGS_PATH beside its saved dungeons (comfy_node.install), so both share one file.
-PAGE_SETTINGS_PATH = os.path.join(PROJECT_DIR, "page_settings.json")
+PAGE_SETTINGS_PATH = os.path.join(DATA_DIR, "page_settings.json")
 PAGE_SETTING_PREFIX = "comfycrawler."
 PAGE_SETTINGS_MAX_KEYS = 64
 PAGE_SETTING_MAX_CHARS = 1000
@@ -554,8 +580,8 @@ def _gfx_profile(quality):
 # process died (terminal closed, machine slept, an unhandled exception) there was
 # nothing left to say why. Everything on stdout/stderr - our own print()s,
 # BaseHTTPRequestHandler's access log, and any traceback - is now also appended to
-# server.log next to this file, with the prior run rolled to server.log.1 on start.
-LOG_PATH = os.path.join(PROJECT_DIR, "server.log")
+# data/server.log, with the prior run rolled to server.log.1 on start.
+LOG_PATH = os.path.join(DATA_DIR, "server.log")
 
 
 class _Tee:
@@ -621,6 +647,7 @@ def _init_file_logging():
 # the previous run's server.log.1 and - unable to roll a server.log the live server still holds
 # open on Windows - appended the test output to the running server's log.
 if __name__ == "__main__":
+    migrate_legacy_data()   # first, so an old server.log is rolled in data/, not beside it
     _init_file_logging()
 
 gen_progress = {
@@ -7089,7 +7116,7 @@ TITLE_MAX_CHARS = 24
 # Names already handed out lately. Kept on disk rather than read back out of dungeon_sessions,
 # because a cancelled or unsaved run leaves no session behind and its cast is repeated all the
 # same. The first names are held only briefly - the pools are not big enough to rest many.
-RECENT_CAST_PATH = os.path.join(PROJECT_DIR, "recent_cast_names.json")
+RECENT_CAST_PATH = os.path.join(DATA_DIR, "recent_cast_names.json")
 RECENT_CAST_KEEP = {"names": 40, "titles": 12, "firsts": 16}
 _RECENT_CAST_LOCK = threading.Lock()
 
@@ -8441,7 +8468,7 @@ def parse_story_block(text, wall_style="", player_style="", enemy_style="", name
 # Runs entirely outside ComfyUI - no GPU, no queue contention with image generation. Model
 # load is the only slow part (~0.3-0.85s) and is cached per process; synthesis itself is
 # ~0.3s per paragraph on CPU, so narrating a whole story costs under two seconds.
-PIPER_VOICES_DIR = os.path.join(PROJECT_DIR, "piper_voices")
+PIPER_VOICES_DIR = os.path.join(DATA_DIR, "piper_voices")
 # One narrator is picked per story (not per paragraph) so the voice stays consistent
 # through the whole crawl; alan and kristin were chosen after listening to samples.
 PIPER_VOICE_NAMES = ["en_GB-alan-medium", "en_US-kristin-medium"]
@@ -9161,7 +9188,7 @@ def generate_music_pack(wall_style):
 # UI sounds. Not called at server runtime; run `python server.py --gen-static-audio` (see the
 # __main__ block) whenever one of them needs to be re-rolled, and commit the result.
 #
-# name -> (seconds, prompt), rendered to sounds/<name>_music.wav. The menu and loading loops
+# name -> (seconds, prompt), rendered to web/sounds/<name>_music.wav. The menu and loading loops
 # are three minutes because a player can sit on either for a long time and a short loop gives
 # itself away; the win and death boxes are left in seconds, so ninety is already generous.
 STATIC_MUSIC = {
@@ -9277,10 +9304,10 @@ READY_CHIME_PROMPT = (
 
 
 def _static_music_source(name):
-    """sounds/<name>_music.wav copied into COMFY_INPUT_DIR as stereo, for LoadAudio. Returns the
+    """web/sounds/<name>_music.wav copied into COMFY_INPUT_DIR as stereo, for LoadAudio. Returns the
     copy's filename. The shipped loops are mono (see _finish_music) and the Stable Audio 3 VAE
     only encodes two channels, so a mono file fails at VAEEncodeAudio."""
-    with wave.open(os.path.join(PROJECT_DIR, "sounds", f"{name}_music.wav"), "rb") as wf:
+    with wave.open(os.path.join(WEB_DIR, "sounds", f"{name}_music.wav"), "rb") as wf:
         rate, channels = wf.getframerate(), wf.getnchannels()
         pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
     out_name = f"static_{name}_music_stereo.wav"
@@ -9293,7 +9320,7 @@ def _static_music_source(name):
 
 
 def generate_static_music_asset(name):
-    """Renders sounds/<name>_music.wav for one entry of STATIC_MUSIC. Prints and returns False
+    """Renders web/sounds/<name>_music.wav for one entry of STATIC_MUSIC. Prints and returns False
     on failure rather than raising, matching the rest of the audio pipeline - a missing file
     just means that screen plays silent, which game.js already handles."""
     seconds, prompt = STATIC_MUSIC[name]
@@ -9323,7 +9350,7 @@ def generate_static_music_asset(name):
         print(f"[{name} music] {problem} - try again (a fresh seed each run)")
         return False
     data = base64.b64decode(url.split(",", 1)[1])
-    out_path = os.path.join(PROJECT_DIR, "sounds", f"{name}_music.wav")
+    out_path = os.path.join(WEB_DIR, "sounds", f"{name}_music.wav")
     with open(out_path, "wb") as f:
         f.write(data)
     print(f"[{name} music] saved {out_path} ({len(data) / 1024:.0f} KB)")
@@ -9388,7 +9415,7 @@ def generate_victory_candidates():
         print(f"[victory candidates] generation failed ({e})")
         return False
 
-    out_dir = os.path.join(PROJECT_DIR, "sounds", "victory_candidates")
+    out_dir = os.path.join(WEB_DIR, "sounds", "victory_candidates")
     os.makedirs(out_dir, exist_ok=True)
     ok = 0
     for name, (source, denoise, prompt) in candidates.items():
@@ -9412,14 +9439,14 @@ def generate_victory_candidates():
 
 # ---- The /trailer page's music ------------------------------------------
 # Each trailer in TRAILERS (<site>/trailer, /trailer2 - one trailer.js, one <name>.json cast
-# each, all kept in trailers/ but served from the site root) has one track under its whole 30 seconds, and every cut lands on one of its beats. The trailer shapes the arc itself - a low-pass that opens at the drop, a tape-stop
+# each, all kept in web/trailers/ but served from the site root) has one track under its whole 30 seconds, and every cut lands on one of its beats. The trailer shapes the arc itself - a low-pass that opens at the drop, a tape-stop
 # before the boss, a hard stop on the last beat - so what it wants from the model is not a song
 # with its own intro and ending but a steady, driving, full-energy cue at a known tempo.
 # 128 BPM puts 64 beats at almost exactly 30 seconds; tools/trailer_beats.py measures what
 # actually came back. Rendered long enough to cover 64 beats at a slightly slower tempo plus
 # the first beat's offset.
 TRAILERS = ("trailer", "trailer2", "trailer11", "trailer12", "trailer12m")
-TRAILERS_DIR = os.path.join(PROJECT_DIR, "trailers")
+TRAILERS_DIR = os.path.join(WEB_DIR, "trailers")
 TRAILER_MUSIC_FILES = tuple(f"{name}_music.wav" for name in TRAILERS)
 TRAILER_CUE_SECONDS = 34.0
 _TRAILER_TAIL = (" Instrumental video game trailer music, 128 BPM, a strong clear steady beat, "
@@ -9484,8 +9511,8 @@ def generate_trailer_candidates():
     """Renders TRAILER_CANDIDATES into sounds/trailer_candidates/ (gitignored, never served) for
     auditioning - the same never-ship-a-guess process the victory pool used. NOTES.txt lists each
     prompt with its measured tempo and steadiness (tools/trailer_beats.py). Once one is picked
-    for a trailer, copy it to sounds/<trailer>_music.wav and run `python tools/trailer_beats.py
-    sounds/<trailer>_music.wav --write <trailer>.json`. Re-running overwrites the same six
+    for a trailer, copy it to web/sounds/<trailer>_music.wav and run `python tools/trailer_beats.py
+    web/sounds/<trailer>_music.wav --write <trailer>.json`. Re-running overwrites the same six
     filenames with fresh seeds."""
     payload = {
         "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
@@ -9510,7 +9537,7 @@ def generate_trailer_candidates():
         trailer_beats = None
         print(f"[trailer candidates] no beat analysis ({e})")
 
-    out_dir = os.path.join(PROJECT_DIR, "sounds", "trailer_candidates")
+    out_dir = os.path.join(WEB_DIR, "sounds", "trailer_candidates")
     os.makedirs(out_dir, exist_ok=True)
     notes = ["Trailer music candidates - listen, pick one, then see generate_trailer_candidates "
              "in server.py for how it gets wired in.", ""]
@@ -9543,7 +9570,7 @@ def generate_trailer_candidates():
 
 
 def generate_ready_chime_asset():
-    """Renders sounds/ready.wav - the fixed "assets are ready" cue played once loading
+    """Renders web/sounds/ready.wav - the fixed "assets are ready" cue played once loading
     finishes. game.js pitch-varies it per playthrough via playSfx's usual jitter, so the one
     static take still sounds a little different each run."""
     seed = random.randint(1, 2**31 - 1)
@@ -9563,7 +9590,7 @@ def generate_ready_chime_asset():
         print(f"[ready chime] {problem} - try again (a fresh seed each run)")
         return False
     data = base64.b64decode(url.split(",", 1)[1])
-    out_path = os.path.join(PROJECT_DIR, "sounds", "ready.wav")
+    out_path = os.path.join(WEB_DIR, "sounds", "ready.wav")
     with open(out_path, "wb") as f:
         f.write(data)
     print(f"[ready chime] saved {out_path} ({len(data) / 1024:.0f} KB)")
@@ -13843,7 +13870,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # /trailer (and /trailer2) is the same page too: game.js reads the path and runs that
         # 30-second trailer (trailer.js) instead of the menu.
         elif self.path.split("?", 1)[0] in ("/", "/index.html") + tuple(f"/{t}" for t in TRAILERS):
-            html_file = os.path.join(PROJECT_DIR, "index.html")
+            html_file = os.path.join(WEB_DIR, "index.html")
             if os.path.exists(html_file):
                 with open(html_file, "rb") as f:
                     content = page_with_saved_settings(f.read())
@@ -13857,7 +13884,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
         elif self.path == "/game.js":
-            js_file = os.path.join(PROJECT_DIR, "game.js")
+            js_file = os.path.join(WEB_DIR, "game.js")
             if os.path.exists(js_file):
                 with open(js_file, "rb") as f:
                     content = f.read()
@@ -13872,7 +13899,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # and what to report afterwards. Served beside the page, where llms.txt convention and the
         # page's own <link rel="help"> both look for it.
         elif self.path == "/llms.txt":
-            txt_file = os.path.join(PROJECT_DIR, "llms.txt")
+            txt_file = os.path.join(WEB_DIR, "llms.txt")
             if os.path.exists(txt_file):
                 with open(txt_file, "rb") as f:
                     content = f.read()
@@ -13903,7 +13930,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # tw:watch while editing the UI). Committed, so playing needs no Node. No Cache-Control,
         # same as game.js, so a refresh picks up a rebuild.
         elif self.path == "/tailwind.css":
-            css_file = os.path.join(PROJECT_DIR, "tailwind.css")
+            css_file = os.path.join(WEB_DIR, "tailwind.css")
             if os.path.exists(css_file):
                 with open(css_file, "rb") as f:
                     content = f.read()
@@ -13922,7 +13949,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # ComfyUI sidebar tab can use it at a size favicon.ico's 48px doesn't cover.
         elif self.path in ("/favicon.svg", "/favicon.ico", "/icon.png"):
             name = self.path.lstrip("/")
-            icon_file = os.path.join(PROJECT_DIR, name)
+            icon_file = os.path.join(WEB_DIR, name)
             if os.path.exists(icon_file):
                 with open(icon_file, "rb") as f:
                     content = f.read()
@@ -13946,7 +13973,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith("/fonts/"):
             name = os.path.basename(self.path)
             if name in ("ComicNeue-Regular.woff2", "ComicNeue-Bold.woff2"):
-                font_file = os.path.join(PROJECT_DIR, "fonts", name)
+                font_file = os.path.join(WEB_DIR, "fonts", name)
                 if os.path.exists(font_file):
                     with open(font_file, "rb") as f:
                         content = f.read()
@@ -13968,7 +13995,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             # Basename alone already defeats "../", but the whitelist keeps this route from
             # ever becoming a general file server.
             if name in STATIC_SOUND_FILES:
-                wav_file = os.path.join(PROJECT_DIR, "sounds", name)
+                wav_file = os.path.join(WEB_DIR, "sounds", name)
                 if os.path.exists(wav_file):
                     with open(wav_file, "rb") as f:
                         content = f.read()

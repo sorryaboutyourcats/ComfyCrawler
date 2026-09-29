@@ -1,19 +1,19 @@
 __pycache__/
 *.pyc
-dungeon_sessions/
-showcase/
-server.log
-server.log.1
 .DS_Store
 Thumbs.db
-piper_voices/
-sounds/victory_candidates/
-sounds/trailer_candidates/
-recent_cast_names.json
-recent_cast_names.json.tmp
-comfy_settings.json
-comfy_settings.json.tmp
-page_settings.json
-page_settings.json.tmp
 node_modules/
 .claude/
+showcase/
+web/sounds/victory_candidates/
+web/sounds/trailer_candidates/
+# Everything a checkout writes as it runs - saved dungeons, settings, logs, voices (server.py DATA_DIR).
+data/
+# The same files where they sat before data/ existed, until the server's next start moves them in.
+dungeon_sessions/
+piper_voices/
+server.log
+server.log.1
+recent_cast_names.json*
+comfy_settings.json*
+page_settings.json*

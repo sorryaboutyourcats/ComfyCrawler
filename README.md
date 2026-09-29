@@ -2,7 +2,7 @@
 
 **A Windows 95 3D Maze–style dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the music and the story. Then you walk in and fight your way to the boss.
 
-**▶️ Play it in your browser, no install:** [mowmeow.net/ComfyCrawlerTest](https://mowmeow.net/ComfyCrawlerTest/). This is the read-only edition, with dungeons that were already made. AI agents: start at [mowmeow.net/ComfyCrawlerTest/?agent](https://mowmeow.net/ComfyCrawlerTest/?agent) and read [llms.txt](llms.txt).
+**▶️ Play it in your browser, no install:** [mowmeow.net/ComfyCrawlerTest](https://mowmeow.net/ComfyCrawlerTest/). This is the read-only edition, with dungeons that were already made. AI agents: start at [mowmeow.net/ComfyCrawlerTest/?agent](https://mowmeow.net/ComfyCrawlerTest/?agent) and read [llms.txt](web/llms.txt).
 
 **🎬 The 30-second trailers:** add `/trailer` or `/trailer2` to any ComfyCrawler address - [mowmeow.net/ComfyCrawlerTest/trailer](https://mowmeow.net/ComfyCrawlerTest/trailer/) and [/trailer2](https://mowmeow.net/ComfyCrawlerTest/trailer2/), or `127.0.0.1:5555/trailer` and `:8188/comfycrawler/trailer2` on your own machine. Each is the game itself, playing a hand-picked cast of saved dungeons (`trailer.json`, `trailer2.json`) to its own music track, cut on the beat - the first shows off what you can type, the second what fights back (a death, a monster parade and a boss charge). `/trailer11` is the first again with the hero side-stepping through its fights (`trailer11.json` just extends `trailer.json`), and `/trailer12` is the first with its end card reading "Try it out now: https://mowmeow.net/ComfyCrawlerTest" instead of buttons - the one to record. `/trailer12m` plays that same cut on a phone (a phone-sized frame, with the touch layout, touchpad and strafe slider).
 
@@ -121,7 +121,7 @@ without restarting ComfyUI.
 The opening crawl is read aloud by [Piper](https://github.com/rhasspy/piper), which runs on the CPU. It isn't installed by default because it brings in `onnxruntime`, which can clash with the `onnxruntime-gpu` some other custom nodes use.
 
 1. `path/to/ComfyUI/python -m pip install -r requirements-narration.txt` (from the ComfyCrawler folder)
-2. Download both files of each voice into a `piper_voices` folder inside ComfyCrawler:
+2. Download both files of each voice into a `data/piper_voices` folder inside ComfyCrawler:
    * `en_GB-alan-medium` - [.onnx](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx) and [.onnx.json](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json)
    * `en_US-kristin-medium` - [.onnx](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium/en_US-kristin-medium.onnx) and [.onnx.json](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium/en_US-kristin-medium.onnx.json)
 3. Restart ComfyUI.
@@ -137,7 +137,7 @@ pip install -r requirements.txt -r requirements-narration.txt
 python server.py
 ```
 
-Then open **http://127.0.0.1:5555**. On Windows, `start-server.bat` does the same and keeps the log window open.
+Then open **http://127.0.0.1:5555**. On Windows, `Start ComfyCrawler.bat` does the same and keeps the log window open.
 
 ComfyUI still has to run on the same computer - ComfyCrawler reads and writes its input and output folders directly. It finds ComfyUI on port 8188 or 8000 by itself; if yours is elsewhere, set it in **Options › ComfyUI Connection**. A launcher script can also pin `COMFYUI_URL`, `COMFYUI_INPUT_DIR`, `COMFYUI_OUTPUT_DIR` or `COMFYCRAWLER_PORT` as environment variables.
 
@@ -161,7 +161,7 @@ Every menu and window works from the keyboard too: arrow keys move the cursor, <
 
 ### 🤖 AI players
 
-AI agents can play too. [llms.txt](llms.txt) is their manual: what the game is, the rules and numbers, a `window.ComfyCrawler` interface for playing from page JavaScript, and a turn-based mode at `?agent` (for example `http://127.0.0.1:5555/?agent`). In that mode a fight waits for each move, and every key press is one short turn. It ends by asking the agent to write about the game and post its run report.
+AI agents can play too. [llms.txt](web/llms.txt) is their manual: what the game is, the rules and numbers, a `window.ComfyCrawler` interface for playing from page JavaScript, and a turn-based mode at `?agent` (for example `http://127.0.0.1:5555/?agent`). In that mode a fight waits for each move, and every key press is one short turn. It ends by asking the agent to write about the game and post its run report.
 
 ## ⚙️ Options
 
@@ -178,7 +178,7 @@ Options are saved by ComfyCrawler itself, so they're the same whichever address 
 
 Every dungeon you make is saved. From **History** you can start it again (same art, music and story on a new maze), copy its four prompts back into the wizard, watch its ending once you've beaten the boss - or film one for a dungeon that doesn't have one - and star favorites, which also protects them from deletion.
 
-Saved dungeons live in ComfyUI's `user/comfycrawler/` folder when ComfyCrawler is installed as a node, and in `dungeon_sessions/` beside `server.py` for the standalone server.
+Saved dungeons live in ComfyUI's `user/comfycrawler/` folder when ComfyCrawler is installed as a node, and in `data/dungeon_sessions/` for the standalone server.
 
 A new install starts with an empty History, so History offers **📥 Get Sample Dungeons**: three finished dungeons (about 55 MB) downloaded from the [showcase site](https://mowmeow.net/ComfyCrawlerTest/) into that same folder, tagged SAMPLE. Once those are in, the button becomes **📥 Get ALL Sample Dungeons**, which fetches every other dungeon the showcase gallery lists (about 850 MB right now). They're ordinary saved runs from then on - play, star or delete them like your own.
 
@@ -187,8 +187,8 @@ A new install starts with an empty History, so History offers **📥 Get Sample 
 ## 🧑‍💻 Development
 
 * **Tests** are plain scripts: `python tests/test_story_names.py`, and so on - each prints `all … checks passed` or exits non-zero. `tests/test_node_routes.py` needs `aiohttp`, so run that one with ComfyUI's Python.
-* **Styles** are Tailwind 3.4.17, compiled into the committed `tailwind.css`. After adding a Tailwind class to `index.html` or `game.js`, run `npm install` once and then `npm run tw:build` - or keep `npm run tw:watch` running while you work. `tests/test_tailwind_fresh.py` catches a forgotten rebuild.
-* **Layout:** `server.py` is the whole backend (generation pipeline and HTTP API); `index.html` and `game.js` are the whole game; `comfy_node.py` and `__init__.py` run the same server inside ComfyUI.
+* **Styles** are Tailwind 3.4.17, compiled into the committed `web/tailwind.css` (config in `tailwind/`). After adding a Tailwind class to `web/index.html` or `web/game.js`, run `npm install` once and then `npm run tw:build` - or keep `npm run tw:watch` running while you work. `tests/test_tailwind_fresh.py` catches a forgotten rebuild.
+* **Layout:** `server.py` is the whole backend (generation pipeline and HTTP API); `web/` is everything the browser loads - `index.html` and `game.js` are the whole game, beside its fonts, sounds and trailers; `comfy_node.py` and `__init__.py` run the same server inside ComfyUI. `data/` (gitignored) is what a checkout writes as it runs: saved dungeons, settings, logs and voices.
 
 ## 📄 License and credits
 

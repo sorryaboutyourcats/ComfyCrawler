@@ -5,10 +5,11 @@
 // scanner will miss a class and it will silently not render.
 // tw:watch polls (--poll) because this repo lives on a mapped network drive, where Node's native
 // file watcher crashes on its first event ("UNKNOWN: unknown error, watch"). --watch=always keeps
-// it alive when it's launched in the background with no stdin (start-server.bat). --minify keeps
+// it alive when it's launched in the background with no stdin (Start ComfyCrawler.bat). --minify keeps
 // its output in the same form tw:build commits. Watch mode only ever ADDS classes: one deleted
 // from the HTML stays in tailwind.css until the next tw:build, which is harmless for rendering and
 // is why tests/test_tailwind_fresh.py checks for missing classes rather than identical bytes.
 module.exports = {
-  content: ["./index.html", "./game.js"],
+  // relative: resolved from this file (tailwind/), not from wherever the build is run.
+  content: { relative: true, files: ["../web/index.html", "../web/game.js"] },
 };

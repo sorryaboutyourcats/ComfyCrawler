@@ -24,7 +24,7 @@ export will be hosted) those printed links come out whole, ready to paste.
 
 The 30-second trailers ship too, at <export>/trailer/, /trailer2/ and /trailer11/ (trailer.js,
 each one's cast in trailer.json / trailer2.json / trailer11.json - server.TRAILERS, all kept in
-the repo's trailers/ folder and shipped flat beside the page). Every dungeon a trailer names has to be one
+the repo's web/trailers/ folder and shipped flat beside the page). Every dungeon a trailer names has to be one
 this export ships - the curation above is what decides what goes public, and a trailer does not
 get to skip it - so a missing one stops the export. Each trailer dungeon also gets a trimmed copy
 of its bundle for the trailers to download instead (see trailer_files).
@@ -41,14 +41,14 @@ sys.path.insert(0, REPO_DIR)
 import server  # noqa: E402  (import only - run_server() sits behind `if __name__ == "__main__":`)
 
 # The same filename whitelist server.py's own /sounds/ route enforces (do_GET's "/sounds/"
-# branch) - not a blind folder copy, so files like the unwired sounds/victory_candidates/
+# branch) - not a blind folder copy, so files like the unwired web/sounds/victory_candidates/
 # audition batch (already gitignored, never served) can't leak into a published export.
 SOUND_WHITELIST = server.STATIC_SOUND_FILES
 
 # llms.txt is the machine players' manual (what the game is, window.ComfyCrawler, what to report
 # back) - the showcase is the edition most of them will actually reach, so it ships there too.
 STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png", "llms.txt"]
-# Kept in the repo's trailers/ folder, served (and exported) at the site root beside the page.
+# Kept in the repo's web/trailers/ folder, served (and exported) at the site root beside the page.
 TRAILER_SHELL_FILES = ["trailer.js"] + [f"{name}.json" for name in server.TRAILERS]
 
 # The page's typeface, referenced by index.html's own @font-face as fonts/<name>. Shipped with
@@ -329,7 +329,7 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
 
     # ---- Static shell: the same page and engine the live server serves, byte-identical except
     # for the one flag line spliced into index.html ahead of game.js. ----
-    with open(os.path.join(REPO_DIR, "index.html"), "rb") as f:
+    with open(os.path.join(server.WEB_DIR, "index.html"), "rb") as f:
         html = f.read()
     if SAVED_SETTINGS_TAG not in html:
         raise SystemExit("index.html's #savedSettings tag has changed shape - "
@@ -349,11 +349,11 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
         with open(os.path.join(out_dir, name, "index.html"), "wb") as f:
             f.write(html.replace(HTML_CHARSET_TAG, HTML_CHARSET_TAG + TRAILER_BASE_TAG, 1))
 
-    sync.folder(REPO_DIR, out_dir, STATIC_SHELL_FILES)
+    sync.folder(server.WEB_DIR, out_dir, STATIC_SHELL_FILES)
     sync.folder(server.TRAILERS_DIR, out_dir, TRAILER_SHELL_FILES)
-    sync.folder(os.path.join(REPO_DIR, "fonts"), os.path.join(out_dir, "fonts"), FONT_FILES)
+    sync.folder(os.path.join(server.WEB_DIR, "fonts"), os.path.join(out_dir, "fonts"), FONT_FILES)
     # prune: a track dropped from STATIC_MUSIC stops shipping instead of lingering in the export.
-    sync.folder(os.path.join(REPO_DIR, "sounds"), os.path.join(out_dir, "sounds"),
+    sync.folder(os.path.join(server.WEB_DIR, "sounds"), os.path.join(out_dir, "sounds"),
                 SOUND_WHITELIST, prune=True)
 
     mb = total_bytes / 1048576

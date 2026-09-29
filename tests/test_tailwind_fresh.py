@@ -1,6 +1,6 @@
 """The committed tailwind.css has every class index.html + game.js use today. The page no longer
 loads Tailwind from its CDN, so a class added to either file renders only after a rebuild
-(npm run tw:build, or the tw:watch start-server.bat runs) - this catches the one that was forgotten.
+(npm run tw:build, or the tw:watch Start ComfyCrawler.bat runs) - this catches the one that was forgotten.
 
 It checks for MISSING classes, not identical bytes: the watcher only ever adds, so after a class is
 deleted from the HTML its rule lingers in tailwind.css until the next tw:build. That leftover is
@@ -31,7 +31,7 @@ tmp = tempfile.mkdtemp(prefix="cc_tw_")
 try:
     out = os.path.join(tmp, "tailwind.css")
     # Same flags as package.json's tw:build.
-    done = subprocess.run([NODE, CLI, "-i", "tailwind.input.css", "-o", out, "--minify"],
+    done = subprocess.run([NODE, CLI, "-c", "tailwind/tailwind.config.js", "-i", "tailwind/tailwind.input.css", "-o", out, "--minify"],
                           cwd=ROOT, capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not os.path.exists(out):
         print("  FAIL: the tailwind build itself failed:\n" + (done.stderr or done.stdout)[-2000:])
@@ -39,7 +39,7 @@ try:
         sys.exit(1)
     with open(out, encoding="utf-8") as f:
         fresh = classes(f.read())
-    with open(os.path.join(ROOT, "tailwind.css"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "web", "tailwind.css"), encoding="utf-8") as f:
         committed = classes(f.read())
 finally:
     shutil.rmtree(tmp, ignore_errors=True)

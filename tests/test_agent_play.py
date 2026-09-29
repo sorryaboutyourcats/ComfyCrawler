@@ -19,11 +19,11 @@ def ck(cond, msg):
     if not cond:
         fails.append(msg); print("  FAIL:", msg)
 
-with open(os.path.join(ROOT, "llms.txt"), "rb") as f:
+with open(os.path.join(ROOT, "web", "llms.txt"), "rb") as f:
     LLMS = f.read()
-with open(os.path.join(ROOT, "game.js"), encoding="utf-8") as f:
+with open(os.path.join(ROOT, "web", "game.js"), encoding="utf-8") as f:
     GAME = f.read()
-with open(os.path.join(ROOT, "index.html"), encoding="utf-8") as f:
+with open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8") as f:
     PAGE = f.read()
 
 # ---- served beside the page ----

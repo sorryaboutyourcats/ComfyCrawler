@@ -64,7 +64,7 @@ ck(merged.get("comfycrawler.screensaverStop") == "5" and merged.get("comfycrawle
 
 # ---- written into the page, safely ----
 TAG = srv.SAVED_SETTINGS_TAG
-with open(os.path.join(ROOT, "index.html"), "rb") as f:
+with open(os.path.join(ROOT, "web", "index.html"), "rb") as f:
     html = f.read()
 ck(html.count(TAG) == 1, "index.html carries the empty #savedSettings tag exactly once (server.py replaces it byte-for-byte)")
 ck(html.index(TAG) < html.index(b'<script src="game.js">'), "the settings tag comes before game.js")

@@ -1,8 +1,8 @@
 """Finds the beat grid of a music track for the /trailer page (see trailer.js).
 
-    python tools/trailer_beats.py sounds/trailer_candidates/*.wav      # compare candidates
-    python tools/trailer_beats.py sounds/trailer_music.wav --write     # set trailer.json's music
-    python tools/trailer_beats.py sounds/trailer2_music.wav --write trailer2.json
+    python tools/trailer_beats.py web/sounds/trailer_candidates/*.wav      # compare candidates
+    python tools/trailer_beats.py web/sounds/trailer_music.wav --write     # set trailer.json's music
+    python tools/trailer_beats.py web/sounds/trailer2_music.wav --write trailer2.json
 
 The trailer cuts on beats, so it needs to know where they are. Every cue in trailer.js is
 written as a beat index, and trailer.json carries the track's beat times in seconds, measured
@@ -27,6 +27,8 @@ import numpy as np
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.normpath(os.path.join(TOOLS_DIR, os.pardir))
+# The page's folder: a trailer json's music.file is a URL relative to the page, e.g. sounds/x.wav.
+WEB_DIR = os.path.join(REPO_DIR, "web")
 
 HOP = 512
 N_FFT = 2048
@@ -152,8 +154,8 @@ def describe(r):
 
 
 def write_trailer_json(r, target):
-    rel = os.path.relpath(os.path.abspath(r["file"]), REPO_DIR).replace(os.sep, "/")
-    path = os.path.join(REPO_DIR, "trailers", target)
+    rel = os.path.relpath(os.path.abspath(r["file"]), WEB_DIR).replace(os.sep, "/")
+    path = os.path.join(WEB_DIR, "trailers", target)
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     data["music"] = {"file": rel, "bpm": r["bpm"], "beats": r["beats"]}
@@ -168,7 +170,7 @@ def main(argv=None):
     ap.add_argument("files", nargs="+")
     ap.add_argument("--write", nargs="?", const="trailer.json", default=None, metavar="JSON",
                     help="store the (single) track's beat grid as that trailer's music "
-                         "(default trailer.json; trailer2.json for /trailer2; both in trailers/)")
+                         "(default trailer.json; trailer2.json for /trailer2; both in web/trailers/)")
     args = ap.parse_args(argv)
     files = [f for pat in args.files for f in (glob.glob(pat) or [pat])]
     if args.write and len(files) != 1:
