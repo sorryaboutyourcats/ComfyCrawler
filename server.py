@@ -9351,6 +9351,137 @@ def generate_victory_candidates():
     return ok == len(candidates)
 
 
+# ---- The /trailer page's music ------------------------------------------
+# Each trailer in TRAILERS (<site>/trailer, /trailer2 - one trailer.js, one <name>.json cast
+# each) has one track under its whole 30 seconds, and every cut lands on one of its beats. The trailer shapes the arc itself - a low-pass that opens at the drop, a tape-stop
+# before the boss, a hard stop on the last beat - so what it wants from the model is not a song
+# with its own intro and ending but a steady, driving, full-energy cue at a known tempo.
+# 128 BPM puts 64 beats at almost exactly 30 seconds; tools/trailer_beats.py measures what
+# actually came back. Rendered long enough to cover 64 beats at a slightly slower tempo plus
+# the first beat's offset.
+TRAILERS = ("trailer", "trailer2", "trailer11", "trailer12", "trailer12m")
+TRAILER_MUSIC_FILES = tuple(f"{name}_music.wav" for name in TRAILERS)
+TRAILER_CUE_SECONDS = 34.0
+_TRAILER_TAIL = (" Instrumental video game trailer music, 128 BPM, a strong clear steady beat, "
+                 "steady consistent tempo throughout, full energy from the very first second, "
+                 "no vocals, no spoken words, no sound effects, no fade in, no fade out, "
+                 "no silence, no tempo change.")
+TRAILER_CANDIDATES = {
+    "t1_synthwave": (
+        "Punchy retro synthwave trailer music for a 1990s dungeon crawler video game, a driving "
+        "arpeggiated bass synth, big gated snare drums and a heroic neon lead melody, bold and "
+        "exciting."),
+    "t2_hybrid": (
+        "Epic hybrid orchestral trailer music for a retro dungeon crawler video game, pounding "
+        "taiko drums, driving staccato strings and huge brass stabs over a pulsing synth bass, "
+        "heroic and relentless."),
+    "t3_chiptune_rock": (
+        "High energy chiptune rock trailer music for a retro 16-bit dungeon crawler video game, "
+        "crunchy electric guitar power chords with square wave lead melodies over a fast rock "
+        "drum beat, fun and adventurous."),
+    "t4_dark_electro": (
+        "Dark driving electronic trailer music for a retro dungeon crawler video game, a gritty "
+        "pulsing bassline, hard punchy kick drum and ominous synth stabs, tense and powerful."),
+    "t5_heroic": (
+        "Heroic fantasy adventure trailer music for a retro 1990s dungeon crawler video game, "
+        "a soaring brass melody and rousing strings over a pounding march with timpani and "
+        "snare, bold and triumphant."),
+    "t6_playful_epic": (
+        "Playful epic trailer music for a funny retro dungeon crawler video game, bouncy "
+        "pizzicato strings and bright synth brass over big stomping drums, cheeky, heroic and "
+        "larger than life."),
+}
+
+# Every file the /sounds/ route will serve - the UI stings, the STATIC_MUSIC loops and the
+# trailer's track. tools/export_showcase.py ships exactly this list, so the two can't disagree.
+STATIC_SOUND_FILES = (("start.wav", "button.wav", "end.wav", "ready.wav")
+                      + tuple(f"{k}_music.wav" for k in STATIC_MUSIC)
+                      + TRAILER_MUSIC_FILES)
+
+
+def _finish_cue(src):
+    """Raw decoded FLAC -> normalised 16-bit STEREO WAV bytes at the model's own rate. Unlike
+    _finish_music there is no loop-seam crossfade (a cue plays once, start to end) and no fold
+    to mono: this track is the trailer's whole soundtrack, so it keeps its width."""
+    rate = 44100
+    pcm = subprocess.run(
+        [_ffmpeg_exe(), "-v", "error", "-i", src, "-f", "s16le", "-ac", "2", "-ar", str(rate), "-"],
+        capture_output=True, check=True).stdout
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    if len(x) < 2 * rate or float(np.abs(x).max()) < 0.01:
+        return None, "empty"
+    x = x * (0.9 / float(np.abs(x).max()))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes((np.clip(x, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())
+    return buf.getvalue(), None
+
+
+def generate_trailer_candidates():
+    """Renders TRAILER_CANDIDATES into sounds/trailer_candidates/ (gitignored, never served) for
+    auditioning - the same never-ship-a-guess process the victory pool used. NOTES.txt lists each
+    prompt with its measured tempo and steadiness (tools/trailer_beats.py). Once one is picked
+    for a trailer, copy it to sounds/<trailer>_music.wav and run `python tools/trailer_beats.py
+    sounds/<trailer>_music.wav --write <trailer>.json`. Re-running overwrites the same six
+    filenames with fresh seeds."""
+    payload = {
+        "music_ckpt": {"inputs": {"ckpt_name": MUSIC_CKPT}, "class_type": "CheckpointLoaderSimple"},
+        "music_clip": {"inputs": {"clip_name": MUSIC_CLIP, "type": "stable_audio", "device": "default"},
+                       "class_type": "CLIPLoader"},
+    }
+    seed0 = random.randint(1, 2**31 - 1)
+    for i, (name, prompt) in enumerate(TRAILER_CANDIDATES.items()):
+        _music_add_branch(payload, name, prompt + _TRAILER_TAIL, seed0 + i,
+                          seconds=TRAILER_CUE_SECONDS)
+    try:
+        paths = _krea2_submit_and_collect(payload, list(TRAILER_CANDIDATES), timeout=1800,
+                                          out_key="audio")
+    except Exception as e:
+        print(f"[trailer candidates] generation failed ({e})")
+        return False
+
+    try:
+        sys.path.insert(0, os.path.join(PROJECT_DIR, "tools"))
+        import trailer_beats
+    except Exception as e:
+        trailer_beats = None
+        print(f"[trailer candidates] no beat analysis ({e})")
+
+    out_dir = os.path.join(PROJECT_DIR, "sounds", "trailer_candidates")
+    os.makedirs(out_dir, exist_ok=True)
+    notes = ["Trailer music candidates - listen, pick one, then see generate_trailer_candidates "
+             "in server.py for how it gets wired in.", ""]
+    ok = 0
+    for name, prompt in TRAILER_CANDIDATES.items():
+        try:
+            data, problem = _finish_cue(paths[name])
+        except Exception as e:
+            print(f"[trailer candidates] {name}: could not process ({e})")
+            continue
+        if problem:
+            print(f"[trailer candidates] {name}: {problem} - skipped, re-run to re-roll it")
+            continue
+        out_path = os.path.join(out_dir, f"{name}.wav")
+        with open(out_path, "wb") as f:
+            f.write(data)
+        line = f"{name}.wav (seed {seed0 + list(TRAILER_CANDIDATES).index(name)})"
+        if trailer_beats:
+            try:
+                line += "\n  " + trailer_beats.describe(trailer_beats.analyze(out_path))
+            except Exception as e:
+                line += f"\n  (beat analysis failed: {e})"
+        notes += [line, "  prompt: " + prompt + _TRAILER_TAIL, ""]
+        print(f"[trailer candidates] saved {out_path} ({len(data) / 1024:.0f} KB)")
+        ok += 1
+    with open(os.path.join(out_dir, "NOTES.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(notes))
+    print(f"[trailer candidates] {ok}/{len(TRAILER_CANDIDATES)} ready in {out_dir}")
+    return ok == len(TRAILER_CANDIDATES)
+
+
 def generate_ready_chime_asset():
     """Renders sounds/ready.wav - the fixed "assets are ready" cue played once loading
     finishes. game.js pitch-varies it per playthrough via playSfx's usual jitter, so the one
@@ -13014,6 +13145,291 @@ def _download_one_model(job, folder, name):
     os.replace(part_path, final_path)
 
 
+# ---------------------------------------------------------------------------
+# SAMPLE DUNGEONS
+# A fresh install has an empty History - dungeon_sessions/ (and the showcase export) are
+# gitignored, so nothing made on this machine ships with the repo, and a run is ~17 MB that git
+# would carry forever. Instead, History offers to fetch finished runs from the public showcase
+# site, which already hosts every file a saved run is made of: dungeons.json is the listing (each
+# row is that run's meta.json as History reads it), and dungeons/<id>/ holds bundle.json, the
+# ending clip and the three tile cards.
+#
+# Two sizes of ask, both in the gallery's Default order, so renumbering the showcase changes them:
+#   "starter" - the first SAMPLE_DUNGEON_COUNT runs, offered while History is empty.
+#   "all"     - every run the gallery lists (never the unlisted, link-only ones), offered once the
+#               player has some samples; whatever is already on disk is skipped either way.
+#
+# Same shape as the model download above: one job app-wide, a daemon thread, a view the page
+# polls. Each run downloads into <id>.part/ - which _SESSION_ID_RE keeps out of the listing - and
+# is renamed into place only once every file is down, so History never lists half a run.
+SAMPLE_DUNGEONS_URL = "https://mowmeow.net/ComfyCrawlerTest/"
+SAMPLE_DUNGEON_COUNT = 3
+SAMPLE_DOWNLOAD_TIMEOUT = 60
+SAMPLE_WHICH = ("starter", "all")
+# How long a read of the site's dungeons.json (1.2 MB) answers sample_catalog before it is fetched
+# again. A download always fetches it fresh.
+SAMPLE_INDEX_TTL = 10 * 60
+# sample_catalog answers an HTTP request, and inside ComfyUI requests are served one at a time
+# (comfy_node.forward) - so a site that is down may hold the rest up this long, not a minute.
+SAMPLE_CATALOG_TIMEOUT = 10
+# What a run's folder holds on the site, in download order. Only bundle.json has to be there;
+# the cards are drawn locally by ensure_session_card when missing, and a run without an ending
+# clip just ends at the stairs.
+_SAMPLE_FILES = ("bundle.json", CARD_FILENAME, CARD_BG_FILENAME, CARD_HERO_FILENAME, ENDING_FILENAME)
+# The listing only says how big a run's bundle is. The rest is estimated from the showcase's own
+# files (a 512x384 8s clip is ~1.2 MB, the three cards ~0.3 MB together) for the size the offer
+# quotes and the bar's first total; each file's real Content-Length then corrects the total.
+_SAMPLE_ENDING_ESTIMATE = 1_300_000
+_SAMPLE_CARD_ESTIMATE = 100_000
+# Showcase-only or this-machine-only fields in the site's listing rows, dropped from the meta.json
+# a sample is saved with - beaten would unlock a movie they have not earned (see
+# mark_dungeon_session_beaten). sort_number is kept on purpose: the samples come with the
+# showcase's own numbering, so History's Default sort lists them in the gallery's order (numbered
+# runs sort ahead of unnumbered ones, the player's own new runs included).
+_SAMPLE_META_DROP = ("unlisted", "beaten", "beaten_at", "last_played", "favorite")
+_SAMPLE_DOWNLOAD_LOCK = threading.Lock()
+_SAMPLE_DOWNLOAD_JOB = None
+_SAMPLE_INDEX = {"url": None, "rows": None, "at": 0.0}
+
+
+class SampleDownloadCancelled(Exception):
+    """Raised inside the sample download loop to unwind out to _run_sample_download_job."""
+
+
+def _sample_request(url, method="GET"):
+    # A named User-Agent: some hosts turn away urllib's default "Python-urllib/3.x".
+    return urllib.request.Request(url, method=method, headers={"User-Agent": "ComfyCrawler"})
+
+
+def fetch_sample_index(fresh=False, timeout=SAMPLE_DOWNLOAD_TIMEOUT):
+    """The site's listing rows. Kept for SAMPLE_INDEX_TTL unless `fresh`. Raises on a network
+    failure or a listing this version cannot read."""
+    base = SAMPLE_DUNGEONS_URL
+    cached = _SAMPLE_INDEX
+    if not fresh and cached["url"] == base and cached["rows"] is not None \
+            and time.time() - cached["at"] < SAMPLE_INDEX_TTL:
+        return cached["rows"]
+    with urllib.request.urlopen(_sample_request(base + "dungeons.json"), timeout=timeout) as resp:
+        listing = json.loads(resp.read().decode("utf-8"))
+    rows = listing.get("sessions") if isinstance(listing, dict) else None
+    if not isinstance(rows, list):
+        raise RuntimeError("the sample list on the ComfyCrawler website is not in a shape this version reads")
+    _SAMPLE_INDEX.update(url=base, rows=rows, at=time.time())
+    return rows
+
+
+def pick_sample_dungeons(rows, count=SAMPLE_DUNGEON_COUNT):
+    """The first `count` runs of the showcase gallery (all of them with count=None) in its Default
+    order: numbered runs first, lowest number first, then the rest newest first - sortHistoryEntries'
+    'default' in game.js. Unlisted runs are left out (they are hidden from the gallery too), and so
+    is any row whose id is not one this server would have written, since the id becomes a folder
+    name here."""
+    listed = [r for r in rows if isinstance(r, dict) and not r.get("unlisted")
+              and isinstance(r.get("id"), str) and _SESSION_ID_RE.match(r["id"])]
+
+    def order(r):
+        n = r.get("sort_number")
+        numbered = isinstance(n, (int, float)) and not isinstance(n, bool)
+        return (0, n, 0) if numbered else (1, 0, -(r.get("created") or 0))
+    listed.sort(key=order)
+    return listed if count is None else listed[:count]
+
+
+def _sample_picks(rows, which):
+    """The runs `which` asks for that are not on disk yet, in download order."""
+    have = set(os.listdir(SESSIONS_DIR)) if os.path.isdir(SESSIONS_DIR) else set()
+    picks = pick_sample_dungeons(rows, None if which == "all" else SAMPLE_DUNGEON_COUNT)
+    return [r for r in picks if r["id"] not in have]
+
+
+def _sample_file_estimate(row, name):
+    if name == "bundle.json":
+        size = row.get("size")
+        return size if isinstance(size, int) and size > 0 else 16_000_000
+    if name == ENDING_FILENAME:
+        return _SAMPLE_ENDING_ESTIMATE if row.get("has_ending_video") else 0
+    return _SAMPLE_CARD_ESTIMATE
+
+
+def _sample_run_estimate(row):
+    return sum(_sample_file_estimate(row, name) for name in _SAMPLE_FILES)
+
+
+def sample_catalog():
+    """What History's offer says: {ok, listed, starter_missing, missing, missing_bytes, error} -
+    how many runs the gallery lists, how many of the starter set and of the whole set are not on
+    disk yet, and about how big the whole set's missing runs are. ok False (with error) when the
+    site cannot be read; the page then just leaves the Get ALL offer out."""
+    try:
+        rows = fetch_sample_index(timeout=SAMPLE_CATALOG_TIMEOUT)
+    except Exception as e:
+        return {"ok": False, "listed": 0, "starter_missing": 0, "missing": 0, "missing_bytes": 0,
+                "error": str(e)}
+    missing = _sample_picks(rows, "all")
+    return {"ok": True, "listed": len(pick_sample_dungeons(rows, None)),
+            "starter_missing": len(_sample_picks(rows, "starter")), "missing": len(missing),
+            "missing_bytes": sum(_sample_run_estimate(r) for r in missing), "error": None}
+
+
+def sample_meta(row, base_url):
+    """The meta.json a downloaded sample is saved with: the site's listing row, minus what belongs
+    to the showcase or to whoever made it, plus a note of where it came from. Attached pictures
+    never travel with an export, so no slot claims one is on disk."""
+    meta = {k: v for k, v in row.items() if k not in _SAMPLE_META_DROP}
+    meta["favorite"] = False
+    meta["sample"] = True
+    meta["sample_source"] = base_url
+    if isinstance(meta.get("pictures"), dict):
+        meta["pictures"] = {slot: dict(p, saved=False) if isinstance(p, dict) else p
+                            for slot, p in meta["pictures"].items()}
+    return meta
+
+
+def _sample_job_view(job):
+    return {"which": job["which"], "state": job["state"], "title": job["title"],
+            "index": job["index"], "count": job["count"], "percent": job["percent"],
+            "bytes_done": job["bytes_done"], "bytes_total": job["bytes_total"],
+            "saved": list(job["saved"]), "error": job["error"]}
+
+
+def sample_download_job_view():
+    """The sample download, for History to poll: {which, state, title, index, count, percent,
+    bytes_done, bytes_total, saved, error}. {state: "idle", ...} when there has not been one. Like
+    the model download, a finished job keeps reporting how it ended."""
+    job = _SAMPLE_DOWNLOAD_JOB
+    if not job:
+        return {"which": None, "state": "idle", "title": "", "index": 0, "count": 0, "percent": 0,
+                "bytes_done": 0, "bytes_total": 0, "saved": [], "error": None}
+    return _sample_job_view(job)
+
+
+def start_sample_download_job(which="starter"):
+    """Start fetching the sample dungeons - "starter" or "all" (SAMPLE_WHICH). While one is already
+    going, that one is reported back, whichever was asked for. The listing is read on the worker
+    thread - the site can be slow, and this request should not wait on it."""
+    global _SAMPLE_DOWNLOAD_JOB
+    if which not in SAMPLE_WHICH:
+        return {"which": which, "state": "failed", "title": "", "index": 0, "count": 0,
+                "percent": 0, "bytes_done": 0, "bytes_total": 0, "saved": [],
+                "error": f"There is no sample set called {which!r}."}
+    with _SAMPLE_DOWNLOAD_LOCK:
+        job = _SAMPLE_DOWNLOAD_JOB
+        if job and job["state"] in ("queued", "downloading"):
+            return _sample_job_view(job)
+        job = {"which": which, "state": "queued", "title": "", "index": 0, "count": 0,
+               "percent": 0, "bytes_done": 0, "bytes_total": 0, "saved": [], "error": None,
+               "cancelled": False, "base_url": SAMPLE_DUNGEONS_URL}
+        _SAMPLE_DOWNLOAD_JOB = job
+    threading.Thread(target=_run_sample_download_job, args=(job,), daemon=True,
+                     name="sample-download").start()
+    return _sample_job_view(job)
+
+
+def cancel_sample_download_job():
+    """Stop the sample download. True if there was one to stop. Runs already renamed into place
+    stay; the one in flight is thrown away by the worker within one chunk."""
+    with _SAMPLE_DOWNLOAD_LOCK:
+        job = _SAMPLE_DOWNLOAD_JOB
+        if not job or job["state"] not in ("queued", "downloading"):
+            return False
+        job["cancelled"] = True
+        job["state"] = "cancelled"
+    return True
+
+
+def _run_sample_download_job(job):
+    base = job["base_url"]
+    try:
+        picks = _sample_picks(fetch_sample_index(fresh=True), job["which"])
+        job["count"] = len(picks)
+        job["bytes_total"] = sum(_sample_run_estimate(r) for r in picks)
+        if job["cancelled"]:
+            raise SampleDownloadCancelled("stopped before downloading")
+        job["state"] = "downloading"
+        for i, row in enumerate(picks):
+            job["index"] = i
+            job["title"] = (row.get("location") or row.get("wall_style") or "Unnamed Dungeon").strip()
+            _download_one_sample(job, row)
+            job["saved"].append(row["id"])
+        job["percent"] = 100
+        job["state"] = "done"
+        print(f"[samples] downloaded {len(job['saved'])} sample dungeon(s) ({job['which']}) from {base}")
+    except SampleDownloadCancelled as e:
+        job["state"] = "cancelled"
+        print(f"[samples] stopped ({e})")
+    except Exception as e:
+        job["state"] = "cancelled" if job["cancelled"] else "failed"
+        # HTTPError is a URLError too, but it did reach the site - only a real no-answer gets the
+        # "check your connection" wording.
+        if isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError) \
+                or isinstance(e, (TimeoutError, ConnectionError)):
+            host = urllib.parse.urlsplit(base).netloc
+            job["error"] = (f"Could not reach the ComfyCrawler website ({host}) to download the sample "
+                            "dungeons. Check the internet connection and try again.")
+        else:
+            job["error"] = f"Could not download the sample dungeons ({e})."
+        print(f"[samples] {job['state']} ({e})")
+
+
+def _download_one_sample(job, row):
+    """Download one run's files into <id>.part/, check the bundle really is one, write its
+    meta.json, and rename the folder into place. Anything left half-done is removed. A file the
+    site does not have (a run never filmed has no ending clip) is left out, except the bundle."""
+    session_id = row["id"]
+    base = job["base_url"]
+    final_dir = os.path.join(SESSIONS_DIR, session_id)
+    part_dir = final_dir + ".part"
+    shutil.rmtree(part_dir, ignore_errors=True)
+    os.makedirs(part_dir)
+    try:
+        for name in _SAMPLE_FILES:
+            url = f"{base}dungeons/{session_id}/{name}"
+            estimate = _sample_file_estimate(row, name)
+            try:
+                resp = urllib.request.urlopen(_sample_request(url), timeout=SAMPLE_DOWNLOAD_TIMEOUT)
+            except urllib.error.HTTPError as e:
+                job["bytes_total"] -= estimate
+                if e.code == 404 and name != "bundle.json":
+                    continue
+                raise RuntimeError(f"{session_id}/{name}: the website answered {e.code}")
+            with resp, open(os.path.join(part_dir, name), "wb") as f:
+                # The real size replaces the estimate in the bar's total, once it is known.
+                length = resp.headers.get("Content-Length")
+                if length and length.isdigit():
+                    job["bytes_total"] += int(length) - estimate
+                while True:
+                    if job["cancelled"]:
+                        raise SampleDownloadCancelled(f"stopped partway through {session_id}")
+                    chunk = resp.read(MODEL_DOWNLOAD_CHUNK)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    job["bytes_done"] += len(chunk)
+                    # Never backwards: a file bigger than its estimate grows the total mid-run.
+                    job["percent"] = max(job["percent"], min(
+                        99, int(100 * job["bytes_done"] / max(job["bytes_total"], 1))))
+        bundle_path = os.path.join(part_dir, "bundle.json")
+        # An error page served with a 200 would otherwise list as a run that cannot load.
+        try:
+            with open(bundle_path, encoding="utf-8") as f:
+                ok = isinstance(json.load(f), dict)
+        except ValueError:
+            ok = False
+        if not ok:
+            raise RuntimeError(f"{session_id}'s bundle is not a saved dungeon")
+        meta = sample_meta(row, base)
+        meta["id"] = session_id
+        meta["size"] = os.path.getsize(bundle_path)
+        with open(os.path.join(part_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=True)
+        os.replace(part_dir, final_dir)
+        forget_session_rows(session_id)
+        print(f"[samples] saved {session_id} ({meta['size'] / 1048576:.1f} MB)")
+    except BaseException:
+        shutil.rmtree(part_dir, ignore_errors=True)
+        raise
+
+
 def comfy_settings_view():
     """Everything Options > ComfyUI Connection shows: what it saved, which fields an environment
     variable pins (those are greyed out there - the variable wins), and a fresh preflight with the
@@ -13048,6 +13464,9 @@ def server_busy_reason():
     job = _MODEL_DOWNLOAD_JOB
     if job and job["state"] in ("queued", "downloading"):
         return f"{job['group']} is downloading"
+    job = _SAMPLE_DOWNLOAD_JOB
+    if job and job["state"] in ("queued", "downloading"):
+        return "the sample dungeons are downloading"
     return None
 
 
@@ -13312,6 +13731,19 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
 
+        # The sample-dungeon download History offers - see sample_download_job_view - and what is
+        # still left on the website to offer (sample_catalog, which reads the site's listing).
+        elif self.path in ("/api/sample_download_job", "/api/sample_catalog"):
+            view = sample_download_job_view() if self.path.endswith("job") else sample_catalog()
+            payload = json.dumps(view, ensure_ascii=True).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
         # The cutscene itself. game.js fetches it whole into a blob as soon as it exists, so the
         # boss's last hit plays it from memory rather than asking this one-request-at-a-time
         # server to stream it right then.
@@ -13334,7 +13766,23 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # The query string is the page's own business, not a different page: `?agent` turns on
         # agent mode (see llms.txt), and inside ComfyUI the /comfycrawler redirect carries one along.
-        elif self.path.split("?", 1)[0] in ("/", "/index.html"):
+        # /trailer/ (as a static host would present the export's trailer/index.html) goes to
+        # /trailer, where the page's relative URLs resolve without a <base>. Relative Location,
+        # so inside ComfyUI it stays under /comfycrawler/ (comfy_node.py passes it through).
+        # Same for every trailer in TRAILERS.
+        elif self.path.split("?", 1)[0] in tuple(f"/{t}{tail}" for t in TRAILERS
+                                                 for tail in ("/", "/index.html")):
+            name = self.path.split("?", 1)[0].strip("/").split("/")[0]
+            query = self.path.partition("?")[2]
+            self.send_response(301)
+            self.send_header("Location", f"../{name}" + ("?" + query if query else ""))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        # /trailer (and /trailer2) is the same page too: game.js reads the path and runs that
+        # 30-second trailer (trailer.js) instead of the menu.
+        elif self.path.split("?", 1)[0] in ("/", "/index.html") + tuple(f"/{t}" for t in TRAILERS):
             html_file = os.path.join(PROJECT_DIR, "index.html")
             if os.path.exists(html_file):
                 with open(html_file, "rb") as f:
@@ -13370,6 +13818,22 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     content = f.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+        # The /trailer page's director and its shot list. Only that page asks for them (game.js
+        # injects trailer.js in TRAILER_MODE), so the ordinary page never downloads either.
+        elif self.path in ("/trailer.js",) + tuple(f"/{t}.json" for t in TRAILERS):
+            name = self.path.lstrip("/")
+            path = os.path.join(PROJECT_DIR, name)
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8"
+                                 if name.endswith(".js") else "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
@@ -13443,8 +13907,7 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             name = os.path.basename(self.path)
             # Basename alone already defeats "../", but the whitelist keeps this route from
             # ever becoming a general file server.
-            if name in (("start.wav", "button.wav", "end.wav", "ready.wav")
-                        + tuple(f"{k}_music.wav" for k in STATIC_MUSIC)):
+            if name in STATIC_SOUND_FILES:
                 wav_file = os.path.join(PROJECT_DIR, "sounds", name)
                 if os.path.exists(wav_file):
                     with open(wav_file, "rb") as f:
@@ -13779,6 +14242,27 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 body, code = {"success": True, "stopped": stopped}, 200
             except Exception as e:
                 print(f"[download] cancel failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path in ("/api/sample_download_start", "/api/sample_download_cancel"):
+            # History's Get (ALL) Sample Dungeons button, and its Cancel. Start's body is {which},
+            # "starter" or "all" (SAMPLE_WHICH), and it answers with sample_download_job_view's
+            # shape; cancel takes no body and answers with whether there was one to stop.
+            try:
+                if self.path.endswith("start"):
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                    body = start_sample_download_job(str(data.get("which") or "starter"))
+                else:
+                    body = {"success": True, "stopped": cancel_sample_download_job()}
+                code = 200
+            except Exception as e:
+                print(f"[samples] {self.path} failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -14121,5 +14605,7 @@ if __name__ == "__main__":
         generate_ready_chime_asset()
     elif "--gen-victory-candidates" in sys.argv:
         generate_victory_candidates()
+    elif "--gen-trailer-candidates" in sys.argv:
+        generate_trailer_candidates()
     else:
         run_server()

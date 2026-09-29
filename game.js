@@ -9,6 +9,17 @@
     // server, favorite/beaten kept in this browser's own localStorage instead of meta.json.
     const SHOWCASE_MODE = window.COMFYCRAWLER_SHOWCASE === true;
 
+    // THE TRAILERS - this page at <site>/trailer (or /trailer2, or with ?trailer / ?trailer=2)
+    // plays a 30-second trailer instead of the menu: trailer.js, injected by the boot block at
+    // the bottom of this file, loads that trailer's hand-picked set of saved dungeons
+    // (trailer.json, trailer2.json) and directs them to its music track. It works on top of
+    // either mode - live server or SHOWCASE export. While it holds the
+    // page writes nothing anywhere: no History "played"/"beaten", no Options, no localStorage
+    // (see prefs below and the TRAILER_MODE guards through this file), so watching the trailer
+    // never changes what the player's own game remembers.
+    const TRAILER_MODE = /\/trailer\d*m?\/?(index\.html)?$/i.test(window.location.pathname)
+      || new URLSearchParams(window.location.search).has('trailer');
+
     // AGENT MODE - for machine players (llms.txt beside this page says how to play one). Set by
     // `?agent` in the page's address, or by the first action an agent takes through
     // window.ComfyCrawler (the AGENT PLAY section at the bottom of this file). While it holds, a
@@ -90,18 +101,22 @@
       return {
         get(key) {
           if (Object.prototype.hasOwnProperty.call(values, key)) {
-            try { if (localStorage.getItem(key) !== values[key]) localStorage.setItem(key, values[key]); }
-            catch (_) { /* storage disabled - the server's copy is what counts anyway */ }
+            if (!TRAILER_MODE) {
+              try { if (localStorage.getItem(key) !== values[key]) localStorage.setItem(key, values[key]); }
+              catch (_) { /* storage disabled - the server's copy is what counts anyway */ }
+            }
             return values[key];
           }
           let local = null;
           try { local = localStorage.getItem(key); } catch (_) { /* storage disabled */ }
-          if (local !== null) { values[key] = local; queue(key, local); }
+          if (local !== null) { values[key] = local; if (!TRAILER_MODE) queue(key, local); }
           return local;
         },
         set(key, value) {
           const text = String(value);
           values[key] = text;
+          // The trailer reads the player's choices but never keeps its own - see TRAILER_MODE.
+          if (TRAILER_MODE) return;
           try { localStorage.setItem(key, text); } catch (_) { /* storage disabled or full */ }
           queue(key, text);
         },
@@ -839,19 +854,23 @@
       const kept = {};
       UI_SOUNDS.forEach(n => { if (sfxBank[n]) kept[n] = sfxBank[n]; });
       sfxBank = kept;
-      if (!sfx) return;            // other modes / a failed pack: synthSfx covers everything
+      if (!sfx) return Promise.resolve();   // other modes / a failed pack: synthSfx covers everything
       const ctx = sfxContext();
-      if (!ctx) return;
-      Object.keys(sfx).forEach(name => {
+      if (!ctx) return Promise.resolve();
+      // Settles once every clip has decoded (or failed to). Only the trailer waits on it: it loads
+      // several dungeons back to back, and a decode landing after the next loadSfxBank would file
+      // one dungeon's sound in the next one's bank. Hence the bank captured here, not the global.
+      const bank = sfxBank;
+      return Promise.all(Object.keys(sfx).map(name => new Promise(done => {
         try {
           const b64 = sfx[name].split(',')[1];
           const bin = atob(b64);
           const bytes = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
           // Callback form, not the promise: Safari still ships the old signature.
-          ctx.decodeAudioData(bytes.buffer, buf => { sfxBank[name] = buf; }, () => {});
-        } catch (e) { /* one bad clip must not cost the other seven */ }
-      });
+          ctx.decodeAudioData(bytes.buffer, buf => { bank[name] = buf; done(); }, () => done());
+        } catch (e) { done(); /* one bad clip must not cost the other seven */ }
+      })));
     }
 
     // ---- Background music (Stable Audio 3, generated per dungeon, v6-only) -------------
@@ -1152,6 +1171,8 @@
     // Idempotent per track: every trigger (narration ending, the victory box, the death box)
     // can call this without checking what is already playing.
     function playScreenMusic(name) {
+      // The trailer is scored by its own track alone - no loading, victory or death loop under it.
+      if (TRAILER_MODE) return;
       screenMusicWanted = name;
       stopMenuMusicForLoadingComplete();   // the menu loop's job is over for this run
       if (screenMusicNode && screenMusicNode.name === name) return;
@@ -1380,7 +1401,9 @@
     // button, unlock on the first gesture of any kind. Once is enough for the session.
     ['pointerdown', 'keydown'].forEach(evt => {
       window.addEventListener(evt, () => {
-        sfxContext(); loadUiSounds(); loadMenuMusic(); loadScreenMusic('loading');
+        sfxContext(); loadUiSounds();
+        // The trailer's click unlocks sound for its own track - the menu loop must not start under it.
+        if (!TRAILER_MODE) { loadMenuMusic(); loadScreenMusic('loading'); }
       }, { once: true, capture: true });
     });
 
@@ -3222,7 +3245,8 @@
     // so this loops - and pendingLevels means the modal is shown once PER level rather than
     // silently swallowing the second one.
     function grantXp(amount) {
-      if (!amount) return;
+      // The trailer's fights are staged kills, not progress - no XP, so no level-up box.
+      if (!amount || TRAILER_MODE) return;
       progression.xp += amount;
       while (progression.xp >= progression.xpToNext) {
         progression.xp -= progression.xpToNext;
@@ -4369,6 +4393,7 @@
     let victoryShownThisRun = false;
     function showVictoryBox(overEnding) {
       if (!victoryModal || !victoryModal.classList.contains('hidden')) return;
+      if (TRAILER_MODE) return;   // the trailer ends on its own title card
       const firstTime = !victoryShownThisRun;
       victoryShownThisRun = true;
       markRunBeaten();
@@ -4902,7 +4927,7 @@ void main() {
     // updated too, so a History window opened straight after agrees without a refetch.
     function markRunBeaten() {
       const id = currentRunHistoryId;
-      if (!id || runBeatenSent) return;
+      if (!id || runBeatenSent || TRAILER_MODE) return;
       runBeatenSent = true;
       if (Array.isArray(historyEntries)) {
         const entry = historyEntries.find(e => e.id === id);
@@ -4929,7 +4954,7 @@ void main() {
     // window opened straight after sorts right without a refetch.
     function markRunPlayed() {
       const id = currentRunHistoryId;
-      if (!id) return;
+      if (!id || TRAILER_MODE) return;
       const now = Date.now() / 1000;      // seconds, matching the server's time.time()
       if (Array.isArray(historyEntries)) {
         const entry = historyEntries.find(e => e.id === id);
@@ -4998,7 +5023,9 @@ void main() {
 
     function prepareEndingCutscene() {
       resetEndingCutscene();
-      if (!currentRunHistoryId) return;
+      // The trailer plays its boss world's clip itself (trailer.js) - and must never ask the
+      // live server to start filming one, which pollEndingStatus below can.
+      if (!currentRunHistoryId || TRAILER_MODE) return;
       // The Ending Video setting only decides whether a clip gets made. A run that already has
       // one plays it either way, so the status is still asked - it just never starts a render.
       endingRunId = currentRunHistoryId;
@@ -11342,9 +11369,11 @@ void main() {
 
     // Load a finished bundle into the engine and show the game. Split out of the poll
     // loop so the transition is driven by the ENTER button instead of firing the moment
-    // generation happens to finish.
+    // generation happens to finish. The promise it returns settles once the game screen is up
+    // with this dungeon's textures built and its sound effects decoded - nothing in the game
+    // waits on it; the trailer does, loading dungeon after dungeon (see captureWorld below).
     function enterDungeon(b) {
-      if (!b) return;
+      if (!b) return Promise.resolve();
       // Playing now, so the tab stops advertising a run that already started.
       resetTabTitle();
       // New run, new pack colours. Rolled here rather than in restartDungeon, which rolls THIS
@@ -11389,29 +11418,33 @@ void main() {
       crawlReadingUntil = 0;
       // The loading loop plays right up to this click - fade it out under the start sting.
       stopScreenMusic();
-      // Fetch the win and death loops now, while the player still has a whole dungeon between
-      // them and either box. Decoding a 90s buffer at the moment of death would be audible.
-      loadScreenMusic('death');
-      // Which win loop this run gets - decided here, off the style the run was actually built
-      // from (b.wall_style survives a History replay; currentThemeName covers a bundle saved
-      // before that field existed). Only the chosen one is fetched: the pool is six 5MB
-      // buffers, and pulling all six down to play one would cost the player 28MB for nothing.
-      loadScreenMusic(pickRunVictoryTrack(b.wall_style || currentThemeName));
-      // The level-up loop is wanted mid-run and with no warning - the box opens the instant a
-      // kill crosses a threshold - so it has to be in memory before the first fight, not
-      // fetched when it is already needed.
-      loadScreenMusic('levelup');
+      // The trailer never reaches a death, win or level-up box, and scores itself with one
+      // track - it skips these fetches, the start sting and the dungeon's own loops below.
+      if (!TRAILER_MODE) {
+        // Fetch the win and death loops now, while the player still has a whole dungeon between
+        // them and either box. Decoding a 90s buffer at the moment of death would be audible.
+        loadScreenMusic('death');
+        // Which win loop this run gets - decided here, off the style the run was actually built
+        // from (b.wall_style survives a History replay; currentThemeName covers a bundle saved
+        // before that field existed). Only the chosen one is fetched: the pool is six 5MB
+        // buffers, and pulling all six down to play one would cost the player 28MB for nothing.
+        loadScreenMusic(pickRunVictoryTrack(b.wall_style || currentThemeName));
+        // The level-up loop is wanted mid-run and with no warning - the box opens the instant a
+        // kill crosses a threshold - so it has to be in memory before the first fight, not
+        // fetched when it is already needed.
+        loadScreenMusic('levelup');
+      }
       // Belt-and-braces: playScreenMusic already retired the menu loop when the narrator
       // finished, but nothing should still be playing it once the dungeon itself starts.
       menuMusicStopped = true;
       stopMenuMusicLoop();
       // v6 ships bundle.sfx; every other mode leaves it undefined and playSfx falls back to
       // the procedural bank.
-      loadSfxBank(b.sfx);
-      playSfx('start', { vary: 0, gain: START_STING_GAIN });   // fixed pitch: a signature, not foley
+      const sfxReady = loadSfxBank(b.sfx);
+      if (!TRAILER_MODE) playSfx('start', { vary: 0, gain: START_STING_GAIN });   // fixed pitch: a signature, not foley
       // v6 with sound_mode "music_and_sound" ships bundle.music; everything else leaves it
       // undefined and loadMusicBank just tears down the previous dungeon's loops.
-      loadMusicBank(b.music);
+      loadMusicBank(TRAILER_MODE ? null : b.music);
       if (b.player_sprites && b.player_sprites.length > 0) {
         playerSpriteFrames = [];
         b.player_sprites.forEach(src => {
@@ -11486,7 +11519,12 @@ void main() {
       enemyVariantNames = (b.enemy_names && typeof b.enemy_names === 'object') ? b.enemy_names : {};
       pickEnemyVariant();
 
+      let shown;
+      const onScreen = new Promise(done => { shown = done; });
       const showGameScreen = () => {
+        // The trailer loads every dungeon up front behind its own screen and cuts to each
+        // one itself (restoreWorld), so here it only needs to know the textures are built.
+        if (TRAILER_MODE) { shown(); return; }
         screenProgress.classList.add('hidden');
         screenGame.classList.remove('hidden');
         if (titleButtons) titleButtons.classList.remove('hidden');
@@ -11494,6 +11532,7 @@ void main() {
         render3D();
         drawMinimap();
         updateHUD();
+        shown();
       };
 
       if (activeMode === 'v1_video') {
@@ -11505,6 +11544,72 @@ void main() {
         // lantern art has decoded, so the player never sees a frame of stale textures before
         // the swap.
         loadAiTextures(b.wall_texture, b.ceiling_texture, b.floor_texture, b.wall_style || currentThemeName, b.lantern_texture, showGameScreen, b.door_texture, b.switch_texture);
+      }
+      return Promise.all([onScreen, sfxReady]);
+    }
+
+    // ---- One dungeon's worth of engine state, for the trailer -----------------------------
+    // The trailer (trailer.js) cuts between a dozen dungeons on the beat, far faster than
+    // enterDungeon's image decodes could keep up with. So it runs enterDungeon once per dungeon
+    // while its start screen is up, takes a captureWorld() of what that left behind, and a cut is
+    // then just restoreWorld(w): reference swaps, no decoding. The maze is NOT part of it - the
+    // trailer draws each shot's maze fresh, from a fixed seed.
+    // Anything enterDungeon or loadAiTextures sets per dungeon belongs in this list; a global
+    // missed here shows up in the trailer as one dungeon's art leaking into the next.
+    function captureWorld() {
+      return {
+        wallTexture, ceilingTexture, floorTexture, wallLanternTexture, exitStairsTexture,
+        aiLanternImg, doorTexture, doorOpenTexture, switchWallOffTexture, switchWallOnTexture,
+        aiDoorImg, aiSwitchImg,
+        playerSpriteImg, playerFaceImg, playerSpriteFrames, playerFaceFrames,
+        weaponSpriteImg, shieldSpriteImg,
+        enemySpriteFrames, enemyVariantImgs, enemyStyleName, enemyBossName, enemyVariantNames,
+        dungeonStory, sfxBank, currentThemeName, activeMode, currentRunHistoryId,
+        packHues: { swarmer: ENEMY_VARIANTS.swarmer.hue, circler: ENEMY_VARIANTS.circler.hue },
+      };
+    }
+
+    function restoreWorld(w) {
+      ({
+        wallTexture, ceilingTexture, floorTexture, wallLanternTexture, exitStairsTexture,
+        aiLanternImg, doorTexture, doorOpenTexture, switchWallOffTexture, switchWallOnTexture,
+        aiDoorImg, aiSwitchImg,
+        playerSpriteImg, playerFaceImg, playerSpriteFrames, playerFaceFrames,
+        weaponSpriteImg, shieldSpriteImg,
+        enemySpriteFrames, enemyVariantImgs, enemyStyleName, enemyBossName, enemyVariantNames,
+        dungeonStory, sfxBank, currentThemeName, activeMode, currentRunHistoryId,
+      } = w);
+      ENEMY_VARIANTS.swarmer.hue = w.packHues.swarmer;
+      ENEMY_VARIANTS.circler.hue = w.packHues.circler;
+      enemyFrames = null;
+      pickEnemyVariant();
+      applyHeroStatusLabel();
+    }
+
+    // The maze half of the same trick: generateAuthentic3DMaze also bakes the lantern light
+    // maps, too slow to do on a beat, so the trailer builds every shot's maze up front and swaps
+    // it in. Everything generateAuthentic3DMaze leaves behind that render3D, drawMinimap or a
+    // step reads.
+    function captureMaze() {
+      return {
+        MAP, MAP_WIDTH, MAP_HEIGHT, passagesList, lanternList, doorList, switchList,
+        enemyMarkers, exitRoom, startRoom, lightMapW, lightMapH, floorLightMap, wallLightMap,
+        visited: [...visitedTiles],
+      };
+    }
+
+    function restoreMaze(m) {
+      ({
+        MAP, MAP_WIDTH, MAP_HEIGHT, passagesList, lanternList, doorList, switchList,
+        enemyMarkers, exitRoom, startRoom, lightMapW, lightMapH, floorLightMap, wallLightMap,
+      } = m);
+      visitedTiles.clear();
+      m.visited.forEach((k) => visitedTiles.add(k));
+      activeMarker = null;
+      queuedAction = null;
+      totalMoves = 0;
+      if (mapProgressBadge) {
+        mapProgressBadge.textContent = `${visitedTiles.size}/${passagesList.length} Tiles`;
       }
     }
 
@@ -13247,29 +13352,43 @@ void main() {
       return bits;
     }
 
-    // ---- The hidden numbering view -----------------------------------------------------------
-    // Ten clicks on the window's 📜 puts a number box at the front of every row; ten more take
-    // them away again. Whatever is typed there is the run's sort_number in its meta.json, and
-    // the Default sort puts numbered runs first, lowest number first (sortHistoryEntries). It
-    // stays on until toggled off or the page reloads. Never in SHOWCASE_MODE - there is no
-    // server there to save a number to, and the numbers the export ships with are already in
-    // its dungeons.json.
-    let historyNumbering = false;
+    // ---- The numbering view ------------------------------------------------------------------
+    // Options' "Show sort number boxes in History" (off by default, remembered) puts a number box
+    // at the front of every row. Ten clicks on the window's 📜 flip the same switch, box and all.
+    // Whatever is typed there is the run's sort_number in its meta.json, and the Default sort
+    // puts numbered runs first, lowest number first (sortHistoryEntries). Never in
+    // SHOWCASE_MODE - there is no server there to save a number to, and the numbers the export
+    // ships with are already in its dungeons.json.
+    const HISTORY_NUMBERING_KEY = 'comfycrawler.historyNumbering';
+    const historyNumberingCheckbox = document.getElementById('historyNumberingCheckbox');
+    let historyNumbering = !SHOWCASE_MODE && prefs.get(HISTORY_NUMBERING_KEY) === 'on';
     let historyTitleIconClicks = 0;
 
     function historyHasSortNumber(entry) {
       return !!entry && Number.isFinite(entry.sort_number);
     }
 
+    function setHistoryNumbering(on) {
+      if (SHOWCASE_MODE) return;
+      historyNumbering = !!on;
+      prefs.set(HISTORY_NUMBERING_KEY, historyNumbering ? 'on' : 'off');
+      if (historyNumberingCheckbox) historyNumberingCheckbox.checked = historyNumbering;
+      // The boxes live on rows only - a tile has no room for one - so turning the view on from
+      // the tiles switches to the list, or it would look like it did nothing.
+      if (historyNumbering && historyView === 'tiles') setHistoryView('list');
+      else renderHistoryList();
+    }
+
+    if (historyNumberingCheckbox) {
+      historyNumberingCheckbox.checked = historyNumbering;
+      historyNumberingCheckbox.addEventListener('change', () => setHistoryNumbering(historyNumberingCheckbox.checked));
+    }
+
     if (historyTitleIcon) historyTitleIcon.addEventListener('click', () => {
       if (SHOWCASE_MODE) return;
       if (++historyTitleIconClicks < 10) return;
       historyTitleIconClicks = 0;
-      historyNumbering = !historyNumbering;
-      // The boxes live on rows only - a tile has no room for one - so opening the view from the
-      // tiles switches to the list, or the ten clicks would look like they did nothing.
-      if (historyNumbering && historyView === 'tiles') setHistoryView('list');
-      else renderHistoryList();
+      setHistoryNumbering(!historyNumbering);
     });
 
     // Saves as it is typed - a short pause after the last keystroke, or straight away when the
@@ -13429,6 +13548,13 @@ void main() {
       } else if (entry.id && entry.id === lastPlayedRunId()) titleLine.appendChild(buildLastPlayedTag());
       const frameVerTag = buildFrameVersionTag(entry);
       if (frameVerTag) titleLine.appendChild(frameVerTag);
+      if (entry.sample) {
+        const tag = document.createElement('span');
+        tag.className = 'hist-sample text-[9px] font-black px-1.5 py-0.5 shrink-0';
+        tag.textContent = 'SAMPLE';
+        tag.title = 'Downloaded from the ComfyCrawler website by Get Sample Dungeons - not made on this computer';
+        titleLine.appendChild(tag);
+      }
       col.appendChild(titleLine);
 
       const cast = document.createElement('div');
@@ -14821,7 +14947,11 @@ void main() {
       ? ['default', 'played', 'style', 'player', 'completed', 'random']
       : ['default', 'newest', 'oldest', 'played', 'style', 'player', 'completed', 'random'];
     const storedHistorySort = prefs.get(HISTORY_SORT_KEY);
-    let historySortMode = HISTORY_SORTS.includes(storedHistorySort) ? storedHistorySort : 'default';
+    // Until the player picks one: newest first in the app, so their own new runs lead rather than
+    // sitting under the numbered sample dungeons (see server.py's SAMPLE DUNGEONS); the showcase,
+    // which is all numbered runs and has no date sorts, starts on Default.
+    const HISTORY_SORT_START = SHOWCASE_MODE ? 'default' : 'newest';
+    let historySortMode = HISTORY_SORTS.includes(storedHistorySort) ? storedHistorySort : HISTORY_SORT_START;
     // Both dropdowns again - History's and the showcase gallery's. They can never be on screen
     // together (the gallery is the screen History opens over), but they share one stored pick,
     // so the one that was not touched still has to be showing it when it next comes up.
@@ -14956,8 +15086,223 @@ void main() {
       return sortHistoryEntries(filtered);
     }
 
+    // ---- Sample dungeons ------------------------------------------------------------------
+    // A fresh install's History is empty - nothing made on the developer's machine ships in the
+    // repo - so History offers to download finished runs from the showcase site (server.py's
+    // SAMPLE DUNGEONS / start_sample_download_job). Two asks, one box:
+    //   empty History           -> "Get Sample Dungeons", the gallery's first three ('starter');
+    //   History holding samples -> "Get ALL Sample Dungeons", every other run the gallery lists
+    //                              ('all'), for as long as the website still has ones not on disk.
+    // The box sits under the empty message, or after the last row, and shows whichever download
+    // is going. Runs land in the saved-runs folder like any other, tagged SAMPLE, and History
+    // picks each one up as it finishes. sampleJob mirrors downloadJob's "keeps reporting its last
+    // state" shape; sampleCatalog is /api/sample_catalog's answer, null until asked.
+    let sampleJob = { which: null, state: 'idle', title: '', index: 0, count: 0, percent: 0,
+                      bytes_done: 0, bytes_total: 0, saved: [], error: null };
+    let sampleJobWatchTimer = null;
+    let sampleJobWatchSeq = 0;
+    let sampleOffer = null;      // the box's live elements, while it is on screen
+    let sampleOfferNote = '';    // one-off line after a finish that added nothing
+    let sampleCatalog = null;
+    let sampleCatalogLoading = false;
+
+    function sampleJobActive(job) {
+      const j = job || sampleJob;
+      return j.state === 'queued' || j.state === 'downloading';
+    }
+
+    // Built by renderHistoryList - `mode` 'starter' under the empty message, 'all' after the
+    // rows. Only its text, bar and buttons change after that (paintSampleOffer), so the keyboard
+    // cursor is not lost on every progress tick; `refocus` puts it back on the box's button when
+    // a re-render took the old box (and the cursor with it) away.
+    function buildSampleOffer(mode, refocus) {
+      if (!historyList) return;
+      const box = document.createElement('div');
+      box.className = mode === 'all'
+        ? 'win95-box flex flex-col items-center gap-2 px-4 py-3'
+        : 'flex flex-col items-center gap-2 px-4 pb-6';
+      const text = document.createElement('div');
+      text.className = 'text-xs text-slate-700 font-bold text-center';
+      const trough = document.createElement('div');
+      trough.className = 'win95-inset h-2.5 p-0.5 overflow-hidden w-full max-w-xs';
+      trough.style.background = '#c0c0c0';
+      const fill = document.createElement('div');
+      fill.className = 'h-full';
+      fill.style.background = '#000080';
+      trough.appendChild(fill);
+      const get = document.createElement('button');
+      get.className = 'win95-btn px-3 py-1 text-xs text-black bg-slate-200 hover:bg-slate-300 font-bold';
+      get.addEventListener('click', () => startSampleDownload(
+        sampleJob.state === 'failed' && sampleJob.which ? sampleJob.which : mode));
+      const cancel = document.createElement('button');
+      cancel.className = 'win95-btn px-3 py-1 text-xs text-black bg-slate-200 hover:bg-slate-300';
+      cancel.textContent = 'Cancel';
+      cancel.title = 'Stop downloading. Any sample already finished stays in History.';
+      cancel.addEventListener('click', cancelSampleDownload);
+      box.append(text, trough, get, cancel);
+      historyList.appendChild(box);
+      sampleOffer = { mode, box, text, trough, fill, get, cancel };
+      paintSampleOffer();
+      if (refocus && !box.classList.contains('hidden')) {
+        (cancel.classList.contains('hidden') ? get : cancel).focus({ preventScroll: true });
+      }
+      if (mode === 'all' && !sampleCatalog) refreshSampleCatalog();
+    }
+
+    function paintSampleOffer() {
+      if (!sampleOffer || !sampleOffer.box.isConnected) return;
+      const { mode, box, text, trough, fill, get, cancel } = sampleOffer;
+      const j = sampleJob;
+      const active = sampleJobActive();
+      const hadFocus = box.contains(document.activeElement);
+      const left = sampleCatalog && sampleCatalog.ok ? sampleCatalog.missing : 0;
+      if (active) {
+        // Bytes as well once it is a big download - a percentage alone crawls on 900 MB.
+        const sizes = j.bytes_total > 100 * 1048576
+          ? `  (${historySizeText(j.bytes_done) || '0.0 MB'} of ${historySizeText(j.bytes_total)})` : '';
+        text.textContent = j.count
+          ? `Downloading ${j.title || 'a sample dungeon'} (${j.index + 1} of ${j.count})... ${j.percent || 0}%${sizes}`
+          : 'Looking up the sample dungeons...';
+      } else if (j.state === 'failed') {
+        text.textContent = j.error || 'The download failed.';
+      } else if (mode === 'all') {
+        text.textContent = `${left} more sample ${left === 1 ? 'dungeon is' : 'dungeons are'} on the`
+          + ` ComfyCrawler website (about ${historySizeText(sampleCatalog && sampleCatalog.missing_bytes) || '0 MB'}).`;
+      } else {
+        text.textContent = sampleOfferNote
+          || 'Want something to play right now? Download 3 finished dungeons from the ComfyCrawler'
+             + ' website (about 55 MB).';
+      }
+      // The Get ALL box only stands while there is something to show in it: a download, a
+      // failure to retry, or runs the website still has.
+      const showBox = mode !== 'all' || active || j.state === 'failed' || left > 0;
+      box.classList.toggle('hidden', !showBox);
+      fill.style.width = `${Math.max(0, Math.min(100, j.percent || 0))}%`;
+      trough.classList.toggle('hidden', !active);
+      get.classList.toggle('hidden', active);
+      cancel.classList.toggle('hidden', !active);
+      get.textContent = j.state === 'failed' ? 'Try Again'
+        : mode === 'all' ? '📥 Get ALL Sample Dungeons' : '📥 Get Sample Dungeons';
+      if (!hadFocus) return;
+      // One of the two buttons always shows while the box does, so whichever had the cursor hands
+      // it to the other; a box that just went away hands it to the first Start instead.
+      if (showBox) (active ? cancel : get).focus({ preventScroll: true });
+      else focusFirstHistoryStart();
+    }
+
+    function focusFirstHistoryStart() {
+      const start = historyList && historyList.querySelector('.hist-start');
+      (start || btnHistoryOk).focus({ preventScroll: true });
+    }
+
+    // What the website still has that is not on disk - read once per History session and again
+    // after every download (the server keeps the site's listing for ten minutes itself).
+    async function refreshSampleCatalog() {
+      if (sampleCatalogLoading || SHOWCASE_MODE) return;
+      sampleCatalogLoading = true;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/sample_catalog`);
+        sampleCatalog = res.ok ? await res.json() : { ok: false };
+      } catch (err) {
+        sampleCatalog = { ok: false };
+      }
+      sampleCatalogLoading = false;
+      paintSampleOffer();
+    }
+
+    async function startSampleDownload(which) {
+      sampleOfferNote = '';
+      try {
+        const res = await fetch(`${SERVER_URL}/api/sample_download_start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ which: which || 'starter' }),
+        });
+        if (res.status === 404) {
+          // The page is newer than the server behind it - page files are refresh-only, the server isn't.
+          throw new Error('The server is still running an older ComfyCrawler. Restart it (or ComfyUI) to pick up the update.');
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'The server refused.');
+        sampleJob = data;
+      } catch (err) {
+        console.error('Sample download start error:', err);
+        sampleJob = Object.assign({}, sampleJob, { which: which || 'starter', state: 'failed',
+                                                  error: 'Could not start the download. ' + err.message });
+      }
+      paintSampleOffer();
+      watchSampleJob();
+    }
+
+    // No confirm box: nothing the player made is at stake, only a download they can start again.
+    async function cancelSampleDownload() {
+      try {
+        await fetch(`${SERVER_URL}/api/sample_download_cancel`, { method: 'POST' });
+      } catch (err) {
+        console.error('Sample download cancel error:', err);
+      }
+      watchSampleJob();
+    }
+
+    // Follows the job until it stops being active. Every run it finishes is read into History
+    // straight away, so the list grows while the rest are still coming. Started by the Get
+    // buttons and by every History open (a reload mid-download).
+    async function watchSampleJob() {
+      if (sampleJobWatchTimer) { clearTimeout(sampleJobWatchTimer); sampleJobWatchTimer = null; }
+      const seq = ++sampleJobWatchSeq;
+      let next = null;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/sample_download_job`);
+        if (res.ok) next = await res.json();
+      } catch (err) {
+        next = null;   // server away for a moment
+      }
+      if (seq !== sampleJobWatchSeq) return;
+      const before = sampleJob;
+      if (next) sampleJob = next;
+      const landed = (sampleJob.saved || []).length !== (before.saved || []).length;
+      if (sampleJobActive(before) && !sampleJobActive()) {
+        onSampleJobFinished(sampleJob);
+      } else if (landed && sampleJobActive()) {
+        refreshHistoryKeepingScroll();
+      }
+      paintSampleOffer();
+      if (next ? sampleJobActive() : sampleJobActive(before)) {
+        sampleJobWatchTimer = setTimeout(watchSampleJob, DOWNLOAD_JOB_POLL_MS);
+      }
+    }
+
+    // A re-read that keeps the list where the player left it - runs arriving while they scroll
+    // (or sit on Cancel) should not throw them back to the top.
+    async function refreshHistoryKeepingScroll() {
+      const top = historyList ? historyList.scrollTop : 0;
+      await refreshHistory();
+      if (historyList) historyList.scrollTop = top;
+    }
+
+    async function onSampleJobFinished(job) {
+      sampleCatalog = null;   // what the website still has changed with this download
+      if (!(job.saved && job.saved.length)) {
+        if (job.state === 'done' && job.which !== 'all') sampleOfferNote = 'The website had no new sample dungeons to add.';
+        refreshSampleCatalog();
+        return;
+      }
+      const offerHadCursor = !!(sampleOffer && sampleOffer.box.contains(document.activeElement));
+      const cursorHere = modalHistory && modalHistory.contains(document.activeElement);
+      await refreshHistoryKeepingScroll();
+      await refreshSampleCatalog();
+      // The first three are in - the player came for something to play, so the cursor goes to
+      // it rather than staying on the Get ALL button that took Cancel's place.
+      if ((job.which !== 'all' && offerHadCursor)
+          || (cursorHere && modalHistory && !modalHistory.contains(document.activeElement))) {
+        focusFirstHistoryStart();
+      }
+    }
+
     function renderHistoryList() {
       if (!historyList) return;
+      // A rebuild takes the sample box away with everything else; its cursor comes back to it.
+      const offerHadCursor = !!(sampleOffer && sampleOffer.box.contains(document.activeElement));
       if (historyEntries === null) {
         setHistoryMessage('Could not reach the server. Make sure server.py is running.');
         if (historyFootNote) historyFootNote.textContent = '';
@@ -14965,6 +15310,7 @@ void main() {
       }
       if (!historyListedEntries().length) {
         setHistoryMessage('No dungeons saved yet. Every dungeon you CREATE is kept here, so you can play it again without generating it again.');
+        if (!SHOWCASE_MODE) buildSampleOffer('starter', offerHadCursor);
         if (historyFootNote) historyFootNote.textContent = '';
         return;
       }
@@ -14979,6 +15325,11 @@ void main() {
       }
       historyList.innerHTML = '';
       visible.forEach(entry => historyList.appendChild(buildHistoryEntryEl(entry)));
+      // Once samples are in, the rest of the website's gallery is offered after the last row
+      // (and a download still going shows its progress there).
+      if (!SHOWCASE_MODE && (sampleJobActive() || historyEntries.some(e => e.sample))) {
+        buildSampleOffer('all', offerHadCursor);
+      }
       // Opened from inside a run, the row for that run is the one the player came to find -
       // and it can be anywhere in a list of thirty - so bring the list to it and flash it once.
       const currentRow = historyRevealCurrent
@@ -15142,6 +15493,8 @@ void main() {
         focusFirstIn(modalHistory, btnHistoryOk);
       }
       refreshHistory();
+      // An empty History's sample download may still be going from before a reload.
+      if (!SHOWCASE_MODE) watchSampleJob();
       // The rows' movie buttons show whatever ending render is going - including one the server
       // started on its own at the end of a background-mode run, which this page never asked for.
       watchEndingJob();
@@ -16008,6 +16361,8 @@ void main() {
     // Anything here means the machine is not actually unattended, so the countdown is held
     // at zero rather than merely paused - the full wait has to elapse after it clears.
     function screensaverBlocked() {
+      // The trailer is 30 seconds with no input on purpose - never let the saver take it.
+      if (TRAILER_MODE) return true;
       // A manual open from the ✕ overrides only the Off setting - every check below still applies.
       if (screensaverDelayMs <= 0 && !screensaverForced) return true;
       // An agent thinking between moves looks exactly like an empty room, and the starfield
@@ -16152,7 +16507,15 @@ void main() {
     }
 
     // Boot engine
-    if (SHOWCASE_MODE) {
+    if (TRAILER_MODE) {
+      // The trailer opens on the Dungeon Creation Wizard - the real one, generation fields and
+      // all, even in the SHOWCASE export - so neither branch below runs: no gallery, and none of
+      // the live server's watchers or ComfyUI checks (whose popups would land mid-trailer).
+      // trailer.js takes it from here; only this page ever downloads it.
+      const trailerScript = document.createElement('script');
+      trailerScript.src = 'trailer.js';
+      document.body.appendChild(trailerScript);
+    } else if (SHOWCASE_MODE) {
       // None of watchForSettling/watchEndingJob/watchDownloadJob/checkPreflight below have a
       // server to reach in this export - they already fail soft (each catches its own network
       // error), but skipping them outright keeps this page's network traffic honestly empty

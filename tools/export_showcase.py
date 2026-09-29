@@ -22,6 +22,12 @@ A starred run with no sort number (History's hidden numbering view) ships unlist
 gallery, playable only by its ?run=<id> link. The export prints those links, and the exported
 page opened with ?unlisted lists just those runs, each with its 🔗. With --base-url (where the
 export will be hosted) those printed links come out whole, ready to paste.
+
+The 30-second trailers ship too, at <export>/trailer/, /trailer2/ and /trailer11/ (trailer.js,
+each one's cast in trailer.json / trailer2.json / trailer11.json - server.TRAILERS). Every dungeon a trailer names has to be one
+this export ships - the curation above is what decides what goes public, and a trailer does not
+get to skip it - so a missing one stops the export. Each trailer dungeon also gets a trimmed copy
+of its bundle for the trailers to download instead (see trailer_files).
 """
 import argparse
 import json
@@ -37,12 +43,12 @@ import server  # noqa: E402  (import only - run_server() sits behind `if __name_
 # The same filename whitelist server.py's own /sounds/ route enforces (do_GET's "/sounds/"
 # branch) - not a blind folder copy, so files like the unwired sounds/victory_candidates/
 # audition batch (already gitignored, never served) can't leak into a published export.
-SOUND_WHITELIST = ("start.wav", "button.wav", "end.wav", "ready.wav") \
-    + tuple(f"{k}_music.wav" for k in server.STATIC_MUSIC)
+SOUND_WHITELIST = server.STATIC_SOUND_FILES
 
 # llms.txt is the machine players' manual (what the game is, window.ComfyCrawler, what to report
 # back) - the showcase is the edition most of them will actually reach, so it ships there too.
-STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png", "llms.txt"]
+STATIC_SHELL_FILES = ["game.js", "tailwind.css", "favicon.svg", "favicon.ico", "icon.png", "llms.txt",
+                      "trailer.js"] + [f"{name}.json" for name in server.TRAILERS]
 
 # The page's typeface, referenced by index.html's own @font-face as fonts/<name>. Shipped with
 # the export for the same reason tailwind.css is: a visitor's phone has no Comic Sans, and
@@ -55,6 +61,87 @@ FONT_FILES = ["ComicNeue-Regular.woff2", "ComicNeue-Bold.woff2", "OFL.txt"]
 # export time, to turn on SHOWCASE_MODE in game.js.
 SAVED_SETTINGS_TAG = b'<script id="savedSettings" type="application/json">{}</script>'
 SHOWCASE_FLAG_TAG = b'<script>window.COMFYCRAWLER_SHOWCASE = true;</script>\n  '
+# A trailer's copy of the page lives in trailer/ (trailer2/), so its relative URLs point one
+# folder up.
+HTML_CHARSET_TAG = b'<meta charset="UTF-8">'
+TRAILER_BASE_TAG = b'\n  <base href="../">'
+
+
+TRAILER_FULL = "trailer_bundle.json"   # a dungeon a trailer fights in
+TRAILER_WALK = "trailer_walk.json"     # a dungeon a trailer's rush only walks through
+# What the trailer never plays: the narration, the outro read, and the dungeon's own music (the
+# trailer has one track of its own). A walk-through also never draws a fighter.
+_TRAILER_DROP_STORY = ("audio", "outro_audio")
+_TRAILER_DROP_ALWAYS = ("music",)
+_TRAILER_DROP_WALK = ("enemy_variants", "enemy_sprites", "player_sprites", "player_sprite",
+                      "weapon_sprite", "shield_sprite")
+
+
+def _cast_ids(node, under=""):
+    """(id, key it was listed under) for every {"id": ...} anywhere in a trailer's json."""
+    if isinstance(node, dict):
+        if isinstance(node.get("id"), str):
+            yield node["id"], under
+        for key, value in node.items():
+            yield from _cast_ids(value, key if isinstance(value, list) else under)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _cast_ids(item, under)
+
+
+def trailer_files(cfgs):
+    """{session id: set of trimmed bundle filenames} for every dungeon any trailer names - the
+    same rule trailer.js loads by: a dungeon a trailer lists only under "rush" (walked through,
+    never fought in) is fetched as the walk-through copy, every other one as the fight copy. One
+    trailer walking a dungeon another fights in gets both. `cfgs` is one trailer json or a list."""
+    files = {}
+    for cfg in (cfgs if isinstance(cfgs, list) else [cfgs]):
+        where = {}
+        for sid, under in _cast_ids(cfg):
+            where.setdefault(sid, set()).add(under)
+        for sid, keys in where.items():
+            files.setdefault(sid, set()).add(TRAILER_WALK if keys == {"rush"} else TRAILER_FULL)
+    return files
+
+
+def read_trailers():
+    """{name: parsed json} for every trailer in server.TRAILERS whose json is in the repo. A json
+    that "extends" another is merged over it, key by key - the same way trailer.js reads it."""
+    raw = {}
+    for name in server.TRAILERS:
+        path = os.path.join(REPO_DIR, f"{name}.json")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                raw[name] = json.load(f)
+    return {name: ({**raw[cfg["extends"]], **cfg} if cfg.get("extends") in raw else cfg)
+            for name, cfg in raw.items()}
+
+
+def trim_bundle(bundle, walk):
+    """A bundle with what the trailer never uses taken out."""
+    out = {k: v for k, v in bundle.items()
+           if k not in _TRAILER_DROP_ALWAYS and not (walk and k in _TRAILER_DROP_WALK)}
+    if isinstance(out.get("story"), dict):
+        out["story"] = {k: v for k, v in out["story"].items() if k not in _TRAILER_DROP_STORY}
+    return out
+
+
+def write_trimmed_bundle(src_dir, dest_dir, name):
+    """Writes dest_dir/name from src_dir's bundle.json unless a copy made from this same bundle is
+    already there (mtimes are carried over, as copy2 does for everything else). Returns
+    (bytes, written)."""
+    src = os.path.join(src_dir, "bundle.json")
+    dest = os.path.join(dest_dir, name)
+    st = os.stat(src)
+    dest_st = _stats_in(dest_dir).get(name)
+    if dest_st is not None and abs(dest_st.st_mtime - st.st_mtime) < 2:
+        return dest_st.st_size, False
+    with open(src, encoding="utf-8") as f:
+        bundle = json.load(f)
+    with open(dest, "w", encoding="utf-8") as f:
+        json.dump(trim_bundle(bundle, name == TRAILER_WALK), f, separators=(",", ":"))
+    os.utime(dest, (st.st_atime, st.st_mtime))
+    return os.path.getsize(dest), True
 
 
 def read_curated_ids(path):
@@ -180,6 +267,17 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
         print("[showcase] none of the curated ids were found - nothing to export.")
         return
 
+    # The trailers' casts have to be public already - see the module docstring.
+    trailers = read_trailers()
+    kept_ids = {meta["id"] for meta in kept}
+    for name, cfg in trailers.items():
+        missing = sorted(set(trailer_files(cfg)) - kept_ids)
+        if missing:
+            raise SystemExit(f"[showcase] {name}.json uses dungeon(s) this export doesn't ship: "
+                             + ", ".join(missing) + " - add them to "
+                             + os.path.basename(ids_path) + f" or pick others in {name}.json.")
+    trailer = trailer_files(list(trailers.values()))
+
     # --clean only: the old wipe-and-copy-everything. Beware it on a folder something holds open
     # (a `python -m http.server` running inside it, an Explorer window) - rmtree empties it and
     # then dies on the final rmdir with WinError 32, leaving it gutted.
@@ -189,7 +287,6 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
     os.makedirs(dungeons_dir, exist_ok=True)
 
     # Dungeons that were exported before but are no longer listed.
-    kept_ids = {meta["id"] for meta in kept}
     with os.scandir(dungeons_dir) as it:
         stale = [e.path for e in it if e.is_dir() and e.name not in kept_ids]
     for path in stale:
@@ -197,6 +294,7 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
         print(f"[showcase] removed {os.path.basename(path)} - no longer listed")
 
     sync = _Sync()
+    trailer_bytes = 0
     session_files = ("bundle.json", server.ENDING_FILENAME, server.CARD_FILENAME,
                      server.CARD_BG_FILENAME, server.CARD_HERO_FILENAME)
     total_bytes = 0
@@ -208,9 +306,22 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
         # is still importable and the bundle is still on disk. One call covers all three: see
         # _card_files_missing.
         server.ensure_session_card(session_id)
+        # Listed with the rest so the prune keeps it; nothing in the session folder has that
+        # name, so folder() leaves the writing of it to write_trimmed_bundle below.
+        trimmed = sorted(trailer.get(session_id, ()))
         total_bytes += sync.folder(os.path.join(server.SESSIONS_DIR, session_id),
                                    os.path.join(dungeons_dir, session_id),
-                                   session_files, prune=True)
+                                   session_files + tuple(trimmed), prune=True)
+        for name in trimmed:
+            size, written = write_trimmed_bundle(os.path.join(server.SESSIONS_DIR, session_id),
+                                                 os.path.join(dungeons_dir, session_id), name)
+            total_bytes += size
+            trailer_bytes += size
+            if written:
+                sync.copied += 1
+                sync.copied_bytes += size
+            else:
+                sync.skipped += 1
 
     with open(os.path.join(out_dir, "dungeons.json"), "w", encoding="utf-8") as f:
         json.dump({"sessions": kept}, f)
@@ -225,6 +336,17 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
     html = html.replace(SAVED_SETTINGS_TAG, SHOWCASE_FLAG_TAG + SAVED_SETTINGS_TAG, 1)
     with open(os.path.join(out_dir, "index.html"), "wb") as f:
         f.write(html)
+    # <export>/trailer/ (and trailer2/) is the same page, one folder down - so it says so in
+    # markup, where the browser's preload scanner reads it before any script runs (a <base> only
+    # written by index.html's script came too late for it: three stray 404s on every load).
+    # game.js sees /trailer in the address and plays the trailer.
+    if HTML_CHARSET_TAG not in html:
+        raise SystemExit("index.html's charset tag has changed shape - update HTML_CHARSET_TAG "
+                         "in this script to match.")
+    for name in trailers:
+        os.makedirs(os.path.join(out_dir, name), exist_ok=True)
+        with open(os.path.join(out_dir, name, "index.html"), "wb") as f:
+            f.write(html.replace(HTML_CHARSET_TAG, HTML_CHARSET_TAG + TRAILER_BASE_TAG, 1))
 
     sync.folder(REPO_DIR, out_dir, STATIC_SHELL_FILES)
     sync.folder(os.path.join(REPO_DIR, "fonts"), os.path.join(out_dir, "fonts"), FONT_FILES)
@@ -237,6 +359,9 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
     print(f"[showcase] exported {len(kept)} dungeon(s) ({mb:.1f} MB) to {out_dir}")
     print(f"[showcase] copied {sync.copied} file(s) ({copied_mb:.1f} MB), "
           f"{sync.skipped} already up to date, {sync.removed} removed")
+    where = normalize_base_url(base_url) or "<address>/"
+    print(f"[showcase] trailers: {len(trailer)} dungeon(s), {trailer_bytes / 1048576:.1f} MB of "
+          f"trimmed bundles, at " + ", ".join(f"{where}{name}/" for name in trailers))
     print(f"[showcase] try it: cd {out_dir} && python -m http.server 8000")
     unlisted = [meta for meta in kept if meta.get("unlisted")]
     if unlisted:

@@ -4,6 +4,8 @@
 
 **▶️ Play it in your browser, no install:** [mowmeow.net/ComfyCrawlerTest](https://mowmeow.net/ComfyCrawlerTest/). This is the read-only edition, with dungeons that were already made. AI agents: start at [mowmeow.net/ComfyCrawlerTest/?agent](https://mowmeow.net/ComfyCrawlerTest/?agent) and read [llms.txt](llms.txt).
 
+**🎬 The 30-second trailers:** add `/trailer` or `/trailer2` to any ComfyCrawler address - [mowmeow.net/ComfyCrawlerTest/trailer](https://mowmeow.net/ComfyCrawlerTest/trailer/) and [/trailer2](https://mowmeow.net/ComfyCrawlerTest/trailer2/), or `127.0.0.1:5555/trailer` and `:8188/comfycrawler/trailer2` on your own machine. Each is the game itself, playing a hand-picked cast of saved dungeons (`trailer.json`, `trailer2.json`) to its own music track, cut on the beat - the first shows off what you can type, the second what fights back (a death, a monster parade and a boss charge). `/trailer11` is the first again with the hero side-stepping through its fights (`trailer11.json` just extends `trailer.json`), and `/trailer12` is the first with its end card reading "Try it out now: https://mowmeow.net/ComfyCrawlerTest" instead of buttons - the one to record. `/trailer12m` plays that same cut on a phone (a phone-sized frame, with the touch layout, touchpad and strafe slider).
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Comfy Registry](https://img.shields.io/badge/Comfy_Registry-comfycrawler-blue)](https://registry.comfy.org/nodes/comfycrawler)
 
@@ -177,6 +179,8 @@ Options are saved by ComfyCrawler itself, so they're the same whichever address 
 Every dungeon you make is saved. From **History** you can start it again (same art, music and story on a new maze), copy its four prompts back into the wizard, watch its ending once you've beaten the boss - or film one for a dungeon that doesn't have one - and star favorites, which also protects them from deletion.
 
 Saved dungeons live in ComfyUI's `user/comfycrawler/` folder when ComfyCrawler is installed as a node, and in `dungeon_sessions/` beside `server.py` for the standalone server.
+
+A new install starts with an empty History, so History offers **📥 Get Sample Dungeons**: three finished dungeons (about 55 MB) downloaded from the [showcase site](https://mowmeow.net/ComfyCrawlerTest/) into that same folder, tagged SAMPLE. Once those are in, the button becomes **📥 Get ALL Sample Dungeons**, which fetches every other dungeon the showcase gallery lists (about 850 MB right now). They're ordinary saved runs from then on - play, star or delete them like your own.
 
 ---
 

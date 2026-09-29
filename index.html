@@ -8,6 +8,23 @@
        (see body's padding below). -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ComfyCrawler by sorryaboutyourcats</title>
+  <!-- The 30-second trailers are this same page at <site>/trailer and /trailer2 (game.js
+       TRAILER_MODE). Every URL below is relative, so opened as .../trailer/ they would all
+       resolve inside trailer/. The static export's trailer/index.html (and trailer2/) carries its
+       own <base href="../"> for that (written
+       by tools/export_showcase.py, ahead of this, so the browser's preload scanner sees it too);
+       this corrects it for a host that serves that file at .../trailer with no slash, and covers
+       any other copy of the page opened under /trailer/. It has to run before the first relative
+       URL, which is the icon link just below. -->
+  <script>
+    (function () {
+      var m = location.pathname.match(/^(.*\/)trailer\d*m?(\/(index\.html)?)?$/i);
+      if (!m) return;
+      var base = document.querySelector('base');
+      if (base) base.href = m[1];
+      else if (m[2]) document.write('<base href="' + m[1].replace(/"/g, '%22') + '">');
+    })();
+  </script>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="icon" href="favicon.ico" sizes="any">
   <!-- AI agents: llms.txt, beside this page, says what this game is and how to play it as a
@@ -1294,8 +1311,9 @@
     /* A row's frame version (buildFrameVersionTag in game.js): version 1 - every run made
        without Last Attack Frame - is the common case and gets no chip; only version 2 shows
        one, a sunken grey chip on a pale amber ground, so the runs that carry the strike frame
-       pick out of a long list. */
-    .hist-frame-ver {
+       pick out of a long list. The SAMPLE chip (a run downloaded from the website by History's
+       Get Sample Dungeons, not made here) shares the plain grey version. */
+    .hist-frame-ver, .hist-sample {
       background: #e7e7e7;
       color: #334155;
       border-top: 1px solid #808080;
@@ -2752,6 +2770,16 @@
                    class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer select-none">
               <input type="checkbox" id="menuMusicOffCheckbox" class="win95-checkbox" />
               Disable menu music
+            </label>
+
+            <!-- The History window's number boxes (game.js: the numbering view /
+                 setHistoryNumbering). Off by default; ten clicks on History's 📜 flip it too.
+                 Numbers are saved to the server, so the showcase export drops the option. -->
+            <label for="historyNumberingCheckbox" data-generation-only
+                   class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer select-none"
+                   title="Puts a number box at the front of every row in History's list view. The number sets where that run goes in the Default sort - lowest number first, runs with no number after.&#10;&#10;Shortcut: click the 📜 in the History window's title bar 10 times to turn this on or off.">
+              <input type="checkbox" id="historyNumberingCheckbox" class="win95-checkbox" />
+              Show sort number boxes in History
             </label>
           </div>
 

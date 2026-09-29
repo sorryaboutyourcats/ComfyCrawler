@@ -53,6 +53,20 @@ async def main():
         r = await client.get("/comfycrawler/tailwind.css")
         ck(r.status == 200 and r.content_type == "text/css", "relative assets resolve under the prefix")
 
+        # The trailer: the page at /comfycrawler/trailer, its two files beside it, and the slash
+        # form sent back to it without losing the prefix.
+        r = await client.get("/comfycrawler/trailer")
+        ck(r.status == 200 and "<title>" in await r.text(), "GET /comfycrawler/trailer serves the page")
+        r = await client.get("/comfycrawler/trailer.js")
+        ck(r.status == 200 and "TRAILER_NEEDS" in await r.text(), "trailer.js resolves under the prefix")
+        r = await client.get("/comfycrawler/trailer/", allow_redirects=False)
+        ck(r.status == 301 and r.headers.get("Location") == "../trailer",
+           f"/comfycrawler/trailer/ redirects relatively (got {r.status} {r.headers.get('Location')})")
+        r = await client.get("/comfycrawler/trailer2")
+        ck(r.status == 200 and "<title>" in await r.text(), "GET /comfycrawler/trailer2 serves the page")
+        r = await client.get("/comfycrawler/trailer2.json")
+        ck(r.status == 200 and '"script"' in await r.text(), "trailer2.json resolves under the prefix")
+
         r = await client.get("/comfycrawler/api/progress")
         ck(r.status == 200 and "is_generating" in await r.json(), "JSON comes back through the handler")
         ck(not any(k.lower().startswith("access-control-") for k in r.headers), "no CORS headers")

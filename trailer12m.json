@@ -1,0 +1,5 @@
+{
+  "about": "The /trailer12m page: trailer 1.2 (trailer12.json) as it plays on a phone - the page is a phone-sized frame on the desktop, and the trailer inside it runs with ?phone (touch layout, swipe touchpad, strafe slider). Nothing to cast here: change trailer12.json and this follows.",
+  "phone": "trailer12",
+  "label": "1.2 (mobile)"
+}

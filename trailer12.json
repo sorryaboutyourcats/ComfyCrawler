@@ -1,0 +1,8 @@
+{
+  "about": "The /trailer12 page: trailer 1 (trailer.json) with trailer 1.1's side-steps, and with its end card closing on a line of text instead of the Replay / Play ComfyCrawler buttons, in a shorter window - the cut to record. Change trailer.json and this follows.",
+  "extends": "trailer",
+  "label": "1.2",
+  "strafe": true,
+  "outro": "Try it out now: https://mowmeow.net/ComfyCrawlerTest",
+  "endHeight": 0.8
+}

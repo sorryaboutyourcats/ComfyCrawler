@@ -1,0 +1,201 @@
+{
+  "about": "The /trailer2 page's cast (trailer.js reads it; script v2 - the death, Fill-in, the fights, the monster parade and the boss's charge). Every id must be a dungeon the showcase export ships - tools/export_showcase.py refuses otherwise. Captions are the wizard's own lines, filled with what that run's maker typed. music is written by tools/trailer_beats.py --write trailer2.json.",
+  "script": "v2",
+  "tagline": "Type anything. Survive it.",
+  "death": {
+    "id": "20260926-142656-e38d23",
+    "foe": "walker"
+  },
+  "pitch": {
+    "id": "20260910-155208-5f0826",
+    "words": {
+      "wall": "corn maze",
+      "player": "pickup truck robot",
+      "weapon": "pitchfork",
+      "enemy": "zombie animal"
+    }
+  },
+  "montage": [
+    {
+      "id": "20260910-155208-5f0826",
+      "shot": "dodge",
+      "foe": "walker",
+      "caption": [
+        "The player is a",
+        "pickup truck robot"
+      ]
+    },
+    {
+      "id": "20260910-153307-465bc5",
+      "shot": "pack",
+      "foe": "swarmer",
+      "caption": [
+        "The enemy is a",
+        "happy customer"
+      ]
+    },
+    {
+      "id": "20260926-143213-533a4d",
+      "shot": "block",
+      "foe": "flyer",
+      "caption": [
+        "The enemy is a",
+        "NYC subway train"
+      ]
+    }
+  ],
+  "parade": [
+    {
+      "id": "20260910-164324-57ce2a",
+      "foe": "walker",
+      "caption": [
+        "The enemy is a",
+        "derpy fire hydrant"
+      ]
+    },
+    {
+      "id": "20260913-135557-5b0ffd",
+      "foe": "flyer",
+      "caption": [
+        "The enemy is a",
+        "taco"
+      ]
+    },
+    {
+      "id": "20260922-225846-6f8484",
+      "foe": "walker",
+      "caption": [
+        "The enemy is a",
+        "overheating server rack golem"
+      ]
+    },
+    {
+      "id": "20260909-151441-0a0ff8",
+      "foe": "walker",
+      "caption": [
+        "The enemy is a",
+        "devil"
+      ]
+    },
+    {
+      "id": "20260910-170613-b7d5ea",
+      "foe": "walker",
+      "caption": [
+        "The enemy is a",
+        "bright stuffed animal with teeth"
+      ]
+    },
+    {
+      "id": "20260910-160521-9c18b0",
+      "foe": "walker",
+      "caption": [
+        "The enemy is a",
+        "pasta"
+      ]
+    },
+    {
+      "id": "20260916-220648-2a9497",
+      "foe": "boss",
+      "caption": [
+        "The enemy is a",
+        "slime"
+      ]
+    }
+  ],
+  "boss": {
+    "id": "20260910-155208-5f0826",
+    "caption": [
+      "The enemy is a",
+      "zombie animal"
+    ],
+    "clip": [
+      [
+        1.0,
+        2.2
+      ],
+      [
+        6.7,
+        7.65
+      ]
+    ]
+  },
+  "music": {
+    "file": "sounds/trailer2_music.wav",
+    "bpm": 128.04,
+    "beats": [
+      0.012,
+      0.464,
+      0.929,
+      1.405,
+      1.869,
+      2.345,
+      2.81,
+      3.274,
+      3.75,
+      4.214,
+      4.679,
+      5.155,
+      5.619,
+      6.084,
+      6.56,
+      7.024,
+      7.5,
+      7.976,
+      8.44,
+      8.916,
+      9.381,
+      9.845,
+      10.31,
+      10.786,
+      11.25,
+      11.714,
+      12.179,
+      12.655,
+      13.131,
+      13.595,
+      14.06,
+      14.536,
+      15.0,
+      15.464,
+      15.929,
+      16.405,
+      16.881,
+      17.345,
+      17.81,
+      18.274,
+      18.739,
+      19.215,
+      19.691,
+      20.155,
+      20.619,
+      21.095,
+      21.56,
+      22.036,
+      22.5,
+      22.965,
+      23.441,
+      23.905,
+      24.369,
+      24.834,
+      25.31,
+      25.774,
+      26.25,
+      26.715,
+      27.179,
+      27.655,
+      28.119,
+      28.595,
+      29.06,
+      29.536,
+      30.0,
+      30.465,
+      30.929,
+      31.393,
+      31.858,
+      32.322,
+      32.787,
+      33.251,
+      33.715
+    ]
+  }
+}
