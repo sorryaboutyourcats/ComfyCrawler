@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(comfy --workspace 'C:\\\\Users\\\\sorryaboutyourcats\\\\AppData\\\\Local\\\\Comfy-Desktop\\\\ComfyUI-Installs\\\\ComfyUI\\\\ComfyUI' --skip-prompt node install ComfyUI_IPAdapter_plus)"
-    ]
-  }
-}
