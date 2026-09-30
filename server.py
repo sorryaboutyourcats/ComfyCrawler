@@ -1040,9 +1040,10 @@ class ProgressTracker:
     _NODE_SUFFIXES = ("_samp", "_dec", "_save", "_mask", "_maskinv", "_pos", "_neg", "_lat")
 
     # Node ids that read as nothing on the loading screen: the schnell surfaces job's one-letter
-    # tags ("w - step 1/4") and the sfx pack's footstep ("step - step 5/8").
+    # tags ("w - step 1/4"), the sfx pack's footstep ("step - step 5/8") and the pictured weapon
+    # going into a krea2 hero's hand (KONTEXT_HERO_SWAP).
     _NODE_NAMES = {"w": "wall", "c": "ceiling", "f": "floor", "d": "door", "l": "lantern",
-                   "s": "switch", "step": "footstep"}
+                   "s": "switch", "step": "footstep", "swap": "weapon swap"}
 
     def _node_detail(self, node_id, value, mx):
         # Every Qwen3-VL text job (TextGenerate, "gen" or "<what>_gen") counts tokens against its
@@ -2422,6 +2423,86 @@ def keep_largest_figure(frame_path, thresh=20):
         Image.fromarray(arr).save(frame_path, format="PNG")
     except Exception as e:
         print(f"[Keep Largest Figure Error] {e}")
+
+
+# GLOWING WEAPONS the white-background cut-out took away. Reported from play (2026-09-29): a pink
+# lightsaber showed as a bare hilt in 15 of 18 hero frames. The drawings all had the blade -
+# SaveImageWithAlpha keeps the render's RGB under alpha 0 - but a glow on white looks like
+# background to BiRefNet, and it dropped the blade, or everything but its thin white core. So
+# the hero frames get back what BiRefNet dropped when it is plainly LIGHT: every test below was
+# needed, and measured over all 2534 frames in ComfyUI's output folder (hero and foe):
+#  * coloured, not grey (GLOW_SEED_CHROMA), and reaching out from the body - fur BiRefNet trimmed
+#    off Elmo's outline came back as a red fringe with white specks; dropped fringe reached at
+#    most 7.8px out (140 frames), the lightsaber glows 9-190px (GLOW_REACH_PX). Reach is measured
+#    from the body with thin kept lines opened away, or the glow round a kept white core never
+#    reaches out from that core;
+#  * one colour (GLOW_HUE) and see-through against the white (GLOW_INK): a pile of bricks lying
+#    beside the hero came back whole - many colours (hue agreement 0.23-0.27, glows 1.00) and
+#    solid (mean colour-to-alpha 0.88-0.90, glows 0.38-0.52);
+#  * bright (GLOW_BRIGHT): krea2's slash frames ask for motion blur, and a coin's and a hoop's
+#    blur came back as smears. Light laid over white keeps its strongest channel near full, so
+#    its colour-to-alpha colour is at full strength (chroma/ink 0.91-1.00); a painted thing's
+#    blur is that colour thinned (0.53-0.80).
+# What passes is only glowing weapons: every lightsaber run and a Kingdom Hearts keyblade, 0 of
+# the other hero frames. The glow is given back as colour-to-alpha from white, so it keeps its
+# colour and fades out on any floor, and the white-hot core the glow closes over (GLOW_CORE_PX)
+# goes back solid. Hero frames only: foes have their own gates, and a patterned blue background
+# on an office-chair foe passed the first two tests.
+GLOW_SEED_CHROMA = 60   # max-min channel spread of a dropped pixel that is clearly coloured
+GLOW_EDGE_PX = 2        # the band hugging the body, left to BiRefNet (trimmed fur and hair)
+GLOW_THIN_PX = 2        # kept lines this thin (a blade's core) do not count as body
+GLOW_REACH_PX = 10      # how far a dropped part must reach out from the body
+GLOW_TOUCH_PX = 8       # ...having started this close to it
+GLOW_HUE = 0.8          # hue agreement (0-1) of its dropped pixels
+GLOW_INK = 0.7          # their mean colour-to-alpha against white
+GLOW_BRIGHT = 0.85      # their median chroma / colour-to-alpha
+GLOW_GROW_PX = 6        # how far past the coloured part the faint halo is taken back
+GLOW_MIN_INK = 0.05     # colour-to-alpha below this is the white background itself
+GLOW_CORE_PX = 4        # the widest white-hot core the glow's two sides close over
+
+
+def restore_dropped_glow(frame_path):
+    """Give a background-removed hero frame back the glow BiRefNet cut away - see the note above.
+    Returns how many pixels it gave back (0 when there was nothing to give)."""
+    import numpy as np
+    from scipy import ndimage
+    try:
+        arr = np.array(Image.open(frame_path).convert("RGBA"))
+        rgb = arr[:, :, :3].astype(float)
+        a = arr[:, :, 3].astype(float) / 255.0
+        solid = a > 0.5
+        chroma = rgb.max(2) - rgb.min(2)
+        ink = (255.0 - rgb.min(2)) / 255.0            # colour-to-alpha against pure white
+        body = ndimage.binary_opening(solid, iterations=GLOW_THIN_PX)
+        dist = ndimage.distance_transform_edt(~body)
+        lab, n = ndimage.label((chroma > GLOW_SEED_CHROMA) & ~solid & (dist > GLOW_EDGE_PX))
+        if not n:
+            return 0
+        idx = np.arange(1, n + 1)
+        hue = np.arctan2(rgb[:, :, 1] - rgb[:, :, 2], 2 * rgb[:, :, 0] - rgb[:, :, 1] - rgb[:, :, 2])
+        agree = np.hypot(ndimage.mean(np.cos(hue), lab, idx), ndimage.mean(np.sin(hue), lab, idx))
+        bright = ndimage.median(chroma / 255.0 / np.maximum(ink, 1e-3), lab, idx)
+        keep = idx[(ndimage.maximum(dist, lab, idx) > GLOW_REACH_PX)
+                   & (ndimage.minimum(dist, lab, idx) <= GLOW_TOUCH_PX)
+                   & (agree >= GLOW_HUE) & (ndimage.mean(ink, lab, idx) < GLOW_INK)
+                   & (bright >= GLOW_BRIGHT)]
+        if not len(keep):
+            return 0
+        seeds = np.isin(lab, keep)
+        halo = (ndimage.binary_dilation(seeds, iterations=GLOW_GROW_PX) & (ink > GLOW_MIN_INK)) | seeds
+        closed = ndimage.binary_closing(halo, iterations=GLOW_CORE_PX)
+        core = (ndimage.binary_fill_holes(closed) | closed) & ~halo & ~solid
+        new_a = np.where(core, 1.0, np.where(halo, ink, 0.0))
+        take = new_a > a
+        # Un-premultiplied from white, so the halo keeps its colour as it fades.
+        unmul = np.clip(255.0 - (255.0 - rgb) / np.maximum(new_a, 1e-3)[:, :, None], 0, 255)
+        arr[:, :, :3] = np.where((take & halo)[:, :, None], unmul, rgb).astype(np.uint8)
+        arr[:, :, 3] = np.where(take, np.round(new_a * 255), arr[:, :, 3]).astype(np.uint8)
+        Image.fromarray(arr).save(frame_path, format="PNG")
+        return int(take.sum())
+    except Exception as e:
+        print(f"[Restore Glow Error] {e}")
+        return 0
 
 
 def _pick_path(src):
@@ -5226,7 +5307,11 @@ _PICTURE_SETTING_RE = re.compile(
     r"\b(?:resting|sitting|lying|laying|standing|placed|set|perched|propped|leaning|posed)"
     r"\s+(?:on|in|against|atop|by|beside|next|near|under|in\s+front)\b"
     r"(?!\s+(?:its|his|her|their|two|four|all|both|hind|tip-?toes?)\b)"
-    r"|\b(?:in|against)\s+(?:the|a)\s+background\b|\bin\s+the\s+distance\b", re.IGNORECASE)
+    # The photo's backdrop, with or without an article: "...emitting vibrant magenta energy
+    # against dark background" put a dark square behind the lightsaber in krea2's hero drawing,
+    # and the cut-out took the blade away with the square in all 9 frames (2026-09-29).
+    r"|\b(?:in|against|on)\s+(?:(?:the|a|an)\s+)?(?:[\w-]+\s+){0,3}(?:background|backdrop)\b"
+    r"|\bin\s+the\s+distance\b", re.IGNORECASE)
 # What the subject was DOING in the picture, which _PICTURE_WHERE asks the model to leave out -
 # see the note above it. Cut from the match to the end of its clause, like a setting. A word
 # for clothing after it is a look, not a pose: "running shoes", "dancing shoes".
@@ -6815,6 +6900,11 @@ def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, endin
     # but schnell's own load is most of the cost either way (25s both pictured runs).
     plan.append(("surfaces", f"Synthesizing dungeon textures{_from_words(['wall'])} with FLUX.1 [schnell]...",
                  25 if "wall" in refs else 30, (3 if "wall" in refs else 6) * 4))
+    if hero_ref and "player" not in refs:
+        # Only the weapon pictured: krea2 draws the hero from the words (KONTEXT_HERO_SWAP) -
+        # 14-18s with its load, measured 2026-09-29 - and Kontext's swap edit takes the drawing's
+        # place in "hero_ref" below, at the same 29-41s with Kontext's load.
+        plan.append(("hero_draw", "Drawing your hero with krea2 turbo...", 18, st))
     if hero_ref:
         plan += [
             # Kontext loads again after schnell: 34-36s for the one drawing. Then two one-word
@@ -6822,15 +6912,27 @@ def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, endin
             # FRONT/BACK (_kontext_turn_hero) and HAND/BACK/NONE (_kontext_hold_weapon), 7-8s
             # each with the model swaps - so their seconds ride here, the stage they follow.
             # Left out, the bar stood still through them and fell 10 points behind the clock.
-            ("hero_ref",   "Drawing your hero from your picture with Kontext...",       50, kx),
+            ("hero_ref",   "Drawing your hero from your picture with Kontext..." if "player" in refs
+                           else "Putting your weapon picture in your hero's hand with Kontext...", 50, kx),
+        ]
+    if "player" in refs:
+        plan += [
             # When the drawing faces front: one turn edit (~29s, Kontext swapping back in) and
             # the check again - planned for that one try; skipped when it already faced away
             # (2 runs of 3), and each further try registers 36s of its own, as does each try of
-            # the weapon-into-hand edit (44s, not planned).
+            # the weapon-into-hand edit (44s, not planned). NOT planned when krea2 drew the hero:
+            # its back view held 7 of 7, so _kontext_turn_hero registers the rare turn itself.
             ("hero_turn",  "Turning your hero to face the dungeon...",                  36, kx),
+        ]
+    if hero_ref:
+        plan += [
             # Eight 512px edits: 142s, 156s and 212s (Kontext ran anywhere from 0.85 to 1.31
-            # s/step across those runs, on the same card).
-            ("hero_poses", "Posing your hero with Kontext...",                         165, 8 * kx),
+            # s/step across those runs, on the same card) - seven of them now, the block its own
+            # job below: 184.5s and 143.0s for the seven (2026-09-29).
+            ("hero_poses", "Posing your hero with Kontext...",                         150, 7 * kx),
+            # The block with the shield's picture as a second reference (KONTEXT_SHIELD_BACK):
+            # 34.7s and 19.1s on the same two runs.
+            ("hero_block", "Raising your hero's shield with Kontext...",                 27, kx),
             # The frames that barely moved are re-rolled (_kontext_unstick) on 2 runs of 6,
             # usually just the block - too seldom to plan: planned, it was 20s the bar skipped
             # past on most runs, which put the 15:05 run of 2026-09-25 ten points behind the
@@ -10292,6 +10394,18 @@ KONTEXT_POSE_MIN_DIFF = 6.0
 # cost, measured and accepted: the weapon usually leaves the frame while blocking (7 of 8).
 # Nothing else may name a shield ("keep the ... shield" and "weapon and shield flung wide" would
 # put one back), so the KEEP tail below has none.
+# ITS BACK TO THE CAMERA. Reported from play (2026-09-29): the pictured Jar Jar blocked with his
+# shield's painted front turned to the player, where a krea2 hero shows its dark inside. Kontext's
+# idea of "a shield" is its front, and words did not move that: on six pictured heroes, two seeds
+# each, "raise a round wooden battle shield" and five rewrites ("its front faces the enemy, so we
+# see its plain back", "we see only the back of the shield", "strapped in, its bare wooden back
+# to the camera", "from behind we see its underside", "like a warrior in a shield wall") left the
+# robot's and the Sith's shield front-on in all 12 of their frames. So the block edit is handed
+# KONTEXT_SHIELD_BACK - krea2's drawing of a shield's back, planks, straps and handle - as its
+# second picture, and raises THAT shield "the same side of it facing the camera": 24 of 24 backs,
+# all six heroes, both seeds. It is the one edit given that picture (its own job - every edit in
+# a job sees the same pictures, and any other pose would grow a shield).
+KONTEXT_SHIELD_BACK = os.path.join(PROJECT_DIR, "workflows", "shield_back.png")
 # TURNED AROUND before it is posed. Reported from play: Elmo facing the camera in all nine frames,
 # the player looking at their own hero's face instead of over its shoulder at the enemy. Kontext
 # keeps the way the photo faces, and a front-on photo outvotes "seen strictly from directly
@@ -10343,6 +10457,22 @@ KONTEXT_HERO_HOLD = ("They hold {w} in their free hand instead of on their back:
                      "background. The whole figure stays in frame from head to feet.")
 KONTEXT_HERO_HOLD_ATTEMPTS = 3
 
+# ONLY THE WEAPON PICTURED: krea2 draws the hero, Kontext swaps the weapon in. Reported from play
+# (2026-09-29): "Jar Jar Binks" with a lightsaber picture came back a black-robed Sith, where the
+# same words without the picture had drawn Jar Jar. Kontext was drawing the whole hero from the
+# words, and it hasn't krea2's grasp of named characters - its one picture was a pink lightsaber,
+# so it drew the man who carries one. Now krea2 draws the hero from the words, holding the weapon
+# as the picture's LOOK describes it (_krea2_hero_drawing), and this one edit puts the object from
+# the picture in the hand. Measured on Jar Jar with the lightsaber, a cloth-wrapped fish and an
+# exhaust pipe (7 drawings): krea2 drew him, from behind, 7 of 7, and the swap kept him 7 of 7.
+# It emptied the hand once (the fish), which _kontext_hold_weapon's check then puts right.
+# "The object in their right hand becomes ..." did no better on the same seeds.
+KONTEXT_HERO_SWAP = ("Replace the weapon in their right hand with the object from the second picture, "
+                     "{w}, gripped by its handle and held out from the body, clearly visible. Keep the "
+                     "exact same character, face, clothing, colours and art style, the strict back "
+                     "view facing away from the camera, and the plain white background. The whole "
+                     "figure stays in frame from head to feet.")
+
 # How the weapon is held in every pose edit. Reported from play: a pictured sword (photographed
 # lying diagonally) held by its blade in the windup and doubled in a slash - with the sword's
 # picture passed to every pose edit as a second reference, Kontext copied the sword out of the
@@ -10360,10 +10490,18 @@ KONTEXT_HERO_KEEP = ("Keep the exact same character, face, hair, clothing, colou
 # _kontext_unstick at 20.9): it makes the retry rarer, it does not replace it.
 KONTEXT_HERO_POSE_GUIDANCE = {"block": KONTEXT_REF_GUIDANCE + 2.5}
 KONTEXT_HERO_POSES = {
-    "block":  ("Change the character's pose: still facing away from the camera, they raise a round "
-               "wooden battle shield with an iron rim in their free hand up beside their head into "
-               "a high guard, and drop into a low braced crouch, knees bent. Their other hand still "
-               "grips the weapon, lowered and drawn back, clearly visible. One shield only."),
+    # Edits the drawing with KONTEXT_SHIELD_BACK as its second picture - see the note above it.
+    # "Up beside their head into a high guard" hid the head behind the shield in 4 of 12 frames
+    # (Jar Jar, six seeds x two guidances) - the one part that says who the hero is. Out to the
+    # side at shoulder height, clear of the head: 22 of 24 heads in view over Jar Jar, the Sith
+    # and Grandma, the shield's back to the camera in all 24.
+    "block":  ("Change the character's pose: still facing away from the camera, they raise the "
+               "round wooden shield from the second picture on their free forearm, held out to "
+               "that side at shoulder height and clear of their head so the back of their head "
+               "still shows, their forearm through its leather straps, the same side of it facing "
+               "the camera as in the second picture, and drop into a low braced crouch, knees "
+               "bent. Their other hand still grips the weapon, lowered and drawn back, clearly "
+               "visible. One shield only."),
     "windup": ("Change the character's pose: they raise the weapon high overhead, cocked back "
                "behind their shoulder, winding up to strike."),
     "slash1": ("Change the character's pose: they swing the weapon down and forward through a "
@@ -10714,9 +10852,10 @@ def _kontext_turn_hero(drawn, seed):
     turned = drawn
     for attempt in range(KONTEXT_HERO_TURN_ATTEMPTS):
         job = f"hero_turn_retry{attempt}" if attempt else "hero_turn"
-        if attempt:
-            # Seconds, like _plan_v6: the turn edit and the FRONT/BACK check after it.
-            PROGRESS.add_job(job, "Turning your hero to face the dungeon again...", 36, KONTEXT_STEPS)
+        # Seconds, like _plan_v6: the turn edit and the FRONT/BACK check after it. The first try
+        # is planned only for a pictured player; this registers it when krea2 drew the hero.
+        PROGRESS.add_job(job, "Turning your hero to face the dungeon again..." if attempt
+                         else "Turning your hero to face the dungeon...", 36, KONTEXT_STEPS)
         turned = _kontext_ref_job([src], {"turn": KONTEXT_HERO_TURN}, seed + 100 + attempt,
                                   alpha=False, prefix="kxhero", job_key=job)["turn"]
         view = _vlm_hero_view(turned)
@@ -10762,20 +10901,42 @@ def _kontext_hold_weapon(drawn, weapon_name, weapon_pic, seed):
     return drawn
 
 
-def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None):
+def _krea2_hero_drawing(player_desc, weapon_desc, size, steps, seed):
+    """The hero drawn by krea2 from the words alone - kontext_hero_prompt with no picture, so the
+    weapon in its hand is the one the picture's LOOK describes - and saved UNMATTED, on its white
+    background, since it goes into Kontext next as a picture. See KONTEXT_HERO_SWAP."""
+    payload = _krea2_loaders()
+    _krea2_add_branch(payload, "hero", kontext_hero_prompt(player_desc, weapon_desc, False, False),
+                      size, size, steps, seed, "kxhero")
+    del payload["hero_mask"], payload["hero_maskinv"]
+    payload["hero_save"] = {"inputs": {"filename_prefix": f"kxhero_krea2_{int(time.time()*1000)}",
+                                       "images": ["hero_dec", 0]}, "class_type": "SaveImage"}
+    return _krea2_submit_and_collect(payload, ["hero"], job_key="hero_draw")["hero"]
+
+
+def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None,
+                                 steps=KREA2_STEPS_DEFAULT):
     """The nine V6_FRAME_NAMES frames drawn from the player's and/or weapon's picture (`refs`,
     {slot: staged name}), or None when Kontext failed and the caller should draw them with krea2
     from the words instead. Frames come back matted; the caller crops them exactly like krea2's.
-    `form` - see kontext_hero_prompt."""
+    `form` - see kontext_hero_prompt. With only the weapon pictured the hero itself is krea2's,
+    drawn in `steps` (see KONTEXT_HERO_SWAP)."""
     player_pic, weapon_pic = refs.get("player"), refs.get("weapon")
     seed = random.randint(1, 1000000000)
     try:
-        drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
-                                 {"hero": kontext_hero_prompt(player_desc, weapon_desc,
-                                                              bool(player_pic), bool(weapon_pic),
-                                                              form=form)},
-                                 seed, size=size, alpha=False, prefix="kxhero",
-                                 job_key="hero_ref")["hero"]
+        if player_pic:
+            drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
+                                     {"hero": kontext_hero_prompt(player_desc, weapon_desc,
+                                                                  True, bool(weapon_pic),
+                                                                  form=form)},
+                                     seed, size=size, alpha=False, prefix="kxhero",
+                                     job_key="hero_ref")["hero"]
+        else:
+            krea2_hero = _to_input(_krea2_hero_drawing(player_desc, weapon_desc, size, steps, seed),
+                                   "kxhero_krea2")
+            w = (weapon_desc or "").strip().rstrip(".") or "sword"
+            drawn = _kontext_ref_job([krea2_hero, weapon_pic], {"swap": KONTEXT_HERO_SWAP.format(w=w)},
+                                     seed, alpha=False, prefix="kxhero", job_key="hero_ref")["swap"]
         # Back to the camera before anything is posed from it - see KONTEXT_HERO_TURN.
         drawn = _kontext_turn_hero(drawn, seed)
         # ...and the weapon in a hand - see _HERO_WEAPON_Q.
@@ -10790,17 +10951,23 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
         edits = {n: (f"{KONTEXT_HERO_POSES[n].replace('the weapon', wname)} {grip} "
                      f"{KONTEXT_HERO_KEEP} {_hero_weapon_keep(weapon_desc)}")
                  for n in V6_FRAME_NAMES if n != "idle"}
-        pose_refs = [src]
         # A seed per pose: every edit starts from the same drawing, so identity is already held
         # by the reference, and the two walk edits read almost alike - one shared seed would
         # hand back the same stride twice.
-        paths = _kontext_ref_job(pose_refs, edits, seed, with_source=True, prefix="kxhero",
-                                 seeds={n: seed + i for i, n in enumerate(edits)},
-                                 guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key="hero_poses")
+        seeds = {n: seed + i for i, n in enumerate(edits)}
+        block = {"block": edits.pop("block")}
+        paths = _kontext_ref_job([src], edits, seed, with_source=True, prefix="kxhero",
+                                 seeds=seeds, guidances=KONTEXT_HERO_POSE_GUIDANCE,
+                                 job_key="hero_poses")
         paths["idle"] = paths.pop("source")
+        # The block raises the shield from its own picture - see KONTEXT_SHIELD_BACK.
+        shield = _to_input(KONTEXT_SHIELD_BACK, "kxshield")
+        paths.update(_kontext_ref_job([src, shield], block, seed, prefix="kxhero", seeds=seeds,
+                                      guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key="hero_block"))
         _kontext_unstick(src, paths, edits, "hero_pose_regen",
-                         "Re-posing the hero frames that did not move...", "kxhero",
-                         extra_refs=pose_refs[1:])
+                         "Re-posing the hero frames that did not move...", "kxhero")
+        _kontext_unstick(src, paths, block, "hero_block_regen",
+                         "Raising your hero's shield again...", "kxhero", extra_refs=[shield])
     except GenerationCancelled:
         raise
     except Exception as e:
@@ -11107,7 +11274,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     # by krea2 from the words in the job below instead, exactly as if it had had no picture.
     frame_paths = (generate_kontext_hero_frames(refs, player_style,
                                                 (brief or {}).get("weapon") or weapon_style, sq,
-                                                form=hero_form)
+                                                form=hero_form, steps=steps)
                    if (refs.get("player") or refs.get("weapon")) else None)
     ref_enemies = (generate_kontext_reference_enemy(refs["enemy"], enemy_style, esq,
                                                     last_attack_frame=last_attack_frame,
@@ -11142,8 +11309,12 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     hero_from_ref = frame_paths is not None
     if frame_paths is None:
         frame_paths = [paths[n] for n in V6_FRAME_NAMES]
+    glow = 0
     for fp in frame_paths:
-        keep_largest_figure(fp)
+        glow += restore_dropped_glow(fp)     # before the largest-blob pass, which keeps it only
+        keep_largest_figure(fp)              # if it joins the hero
+    if glow:
+        print(f"[glow] gave the hero frames back {glow} px of glow the cut-out dropped")
     # One shared bounding box so the character holds still between frames instead of rescaling on
     # every swap. Build it from the planted stances only - the slash, windup and hurt frames fling
     # the weapon and arms well past the body, and letting those into the union blew the box out

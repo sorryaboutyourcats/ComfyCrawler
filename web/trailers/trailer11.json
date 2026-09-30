@@ -1,6 +1,0 @@
-{
-  "about": "The /trailer11 page: trailer 1 (trailer.json - same cast, same track, same shot list) with the hero side-stepping left and right in its fights. Only what differs from trailer.json is written here; change trailer.json and this follows.",
-  "extends": "trailer",
-  "label": "1.1",
-  "strafe": true
-}

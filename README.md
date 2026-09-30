@@ -1,10 +1,8 @@
 # 🏰 ComfyCrawler
 
-**A Windows 95 3D Maze–style dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the music and the story. Then you walk in and fight your way to the boss.
+**A Windows 95 3D Maze-inspired dungeon crawler that your own ComfyUI draws, scores and narrates.** Fill in four blanks - what the dungeon looks like, who you are, your weapon, your enemy - and ComfyUI builds the walls, the hero, the monsters, the boss, the audio and the story. Then you walk in and fight your way to the boss.
 
 **▶️ Play it in your browser, no install:** [mowmeow.net/ComfyCrawlerTest](https://mowmeow.net/ComfyCrawlerTest/). This is the read-only edition, with dungeons that were already made. AI agents: start at [mowmeow.net/ComfyCrawlerTest/?agent](https://mowmeow.net/ComfyCrawlerTest/?agent) and read [llms.txt](web/llms.txt).
-
-**🎬 The 30-second trailers:** add `/trailer` or `/trailer2` to any ComfyCrawler address - [mowmeow.net/ComfyCrawlerTest/trailer](https://mowmeow.net/ComfyCrawlerTest/trailer/) and [/trailer2](https://mowmeow.net/ComfyCrawlerTest/trailer2/), or `127.0.0.1:5555/trailer` and `:8188/comfycrawler/trailer2` on your own machine. Each is the game itself, playing a hand-picked cast of saved dungeons (`trailer.json`, `trailer2.json`) to its own music track, cut on the beat - the first shows off what you can type, the second what fights back (a death, a monster parade and a boss charge). `/trailer11` is the first again with the hero side-stepping through its fights (`trailer11.json` just extends `trailer.json`), and `/trailer12` is the first with its end card reading "Try it out now: https://mowmeow.net/ComfyCrawlerTest" instead of buttons - the one to record. `/trailer12m` plays that same cut on a phone (a phone-sized frame, with the touch layout, touchpad and strafe slider).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Comfy Registry](https://img.shields.io/badge/Comfy_Registry-comfycrawler-blue)](https://registry.comfy.org/nodes/comfycrawler)
@@ -50,9 +48,12 @@ Then it's a game:
 
 * **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090**.
 * **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** - required. Its SageAttention patch is also used automatically, when installed, to speed up the ending cutscene.
-* **The models below.** ComfyCrawler checks for every file when it starts and on the setup screen, and can download whichever ones are missing straight into the right folder - so you don't have to find and place them by hand. Required and optional are shown separately, so you can start with just the required ones and add the rest (sound, music, the ending cutscene) later; finishing an optional group turns on the Option it unlocks by itself.
+* **The models below** - ComfyCrawler downloads them for you. Required and optional are shown separately, so you can start with just the required ones and add the rest (sound, music, the ending cutscene) later; finishing an optional group turns on the Option it unlocks by itself.
 
 ### Models
+
+> [!TIP]
+> **You don't need to download any of these yourself.** ComfyCrawler checks for every file when it starts and on the setup screen, and downloads whichever ones are missing straight into the right folder. The links and folders below are only for anyone who'd rather fetch them by hand.
 
 **Required - about 50 GB**
 
@@ -171,6 +172,9 @@ AI agents can play too. [llms.txt](web/llms.txt) is their manual: what the game 
 * **Sound Generation** - music and sound, sound only, or none (fastest).
 * **Ending Video** - film the ending cutscene (off by default; it adds several minutes).
 * **Screensaver Wait** - how long before the starfield takes over.
+* **Show sort number boxes in History** - off by default. Puts a number box at the front of every row in History's list view, so you can choose the order the **Default** sort shows your dungeons in (below). Clicking the 📜 in History's title bar 10 times turns it on or off too.
+
+**Default order and numbered runs.** History's sort menu offers Default, Newest created, Oldest created, Recently played, Style, Player, Completed and Randomized. Only Default uses the numbers: numbered runs come first, lowest number first, then every run without a number, newest first. A number saves as you type (or when you press <kbd>Enter</kbd>) and is stored with the dungeon itself; clear the box to take it off. The list doesn't re-sort while you type, so reopen History to see the new order. Sample dungeons arrive already numbered in the showcase gallery's order, so under Default they sit above your own runs. That's why History starts on **Newest created** until you pick a sort, and then it keeps whichever one you picked.
 
 Options are saved by ComfyCrawler itself, so they're the same whichever address you play from.
 

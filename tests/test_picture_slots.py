@@ -33,6 +33,14 @@ ck(got["look"] == "yellow rubber duck with orange beak and black eye",
 got = srv.parse_picture_reply(" sword\nLOOK: sword with a red grip, gold crossguard, steel blade "
                               "resting on wood grain surface", "weapon")
 ck(got["look"] == "sword with a red grip, gold crossguard, steel blade", got["look"])
+# The backdrop with no article in front of it: krea2 drew the dark square behind the lightsaber.
+got = srv.parse_picture_reply(" sword\nLOOK: glowing pink lightsaber with metallic hilt and textured grip, "
+                              "emitting vibrant magenta energy against dark background", "weapon")
+ck(got["look"] == "sword, glowing pink lightsaber with metallic hilt and textured grip, emitting "
+   "vibrant magenta energy", f"the photo's backdrop must be cut, article or not: {got['look']!r}")
+for backdrop in ("on a plain white background", "against black backdrop", "in the blurry background"):
+    got = srv.parse_picture_reply(f" sword\nLOOK: sword with a red grip {backdrop}", "weapon")
+    ck(got["look"] == "sword with a red grip", f"{backdrop!r} must be cut: {got['look']!r}")
 got = srv.parse_picture_reply(" man\nLOOK: A graying bearded man with round glasses.", "player")
 ck(got["look"] == "graying bearded man with round glasses",
    f"LOOK follows the word 'a' - no article, no full stop: {got['look']!r}")
@@ -411,7 +419,7 @@ srv._krea2_finish_enemy_variants = lambda *a, **kw: {"walker": {"idle": "krea2_w
 srv.generate_kontext_portrait_set = lambda style, size=256, ref=None, form=None: (portrait_refs.append(ref)
                                                                       or ["p.png"] * 4)
 try:
-    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None: [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
+    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None: [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
     srv.generate_kontext_reference_enemy = lambda ref, look, size, last_attack_frame=False, form=None: {
         "walker": {"idle": "kx_walker.png"}}
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={
@@ -423,7 +431,7 @@ try:
        f"ref_drawn / portrait ref: {out['ref_drawn']} {portrait_refs}")
 
     krea2_keys.clear()
-    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None: None      # Kontext fell over
+    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None: None      # Kontext fell over
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={"weapon": "brick.png",
                                                                        "enemy": "cat.png"})
     ck(krea2_keys and krea2_keys[0] == srv.V6_FRAME_NAMES,
@@ -522,6 +530,61 @@ try:
 finally:
     srv._vlm_weapon_where, srv._kontext_ref_job, srv._to_input = _saved
 ck("hero_turn" in [j[0] for j in srv._plan_v6(8, refs={"player"})], "the turn step is not on the progress bar")
+
+# Only the weapon pictured: krea2 draws the hero from the words and Kontext only swaps the weapon
+# in. Kontext drawing the whole hero turned "Jar Jar Binks" with a lightsaber picture into a Sith.
+_names = ("_krea2_submit_and_collect", "_kontext_ref_job", "_to_input", "_kontext_turn_hero",
+          "_kontext_hold_weapon", "_kontext_unstick")
+_saved = {k: getattr(srv, k) for k in _names}
+try:
+    krea2_sent, kx_calls = [], []
+    def fake_krea2(b, keys, **kw):
+        krea2_sent.append((b, list(keys), kw.get("job_key"))); return {k: f"krea2_{k}.png" for k in keys}
+    def fake_kx(refs, branches, seed, **kw):
+        kx_calls.append((list(refs), dict(branches), kw))
+        return {n: f"kx_{n}.png" for n in list(branches) + (["source"] if kw.get("with_source") else [])}
+    srv._krea2_submit_and_collect, srv._kontext_ref_job = fake_krea2, fake_kx
+    srv._to_input = lambda p, tag: f"in_{p}"
+    srv._kontext_turn_hero = lambda drawn, seed: drawn
+    srv._kontext_hold_weapon = lambda drawn, name, pic, seed: drawn
+    srv._kontext_unstick = lambda *a, **kw: []
+    frames = srv.generate_kontext_hero_frames({"weapon": "saber.png"}, "Jar Jar Binks, the real character",
+                                              "glowing pink lightsaber.", 512, steps=6)
+    ck(frames is not None and len(krea2_sent) == 1, f"a weapon-only hero must be drawn by krea2: {krea2_sent}")
+    b, keys, job = krea2_sent[0]
+    ck(keys == ["hero"] and job == "hero_draw" and b["hero_samp"]["inputs"]["steps"] == 6
+       and "Jar Jar Binks" in b["hero_pos"]["inputs"]["text"]
+       and "picture" not in b["hero_pos"]["inputs"]["text"],
+       f"krea2 draws the hero from the words, no picture named: {b['hero_pos']['inputs']['text']!r}")
+    ck(b["hero_save"]["class_type"] == "SaveImage" and "hero_mask" not in b,
+       "the krea2 hero goes into Kontext on its white background, so it must be saved unmatted")
+    refs0, br0, kw0 = kx_calls[0]
+    ck(refs0 == ["in_krea2_hero.png", "saber.png"] and list(br0) == ["swap"] and "size" not in kw0
+       and "second picture, glowing pink lightsaber, gripped" in br0["swap"] and kw0["job_key"] == "hero_ref",
+       f"the swap edits the krea2 drawing with the weapon's picture second: {kx_calls[0]}")
+    # The block raises the shield from its own picture, in a job of its own - every edit in a job
+    # sees the same pictures, and any other pose given it would grow a shield.
+    block_jobs = [c for c in kx_calls if "block" in c[1]]
+    pose_jobs = [c for c in kx_calls if "windup" in c[1]]
+    ck(len(block_jobs) == 1 and list(block_jobs[0][1]) == ["block"]
+       and block_jobs[0][0] == ["in_kx_swap.png", f"in_{srv.KONTEXT_SHIELD_BACK}"]
+       and "from the second picture" in block_jobs[0][1]["block"],
+       f"the block must be its own edit, with the shield's back as its second picture: {block_jobs}")
+    ck(len(pose_jobs) == 1 and pose_jobs[0][0] == ["in_kx_swap.png"] and "block" not in pose_jobs[0][1],
+       f"no other pose may see the shield's picture: {pose_jobs}")
+    ck(os.path.isfile(srv.KONTEXT_SHIELD_BACK), f"the shield's picture is missing: {srv.KONTEXT_SHIELD_BACK}")
+    krea2_sent.clear(); kx_calls.clear()
+    srv.generate_kontext_hero_frames({"player": "me.png", "weapon": "saber.png"}, "man", "sword", 512)
+    ck(not krea2_sent and kx_calls[0][0] == ["me.png", "saber.png"] and kx_calls[0][2].get("size") == 512,
+       "a pictured player is still drawn by Kontext from the pictures")
+finally:
+    for k, v in _saved.items():
+        setattr(srv, k, v)
+wplan = [j[0] for j in srv._plan_v6(8, refs={"weapon"})]
+ck(wplan.index("hero_draw") < wplan.index("hero_ref") and "hero_turn" not in wplan,
+   f"a weapon-only plan draws with krea2 first and plans no turn (krea2's back view held 7 of 7): {wplan}")
+ck("hero_draw" not in [j[0] for j in srv._plan_v6(8, refs={"player", "weapon"})],
+   "a pictured player has no krea2 hero drawing")
 
 # A derived flyer/boss is posed like the walker, and its idle is REDRAWN on white in that job - a
 # boss edit that painted fire behind it lost its head when the cut-out was cut out again.
@@ -651,7 +714,7 @@ finally:
 
 # Every pose says how the weapon is held, and no longer hands Kontext the weapon's picture (it
 # copied a diagonally-photographed sword as a loose object, held by the blade).
-ck("KONTEXT_HERO_GRIP.format" in src_hero and "pose_refs = [src]" in src_hero
+ck("KONTEXT_HERO_GRIP.format" in src_hero and "_kontext_ref_job([src], edits" in src_hero
    and "handle" in srv.KONTEXT_HERO_GRIP and "Only one" in srv.KONTEXT_HERO_GRIP,
    "the hero's poses no longer say how the weapon is gripped")
 

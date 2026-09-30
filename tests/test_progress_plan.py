@@ -118,6 +118,14 @@ HOLD_RUN = [(None, 0.3), ("picture_wall", 9.3), ("picture_player", 3.6), ("pictu
             ("portrait_idle", 9.6), ("portrait_edits", 18.8), (None, 0.2), ("sfx", 15.2), (None, 0.9),
             ("music", 8.5), (None, 1.5)]
 
+# Every run above posed all eight hero frames in one Kontext job. The block is its own job now,
+# with the shield's picture as a second reference (KONTEXT_SHIELD_BACK), so each run's eight
+# edits are split: seven eighths stay "hero_poses", and "hero_block" follows at the 27s it
+# averaged on the first two runs that had it (34.7s and 19.1s, 2026-09-29).
+for _run in (USER_RUN, FAST_RUN, TURN_RUN, HOLD_RUN):
+    _at = next(i for i, o in enumerate(_run) if o[0] == "hero_poses")
+    _run[_at:_at + 1] = [("hero_poses", round(_run[_at][1] * 7 / 8, 1)), ("hero_block", 27.0)]
+
 # The same four pictures a minute later on "Describe the picture in words": no Kontext until the
 # portrait edits, so the one krea2 job draws all 17 frames; one portrait was re-rolled.
 DESCRIBE_RUN = [(None, 0.4), ("picture_wall", 8.9), ("picture_player", 3.6), ("picture_weapon", 2.5),
