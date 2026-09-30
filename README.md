@@ -4,7 +4,7 @@
 
 **▶️ Play it in your browser, no install:** [mowmeow.net/ComfyCrawlerTest](https://mowmeow.net/ComfyCrawlerTest/). This is the read-only edition, with dungeons that were already made. AI agents: start at [mowmeow.net/ComfyCrawlerTest/?agent](https://mowmeow.net/ComfyCrawlerTest/?agent) and read [llms.txt](web/llms.txt).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Comfy Registry](https://img.shields.io/badge/Comfy_Registry-comfycrawler-blue)](https://registry.comfy.org/nodes/comfycrawler)
 
 ![Rusty Fork, a truck-robot farmer, squares up to Doom Grubgulch, a many-headed cow, in a cornfield maze](screenshots/rusty-fork-vs-grubgulch.png)
@@ -225,6 +225,6 @@ A new install starts with an empty History, so History offers **📥 Get Sample 
 
 ## 📄 License and credits
 
-ComfyCrawler is [MIT licensed](LICENSE). The models it uses are not part of it and each has its own license - FLUX.1 Kontext [dev], for one, is non-commercial - so check them before using what you make commercially.
+ComfyCrawler is licensed under the [GNU GPL v3](LICENSE) - the same license as ComfyUI. The models it uses are not part of it and each has its own license - FLUX.1 Kontext [dev], for one, is non-commercial - so check them before using what you make commercially.
 
 Made by **[sorryaboutyourcats](https://github.com/sorryaboutyourcats)** together with **Claude** (Anthropic), in Claude Code.
