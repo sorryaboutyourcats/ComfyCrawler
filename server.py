@@ -4037,13 +4037,29 @@ def _species_worn_rule(enemy_style):
             "   exactly where on the body it sits. Rule 4's colours are for their bodies.")
 
 
-def _enemy_species_prompt(enemy_style):
+# A known INDIVIDUAL's boss is that one individual, bigger. The default BOSS line asks a family
+# for "more of itself - stack or fuse several of it together", which suits a slime or a RAM
+# stick; for "Darth Vader" the bestiary wrote "Three fused Darth Vaders stacked vertically" on
+# both runs of 2026-09-30, and krea2 drew two Vaders, one in front of the other, in every boss
+# frame but the block. A person (_SPECIES_PARTS_PERSON) already gets one whole person; this is
+# for a named character the person rules would hurt - their helmet or armour IS the look.
+_SPECIES_BOSS_INDIVIDUAL = """- BOSS: the champion, far bigger and heavier than the other two - the one and only {enemy} at
+  their most imposing: a single towering {enemy}, their own best-known features made larger,
+  heavier and more menacing.
+"""
+
+
+def _enemy_species_prompt(enemy_style, individual=False):
     """Same hand-built chat template as _story_prompt - see there for why the <|im_start|>
     opener and the empty <think> block are both mandatory.
 
     The kind-dependent parts (_SPECIES_PARTS) go in before the {enemy} fill, since they name
-    {enemy} themselves."""
+    {enemy} themselves. `individual` is a known named one (resolve_named_styles' "known") -
+    see _SPECIES_BOSS_INDIVIDUAL."""
     parts = _SPECIES_PARTS_PERSON if _enemy_is_person(enemy_style) else _SPECIES_PARTS
+    if individual and parts is _SPECIES_PARTS:
+        roles = parts["roles"]
+        parts = dict(parts, roles=roles[:roles.index("- BOSS:")] + _SPECIES_BOSS_INDIVIDUAL)
     template = _ENEMY_SPECIES_USER
     for key, text in parts.items():
         template = template.replace("{" + key + "}", text.rstrip("\n"))
@@ -4301,10 +4317,10 @@ def _tidy_species_names(species, enemy_style):
     return species
 
 
-def generate_enemy_species(enemy_style):
+def generate_enemy_species(enemy_style, individual=False):
     """Design the three foes. Never raises: on any failure returns None and the caller falls
     back to the walker-plus-Kontext-derivation path, which still produces three usable
-    enemies - just three that look more alike."""
+    enemies - just three that look more alike. `individual` - see _SPECIES_BOSS_INDIVIDUAL."""
     payload = {
         # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
         "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
@@ -4312,7 +4328,7 @@ def generate_enemy_species(enemy_style):
         "species_gen": {
             "inputs": {
                 "clip": ["k_clip", 0],
-                "prompt": _enemy_species_prompt(enemy_style),
+                "prompt": _enemy_species_prompt(enemy_style, individual),
                 "max_length": ENEMY_SPECIES_MAX_TOKENS,
                 "sampling_mode": "on",
                 "sampling_mode.temperature": ENEMY_SPECIES_TEMPERATURE,
@@ -5311,6 +5327,9 @@ _PICTURE_SETTING_RE = re.compile(
     # against dark background" put a dark square behind the lightsaber in krea2's hero drawing,
     # and the cut-out took the blade away with the square in all 9 frames (2026-09-29).
     r"|\b(?:in|against|on)\s+(?:(?:the|a|an)\s+)?(?:[\w-]+\s+){0,3}(?:background|backdrop)\b"
+    # ...or the atmosphere it was shot in: "emitting bright light against dark purple smoke"
+    # painted purple smoke over the next run's wall (the set designer reads the weapon's line).
+    r"|\bagainst\s+(?:(?:the|a|an)\s+)?(?:[\w-]+\s+){0,3}(?:smoke|haze|fog|mist|sky|darkness|void)\b"
     r"|\bin\s+the\s+distance\b", re.IGNORECASE)
 # What the subject was DOING in the picture, which _PICTURE_WHERE asks the model to leave out -
 # see the note above it. Cut from the match to the end of its clause, like a setting. A word
@@ -6902,9 +6921,15 @@ def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, endin
                  25 if "wall" in refs else 30, (3 if "wall" in refs else 6) * 4))
     if hero_ref and "player" not in refs:
         # Only the weapon pictured: krea2 draws the hero from the words (KONTEXT_HERO_SWAP) -
-        # 14-18s with its load, measured 2026-09-29 - and Kontext's swap edit takes the drawing's
-        # place in "hero_ref" below, at the same 29-41s with Kontext's load.
-        plan.append(("hero_draw", "Drawing your hero with krea2 turbo...", 18, st))
+        # 14-18s with its load, measured 2026-09-29 - and the shield the block raises
+        # (KONTEXT_SHIELD_PROMPT), one more frame; Kontext's swap edit takes the drawing's place
+        # in "hero_ref" below, at the same 29-41s with Kontext's load.
+        plan.append(("hero_draw", "Drawing your hero and shield with krea2 turbo...",
+                     18 + KREA2_FRAME_SEC, 2 * st))
+    elif hero_ref:
+        # A pictured player: krea2 loads just for the shield, before Kontext does - 17.4s and
+        # 16.6s straight after schnell, load included (2026-09-30).
+        plan.append(("hero_shield", "Drawing your hero's shield with krea2 turbo...", 17, st))
     if hero_ref:
         plan += [
             # Kontext loads again after schnell: 34-36s for the one drawing. Then two one-word
@@ -10406,6 +10431,19 @@ KONTEXT_POSE_MIN_DIFF = 6.0
 # all six heroes, both seeds. It is the one edit given that picture (its own job - every edit in
 # a job sees the same pictures, and any other pose would grow a shield).
 KONTEXT_SHIELD_BACK = os.path.join(PROJECT_DIR, "workflows", "shield_back.png")
+# ONE SHIELD FOR EVERY HERO, THOUGH. Asked from play (2026-09-30): "is the shield always going to
+# look the same when an attachment is used?" So each run now has krea2 draw its own shield's back
+# for the block to raise, and the fixed picture above is only what a failed drawing falls back on.
+# krea2 keeps it a BACK: "painted in {p}'s own colours" drew planks or plate with straps and a grip
+# 18 of 18 over six heroes (the car robot's blue, Elmo's red and blue, a pirate's stripes), as did
+# "in the colours and materials of their gear" (18 of 18, but mostly black and grey). Measured and
+# not used: FLUX schnell, already loaded for the door and lantern, drew the painted FRONT with its
+# boss 18 of 18 whatever the words; Kontext repainting the fixed picture kept the back 12 of 12
+# but painted the hero onto it twice - a man's portrait for Jar Jar, a sweater for Grandma.
+KONTEXT_SHIELD_PROMPT = ("The back of a round battle shield painted in {p}'s own colours, seen from "
+                         "behind: its plain inner side, with two leather arm straps and a hand grip "
+                         "running across the middle. One shield only, seen straight on, isolated on "
+                         "a plain pure white background.")
 # TURNED AROUND before it is posed. Reported from play: Elmo facing the camera in all nine frames,
 # the player looking at their own hero's face instead of over its shoulder at the enemy. Kontext
 # keeps the way the photo faces, and a front-on photo outvotes "seen strictly from directly
@@ -10502,14 +10540,38 @@ KONTEXT_HERO_POSES = {
                "the camera as in the second picture, and drop into a low braced crouch, knees "
                "bent. Their other hand still grips the weapon, lowered and drawn back, clearly "
                "visible. One shield only."),
-    "windup": ("Change the character's pose: they raise the weapon high overhead, cocked back "
-               "behind their shoulder, winding up to strike."),
-    "slash1": ("Change the character's pose: they swing the weapon down and forward through a "
-               "fast diagonal arc, mid-swing, the arm stretched out ahead of them."),
-    "slash2": ("Change the character's pose: they swing the weapon all the way down and across "
-               "their body in a full follow-through, arms extended."),
-    "slash3": ("Change the character's pose: they recover from the swing, the weapon trailing low "
-               "across the far side of their body, their weight settling back to centre."),
+    # THE SWING, as krea2 draws it. Reported from play (2026-09-30): a typed hero's attack stays
+    # centred, the weapon swung in close and behind them, where a pictured hero's is "extended
+    # outward". krea2's attack frames stand upright, the windup's weapon high over the head with
+    # the elbow bent beside it and every slash's weapon low at the right hip, pointing down and
+    # forward; these edits said "the arm stretched out ahead of them" and "arms extended", and
+    # seen from behind Kontext drew "ahead" as out to the side - a wide lunge, the weapon at arm's
+    # length. Written as poses, limb by limb and upright, on Jar Jar, Grandma and a man with a
+    # wrapped fish, two seeds each (2026-09-30):
+    #  * krea2's own - every slash low at the right hip - stood upright with the weapon in close,
+    #    but a slash that says "straight down by their side" IS the idle: a real run's slash2 sat
+    #    0.4 from it, and 0.5 after _kontext_unstick's retry. The swing did not show at all.
+    #  * So the slashes are an ARC now, down in front, across to the far hip - partly hidden behind
+    #    the body, which is the "swung behind them" of a typed hero - and back out behind the leg:
+    #    every frame 7-27 from the drawing, none re-rolled.
+    #  * "Above their head" shrank the whole figure to fit the weapon in, to about 70% of its
+    #    height in every windup, "exactly as large as before" or not - a hero who pops small as
+    #    they wind up. Cocked back BEHIND the head, over the shoulder, they stay full size.
+    "windup": ("Change the character's pose: standing upright with their feet planted under "
+               "them, they draw the weapon back behind their head to wind up a chop: the right "
+               "hand up beside their right ear, the elbow bent and raised, the weapon pointing "
+               "back over their shoulder and down behind their back."),
+    "slash1": ("Change the character's pose: standing upright with their feet planted under "
+               "them, they chop the weapon down in front of them, away from the camera: the right "
+               "arm reaching forward past their right shoulder, the weapon angled down and forward "
+               "in front of their body at chest height."),
+    "slash2": ("Change the character's pose: standing upright with their feet planted under "
+               "them, they follow the chop through: the weapon swung down and across in front of "
+               "their body to their left hip, partly hidden behind their own body, the right arm "
+               "bent across their waist."),
+    "slash3": ("Change the character's pose: standing upright with their feet planted under "
+               "them, they draw the weapon back from the swing to their right side, held low and "
+               "angled out behind their right leg, their weight settling back to centre."),
     "hurt":   ("Change the character's pose: they stagger backward off balance, recoiling from a "
                "hit, the weapon and their free arm flung wide."),
     # Opposite phases of one stride, as in krea2_frame_prompts - see V6_WALK_FRAME_INDICES.
@@ -10901,17 +10963,25 @@ def _kontext_hold_weapon(drawn, weapon_name, weapon_pic, seed):
     return drawn
 
 
-def _krea2_hero_drawing(player_desc, weapon_desc, size, steps, seed):
-    """The hero drawn by krea2 from the words alone - kontext_hero_prompt with no picture, so the
-    weapon in its hand is the one the picture's LOOK describes - and saved UNMATTED, on its white
-    background, since it goes into Kontext next as a picture. See KONTEXT_HERO_SWAP."""
+def _krea2_hero_art(player_desc, weapon_desc, size, steps, seed, hero=True):
+    """krea2's part of a pictured hero, in one job: the shield the block raises (KONTEXT_SHIELD_PROMPT)
+    and, with `hero`, the hero itself drawn from the words alone - kontext_hero_prompt with no
+    picture, so the weapon in its hand is the one the picture's LOOK describes (see
+    KONTEXT_HERO_SWAP). Both saved UNMATTED, on their white background, since they go into
+    Kontext next as pictures. Returns {"shield": path, "hero": path (with `hero`)}."""
     payload = _krea2_loaders()
-    _krea2_add_branch(payload, "hero", kontext_hero_prompt(player_desc, weapon_desc, False, False),
-                      size, size, steps, seed, "kxhero")
-    del payload["hero_mask"], payload["hero_maskinv"]
-    payload["hero_save"] = {"inputs": {"filename_prefix": f"kxhero_krea2_{int(time.time()*1000)}",
-                                       "images": ["hero_dec", 0]}, "class_type": "SaveImage"}
-    return _krea2_submit_and_collect(payload, ["hero"], job_key="hero_draw")["hero"]
+    branches = {"shield": (KONTEXT_SHIELD_PROMPT.format(p=(player_desc or "").strip()
+                                                        or "armored warrior knight"), KONTEXT_REF_PX)}
+    if hero:
+        branches["hero"] = (kontext_hero_prompt(player_desc, weapon_desc, False, False), size)
+    stamp = int(time.time() * 1000)
+    for name, (text, px) in branches.items():
+        _krea2_add_branch(payload, name, text, px, px, steps, seed, "kxhero")
+        del payload[f"{name}_mask"], payload[f"{name}_maskinv"]
+        payload[f"{name}_save"] = {"inputs": {"filename_prefix": f"kxhero_krea2_{name}_{stamp}",
+                                              "images": [f"{name}_dec", 0]}, "class_type": "SaveImage"}
+    return _krea2_submit_and_collect(payload, list(branches),
+                                     job_key="hero_draw" if hero else "hero_shield")
 
 
 def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None,
@@ -10924,6 +10994,19 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
     player_pic, weapon_pic = refs.get("player"), refs.get("weapon")
     seed = random.randint(1, 1000000000)
     try:
+        # The shield comes first, while krea2 is loading anyway on a weapon-only run, and before
+        # Kontext does on the others - see KONTEXT_SHIELD_PROMPT. A failed drawing is not worth
+        # the hero: the block then raises KONTEXT_SHIELD_BACK's plain wooden shield.
+        try:
+            art = _krea2_hero_art(player_desc, weapon_desc, size, steps, seed, hero=not player_pic)
+        except GenerationCancelled:
+            raise
+        except Exception as e:
+            if not player_pic:
+                raise
+            print(f"[Kontext Ref Error] hero's shield: {e} - raising the plain wooden one")
+            art = {}
+        shield = _to_input(art.get("shield") or KONTEXT_SHIELD_BACK, "kxshield")
         if player_pic:
             drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
                                      {"hero": kontext_hero_prompt(player_desc, weapon_desc,
@@ -10932,8 +11015,7 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
                                      seed, size=size, alpha=False, prefix="kxhero",
                                      job_key="hero_ref")["hero"]
         else:
-            krea2_hero = _to_input(_krea2_hero_drawing(player_desc, weapon_desc, size, steps, seed),
-                                   "kxhero_krea2")
+            krea2_hero = _to_input(art["hero"], "kxhero_krea2")
             w = (weapon_desc or "").strip().rstrip(".") or "sword"
             drawn = _kontext_ref_job([krea2_hero, weapon_pic], {"swap": KONTEXT_HERO_SWAP.format(w=w)},
                                      seed, alpha=False, prefix="kxhero", job_key="hero_ref")["swap"]
@@ -10961,7 +11043,6 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
                                  job_key="hero_poses")
         paths["idle"] = paths.pop("source")
         # The block raises the shield from its own picture - see KONTEXT_SHIELD_BACK.
-        shield = _to_input(KONTEXT_SHIELD_BACK, "kxshield")
         paths.update(_kontext_ref_job([src, shield], block, seed, prefix="kxhero", seeds=seeds,
                                       guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key="hero_block"))
         _kontext_unstick(src, paths, edits, "hero_pose_regen",
@@ -11283,7 +11364,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
 
     # A pictured foe is the thing in the picture, not three designed species - the flyer and
     # the boss are its own Kontext edits, and nothing is left for the bestiary to design.
-    species = None if ref_enemies else generate_enemy_species(enemy_style)
+    species = None if ref_enemies else generate_enemy_species(
+        enemy_style, individual=bool(enemy_named and enemy_named.get("known")))
     # Keep the species-level fallback name in step with the title parse_story_block actually
     # uses (game.js reads the story's boss title FIRST and only falls back to this one), so the
     # two can never disagree if the story call itself happened to fail.

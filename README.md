@@ -160,6 +160,22 @@ ComfyUI still has to run on the same computer - ComfyCrawler reads and writes it
 
 Every menu and window works from the keyboard too: arrow keys move the cursor, <kbd>Enter</kbd> picks, <kbd>Esc</kbd> backs out.
 
+### 📱 On a phone
+
+ComfyCrawler fits itself to a phone screen, the Dungeon Creation Wizard included, and a touch screen gets its own controls. Try it on the [showcase site](https://mowmeow.net/ComfyCrawlerTest/), or play your own dungeons from a phone on the same network: start ComfyUI with `--listen` and open `http://<your PC's address>:8188/comfycrawler/`.
+
+| | |
+| :---: | :---: |
+| <img src="screenshots/mobile-exploration.jpg" alt="Will Smith explores a red-tiled Pizza Hut maze toward a furry monster in a chef's hat on a phone, with the swipe touchpad under the map and stats" width="300"> | <img src="screenshots/mobile-battle.jpg" alt="Jellybean the Rat fights the Bagel Basher on a phone, with the strafe slider beside the attack and block buttons" width="300"> |
+| *Exploring with the swipe pad* | *Fighting with the strafe slider* |
+
+The **MODE** switch in the top-right corner of the controls panel picks between two ways to play:
+
+* **Swipe** *(the default)* - while exploring, the whole D-pad becomes one touchpad: swipe up or down to step forward or back, left or right to turn, and tap to use a switch. One swipe is one step, however long it is. In a fight, the two step-aside buttons become one slider: drag its knob left or right to dodge, and let go to spring it back to the middle. ⚔️ and 🛡️ stay buttons beside it.
+* **Buttons** - the on-screen buttons from the table above: ▲ ▼ ↺ ↻ and USE while exploring, ⬅ ➡ ⚔️ 🛡️ in a fight.
+
+The switch is locked for the length of a fight, so a stray tap can't swap the controls mid-swing. Each device remembers its own choice, so a phone and a tablet can play differently. Computers with a mouse never see the switch and always get the buttons.
+
 ### 🤖 AI players
 
 AI agents can play too. [llms.txt](web/llms.txt) is their manual: what the game is, the rules and numbers, a `window.ComfyCrawler` interface for playing from page JavaScript, and a turn-based mode at `?agent` (for example `http://127.0.0.1:5555/?agent`). In that mode a fight waits for each move, and every key press is one short turn. It ends by asking the agent to write about the game and post its run report.

@@ -38,7 +38,8 @@ got = srv.parse_picture_reply(" sword\nLOOK: glowing pink lightsaber with metall
                               "emitting vibrant magenta energy against dark background", "weapon")
 ck(got["look"] == "sword, glowing pink lightsaber with metallic hilt and textured grip, emitting "
    "vibrant magenta energy", f"the photo's backdrop must be cut, article or not: {got['look']!r}")
-for backdrop in ("on a plain white background", "against black backdrop", "in the blurry background"):
+for backdrop in ("on a plain white background", "against black backdrop", "in the blurry background",
+                 "against dark purple smoke", "against a night sky"):
     got = srv.parse_picture_reply(f" sword\nLOOK: sword with a red grip {backdrop}", "weapon")
     ck(got["look"] == "sword with a red grip", f"{backdrop!r} must be cut: {got['look']!r}")
 got = srv.parse_picture_reply(" man\nLOOK: A graying bearded man with round glasses.", "player")
@@ -410,7 +411,7 @@ real = {k: getattr(srv, k) for k in (
     "_krea2_submit_and_collect", "keep_largest_figure", "crop_frames_to_common_bbox",
     "_krea2_finish_enemy_variants", "generate_kontext_portrait_set")}
 krea2_keys, portrait_refs = [], []
-srv.generate_enemy_species = lambda style: None
+srv.generate_enemy_species = lambda style, **kw: None
 srv._krea2_submit_and_collect = lambda b, keys, **kw: (krea2_keys.append(list(keys))
                                                        or {k: f"{k}.png" for k in keys})
 srv.keep_largest_figure = lambda *a, **kw: None
@@ -552,12 +553,14 @@ try:
                                               "glowing pink lightsaber.", 512, steps=6)
     ck(frames is not None and len(krea2_sent) == 1, f"a weapon-only hero must be drawn by krea2: {krea2_sent}")
     b, keys, job = krea2_sent[0]
-    ck(keys == ["hero"] and job == "hero_draw" and b["hero_samp"]["inputs"]["steps"] == 6
+    ck(keys == ["shield", "hero"] and job == "hero_draw" and b["hero_samp"]["inputs"]["steps"] == 6
        and "Jar Jar Binks" in b["hero_pos"]["inputs"]["text"]
        and "picture" not in b["hero_pos"]["inputs"]["text"],
        f"krea2 draws the hero from the words, no picture named: {b['hero_pos']['inputs']['text']!r}")
-    ck(b["hero_save"]["class_type"] == "SaveImage" and "hero_mask" not in b,
-       "the krea2 hero goes into Kontext on its white background, so it must be saved unmatted")
+    ck(all(b[f"{n}_save"]["class_type"] == "SaveImage" and f"{n}_mask" not in b for n in keys),
+       "the krea2 hero and shield go into Kontext on their white background, so they must be saved unmatted")
+    ck("The back of a round battle shield painted in Jar Jar Binks" in b["shield_pos"]["inputs"]["text"],
+       f"the shield must be this hero's own, from behind: {b['shield_pos']['inputs']['text']!r}")
     refs0, br0, kw0 = kx_calls[0]
     ck(refs0 == ["in_krea2_hero.png", "saber.png"] and list(br0) == ["swap"] and "size" not in kw0
        and "second picture, glowing pink lightsaber, gripped" in br0["swap"] and kw0["job_key"] == "hero_ref",
@@ -567,7 +570,7 @@ try:
     block_jobs = [c for c in kx_calls if "block" in c[1]]
     pose_jobs = [c for c in kx_calls if "windup" in c[1]]
     ck(len(block_jobs) == 1 and list(block_jobs[0][1]) == ["block"]
-       and block_jobs[0][0] == ["in_kx_swap.png", f"in_{srv.KONTEXT_SHIELD_BACK}"]
+       and block_jobs[0][0] == ["in_kx_swap.png", "in_krea2_shield.png"]
        and "from the second picture" in block_jobs[0][1]["block"],
        f"the block must be its own edit, with the shield's back as its second picture: {block_jobs}")
     ck(len(pose_jobs) == 1 and pose_jobs[0][0] == ["in_kx_swap.png"] and "block" not in pose_jobs[0][1],
@@ -575,16 +578,28 @@ try:
     ck(os.path.isfile(srv.KONTEXT_SHIELD_BACK), f"the shield's picture is missing: {srv.KONTEXT_SHIELD_BACK}")
     krea2_sent.clear(); kx_calls.clear()
     srv.generate_kontext_hero_frames({"player": "me.png", "weapon": "saber.png"}, "man", "sword", 512)
-    ck(not krea2_sent and kx_calls[0][0] == ["me.png", "saber.png"] and kx_calls[0][2].get("size") == 512,
+    ck(kx_calls[0][0] == ["me.png", "saber.png"] and kx_calls[0][2].get("size") == 512,
        "a pictured player is still drawn by Kontext from the pictures")
+    ck([k for _b, k, _j in krea2_sent] == [["shield"]] and krea2_sent[0][2] == "hero_shield",
+       f"a pictured player's krea2 job draws only the shield: {[(k, j) for _b, k, j in krea2_sent]}")
+    # A shield krea2 could not draw costs the block only its colours, never the hero.
+    def broken_krea2(b, keys, **kw):
+        raise RuntimeError("krea2 fell over")
+    srv._krea2_submit_and_collect = broken_krea2
+    kx_calls.clear()
+    frames = srv.generate_kontext_hero_frames({"player": "me.png"}, "man", "sword", 512)
+    block_jobs = [c for c in kx_calls if "block" in c[1]]
+    ck(frames is not None and block_jobs and block_jobs[0][0][1] == f"in_{srv.KONTEXT_SHIELD_BACK}",
+       f"a failed shield drawing must fall back on the plain wooden one: {block_jobs}")
 finally:
     for k, v in _saved.items():
         setattr(srv, k, v)
 wplan = [j[0] for j in srv._plan_v6(8, refs={"weapon"})]
 ck(wplan.index("hero_draw") < wplan.index("hero_ref") and "hero_turn" not in wplan,
    f"a weapon-only plan draws with krea2 first and plans no turn (krea2's back view held 7 of 7): {wplan}")
-ck("hero_draw" not in [j[0] for j in srv._plan_v6(8, refs={"player", "weapon"})],
-   "a pictured player has no krea2 hero drawing")
+_pplan = [j[0] for j in srv._plan_v6(8, refs={"player", "weapon"})]
+ck("hero_draw" not in _pplan and _pplan.index("hero_shield") < _pplan.index("hero_ref"),
+   f"a pictured player has no krea2 hero drawing, only its shield, before Kontext: {_pplan}")
 
 # A derived flyer/boss is posed like the walker, and its idle is REDRAWN on white in that job - a
 # boss edit that painted fire behind it lost its head when the cut-out was cut out again.

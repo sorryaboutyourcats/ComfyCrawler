@@ -125,6 +125,11 @@ HOLD_RUN = [(None, 0.3), ("picture_wall", 9.3), ("picture_player", 3.6), ("pictu
 for _run in (USER_RUN, FAST_RUN, TURN_RUN, HOLD_RUN):
     _at = next(i for i, o in enumerate(_run) if o[0] == "hero_poses")
     _run[_at:_at + 1] = [("hero_poses", round(_run[_at][1] * 7 / 8, 1)), ("hero_block", 27.0)]
+# ...and that shield is each run's own now (KONTEXT_SHIELD_PROMPT): a krea2 job straight after
+# schnell, before the hero's drawing - 17.4s and 16.6s, load included (2026-09-30).
+for _run in (USER_RUN, FAST_RUN, TURN_RUN, HOLD_RUN):
+    _at = next(i for i, o in enumerate(_run) if o[0] == "hero_ref")
+    _run[_at:_at] = [("hero_shield", 17.0)]
 
 # The same four pictures a minute later on "Describe the picture in words": no Kontext until the
 # portrait edits, so the one krea2 job draws all 17 frames; one portrait was re-rolled.
