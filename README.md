@@ -182,13 +182,26 @@ AI agents can play too. [llms.txt](web/llms.txt) is their manual: what the game 
 
 ## ⚙️ Options
 
-* **Difficulty** - Easy, Medium or Hard: ~33, ~66 or ~111 corridors, with foes getting 25% or 60% more health on the harder two.
+* **Difficulty** - Easy, Medium or Hard (compared below). It's also on the main screen next to Undo and Redo, and in History next to the sort menu.
 * **Texture and Sprite Generation** - High, Medium or Low generation resolution. Lower is faster.
 * **Max Frame Rate** - 24 to 240 FPS.
 * **Sound Generation** - music and sound, sound only, or none (fastest).
 * **Ending Video** - film the ending cutscene (off by default; it adds several minutes).
 * **Screensaver Wait** - how long before the starfield takes over.
 * **Show sort number boxes in History** - off by default. Puts a number box at the front of every row in History's list view, so you can choose the order the **Default** sort shows your dungeons in (below). Clicking the 📜 in History's title bar 10 times turns it on or off too.
+
+**Difficulty.** Medium is the standard game; Easy and Hard change the maze and the fights around it.
+
+| | Easy | Medium | Hard |
+| :--- | :--- | :--- | :--- |
+| **Maze** | Small and looping, with no dead ends | Branching routes | Sprawling and looping, with two doors that open onto dead ends |
+| **Size** | 33 corridors (~40 tiles) | 66 corridors (~77 tiles) | 111 corridors (~124 tiles) |
+| **Exit** | Nearby | Distant | A long, well-gated route |
+| **Hero starts with** | 125 health, 125 stamina | 100 health, 100 stamina | 75 health, 100 stamina |
+| **Foe health** | Normal | +25% | +60% |
+| **Foes** | Walkers guard only 45% of your swings; flyers give up a dive when you hit them mid-dive; packs come two at a time | As tuned | Close in 10% faster, the boss 25% faster |
+
+Difficulty is picked when a dungeon loads, not when it's made. Replaying a saved dungeon draws a fresh maze at whatever difficulty is picked right now, so you can play the same art and story on Easy one time and Hard the next.
 
 **Default order and numbered runs.** History's sort menu offers Default, Newest created, Oldest created, Recently played, Style, Player, Completed and Randomized. Only Default uses the numbers: numbered runs come first, lowest number first, then every run without a number, newest first. A number saves as you type (or when you press <kbd>Enter</kbd>) and is stored with the dungeon itself; clear the box to take it off. The list doesn't re-sort while you type, so reopen History to see the new order. Sample dungeons arrive already numbered in the showcase gallery's order, so under Default they sit above your own runs. That's why History starts on **Newest created** until you pick a sort, and then it keeps whichever one you picked.
 
