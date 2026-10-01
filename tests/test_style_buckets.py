@@ -3,7 +3,8 @@ if/elif chains, and matched buckets must ignore `brief` entirely."""
 import importlib.util, sys, os
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 mw = srv.match_word
 
 def original_bucket(wall_style):
@@ -48,23 +49,27 @@ bad = 0
 for s in CASES:
     got, want = srv._style_bucket(s), original_bucket(s)
     if got != want:
-        print(f"  BUCKET MISMATCH {s!r}: new={got} old={want}"); bad += 1
+        print(f"  BUCKET MISMATCH {s!r}: new={got} old={want}")
+        bad += 1
 
 # matched buckets must be byte-identical with and without a brief
 for s in CASES:
     if srv._style_bucket(s) is None:
         continue
     if srv.get_surface_prompts(s) != srv.get_surface_prompts(s, brief=FAKE):
-        print(f"  SURFACE brief leaked into bucket {s!r}"); bad += 1
+        print(f"  SURFACE brief leaked into bucket {s!r}")
+        bad += 1
     if srv.get_gate_prompts(s) != srv.get_gate_prompts(s, brief=FAKE):
-        print(f"  GATE brief leaked into bucket {s!r}"); bad += 1
+        print(f"  GATE brief leaked into bucket {s!r}")
+        bad += 1
 
 # _theme_bucket (the named-entity-aware dispatcher both get_surface_prompts and
 # get_gate_prompts now actually call) must be byte-identical to _style_bucket alone for every
 # case above - unquoted input must never see any behaviour change from that feature existing.
 for s in CASES:
     if srv._theme_bucket(s, None) != srv._style_bucket(s):
-        print(f"  THEME_BUCKET DRIFT (unnamed) {s!r}"); bad += 1
+        print(f"  THEME_BUCKET DRIFT (unnamed) {s!r}")
+        bad += 1
 
 # A quoted proper name must ALWAYS bypass the bucket, even for a string that would otherwise
 # collide - see tests/test_named_styles.py for the fuller named-entity coverage; this is just
@@ -72,13 +77,15 @@ for s in CASES:
 _FAKE_NAMED = {"kind": "city", "name": "X"}
 for s in ("wall street", "rockefeller center", "st patricks cathedral", "route 95"):
     if srv._theme_bucket(s, _FAKE_NAMED) is not None:
-        print(f"  a named entity failed to bypass the bucket for {s!r}"); bad += 1
+        print(f"  a named entity failed to bypass the bucket for {s!r}")
+        bad += 1
 
 # ...except a bucket whose key IS the name (_STYLE_BUCKETS_QUOTE_SAFE): a quoted "The Matrix"
 # is asking for exactly the green rain, so it must still reach it.
 for s in ("The Matrix, the real film digital rain", "The Matrix"):
     if srv._theme_bucket(s, _FAKE_NAMED) != "matrix":
-        print(f"  the quote-safe matrix bucket was bypassed for {s!r}"); bad += 1
+        print(f"  the quote-safe matrix bucket was bypassed for {s!r}")
+        bad += 1
 
 # generic path with no brief must be unchanged; with a brief must use every slot
 w,c,f,l = srv.get_surface_prompts("internet")

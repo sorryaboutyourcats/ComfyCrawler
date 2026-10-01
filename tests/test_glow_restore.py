@@ -12,12 +12,14 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 TMP = tempfile.mkdtemp(prefix="glow_test_")
 N = 200

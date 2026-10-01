@@ -5,12 +5,14 @@ No ComfyUI needed - _comfy_get_json is replaced by a fake one."""
 import atexit, errno, importlib.util, json, os, shutil, sys, tempfile, threading, urllib.error, urllib.request
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 TMP = tempfile.mkdtemp(prefix="cc_preflight_")
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)

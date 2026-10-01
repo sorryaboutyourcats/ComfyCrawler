@@ -3,12 +3,14 @@ substitution. No ComfyUI needed - the LLM reply is faked."""
 import importlib.util, sys, os
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 # ---- prompt shape -------------------------------------------------------------
 full = srv._theme_brief_prompt("internet", "memes", "chat", True)
@@ -175,7 +177,8 @@ before = srv._mean_luma(Image.open(bright))
 srv._lift_dark_surface(bright, "unit-bright")
 ck(abs(srv._mean_luma(Image.open(bright)) - before) < 0.01, "bright surface was altered")
 rgba = os.path.join(tmpd, "rgba.png")
-im = Image.new("RGBA", (64, 64), (5, 5, 8, 255)); im.putalpha(Image.new("L", (64, 64), 128))
+im = Image.new("RGBA", (64, 64), (5, 5, 8, 255))
+im.putalpha(Image.new("L", (64, 64), 128))
 im.save(rgba)
 srv._lift_dark_surface(rgba, "unit-alpha")
 out = Image.open(rgba)
@@ -203,7 +206,8 @@ checks.putdata([(255, 255, 255) if (x // 8 + y // 8) % 2 else (20, 20, 20)
                 for y in range(64) for x in range(64)])
 ck(srv._surface_contrast(checks) > srv.SURFACE_MIN_CONTRAST, "a checkerboard read as blank")
 # a readable wall must be returned untouched, without reaching ComfyUI at all
-ok_wall = os.path.join(tmpd, "ok.png"); checks.save(ok_wall)
+ok_wall = os.path.join(tmpd, "ok.png")
+checks.save(ok_wall)
 ck(srv._fix_blank_wall(ok_wall, "supermarket", 512) == ok_wall,
    "a readable wall was needlessly re-rolled")
 # an unreadable file must not raise, and must hand its path straight back

@@ -15,14 +15,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 spec = importlib.util.spec_from_file_location("comfy_node", os.path.join(ROOT, "comfy_node.py"))
-cn = importlib.util.module_from_spec(spec); spec.loader.exec_module(cn)
+cn = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cn)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 TMP = tempfile.mkdtemp(prefix="cc_routes_")
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
@@ -90,7 +93,8 @@ async def main():
         real = srv.list_dungeon_sessions
         def slow_listing():
             with lock:
-                active[0] += 1; peak[0] = max(peak[0], active[0])
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
             time.sleep(0.6)
             with lock:
                 active[0] -= 1

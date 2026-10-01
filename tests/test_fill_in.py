@@ -3,12 +3,14 @@ read back into fields. No ComfyUI needed - the LLM reply is faked."""
 import importlib.util, random, sys, os
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 
 def form(wall="", player="", weapon="", enemy=""):

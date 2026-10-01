@@ -4,13 +4,15 @@ byte-identical to what it was before that existed. No ComfyUI needed."""
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 bad = 0
 def check(cond, msg):
     global bad
     if not cond:
-        print("  FAIL:", msg); bad += 1
+        print("  FAIL:", msg)
+        bad += 1
 
 # Head-noun detection: the last word before the first joiner.
 for text, want in [("Lady in the red dress", True), ("lady in the red dress", True),
@@ -55,7 +57,8 @@ img = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
 for y in range(10, 100):
     for x in range(22, 78):          # 56 px wide, running off the bottom
         img.putpixel((x, y), (200, 0, 0, 255))
-tmp = os.path.join(tempfile.gettempdir(), "person_feet_check.png"); img.save(tmp)
+tmp = os.path.join(tempfile.gettempdir(), "person_feet_check.png")
+img.save(tmp)
 check(srv._enemy_frame_problem(tmp) is None, "the general guard should pass a 56% bottom edge")
 check((srv._enemy_frame_problem(tmp, feet_max=srv._person_feet_max("lady in the red dress", "walker"))
        or "").startswith("clipped"), "a person walker cut off at the legs was not flagged")

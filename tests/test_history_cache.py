@@ -9,7 +9,8 @@ import atexit, importlib.util, json, os, shutil, sys, tempfile, time
 
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 TMP = tempfile.mkdtemp(prefix="history_cache_")
 atexit.register(shutil.rmtree, TMP, True)

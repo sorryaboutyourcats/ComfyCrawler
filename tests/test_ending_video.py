@@ -11,7 +11,8 @@ from PIL import Image
 
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 TMP = tempfile.mkdtemp(prefix="ending_video_")
 atexit.register(shutil.rmtree, TMP, True)
@@ -33,7 +34,9 @@ def png_url(color=(255, 0, 0, 255), size=(8, 8)):
 def wav_url(seconds, rate=32000):
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(rate)
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
         wf.writeframes(b"\x01\x00" * int(seconds * rate))
     return "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 

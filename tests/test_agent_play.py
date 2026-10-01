@@ -8,16 +8,19 @@ import importlib.util, os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 spec = importlib.util.spec_from_file_location("comfy_node", os.path.join(ROOT, "comfy_node.py"))
-cn = importlib.util.module_from_spec(spec); spec.loader.exec_module(cn)
+cn = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cn)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import export_showcase  # noqa: E402
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 with open(os.path.join(ROOT, "web", "llms.txt"), "rb") as f:
     LLMS = f.read()

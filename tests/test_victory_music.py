@@ -15,7 +15,8 @@ import importlib.util, os, re, sys, wave
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 GAME_JS = open(os.path.join(ROOT, "web", "game.js"), encoding="utf-8").read()
 bad = 0

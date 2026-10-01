@@ -9,12 +9,14 @@ import urllib.error, urllib.request
 
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 TMP = tempfile.mkdtemp(prefix="cc_downloads_")
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
@@ -76,7 +78,9 @@ class FakeFileHandler(http.server.BaseHTTPRequestHandler):
         name = self.path.lstrip("/")
         body = FakeFileHandler.files.get(name)
         if body is None:
-            self.send_response(404); self.end_headers(); return
+            self.send_response(404)
+            self.end_headers()
+            return
         rng = None if FakeFileHandler.ignore_range else self.headers.get("Range")
         FakeFileHandler.requests.append(rng)
         start, status = 0, 200

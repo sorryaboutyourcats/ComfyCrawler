@@ -6,14 +6,17 @@ import atexit, contextlib, importlib.util, io, json, os, shutil, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 spec = importlib.util.spec_from_file_location("comfy_node", os.path.join(ROOT, "comfy_node.py"))
-cn = importlib.util.module_from_spec(spec); spec.loader.exec_module(cn)
+cn = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cn)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 TMP = tempfile.mkdtemp(prefix="cc_node_")
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
@@ -99,7 +102,8 @@ ck(status == 200, "a request with no Origin / Sec-Fetch-Site (curl, scripts) pas
 
 # ---- embedded mode (inside ComfyUI) ----
 IN_DIR, OUT_DIR = os.path.join(TMP, "in"), os.path.join(TMP, "out")
-os.makedirs(IN_DIR); os.makedirs(OUT_DIR)
+os.makedirs(IN_DIR)
+os.makedirs(OUT_DIR)
 srv.save_comfy_settings(url="127.0.0.1:9999")          # must be ignored when embedded
 srv.COMFY_EMBEDDED = {"url": "http://127.0.0.1:8188", "input_dir": lambda: IN_DIR, "output_dir": lambda: OUT_DIR}
 asked = []

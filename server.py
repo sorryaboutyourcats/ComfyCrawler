@@ -1219,7 +1219,8 @@ def _ring_saturation(img, frac=0.12):
         if y < r or y >= h - r:
             ring.extend(row)                      # full top / bottom bands
         else:
-            ring.extend(row[:r]); ring.extend(row[-r:])   # left / right edges only
+            ring.extend(row[:r])
+            ring.extend(row[-r:])   # left / right edges only
     return sum(ring) / max(1, len(ring))
 
 

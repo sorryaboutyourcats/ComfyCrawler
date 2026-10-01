@@ -10,7 +10,8 @@ import atexit, base64, importlib.util, io, json, os, shutil, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 sys.path.insert(0, ROOT)
 import comfy_node
 from PIL import Image
@@ -18,7 +19,8 @@ from PIL import Image
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 # ---- reading a reply -------------------------------------------------------------------
 # Replies as they came back live, after the "KIND:" the reply is begun on.
@@ -353,11 +355,13 @@ ck(srv.kontext_surface_prompt("bright blue sky.").endswith("bright blue sky."), 
 # A surface Kontext handed back as the picture itself (sky over ground) goes to FLUX schnell.
 hill = Image.new("RGB", (64, 64), (60, 120, 230))
 hill.paste((70, 160, 40), (0, 32, 64, 64))
-hill_path = os.path.join(TMP, "hill.png"); hill.save(hill_path)
+hill_path = os.path.join(TMP, "hill.png")
+hill.save(hill_path)
 grass = Image.effect_noise((64, 64), 40).convert("RGB")
 grass = Image.merge("RGB", (grass.getchannel(0).point(lambda v: v // 3),
                             grass.getchannel(0), grass.getchannel(0).point(lambda v: v // 4)))
-grass_path = os.path.join(TMP, "grass.png"); grass.save(grass_path)
+grass_path = os.path.join(TMP, "grass.png")
+grass.save(grass_path)
 ck(srv._surface_scene_split(hill_path) > srv.KONTEXT_SURFACE_MAX_SPLIT,
    f"a sky-over-ground picture must read as a scene: {srv._surface_scene_split(hill_path):.0f}")
 ck(srv._surface_scene_split(grass_path) < srv.KONTEXT_SURFACE_MAX_SPLIT,
@@ -480,7 +484,8 @@ try:
     srv._to_input = lambda p, tag: p
     calls = []
     def fake_job(refs, branches, seed, **kw):
-        calls.append(seed); return {"turn": f"turned{len(calls)}.png"}
+        calls.append(seed)
+        return {"turn": f"turned{len(calls)}.png"}
     srv._kontext_ref_job = fake_job
     srv._vlm_hero_view = lambda p: "back"
     ck(srv._kontext_turn_hero("drawn.png", 1) == "drawn.png" and not calls,
@@ -512,7 +517,8 @@ try:
     srv._to_input = lambda p, tag: p
     calls = []
     def fake_job(refs, branches, seed, **kw):
-        calls.append((list(refs), branches["hold"])); return {"hold": f"held{len(calls)}.png"}
+        calls.append((list(refs), branches["hold"]))
+        return {"hold": f"held{len(calls)}.png"}
     srv._kontext_ref_job = fake_job
     srv._vlm_weapon_where = lambda p, w: "hand"
     ck(srv._kontext_hold_weapon("drawn.png", "plush", "plush_ref.png", 1) == "drawn.png" and not calls,
@@ -540,7 +546,8 @@ _saved = {k: getattr(srv, k) for k in _names}
 try:
     krea2_sent, kx_calls = [], []
     def fake_krea2(b, keys, **kw):
-        krea2_sent.append((b, list(keys), kw.get("job_key"))); return {k: f"krea2_{k}.png" for k in keys}
+        krea2_sent.append((b, list(keys), kw.get("job_key")))
+        return {k: f"krea2_{k}.png" for k in keys}
     def fake_kx(refs, branches, seed, **kw):
         kx_calls.append((list(refs), dict(branches), kw))
         return {n: f"kx_{n}.png" for n in list(branches) + (["source"] if kw.get("with_source") else [])}
@@ -576,7 +583,8 @@ try:
     ck(len(pose_jobs) == 1 and pose_jobs[0][0] == ["in_kx_swap.png"] and "block" not in pose_jobs[0][1],
        f"no other pose may see the shield's picture: {pose_jobs}")
     ck(os.path.isfile(srv.KONTEXT_SHIELD_BACK), f"the shield's picture is missing: {srv.KONTEXT_SHIELD_BACK}")
-    krea2_sent.clear(); kx_calls.clear()
+    krea2_sent.clear()
+    kx_calls.clear()
     srv.generate_kontext_hero_frames({"player": "me.png", "weapon": "saber.png"}, "man", "sword", 512)
     ck(kx_calls[0][0] == ["me.png", "saber.png"] and kx_calls[0][2].get("size") == 512,
        "a pictured player is still drawn by Kontext from the pictures")
@@ -624,7 +632,8 @@ ck(all("glasses" in t and "exact same face" not in t for t in srv.KONTEXT_EXPRES
 tmp_bust = tempfile.mkdtemp()
 atexit.register(shutil.rmtree, tmp_bust, True)
 for name, box in (("centred", (30, 10, 70, 100)), ("edge", (70, 10, 100, 100))):
-    im = Image.new("RGBA", (100, 100), (0, 0, 0, 0)); im.paste((200, 150, 120, 255), box)
+    im = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    im.paste((200, 150, 120, 255), box)
     im.save(os.path.join(tmp_bust, name + ".png"))
 ck(srv._bust_offset(os.path.join(tmp_bust, "centred.png")) <= srv.KONTEXT_BUST_MAX_OFFSET
    < srv._bust_offset(os.path.join(tmp_bust, "edge.png")), "the off-centre bust check no longer separates them")
@@ -678,7 +687,8 @@ try:
     srv._vlm_wants_rotors = lambda path: False
     ck(srv.describe_pictures({"player": "x"})["player"]["form"] == "living", "a non-machine is living")
     reads["picture_player"] = {"kind": "man", "look": "man in a cap"}
-    asked.clear(); srv._vlm_wants_rotors = lambda path: asked.append(path) or True
+    asked.clear()
+    srv._vlm_wants_rotors = lambda path: asked.append(path) or True
     ck("form" not in srv.describe_pictures({"player": "x"})["player"] and not asked,
        "a person must not be asked the machine question")
 finally:

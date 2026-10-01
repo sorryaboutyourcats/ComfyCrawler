@@ -11,12 +11,14 @@ import importlib.util, json, os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 EVERY = ("wall", "player", "weapon", "enemy")
 
@@ -159,16 +161,19 @@ for name, observed, sound, mode in (("user's run", USER_RUN, "music_and_sound", 
 # ---- jobs that turn out different from the plan ------------------------------------------------
 tr = srv.ProgressTracker()
 tr.begin_plan([("a", "A", 10, 1), ("retry", "Retry", 10, 1), ("b", "B", 80, 1)])
-tr.begin_job("a"); tr.finish_job("a")
+tr.begin_job("a")
+tr.finish_job("a")
 ck(srv.gen_progress["percent"] == round(10 / 100 * tr.CAP), srv.gen_progress["percent"])
 tr.skip_job("retry")
 ck(srv.gen_progress["percent"] == round(20 / 100 * tr.CAP),
    f"a planned retry that is not needed must move the bar when that is known: {srv.gen_progress['percent']}")
-tr.begin_job("b"); tr.finish_job("b")
+tr.begin_job("b")
+tr.finish_job("b")
 ck(srv.gen_progress["percent"] == tr.CAP, f"skipping must not strand the bar short: {srv.gen_progress['percent']}")
 
 tr.begin_plan([("a", "A", 50, 1), ("retry", "Retry", 10, 1), ("b", "B", 40, 1)])
-tr.begin_job("a"); tr.finish_job("a")
+tr.begin_job("a")
+tr.finish_job("a")
 before = srv.gen_progress["percent"]
 tr.add_job("retry", "Retry x3", 30, 3)
 ck(tr._weights["retry"] == 30 and tr._labels["retry"] == "Retry x3",

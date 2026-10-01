@@ -4,14 +4,16 @@ No ComfyUI needed - every model reply is faked."""
 import importlib.util, random, re, sys, os, tempfile
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 # Never touch the real recent-cast memory from a test.
 srv.RECENT_CAST_PATH = os.path.join(tempfile.mkdtemp(), "recent_cast_names.json")
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 
 def decide(kind, what, name, typed, seeds=60, **kw):

@@ -6,14 +6,17 @@ import atexit, importlib.util, json, os, re, shutil, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("srv", os.path.join(ROOT, "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 spec = importlib.util.spec_from_file_location("comfy_node", os.path.join(ROOT, "comfy_node.py"))
-cn = importlib.util.module_from_spec(spec); spec.loader.exec_module(cn)
+cn = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cn)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 TMP = tempfile.mkdtemp(prefix="cc_settings_")
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
@@ -56,7 +59,8 @@ for bad, why in (({"notours": "x"}, "a key without the comfycrawler. prefix"),
         ck(on_disk() == before, f"{why} is refused without writing anything")
 
 # ---- the other address wrote meanwhile: its change is kept ----
-external = on_disk(); external["comfycrawler.screensaverStop"] = "5"
+external = on_disk()
+external["comfycrawler.screensaverStop"] = "5"
 write_raw(json.dumps(external))
 merged = srv.save_page_settings({"comfycrawler.endingVideoLook": "pixel"})
 ck(merged.get("comfycrawler.screensaverStop") == "5" and merged.get("comfycrawler.endingVideoLook") == "pixel",

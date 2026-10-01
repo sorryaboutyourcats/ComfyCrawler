@@ -6,12 +6,14 @@ test_theme_brief.py uses for generate_theme_brief)."""
 import importlib.util, sys, os, inspect
 spec = importlib.util.spec_from_file_location(
     "srv", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"))
-srv = importlib.util.module_from_spec(spec); spec.loader.exec_module(srv)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
 
 fails = []
 def ck(cond, msg):
     if not cond:
-        fails.append(msg); print("  FAIL:", msg)
+        fails.append(msg)
+        print("  FAIL:", msg)
 
 # ---- extraction ----------------------------------------------------------------
 ck(srv.parse_named_styles('"Billy" the cat') != [], "a straight-quoted span was not found")
