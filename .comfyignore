@@ -1,0 +1,19 @@
+# What the Comfy Registry package leaves out. `comfy node publish` (.github/workflows/publish_node.yml)
+# zips the git-tracked files minus these patterns - a git clone still gets everything.
+
+# The trailers are cut from this machine's own saved runs, so they can't play anywhere else.
+web/trailers/
+web/sounds/trailer*_music.wav
+# Retired from the victory pool (see VICTORY_MUSIC_TRACKS in server.py) - nothing plays it.
+web/sounds/unused_*
+
+# Development only: tests, build config for web/tailwind.css, dev scripts, README images.
+tests/
+tools/
+tailwind/
+package.json
+package-lock.json
+screenshots/
+.github/
+.gitignore
+.comfyignore
