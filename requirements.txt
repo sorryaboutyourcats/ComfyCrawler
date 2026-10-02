@@ -2,7 +2,8 @@
 # Real per-step progress: ComfyUI only pushes node/sampler progress over its websocket,
 # so without this the bar advances once per completed job instead of continuously.
 websocket-client>=1.7
-imageio-ffmpeg>=0.4.9
+# Decodes the generated sound effects and music in-process (ComfyUI already ships it).
+av>=13.0
 pillow>=10.0
 numpy>=1.24
 # The intro narration's text-to-speech is separate - see requirements-narration.txt.

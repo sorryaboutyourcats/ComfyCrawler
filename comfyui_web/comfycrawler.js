@@ -9,8 +9,8 @@ const openComfyCrawler = () => {
   window.open(url("/comfycrawler/"), "_blank", "noopener");
 };
 const GITHUB_URL = "https://github.com/sorryaboutyourcats/ComfyCrawler";
-// Also written in the About box's title bar in index.html and in pyproject.toml (as 0.111.0) - bump all three.
-const APP_VERSION = "v0.111";
+// Also written in the About box's title bar in index.html and in pyproject.toml (as 0.111.1) - bump all three.
+const APP_VERSION = "v0.111.1";
 
 // registerSidebarTab's `icon` becomes an <i class="{icon} side-bar-button-icon">, sized by
 // font-size alone - so a plain CSS class with a background-image stands in for a PrimeIcons glyph,

@@ -433,7 +433,7 @@ try:
     ck(not srv.gen_progress["is_generating"], "a refused CREATE must not start a run")
 
     # ---- /api/open_folder: what the About window's model rows send ----
-    # An accepted key genuinely opens an Explorer window (os.startfile/subprocess.Popen), which a
+    # An accepted key genuinely opens an Explorer window (os.startfile), which a
     # test has no business doing wholesale - _open_folder_now is swapped out below to record what
     # it was asked to open instead of actually opening it, so the resolved PATH can still be
     # checked. What matters throughout: a request cannot name a directory - it sends

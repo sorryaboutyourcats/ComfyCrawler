@@ -30,7 +30,6 @@ import time
 import base64
 import random
 import threading
-import subprocess
 import uuid
 import wave
 
@@ -87,8 +86,9 @@ def _open_folder_now(folder):
     waiting on Explorer here would stall the progress poll queued behind it."""
     try:
         os.startfile(folder)
-    except Exception:
-        subprocess.Popen(["explorer", os.path.normpath(folder)])
+    except Exception as e:
+        print(f"[folder] could not open {folder} ({e})")
+        return
     print(f"[folder] opened {folder}")
 
 # ---------------------------------------------------------------------------
@@ -8927,22 +8927,29 @@ def sfx_prompts(wall_style, player_style, weapon_style, enemy_style):
     return {k: v[0].upper() + v[1:] for k, v in out.items()}
 
 
-def _ffmpeg_exe():
-    """Path to the ffmpeg bundled with imageio-ffmpeg (already in requirements.txt).
+def _decode_audio(path, rate, channels=1):
+    """Audio file -> float32 at `rate` (interleaved L/R when channels=2), via 16-bit samples.
 
-    Imported lazily so a missing package costs the sound effects and nothing else - the
-    server must still boot and still generate a dungeon."""
-    import imageio_ffmpeg
-    return imageio_ffmpeg.get_ffmpeg_exe()
+    PyAV (in requirements.txt, and one of ComfyUI's own dependencies) decodes in-process with
+    the same ffmpeg libraries the ffmpeg CLI uses. Launching a separate program instead is
+    what got 0.111.0 flagged by the Comfy Registry's scanner. Imported lazily so a missing
+    package costs the sounds and nothing else - the server must still boot and still
+    generate a dungeon."""
+    import av
+    resampler = av.AudioResampler(format="s16", layout="mono" if channels == 1 else "stereo",
+                                  rate=rate)
+    chunks = []
+    with av.open(path) as container:
+        for frame in container.decode(audio=0):
+            chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(frame)]
+    chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(None)]
+    pcm = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int16)
+    return pcm.astype(np.float32) / 32768.0
 
 
 def _sfx_decode(path):
     """FLAC -> mono float32 at SFX_SR."""
-    out = subprocess.run(
-        [_ffmpeg_exe(), "-v", "error", "-i", path,
-         "-f", "s16le", "-ac", "1", "-ar", str(SFX_SR), "-"],
-        capture_output=True, check=True).stdout
-    return np.frombuffer(out, dtype="<i2").astype(np.float32) / 32768.0
+    return _decode_audio(path, SFX_SR)
 
 
 def _sfx_env(x, frame_ms=20):
@@ -9169,11 +9176,7 @@ def music_prompts(wall_style):
 
 def _music_decode(path):
     """FLAC -> mono float32 at MUSIC_SR."""
-    out = subprocess.run(
-        [_ffmpeg_exe(), "-v", "error", "-i", path,
-         "-f", "s16le", "-ac", "1", "-ar", str(MUSIC_SR), "-"],
-        capture_output=True, check=True).stdout
-    return np.frombuffer(out, dtype="<i2").astype(np.float32) / 32768.0
+    return _decode_audio(path, MUSIC_SR)
 
 
 def _music_problem(x):
@@ -9619,10 +9622,7 @@ def _finish_cue(src):
     _finish_music there is no loop-seam crossfade (a cue plays once, start to end) and no fold
     to mono: this track is the trailer's whole soundtrack, so it keeps its width."""
     rate = 44100
-    pcm = subprocess.run(
-        [_ffmpeg_exe(), "-v", "error", "-i", src, "-f", "s16le", "-ac", "2", "-ar", str(rate), "-"],
-        capture_output=True, check=True).stdout
-    x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    x = _decode_audio(src, rate, channels=2)
     if len(x) < 2 * rate or float(np.abs(x).max()) < 0.01:
         return None, "empty"
     x = x * (0.9 / float(np.abs(x).max()))
