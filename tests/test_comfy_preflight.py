@@ -432,6 +432,41 @@ try:
         ck(refusal.get("preflight", {}).get("ready") is False, "the refusal carries the report for the page")
     ck(not srv.gen_progress["is_generating"], "a refused CREATE must not start a run")
 
+    # ---- a choice whose optional models are missing reaches the run as the most ComfyUI can make ----
+    # game.js greys those choices out (applyModelAvailability), but an older page or a script can
+    # still ask for them. The run itself is swapped for a stub that records what it was handed.
+    started = []
+    real_run = srv.run_batch_v6_krea
+    srv.run_batch_v6_krea = lambda *a, **kw: started.append(kw)
+
+    def create_with(missing, **options):
+        have = {f: set(v) for f, v in ALL_MODELS.items()}
+        for folder, name in missing:
+            have[folder].discard(name)
+        reset(argv=DESKTOP_ARGV, models=have, model_dirs={"diffusion_models": [FIRST_DIR, SECOND_DIR]})
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/generate_dungeon", method="POST",
+                                     data=json.dumps({"mode": "v6_krea", "wall_style": "moss", **options}).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        srv.GEN_THREAD.join(timeout=10)
+        srv.gen_progress["is_generating"] = False
+        return started.pop() if started else {}
+
+    try:
+        kw = create_with([("checkpoints", srv.MUSIC_CKPT), ("diffusion_models", srv.ENDING_UNET)],
+                         sound_mode="music_and_sound", ending_video=True)
+        ck(kw.get("sound_mode") == "sound_only", f"no music model: music and sound becomes sound only, got {kw.get('sound_mode')}")
+        ck(kw.get("ending_video") == "off", f"no H3 model: the ending movie is skipped, got {kw.get('ending_video')}")
+        kw = create_with([("checkpoints", srv.SFX_CKPT)], sound_mode="sound_only")
+        ck(kw.get("sound_mode") == "skip", f"no sound-effects model: sound generation is skipped, got {kw.get('sound_mode')}")
+        kw = create_with([], sound_mode="music_and_sound", ending_video=True)
+        ck((kw.get("sound_mode"), kw.get("ending_video")) == ("music_and_sound", "loading"),
+           "with every model installed, the player's picks reach the run untouched")
+    finally:
+        srv.run_batch_v6_krea = real_run
+        reset(argv=DESKTOP_ARGV, models=models, model_dirs={"diffusion_models": [FIRST_DIR, SECOND_DIR]})
+
     # ---- /api/open_folder: what the About window's model rows send ----
     # An accepted key genuinely opens an Explorer window (os.startfile), which a
     # test has no business doing wholesale - _open_folder_now is swapped out below to record what

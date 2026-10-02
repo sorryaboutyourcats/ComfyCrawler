@@ -51,7 +51,7 @@
       'dirToAngle', 'isWalkable', 'releaseHeldKeys', 'enemySpeedMul',
       'combatState', 'keysHeld', 'player', 'enemyMarkers', 'visitedTiles', 'passagesList', 'MAP',
       'exitRoom', 'activeMarker', 'endingPhase', 'selectedDifficulty', 'currentThemeName',
-      'activeMode', 'dungeonStory', 'currentRunHistoryId', 'crawlRollStartedAt',
+      'activeMode', 'dungeonStory', 'currentRunHistoryId',
       'playerSpriteImg', 'playerFaceImg', 'playerSpriteFrames', 'playerFaceFrames', 'enemyVariantImgs',
       'DIR_VECS', 'DIFFICULTIES', 'ENEMY_VARIANTS', 'INTRO_TOTAL', 'ATTACK_HIT_FRAME',
       'START_STING_GAIN', 'SOUNDS_BASE', 'SERVER_URL', 'SHOWCASE_MODE',
@@ -650,10 +650,9 @@
         'Composing dungeon music with Stable Audio 3...',
         'Filming the ending cutscene with MiniMax H3...',
       ];
-      // The run's own opening crawl, as the loading screen shows it - but run at time-lapse speed
-      // (a full crawl takes a minute) and started with the title already in view. Built here
-      // rather than by startCrawl, which would also start the narrator.
-      function timelapseCrawl(story) {
+      // The run's own opening crawl, as the loading screen shows it. Built here rather than by
+      // startCrawl, which would also start the narrator.
+      function showCrawl(story) {
         const crawlText = $('crawlText'), pending = $('crawlPending');
         if (!story || !crawlText) return;
         crawlText.innerHTML = '';
@@ -667,13 +666,6 @@
           crawlText.appendChild(para);
         });
         if (pending) pending.style.display = 'none';
-        crawlText.style.setProperty('--crawl-duration', '15s');
-        // game.js re-times the animation off crawlRollStartedAt when it (re)starts - see its
-        // animationstart listener - so "started 2.5s ago" is said there, not in animationDelay.
-        crawlRollStartedAt = Date.now() - 2500;
-        crawlText.classList.remove('rolling');
-        void crawlText.offsetWidth;
-        crawlText.classList.add('rolling');
       }
 
       function zipLoading(fromBeat, toBeat) {
@@ -942,7 +934,7 @@
           btnEnterDungeon.classList.remove('bg-yellow-100');
           btnEnterDungeon.textContent = 'GENERATING ASSETS';
           chip.style.display = 'inline-block';
-          timelapseCrawl(worlds[hook.id].world.dungeonStory);
+          showCrawl(worlds[hook.id].world.dungeonStory);
           zipLoading(6.3, 7.6);
         });
         cue(7.65, 'ready', () => {

@@ -2398,6 +2398,44 @@ def crop_portrait_square(portrait_path):
         return False
 
 
+def _overhead_marker(labels, counts, main):
+    """The label of a small blob floating straight over the main figure's head, or None.
+
+    All of it has to hold: between OVERHEAD_MARKER_MIN_AREA and _MAX_AREA of the figure's area
+    (the floor keeps cut-out specks erased), entirely
+    above the figure's top, no further up than OVERHEAD_MARKER_MAX_GAP of the figure's height,
+    and centred over the head - the figure's top fifth. A bystander is beside the figure,
+    not over it, and is never that small, so keep_largest_figure still drops them."""
+    import numpy as np
+    from scipy import ndimage
+    boxes = ndimage.find_objects(labels)
+    fy, fx = boxes[main - 1]
+    height = fy.stop - fy.start
+    head = np.nonzero((labels[fy.start:fy.start + max(1, height // 5)] == main).any(axis=0))[0]
+    if not len(head):
+        return None
+    best = None
+    for lab in np.argsort(counts)[::-1][1:]:
+        if counts[lab] == 0:
+            break
+        if not (OVERHEAD_MARKER_MIN_AREA <= counts[lab] / counts[main] <= OVERHEAD_MARKER_MAX_AREA):
+            continue
+        by, bx = boxes[lab - 1]
+        centre = (bx.start + bx.stop) / 2
+        if (by.stop <= fy.start + 2 and fy.start - by.stop <= height * OVERHEAD_MARKER_MAX_GAP
+                and head.min() <= centre <= head.max()):
+            best = lab
+            break
+    return best
+
+
+# Measured on a "The Sims" boss: its plumbob was 2.1% of the figure's area and floated 0.035 of
+# its height above the crown. Both limits leave room for a bigger marker or a higher float.
+OVERHEAD_MARKER_MAX_AREA = 0.06
+OVERHEAD_MARKER_MIN_AREA = 0.005
+OVERHEAD_MARKER_MAX_GAP = 0.2
+
+
 def keep_largest_figure(frame_path, thresh=20):
     """Erase everything in a background-removed frame except the biggest connected blob.
 
@@ -2408,7 +2446,11 @@ def keep_largest_figure(frame_path, thresh=20):
 
     `thresh` is the alpha cut for "solid". A higher value (used for the enemy) also discards a
     faint BiRefNet halo left on the old pure-white background - that halo would otherwise be the
-    largest component and defeat the tight crop that follows, leaving the creature tiny."""
+    largest component and defeat the tight crop that follows, leaving the creature tiny.
+
+    One exception survives: a small shape floating just over the HEAD - a Sims plumbob
+    (_KNOWN_ENEMY_LOOKS), which krea2 draws clear of the hair every time and this pass used to
+    erase. See _overhead_marker for how narrow that test is."""
     import numpy as np
     from scipy import ndimage
     from PIL import Image
@@ -2420,7 +2462,12 @@ def keep_largest_figure(frame_path, thresh=20):
             return
         counts = np.bincount(labels.ravel())
         counts[0] = 0                     # index 0 is the transparent background
-        arr[:, :, 3] = np.where(labels == counts.argmax(), arr[:, :, 3], 0)
+        main = counts.argmax()
+        keep = labels == main
+        marker = _overhead_marker(labels, counts, main)
+        if marker:
+            keep |= labels == marker
+        arr[:, :, 3] = np.where(keep, arr[:, :, 3], 0)
         Image.fromarray(arr).save(frame_path, format="PNG")
     except Exception as e:
         print(f"[Keep Largest Figure Error] {e}")
@@ -2504,6 +2551,392 @@ def restore_dropped_glow(frame_path):
     except Exception as e:
         print(f"[Restore Glow Error] {e}")
         return 0
+
+
+def restore_overhead_marker(frame_path, thresh=50):
+    """Give a foe frame back the marker floating over its head - a Sims plumbob - when BiRefNet
+    cut it away. Only called for a family with a signature (_enemy_signature).
+
+    Measured on a "The Sims" run: krea2 drew the plumbob on every foe, and BiRefNet kept it on
+    the boss but dropped it whole on the walker (alpha 3 at most), its green still sitting in
+    the saved RGB under alpha 0. What comes back is one strongly coloured blob of dropped
+    pixels in the band over the head that _overhead_marker accepts, holes filled (a gem's pale
+    facets are low-chroma), solid. Returns how many pixels it gave back."""
+    import numpy as np
+    from scipy import ndimage
+    try:
+        arr = np.array(Image.open(frame_path).convert("RGBA"))
+        rgb = arr[:, :, :3].astype(float)
+        alpha = arr[:, :, 3]
+        labels, n = ndimage.label(alpha > thresh)
+        if not n:
+            return 0
+        counts = np.bincount(labels.ravel())
+        counts[0] = 0
+        main = counts.argmax()
+        fy, _ = ndimage.find_objects(labels)[main - 1]
+        band = np.zeros(alpha.shape, bool)
+        band[max(0, fy.start - int((fy.stop - fy.start) * OVERHEAD_MARKER_MAX_GAP) - 1):fy.start] = True
+        dropped = band & (alpha <= thresh) & (rgb.max(2) - rgb.min(2) > GLOW_SEED_CHROMA)
+        lab, m = ndimage.label(dropped)
+        if not m:
+            return 0
+        biggest = np.bincount(lab.ravel())
+        biggest[0] = 0
+        marker = ndimage.binary_fill_holes(ndimage.binary_closing(lab == biggest.argmax(), iterations=2))
+        # Re-run the same over-the-head test keep_largest_figure uses, on the blob put back.
+        trial = np.where(marker & (labels == 0), n + 1, labels)
+        trial_counts = np.bincount(trial.ravel())
+        trial_counts[0] = 0
+        if _overhead_marker(trial, trial_counts, main) is None:
+            return 0
+        take = marker & (alpha <= thresh)
+        arr[:, :, 3] = np.where(take, 255, alpha).astype(np.uint8)
+        Image.fromarray(arr).save(frame_path, format="PNG")
+        return int(take.sum())
+    except Exception as e:
+        print(f"[Restore Marker Error] {e}")
+        return 0
+
+
+# FIRE on a foe's attack frame - an "attacks" entry with "fire"; the Sims fire punch and fire
+# breath used it, both since replaced by kicks, so no family does today - that the
+# cut-out took away. Fire on white reads as background to BiRefNet like any glow, but
+# restore_dropped_glow's colour-to-alpha (right for a lightsaber's light on white) turned pale
+# yellow flame into olive smoke on the dark corridor. Fire is painted, not light, so this puts
+# back the drawn pixels as they are: warm (orange to yellow, almost no blue), in pieces of at
+# least FIRE_MIN_PX that start within FIRE_TOUCH_PX of the body, holes closed (the white-hot
+# middle of a plume has no colour to find), plus a soft rim. On 6 Sims fire-breath frames it
+# gave back 1.2k-57k px each and every plume came back orange.
+FIRE_TOUCH_PX = 12
+FIRE_MIN_PX = 150
+
+
+def _fire_pixels(rgb):
+    """Bright orange-to-yellow, almost no blue - flame, not skin (skin keeps far more blue)."""
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    return (r > 170) & (r >= g) & (g > b) & (r - b > 70)
+
+
+def restore_dropped_fire(frame_path, thresh=128):
+    """Give an attack frame back the fire BiRefNet cut away - see the note above. Returns how
+    many pixels it gave back."""
+    import numpy as np
+    from scipy import ndimage
+    try:
+        arr = np.array(Image.open(frame_path).convert("RGBA"))
+        rgb = arr[:, :, :3].astype(float)
+        alpha = arr[:, :, 3]
+        dropped = _fire_pixels(rgb) & (alpha < thresh)
+        lab, n = ndimage.label(dropped)
+        if not n:
+            return 0
+        idx = np.arange(1, n + 1)
+        dist = ndimage.distance_transform_edt(alpha <= thresh)
+        keep = idx[(ndimage.minimum(dist, lab, idx) <= FIRE_TOUCH_PX)
+                   & (ndimage.sum(dropped, lab, idx) >= FIRE_MIN_PX)]
+        if not len(keep):
+            return 0
+        flame = ndimage.binary_fill_holes(ndimage.binary_closing(np.isin(lab, keep), iterations=3))
+        rim = ndimage.binary_dilation(flame, iterations=2) & ~flame & ((255 - rgb.min(2)) > 25)
+        new_a = np.where(flame, 255, np.where(rim, 140, 0))
+        take = new_a > alpha
+        arr[:, :, 3] = np.where(take, new_a, alpha).astype(np.uint8)
+        Image.fromarray(arr).save(frame_path, format="PNG")
+        return int(take.sum())
+    except Exception as e:
+        print(f"[Restore Fire Error] {e}")
+        return 0
+
+
+# EVERY Sims frame gets one upright plumbob over the head - the user's call, after runs where krea2
+# drew it upside down, broken in two, under a diving flyer, or not at all. Drawn plumbobs are
+# measured, not trusted: per run the best one (_plumbob_shape_ok, idle frames first) is cut out
+# and becomes THE plumbob, every frame's own is erased, and that one is pasted over each head at
+# a fixed share of the foe's idle height. With no usable one anywhere, _drawn_plumbob makes one.
+# Sizes measured off good ones: 0.13-0.14 of the figure tall, 0.035 of it above the hair.
+PLUMBOB_HEIGHT = 0.13
+PLUMBOB_GAP = 0.035
+
+
+def _lime_pixels(arr):
+    """The plumbob's bright lime green, on an RGBA array (shared with _marker_box)."""
+    r, g, b, a = (arr[..., i].astype(int) for i in range(4))
+    return (a > 50) & (g > 150) & (g - r > 40) & (g - b > 60)
+
+
+def _plumbob_shape_ok(mask):
+    """An upright plumbob: taller than wide, both tips narrow, widest across the middle. A
+    downward triangle (the top half alone) is widest at its top row and fails."""
+    import numpy as np
+    rows = mask.sum(axis=1)
+    h, w = mask.shape
+    if mask.sum() < 80 or not (1.3 <= h / max(w, 1) <= 3.5):
+        return False
+    widest = int(np.argmax(rows)) / max(h - 1, 1)
+    tip = max(1, h // 10)
+    return (0.2 <= widest <= 0.65 and rows[:tip].max() < rows.max() * 0.5
+            and rows[-tip:].max() < rows.max() * 0.5)
+
+
+def _body_and_plumbobs(arr, thresh=50, fire=False):
+    """(body mask, list of plumbob blob masks) for an uncropped foe frame.
+
+    A plumbob blob is a SMALL lime piece (30+ px, under 6% of the figure) whose bottom is no
+    lower than PLUMBOB_HEAD_REACH of the figure below the top of everything else - over the
+    head, or drawn into the hair. Lime is not cut out of the body otherwise: once the Sims
+    wore "brightly coloured clothes", a lime-green shirt was taken for a plumbob, erased at
+    the collar, and the head lost - the plumbob went on the face.
+
+    Fire is left out of the body on a frame that has some (`fire`) - only there, because skin
+    passes _fire_pixels too, and leaving it out everywhere cut the face away the same way."""
+    import numpy as np
+    from scipy import ndimage
+    full = arr[:, :, 3] > thresh
+    if fire:
+        full &= ~_fire_pixels(arr[:, :, :3].astype(float))
+    total = int(full.sum())
+    if not total:
+        return None, []
+    llab, _ = ndimage.label(_lime_pixels(arr) & full)
+    small = [llab == i for i, sl in enumerate(ndimage.find_objects(llab), 1)
+             if 30 <= (llab[sl] == i).sum() < total * 0.06]
+    rest = full.copy()
+    for blob in small:
+        rest &= ~blob
+    lab, n = ndimage.label(rest)
+    if not n:
+        return None, []
+    cnt = np.bincount(lab.ravel())
+    cnt[0] = 0
+    rows = np.nonzero((lab == cnt.argmax()).any(axis=1))[0]
+    reach = rows[0] + (rows[-1] - rows[0]) * PLUMBOB_HEAD_REACH
+    blobs = [blob for blob in small if np.nonzero(blob.any(axis=1))[0][-1] <= reach]
+    body = full.copy()
+    for blob in blobs:
+        body &= ~blob
+    lab, n = ndimage.label(body)
+    cnt = np.bincount(lab.ravel())
+    cnt[0] = 0
+    return lab == cnt.argmax(), blobs
+
+
+# How far below the top of the head a plumbob drawn into the hair may still reach - the top
+# twelfth of the figure, less than a head, so a lime collar or shoulder never counts.
+PLUMBOB_HEAD_REACH = 0.08
+
+
+def _plumbob_mask(arr, blob, body):
+    """The whole plumbob a lime blob belongs to: its separate piece of the frame, dark facets
+    and outline included, when it stands apart from the body; else the blob grown by a pixel.
+    Cut from the lime alone, the pasted plumbob came out thin and jagged."""
+    import numpy as np
+    from scipy import ndimage
+    alab, _ = ndimage.label(arr[:, :, 3] > 20)
+    ids = [i for i in np.unique(alab[blob]) if i]
+    body_ids = set(np.unique(alab[body])) if body is not None else set()
+    if len(ids) == 1 and ids[0] not in body_ids:
+        return alab == ids[0]
+    return ndimage.binary_dilation(blob, iterations=1) & (arr[:, :, 3] > 20)
+
+
+def _plumbob_cutout(arr, grown):
+    """The RGBA of one plumbob mask (from _plumbob_mask), cropped."""
+    import numpy as np
+    ys, xs = np.nonzero(grown)
+    crop = arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1].copy()
+    crop[:, :, 3] = np.where(grown[ys.min():ys.max() + 1, xs.min():xs.max() + 1], crop[:, :, 3], 0)
+    return crop
+
+
+def _drawn_plumbob(height):
+    """A faceted lime diamond, for a run where krea2 drew no usable plumbob at all."""
+    import numpy as np
+    from PIL import ImageDraw
+    w = max(6, int(height * 0.48))
+    img = Image.new("RGBA", (w, height), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    mid, belt = w / 2, height * 0.4
+    d.polygon([(mid, 0), (0, belt), (mid, belt)], fill=(170, 245, 110, 255))
+    d.polygon([(mid, 0), (w - 1, belt), (mid, belt)], fill=(120, 220, 60, 255))
+    d.polygon([(0, belt), (mid, height - 1), (mid, belt)], fill=(90, 200, 40, 255))
+    d.polygon([(w - 1, belt), (mid, height - 1), (mid, belt)], fill=(55, 160, 25, 255))
+    return np.array(img)
+
+
+def _normalise_markers(frames, fallback=None, fire_frames=()):
+    """Give every frame of one foe ({frame: uncropped path}) one upright plumbob over its head -
+    see PLUMBOB_HEIGHT. `fallback` is a plumbob cut from an earlier foe of the same run, for a
+    foe that drew none fit to use; `fire_frames` are the frames with fire in them. Returns the
+    plumbob it used, for the next foe."""
+    import numpy as np
+    from scipy import ndimage
+    try:
+        arrs = {f: np.array(Image.open(p).convert("RGBA")) for f, p in frames.items()}
+        parts = {f: _body_and_plumbobs(a, fire=f in fire_frames) for f, a in arrs.items()}
+        idle_body = (parts.get("idle") or (None,))[0]
+        if idle_body is None:
+            return fallback
+        rows = np.nonzero(idle_body.any(axis=1))[0]
+        size = max(12, int((rows[-1] - rows[0]) * PLUMBOB_HEIGHT))
+        gap = int((rows[-1] - rows[0]) * PLUMBOB_GAP)
+        best = None
+        for f in ["idle"] + [f for f in arrs if f != "idle"]:
+            for blob in parts[f][1]:
+                whole = _plumbob_mask(arrs[f], blob, parts[f][0])
+                ys, xs = np.nonzero(whole)
+                if _plumbob_shape_ok(whole[ys.min():ys.max() + 1, xs.min():xs.max() + 1]):
+                    best = _plumbob_cutout(arrs[f], whole)
+                    break
+            if best is not None:
+                break
+        if best is None:
+            best = fallback if fallback is not None else _drawn_plumbob(size)
+        bob = np.array(Image.fromarray(best).resize(
+            (max(4, round(best.shape[1] * size / best.shape[0])), size), Image.LANCZOS))
+        spot = {}
+        # Idle first: a frame with fire takes the idle's spot rather than measuring its own -
+        # gold crowns and lit hair pass _fire_pixels, so with the fire left out the head read
+        # low and the plumbob sat on the crown. The fire punch barely moves the head.
+        for f in sorted(arrs, key=lambda k: k != "idle"):
+            arr = arrs[f]
+            body, blobs = parts[f]
+            if body is None:
+                continue
+            # The old plumbob goes whole - its dark facets and outline are not lime and stayed
+            # behind as a ghost when only the lime went. A piece standing apart from the body
+            # is erased entirely; one drawn into the hair loses its lime and a 3 px ring.
+            alab, _ = ndimage.label(arr[:, :, 3] > 20)
+            body_id = np.bincount(alab[body]).argmax() if body.any() else -1
+            for blob in blobs:
+                for i in np.unique(alab[blob]):
+                    if i and i != body_id:
+                        arr[:, :, 3] = np.where(alab == i, 0, arr[:, :, 3])
+                arr[:, :, 3] = np.where(ndimage.binary_dilation(blob, iterations=3) & ~body,
+                                        0, arr[:, :, 3])
+            rows = np.nonzero(body.any(axis=1))[0]
+            top, height = rows[0], rows[-1] - rows[0]
+            # The head is the biggest piece of the body's top eighth - a fist raised beside it
+            # (the fire punch) is a smaller piece and must not pull the plumbob sideways.
+            band = body[top:top + max(1, height // 8)]
+            blab, nb = ndimage.label(band)
+            head = band if nb <= 1 else blab == np.bincount(blab.ravel())[1:].argmax() + 1
+            hx = np.nonzero(head.any(axis=0))[0]
+            hy = np.nonzero(head.any(axis=1))[0]
+            y1 = top + hy[0] - gap
+            y0 = y1 - bob.shape[0]
+            x0 = int(round((hx.min() + hx.max()) / 2 - bob.shape[1] / 2))
+            if f in fire_frames and "idle" in spot:
+                y0, y1, x0 = spot["idle"]
+            spot[f] = (y0, y1, x0)
+            if y0 < 0:
+                # No room above the head on this canvas - shift everything down, never clip
+                # the plumbob; the crop after this takes the empty rows back off the bottom.
+                arr = np.roll(arr, -y0, axis=0)
+                arr[:-y0] = 0
+                y0, y1 = 0, bob.shape[0]
+            sl = arr[y0:y1, max(0, x0):x0 + bob.shape[1]]
+            src = bob[:, max(0, -x0):max(0, -x0) + sl.shape[1]]
+            a = src[:, :, 3:4].astype(float) / 255
+            sl[:, :, :3] = (src[:, :, :3] * a + sl[:, :, :3] * (1 - a)).astype(np.uint8)
+            sl[:, :, 3] = np.maximum(sl[:, :, 3], src[:, :, 3])
+            Image.fromarray(arr).save(frames[f], format="PNG")
+        return best
+    except Exception as e:
+        print(f"[Normalise Markers Error] {e}")
+        return fallback
+
+
+def _colour_share(frame_path, thresh=50):
+    """Share of a cut-out foe frame's solid pixels that are in colour (channel spread over 25),
+    plumbob left out - 0.01 on a black-and-white Sim, 0.3 and up on a coloured one."""
+    import numpy as np
+    try:
+        arr = np.array(Image.open(frame_path).convert("RGBA"))
+        rgb = arr[:, :, :3].astype(int)
+        solid = (arr[:, :, 3] > thresh) & ~_lime_pixels(arr)
+        if not solid.any():
+            return 1.0
+        return float(np.mean((rgb.max(2) - rgb.min(2))[solid] > 25))
+    except Exception as e:
+        print(f"[Colour Share Error] {e}")
+        return 1.0
+
+
+def _foe_redraw_reason(family, variant, paths):
+    """Why this foe's freshly drawn frames ({branch key: path}) must be re-drawn, or None.
+    Checked only for a _KNOWN_ENEMY_LOOKS family that asks: "min_colour" (black and white -
+    _SIMS_COLOUR), "one_person" (a second figure in the idle or attack frame - the Sims kick
+    drew a Sim kicking a second Sim on one seed in every wording tried) and "boss_woman" (the
+    boss's idle shows a man - a suit beat the woman wording on 1 run of 3). The last two ask
+    qwen3vl for a description (_vlm_describe), which read 13 of 13 test frames right."""
+    idle = paths.get(f"enemy_{variant}_idle")
+    if not (family and idle):
+        return None
+    if family.get("min_colour"):
+        share = _colour_share(idle)
+        if share < family["min_colour"]:
+            return f"came out black and white ({share:.2f} in colour)"
+    said = {}
+    for f in ("idle", "attack"):
+        fp = paths.get(f"enemy_{variant}_{f}")
+        if fp and (family.get("one_person") or (variant == "boss" and family.get("boss_woman"))):
+            said[f] = _vlm_describe(fp)
+    if family.get("one_person"):
+        for f, text in said.items():
+            if _vlm_many_people(text):
+                return f"drew more than one person in its {f} frame ({text.strip()[:60]!r})"
+    if variant == "boss" and family.get("boss_woman") and _vlm_is_man(said.get("idle", "")):
+        return f"came out a man ({said['idle'].strip()[:60]!r})"
+    return None
+
+
+def _redraw_grey_foe(look, guard, enemy_style, variant, frames, size, steps, prefix):
+    """Every frame of one foe again on a fresh seed, for a family with "min_colour" whose idle
+    came back black and white. Returns ({branch key: path}, seed), or (None, None)."""
+    try:
+        payload = _krea2_loaders()
+        seed = random.randint(1, 1000000000)
+        keys = []
+        for f in frames:
+            key = f"enemy_{variant}_{f}"
+            _krea2_add_branch(payload, key, krea2_species_prompt(look, enemy_style, pose=f,
+                                                                  guard=guard, variant=variant),
+                              size, size, steps, seed, prefix)
+            keys.append(key)
+        return _krea2_submit_and_collect(payload, keys), seed
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[krea2] {variant} grey re-draw failed ({e}) - keeping the first drawing")
+        return None, None
+
+
+def _marker_box(frame_path):
+    """[x0, y0, x1, y1] of the plumbob in a FINISHED (cropped) Sims frame, or None - for game.js,
+    which recolours it when the foe is hit or attacks. Found by colour, since by now the
+    plumbob may touch a plume of fire: the topmost bright lime-green blob of at least 80 px,
+    taller than wide like the diamond. A green shirt is lower down and far bigger."""
+    import numpy as np
+    from scipy import ndimage
+    try:
+        arr = np.array(Image.open(frame_path).convert("RGBA")).astype(int)
+        r, g, b, a = arr[..., 0], arr[..., 1], arr[..., 2], arr[..., 3]
+        lime = (a > 50) & (g > 150) & (g - r > 40) & (g - b > 60)
+        lab, n = ndimage.label(lime)
+        best = None
+        for i, sl in enumerate(ndimage.find_objects(lab), 1):
+            h, w = sl[0].stop - sl[0].start, sl[1].stop - sl[1].start
+            if (lab[sl] == i).sum() < 80 or not (1.1 <= h / max(w, 1) <= 3.5):
+                continue
+            if sl[0].start > arr.shape[0] * 0.4:
+                continue
+            if best is None or sl[0].start < best[1]:
+                best = [sl[1].start, sl[0].start, sl[1].stop, sl[0].stop]
+        return best
+    except Exception as e:
+        print(f"[Marker Box Error] {e}")
+        return None
 
 
 def _pick_path(src):
@@ -2842,19 +3275,25 @@ _STYLE_BUCKETS_NAMED = [
     # "neon green digital rain", then "black-and-white film grain", then "black-and-cyan
     # digital rain"). Everyone pictures the same green rain, so it is answered here.
     ("matrix",   ['matrix', 'digital rain', 'code rain', 'falling code']),
+    # Katamari Damacy. Quoted, it went to the set designer, which knew only "rolling balls,
+    # colorful objects, chaotic environments" and drew a stock dungeon - teal tiles, obsidian,
+    # steel beams, a steel door (2026-10-02). Its look is specific and everyone knows it: a
+    # sticky ball of rolled-up everyday junk, candy pastels, low-poly PS2 shapes, the rainbow
+    # cosmos and its King.
+    ("katamari", ['katamari', 'damacy']),
 ]
 
 # Named-aesthetic buckets that still apply when the wall field was QUOTED. _theme_bucket sends
 # every quoted name down the designed path because proper names trip the fuzzy substring
 # tables ("rockefeller center" -> 'rock'). That reason does not hold for a key that IS the
 # name: "The Matrix" typed in quotes is asking for exactly this look.
-_STYLE_BUCKETS_QUOTE_SAFE = {"matrix"}
+_STYLE_BUCKETS_QUOTE_SAFE = {"matrix", "katamari"}
 
 
 def _style_bucket(wall_style):
     """Which hand-tuned theme bucket `wall_style` resolves to, or None for the generic path."""
     ui = (wall_style or "").lower()
-    for name, keys in _STYLE_BUCKETS_NAMED:        # lsddream, acid, glitch, mario, lsd, matrix
+    for name, keys in _STYLE_BUCKETS_NAMED:        # lsddream ... matrix, katamari
         if any(k in ui for k in keys):
             return name
     for name, keys in _STYLE_BUCKETS[:4]:          # scifi, win95, forest, taco
@@ -3090,6 +3529,28 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
         lantern_p = (f"An old boxy CRT computer monitor switched on, its black screen filled with falling "
                      f"glowing green code characters in The Matrix style, blazing green phosphor light "
                      f"pouring out of the screen. {_LANTERN_TAIL}")
+
+    elif bucket == "katamari":
+        # Katamari Damacy: the walls are the King's playful outer space (the user's call - they
+        # were a katamari's junk-covered surface), the ceiling its rainbow cosmos, the floor a
+        # giant tatami room - everyday things at the wrong scale is the whole joke.
+        wall_p = ("A flat 2D vertical wall texture of the playful outer space of Katamari Damacy: a deep "
+                  "violet and midnight blue galaxy full of swirling pink and turquoise nebulae, colourful "
+                  "cartoon planets with rings and polka dots, smiling rainbow stars, comets with sparkly "
+                  "tails and little katamari balls of rolled-up toys and candies floating like moons, bright "
+                  "cheerful candy colours, simple low-poly PlayStation 2 video game style, flat orthographic "
+                  "front view, seamless tileable wall material, zero perspective, zero horizon.")
+        ceil_p = ("A flat 2D texture of the bright cosmic sky of Katamari Damacy: soft swirling rainbow pastel "
+                  "bands of pink, yellow, mint and sky blue strewn with twinkling sparkly stars and glowing "
+                  "rainbow star shapes, cheerful candy-coloured cosmos, flat orthographic front view, seamless "
+                  "tileable material, zero perspective, zero horizon.")
+        floor_p = ("A flat 2D texture of giant pale green tatami mats from a Katamari Damacy living room, with "
+                   "oversized everyday things lying flat on them - a huge thumbtack, a coin, a domino, a "
+                   "wrapped candy, a matchbox - simple low-poly PlayStation 2 shapes in bright pastel colours, "
+                   "flat orthographic front view, seamless tileable material, zero perspective, zero horizon.")
+        lantern_p = (f"A small round katamari ball of rolled-up candies, toys, pencils and rubber ducks stuck "
+                     f"together, glowing brilliantly from within with warm rainbow light and sparkles, bright "
+                     f"pastel low-poly PlayStation 2 video game style. {_LANTERN_TAIL}")
 
     else:
         # THE ABSTRACT-THEME PATH. Everything below interpolates the typed words, so when those
@@ -3376,6 +3837,20 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
         # everyone remembers.
         switch_p = ("A small wall-mounted lever handle shaped like one glossy red pill capsule, on a black "
                     "metal plate edged with a glowing green trim, the handle resting down. " + _GATE_TAIL)
+
+    elif bucket == "katamari":
+        # FLUSH in a flat wall, not "set into an archway": with the galaxy wall around it, the
+        # archway wording drew a little room - floor, ceiling, door at the back - on 3 of 3.
+        door_p = (f"A flat 2D texture of a closed door seen straight-on and filling the frame, the door "
+                  f"painted with the King of All Cosmos from Katamari Damacy - a giant regal king with a "
+                  f"tall purple cylinder-shaped head, a huge rainbow ruff collar and a flowing cape - in "
+                  f"bright pastel low-poly PlayStation 2 style, set flush into a flat wall painted with the "
+                  f"same playful cartoon galaxy of planets and stars as the corridor wall, flat orthographic "
+                  f"front view, {NO_MARGINS}, zero perspective, zero floor, zero ceiling, zero horizon.")
+        # Lantern is a glowing katamari - the switch is a rainbow star, the King's other gift.
+        switch_p = ("A small wall-mounted lever handle shaped like a glowing five-pointed rainbow star from "
+                    "Katamari Damacy, on a pastel pink plate, bright low-poly PlayStation 2 video game art, "
+                    "the handle resting down. " + _GATE_TAIL)
 
     elif brief and brief.get("door") and brief.get("switch"):
         # A designed gate. Unlike the raw-word branch below, both lines are already concrete
@@ -4607,6 +5082,141 @@ _CHAT_ENEMY_WORDS = ("chat", "chats", "chatroom", "chatrooms", "chatter", "chatt
                      "emoticons")
 
 
+# The Sims WALKER's and FLYER's attacks - the user's picks, a kick and a chomp. (A fire breath
+# was tried first for the walker: it only drew when it LED the prompt, BiRefNet then cut most of
+# it away - restore_dropped_fire - and the user did not like it.)
+# Both LEAD the prompt. Measured on 3 freshly designed happy Sims per foe, one seed each:
+#  * kick - "throw a high kick straight at the viewer" drew no kick at all, in the stance slot
+#    or leading; a named MARTIAL-ARTS SIDE KICK leading drew a clean kick on 3 of 3 (a "flying
+#    jump kick" drew 1 good, 1 tucked, 1 with four arms).
+#  * chomp - no wording drew a gaping mouth: "jaws stretched open as wide as they can go", "jaw
+#    dropped all the way down", a scream - all came back smiling, closed or barely open. The
+#    family's own smile clause fights it, so the chomp frame drops it ("no_smile"); still the
+#    best was the MOUTH as the subject, which at least swoops at the viewer, arms spread, mouth
+#    open on 2 of 3.
+ENEMY_KICK_ATTACK = (
+    "A dramatic martial-arts side kick by one person alone, nobody else in the picture: they "
+    "balance on one leg with the other leg thrust "
+    "straight out sideways at hip height, the sole of the shoe first, arms raised in a fighting "
+    "stance")
+ENEMY_CHOMP_ATTACK = (
+    "An enormous wide-open mouth with two rows of big white teeth, jaws gaping like a shark "
+    "about to bite, on a person swooping at the viewer with their arms spread wide")
+_SIMS_SMILE = " and a big cheerful smile lights up their face"
+# Some seeds draw a Sim in black and white - all its frames, since they share the seed. Measured
+# on one such seed (share of the figure in colour): as is 0.01; "in full vivid natural colour"
+# 0.18 (skin only, the clothes stayed grey); adding "wearing brightly coloured clothes" 0.55,
+# and it lifted the other two Sims tested from 0.50/0.31 to 0.95/0.66. Any Sim still drawn grey
+# is re-drawn on a fresh seed (_redraw_grey_foe). "Brightly coloured" alone let every pose pick
+# its own colours - one Sim wore a green shirt to idle and a red one to block - so each foe is
+# given one concrete pair from _SIMS_COLOURS when its LOOK lines are built (_enemy_look_lead),
+# the same words in all its frames. No green: the plumbob is the one green thing.
+_SIMS_COLOUR = (", wearing bright {a} and {b} clothes, the whole picture in full vivid natural "
+                "colour")
+_SIMS_COLOURS = ("red", "orange", "yellow", "blue", "purple", "pink", "teal", "turquoise",
+                 "coral", "magenta", "navy blue", "sky blue")
+
+
+# The Sims boss is always an attractive woman - the user's call. The designed LOOK line often
+# says "regal man" or "his crown", which would argue with a lead saying woman, so the boss's
+# line has these words swapped first (_swap_words). Whole words, case kept on the first letter.
+_FEMININE_WORDS = {
+    "man": "woman", "men": "women", "male": "female", "he": "she", "him": "her", "his": "her",
+    "himself": "herself", "king": "queen", "kings": "queens", "prince": "princess",
+    "lord": "lady", "gentleman": "lady", "guy": "woman", "boy": "girl", "father": "mother",
+    "sir": "madam", "emperor": "empress", "bearded": "", "beard": "", "moustache": "",
+    "mustache": "", "businessman": "businesswoman", "nobleman": "noblewoman",
+    # Menswear too: "tall and regal in a formal suit with a cape" drew a man on a seed whose
+    # prompt said woman three times; "formal gown" on the same seed drew a woman.
+    "suit": "gown", "suits": "gowns", "tuxedo": "evening gown", "tuxedos": "evening gowns",
+}
+
+
+def _swap_words(text, table):
+    def one(m):
+        w = m.group(0)
+        to = table[w.lower()]
+        return to[:1].upper() + to[1:] if (to and w[:1].isupper()) else to
+    out = re.sub(r"\b(" + "|".join(map(re.escape, table)) + r")\b", one, text, flags=re.I)
+    return re.sub(r"\s{2,}", " ", out).replace(" ,", ",")
+
+
+# Recognised names whose look the model cannot supply. The identity call places "The Sims"
+# fine (a known game), but a game title is not a creature: kept as typed, the bestiary drew
+# "sims" as winged stone monsters, and asked outright Qwen3-VL called the plumbob a
+# "Simoleon" icon or refused. Keyed on the resolved name, lowercased. Each entry is the
+# "subject" the set designer keeps (written so _enemy_is_person reads it as people), the
+# signature clause ("lead") _enemy_look_lead puts in front of every LOOK line - in front, for
+# the reason given on _CHAT_ENEMY_LOOK - plus, per foe: "variant_leads", a clause after it on
+# that foe's LOOK lines only, "variant_swaps", words swapped in that foe's designed line first,
+# and "attacks", that foe's attack pose ({"clause", "leads": put in front of the whole prompt
+# instead of in the stance slot, "fire": its fire is put back after the cut-out by
+# restore_dropped_fire, "no_smile": a phrase taken out of the LOOK for that frame}).
+_KNOWN_ENEMY_LOOKS = {
+    "the sims": {
+        # "happy smiling" because the user asked for happier Sims. No comma: _enemy_is_person
+        # reads the head noun before the first joiner, and a comma is one.
+        "subject": "happy smiling everyday people from the video game The Sims",
+        "lead": ("A glowing green diamond plumbob floats in the air above their head" + _SIMS_SMILE
+                 + _SIMS_COLOUR),
+        "lead_colours": _SIMS_COLOURS,
+        # Re-draw a foe that comes out with less than this share of it in colour, with a
+        # second person in its idle or attack frame, or (the boss) as a man - _foe_redraw_reason.
+        "min_colour": 0.12,
+        "one_person": True,
+        "boss_woman": True,
+        # The boss is beautiful rather than colourful (the user's call) - one rich colour, so
+        # she is still never black and white: her own colour clause replaces the shared one.
+        "variant_leads": {"boss": "a beautiful, glamorous woman"},
+        "colour_clause": _SIMS_COLOUR,
+        "variant_colour": {"boss": (", wearing a stunning, elegant {a} gown, the whole picture "
+                                    "in full vivid natural colour")},
+        "variant_swaps": {"boss": _FEMININE_WORDS},
+        "variant_subjects": {"boss": "a beautiful, glamorous woman from the video game The Sims"},
+        # The head-to-feet framing names the boss a woman too, not a person - same seed as above.
+        "variant_framing": {"boss": "woman"},
+        # The boss kicks too (the user's call - it was a fire punch). In a gown the skirt
+        # sweeps out with the leg: a clear kick on 3 of 3 freshly designed bosses.
+        "attacks": {"boss": {"clause": ENEMY_KICK_ATTACK, "leads": True},
+                    "walker": {"clause": ENEMY_KICK_ATTACK, "leads": True},
+                    "flyer": {"clause": ENEMY_CHOMP_ATTACK, "leads": True,
+                              "no_smile": _SIMS_SMILE}},
+        # Every frame gets one upright plumbob over the head - see _normalise_markers.
+        "marker": "plumbob",
+    },
+}
+
+
+def _known_enemy_family(enemy_style):
+    """The _KNOWN_ENEMY_LOOKS entry `enemy_style` (the set designer's enemy line) belongs to,
+    or None."""
+    text = (enemy_style or "").lower()
+    return next((v for v in _KNOWN_ENEMY_LOOKS.values() if v["subject"].lower() in text), None)
+
+
+def _enemy_signature(enemy_style):
+    """The signature clause of `enemy_style`'s _KNOWN_ENEMY_LOOKS family, or None."""
+    return (_known_enemy_family(enemy_style) or {}).get("lead")
+
+
+def _known_enemy_attack(enemy_style, variant):
+    """The "attacks" entry for this foe of `enemy_style`'s _KNOWN_ENEMY_LOOKS family, or None."""
+    return ((_known_enemy_family(enemy_style) or {}).get("attacks") or {}).get(variant)
+
+
+def _fire_attack_frame(enemy_style, variant, frame):
+    """True for the attack frame of a foe whose family gives that foe a fire attack - the
+    frames restore_dropped_fire is for."""
+    return frame == "attack" and bool((_known_enemy_attack(enemy_style, variant) or {}).get("fire"))
+
+
+def _known_enemy_look(enemy_named):
+    """The _KNOWN_ENEMY_LOOKS entry for a recognised enemy name, or None."""
+    if not (enemy_named and enemy_named.get("known")):
+        return None
+    return _KNOWN_ENEMY_LOOKS.get((enemy_named.get("name") or "").strip().lower())
+
+
 def _enemy_literal(enemy_style):
     """The hand-tuned ENEMY subject for a typed word the designer keeps getting wrong, or
     None for everything else, which goes through generate_theme_brief as before."""
@@ -4685,11 +5295,29 @@ def _enemy_look_lead(species, enemy_style):
 
     Returns `species` unchanged for every other theme."""
     if species and _enemy_is_person(enemy_style):
-        for v in species.values():
+        sign = _enemy_signature(enemy_style)
+        family = _known_enemy_family(enemy_style) or {}
+        own = family.get("variant_leads") or {}
+        swaps = family.get("variant_swaps") or {}
+        framing = family.get("variant_framing") or {}
+        for key, v in species.items():
             look = (v.get("look") or "").strip().rstrip(".").strip()
+            if look and swaps.get(key):
+                look = _swap_words(look, swaps[key])
             if look:
-                v["look"] = f"{_PERSON_ENEMY_LOOK}: {_theme_inline(look)}"
-        print(f"[species] led all {len(species)} LOOK lines with the head-to-feet framing")
+                frame = (_PERSON_ENEMY_LOOK.replace(" person ", f" {framing[key]} ")
+                         if framing.get(key) else _PERSON_ENEMY_LOOK)
+                v["look"] = f"{frame}: {_theme_inline(look)}"
+                if own.get(key):
+                    v["look"] = f"{own[key]}, {v['look']}"
+                if sign:
+                    pair = random.sample(family.get("lead_colours") or ("bright",) * 2, 2)
+                    lead = sign
+                    if (family.get("variant_colour") or {}).get(key):
+                        lead = lead.replace(family["colour_clause"], family["variant_colour"][key])
+                    v["look"] = f"{lead.format(a=pair[0], b=pair[1])}, {v['look']}"
+        print(f"[species] led all {len(species)} LOOK lines with the head-to-feet framing"
+              + (" and the hand-tuned signature" if sign else ""))
         return species
     if not species or _CHAT_ENEMY_MARK not in (enemy_style or "").lower():
         return species
@@ -6039,9 +6667,18 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # came back "alien wearing pink bowler hat" in 3 of 3 samples, dropping the "from Alien"
     # that made it the xenomorph, so every foe was a generic alien in a hat. A known character
     # IS the look - the same reason generate_krea2_posed_bundle never strips a known name.
+    # A name that starts with its own article ("The Sims") keeps it: _theme_inline's article
+    # strip and lowercasing turned "The Sims" into "sims", a word with no picture of its own.
+    # A name in _KNOWN_ENEMY_LOOKS is swapped for its hand-tuned subject instead.
     if (literal is None and enemy_named and enemy_named.get("known")
             and (enemy_typed or "").strip()):
-        literal = _theme_inline(enemy_typed.strip())
+        known_look = _known_enemy_look(enemy_named)
+        if known_look:
+            literal = known_look["subject"]
+        elif _THEME_ARTICLE.match(enemy_named.get("name") or ""):
+            literal = enemy_typed.strip()
+        else:
+            literal = _theme_inline(enemy_typed.strip())
     # `enemy_pictured`: `enemy_style` is the LOOK Qwen3-VL read off an attached picture, and it
     # is kept the same way, whatever it is. The designer's ENEMY line is at most eight words,
     # and cut to fit it dropped exactly what made the picture that picture - a cat-headed dancer
@@ -6222,7 +6859,7 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
     )
 
 
-def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=None):
+def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=None, variant=None):
     """The prompt for an LLM-designed foe (generate_enemy_species). This is the normal path;
     krea2_enemy_prompt above is the fallback.
 
@@ -6244,6 +6881,12 @@ def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=Non
     description does mention it; krea2 wants the subject repeated anyway."""
     subject = (look or "").strip().rstrip(".").strip() or "a shadowy nightstalker demon"
     e = (enemy_style or "").strip()
+    attack = _known_enemy_attack(e, variant) if pose == "attack" else None
+    if attack and attack.get("no_smile"):
+        subject = subject.replace(attack["no_smile"], "")
+    if attack and attack.get("leads"):
+        return f"{attack['clause']}. " + krea2_species_prompt(subject, enemy_style, tighten=tighten,
+                                                              variant=variant)
     # The block frame always gets one step more margin than the rest. A guard is a WIDER,
     # taller shape than an idle - arms out to the sides, or a barrier standing across the
     # whole front - and at the thin margin krea2 satisfied "fill the frame" by cropping in to
@@ -6260,6 +6903,10 @@ def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=Non
         "a modest even margin around it",
         "a comfortable even margin around it",
     ][min(int(tighten), 2)]
+    # A family can name one foe its own way in this sentence - the Sims boss is "a beautiful,
+    # glamorous woman from The Sims", because the woman clause in her LOOK alone lost to a
+    # rainbow suit's male prior on 1 run of 3.
+    e = ((_known_enemy_family(e) or {}).get("variant_subjects") or {}).get(variant) or e
     anchor = (f"A full-body video game enemy sprite of {e}. This particular {e} is {subject}. "
               f"The subject is literally {e}, drawn exactly as described above and instantly "
               f"recognisable as {e} at a glance."
@@ -6274,6 +6921,8 @@ def krea2_species_prompt(look, enemy_style="", tighten=0, pose="idle", guard=Non
     # why the block clause has to change the silhouette to be seen at all.
     if pose == "block":
         stance = ENEMY_BLOCK_POSES.get(guard) or ENEMY_BLOCK_POSES["field"]
+    elif attack:
+        stance = attack["clause"]
     else:
         stance = ENEMY_FRAME_POSES.get(pose) or ENEMY_FRAME_POSES["idle"]
     return (
@@ -9820,9 +10469,12 @@ def _krea2_regen_pose_frame(look, enemy_style, guard, pose, seed, size, steps, p
 
     Returns the path when it comes back clean, or None to leave the frontend on the idle."""
     payload = _krea2_loaders()
-    prompt_text = krea2_species_prompt(look, enemy_style, tighten=2, pose=pose, guard=guard)
+    prompt_text = krea2_species_prompt(look, enemy_style, tighten=2, pose=pose, guard=guard,
+                                       variant=variant)
     _krea2_add_branch(payload, "pose", prompt_text, size, size, steps, seed, prefix)
     fp = _krea2_submit_and_collect(payload, ["pose"])["pose"]
+    if _fire_attack_frame(enemy_style, variant, pose):
+        restore_dropped_fire(fp)
     keep_largest_figure(fp, thresh=50)
     problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, variant))
     print(f"[krea2] {variant} {pose} reframe at a wider margin is "
@@ -9857,7 +10509,8 @@ def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=N
                   else ENEMY_FRAME_FALLBACK)
         for f in frames:
             prompt_text = (krea2_species_prompt(species[v]["look"], enemy_style, pose=f,
-                                                guard=species[v].get("guard")) if species
+                                                guard=species[v].get("guard"), variant=v)
+                           if species
                            else krea2_enemy_prompt(enemy_style, variant=v))
             _krea2_add_branch(payload, f"enemy_{v}_{f}", prompt_text, sq, sq, steps, seed, prefix)
         added[v] = list(frames)
@@ -10034,6 +10687,69 @@ def _vlm_wants_rotors(image_path, timeout=180):
         return False
 
 
+# ASK FOR A DESCRIPTION, READ THE WORDS. Asked to pick ONE or MANY, qwen3vl answered "TWO" (no
+# option at all) for a two-person frame; asked WOMAN or MAN, it rambled and recited the question,
+# which holds both words. Asked to describe the picture, it says "two characters from The Sims",
+# "a single Sim character", "the person in the picture is a woman" - so one description serves
+# both checks below, read with whole-word matches.
+VLM_DESCRIBE_QUESTION = ("Describe this picture in one short sentence: how many people are in it, "
+                         "and whether each is a man or a woman.")
+_VLM_MANY = re.compile(r"\b(two|three|four|five|several|multiple|pair|couple|group|both|2|3|4)\b",
+                       re.I)
+_VLM_WOMAN = re.compile(r"\b(woman|women|female|girl|lady|she|her)\b", re.I)
+_VLM_MAN = re.compile(r"\b(man|men|male|boy|guy|gentleman|he|his)\b", re.I)
+
+
+def _vlm_describe(image_path, timeout=180):
+    """qwen3vl's one-sentence description of a picture ("" when the call fails)."""
+    try:
+        infile = f"vlmdesc_{int(time.time()*1000)}.png"
+        shutil.copy(image_path, os.path.join(COMFY_INPUT_DIR, infile))
+        payload = {
+            "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
+                       "class_type": "CLIPLoader"},
+            "img": {"inputs": {"image": infile}, "class_type": "LoadImage"},
+            "gen": {"inputs": {"clip": ["k_clip", 0], "image": ["img", 0],
+                               "prompt": VLM_DESCRIBE_QUESTION, "max_length": 80,
+                               "sampling_mode": "off", "use_default_template": True,
+                               "thinking": False},
+                    "class_type": "TextGenerate"},
+            "prev": {"inputs": {"source": ["gen", 0]}, "class_type": "PreviewAny"},
+        }
+        data = json.dumps({"prompt": payload}).encode("utf-8")
+        req = urllib.request.Request(f"{COMFY_URL}/prompt", data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            pid = _track_prompt(json.loads(resp.read().decode("utf-8"))["prompt_id"])
+        start = time.time()
+        while time.time() - start < timeout:
+            time.sleep(0.5)
+            _bail_if_cancelled()
+            with urllib.request.urlopen(f"{COMFY_URL}/history/{pid}") as h:
+                hist = json.loads(h.read().decode("utf-8"))
+            if pid in hist and (hist[pid].get("outputs") or
+                                hist[pid].get("status", {}).get("completed")):
+                return " ".join(hist[pid].get("outputs", {}).get("prev", {}).get("text", []))
+        return ""
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[VLM Error] {e}")
+        return ""
+
+
+def _vlm_many_people(text):
+    """True when a _vlm_describe sentence speaks of more than one person."""
+    return bool(_VLM_MANY.search(text or ""))
+
+
+def _vlm_is_man(text):
+    """True when a _vlm_describe sentence's FIRST gendered word is a man's - an empty or
+    ungendered reply is not a man, so a failed call never forces a re-draw."""
+    w, m = _VLM_WOMAN.search(text or ""), _VLM_MAN.search(text or "")
+    return bool(m) and (not w or m.start() < w.start())
+
+
 # The palette-similarity gate that used to live here (keep a direct krea2 flyer when its
 # colours still matched the walker, else re-do it as a Kontext edit) is GONE, along with
 # FLYER_IDENTITY_MIN. It existed only because krea2 was generating the flyer directly. Both
@@ -10159,12 +10875,31 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
                               for v in (ENEMY_VARIANT_NAMES if species
                                         else KREA2_FALLBACK_DIRECT_VARIANTS)}
     enemies = {}
+    marker_fallback = None
+    family = _known_enemy_family(enemy_style) or {}
     for v, frames in generated.items():
         got = {}
+        # A foe that fails its family's checks is re-drawn whole, on a fresh seed, before
+        # anything else is done to its frames - see _foe_redraw_reason. Two tries, then it stands.
+        for _ in range(2):
+            reason = _foe_redraw_reason(family, v, paths) if species else None
+            if not reason:
+                break
+            print(f"[krea2] {prefix} {v} {reason} - re-drawing it on a fresh seed")
+            redrawn, seed = _redraw_grey_foe(species[v]["look"], species[v].get("guard"),
+                                             enemy_style, v, frames, sq, steps, prefix)
+            if not redrawn:
+                break
+            paths.update(redrawn)
+            if seeds is not None:
+                seeds[v] = seed
         for f in frames:
             fp = paths.get(f"enemy_{v}_{f}")
             if not fp:
                 continue
+            # Before the blob pass, which would erase any piece of flame left detached.
+            if _fire_attack_frame(enemy_style, v, f):
+                print(f"[krea2] {prefix} {v} {f} got {restore_dropped_fire(fp)} px of fire back")
             keep_largest_figure(fp, thresh=50)
             problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, v))
             if problem and f == "idle":
@@ -10189,7 +10924,22 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
                           f"the frontend will use {fallback} for that pose")
                     continue
             if fp:
+                # After the blob pass and any re-draw, before the crop below would cut the
+                # band over the head away.
+                if _enemy_signature(enemy_style):
+                    restored = restore_overhead_marker(fp)
+                    if restored:
+                        print(f"[krea2] {prefix} {v} {f} got its overhead marker back "
+                              f"({restored} px)")
                 got[f] = fp
+        # One upright plumbob over every head, before the crop (which would otherwise be sized
+        # without room for it). The plumbob this foe used is handed on to the next foe as its
+        # fallback.
+        if got.get("idle") and (_known_enemy_family(enemy_style) or {}).get("marker"):
+            marker_fallback = _normalise_markers(
+                got, marker_fallback,
+                fire_frames={f for f in got if _fire_attack_frame(enemy_style, v, f)})
+            print(f"[krea2] {prefix} {v} plumbob set over all {len(got)} frames")
         # Register every frame of this foe against ONE box so it holds still when the sprite
         # swaps mid-fight. The box is the UNION, so an attack lunge is not clipped - the
         # frontend then scales all frames by the IDLE frame's content, which keeps the idle at
@@ -11421,6 +12171,11 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     return {"frames": frame_paths, "enemy": (enemies.get("walker") or {}).get("idle"),
             "enemies": enemies,
             "enemy_names": ({v: species[v]["name"] for v in species} if species else None),
+            # {variant: {frame: [x0, y0, x1, y1] | None}} - where each frame's plumbob is, for
+            # game.js to recolour. Only for a family with an overhead marker.
+            "enemy_markers": ({v: {f: _marker_box(p) for f, p in fr.items()}
+                               for v, fr in enemies.items()}
+                              if enemies and _enemy_signature(enemy_style) else None),
             "portrait": portraits[0] if portraits else None, "portraits": portraits,
             "ref_drawn": ref_drawn}
 
@@ -11716,6 +12471,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
                                if bundle.get("enemies") else None),
             # Each foe's own invented name, when the LLM designed them (generate_enemy_species).
             "enemy_names": bundle.get("enemy_names"),
+            # Where each frame's plumbob sits, or None - see generate_krea2_posed_bundle.
+            "enemy_markers": bundle.get("enemy_markers"),
             "enemy_style": (enemy_style or "").strip(),
             # {name: data:audio/wav;base64,...} for whatever survived, or None. Partial is
             # fine and expected - game.js synthesises anything missing.
@@ -14370,6 +15127,17 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 if bool(data.get("ending_video", False)):
                     ending_video = ("background" if bool(data.get("ending_video_background", False))
                                     else "loading")
+                # A choice whose models ComfyUI doesn't have becomes the most it can make. The page
+                # already greys those out (applyModelAvailability in game.js) - this covers an older
+                # page or a scripted request, and keeps the loading bar from budgeting minutes for
+                # a step that would only fail ComfyUI's validation. Same ranking as the page's.
+                missing_groups = {g["label"] for g in preflight["groups"] if g["missing"]}
+                if "Sound effects" in missing_groups:
+                    sound_mode = "skip"
+                elif "Music" in missing_groups and sound_mode == "music_and_sound":
+                    sound_mode = "sound_only"
+                if "Ending video" in missing_groups:
+                    ending_video = "off"
                 # A new dungeon outranks an ending still filming for a run the player has left:
                 # every prompt of this run would otherwise queue behind a multi-minute video job.
                 cancel_ending_video_job("a new dungeon is being generated")

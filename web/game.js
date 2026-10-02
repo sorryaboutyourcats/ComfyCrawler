@@ -594,6 +594,9 @@
     // as separate species rather than derived from one another. Takes precedence over the
     // tag+common-name fallback below, because these really are three different creatures.
     let enemyVariantNames = {};
+    // Where each frame's overhead marker (a Sims plumbob) is, {variant: {frame: [x0, y0, x1, y1]}}
+    // from server bundle.enemy_markers - empty for every other kind of foe. See markerTintFrame.
+    let enemyMarkerBoxes = {};
     // The generated intro: {location, hero, foe, boss, crawl:[...]}. Arrives from
     // /api/progress minutes before the art does, and names the enemies in combat.
     let dungeonStory = null;
@@ -618,11 +621,9 @@
     // Date.now() timestamp until which the intro crawl counts as "being read", so the screen
     // saver's idle timer holds off even if the story shipped with no narration audio (or
     // autoplay blocked the clip) and there is nothing else - no audio, no video, no battle -
-    // to already block it. Set from the crawl's own scroll duration in startCrawl(); belt and
-    // braces alongside the narrationActive() check in screensaverBlocked().
+    // to already block it. Set from a reading-pace estimate in startCrawl(); belt and braces
+    // alongside the narrationActive() check in screensaverBlocked().
     let crawlReadingUntil = 0;
-    // Date.now() when startCrawl() set the crawl rolling - see the animationstart listener there.
-    let crawlRollStartedAt = 0;
     // True only while the server is actually rendering a dungeon for us. Drives the
     // "you will lose this" refresh warning and the cancel beacon further down - see the
     // beforeunload/pagehide pair next to the CREATE handler.
@@ -702,8 +703,8 @@
       // crawlReadingUntil is a fallback reading-pace estimate for a story with no narration at
       // all - real narration finishing is the authoritative "done reading" signal and almost
       // always arrives well before that estimate (CRAWL_MIN_SECONDS=55, 22s/paragraph assumes
-      // silent reading, not a voice actually speaking it). On a phone or with reduced motion the
-      // crawl is a static block with no animation left to justify the wait either. Left alone,
+      // silent reading, not a voice actually speaking it). The story is a static block, so there
+      // is no animation left to justify the wait either. Left alone,
       // the screen saver stayed blocked for however much of the estimate was still unspent -
       // on a fast History/showcase load that could be another minute of sitting on a screen
       // that had already finished doing everything it was blocking for.
@@ -714,10 +715,9 @@
       narrateIndex = i;
       narrateClips.forEach((c, idx) => c.el.classList.toggle('speaking', idx === i));
       if (i >= narrateClips.length) { finishNarration(); return; }
-      // On a phone the story is a static block that scrolls inside the stage (index.html
-      // caps its height), so keep the paragraph being read on screen. Only the stage's own
-      // scrollTop moves - scrollIntoView would drag the page along too. A no-op for the
-      // rolling crawl, whose stage never overflows scrollably.
+      // A long story scrolls inside the stage (index.html caps its height), so keep the
+      // paragraph being read on screen. Only the stage's own scrollTop moves - scrollIntoView
+      // would drag the page along too. A no-op for a story that fits.
       if (crawlStage && crawlStage.scrollHeight > crawlStage.clientHeight) {
         const el = narrateClips[i].el;
         const top = el.getBoundingClientRect().top - crawlStage.getBoundingClientRect().top
@@ -2015,9 +2015,21 @@
     const endingBackgroundLabel = document.getElementById('endingBackgroundLabel');
     let endingVideoOn = false;
     let endingBackgroundOn = false;
+    // False while the last preflight report says H3's models aren't installed - see
+    // applyModelAvailability. endingVideoOn stays the player's own pick; this decides whether it
+    // can be made right now.
+    let endingVideoAvailable = true;
+
+    // Whether creating a dungeon films an ending: the player asked for one and the models are here.
+    function endingVideoMakes() {
+      return endingVideoOn && endingVideoAvailable;
+    }
 
     function paintEndingOptionRows() {
-      if (endingVideoSelect) endingVideoSelect.value = endingVideoOn ? 'on' : 'off';
+      if (endingVideoSelect) {
+        paintModelGatedOption(endingVideoSelect.querySelector('option[value="on"]'), endingVideoAvailable);
+        endingVideoSelect.value = endingVideoMakes() ? 'on' : 'off';
+      }
       // The background row is still a row of buttons - it is hidden, so it was never worth
       // turning into a second dropdown alongside the first.
       if (endingBackgroundRow) {
@@ -2025,10 +2037,10 @@
           const picked = (btn.dataset.endingBackground === 'on') === endingBackgroundOn;
           btn.classList.toggle('is-selected', picked);
           btn.setAttribute('aria-pressed', picked ? 'true' : 'false');
-          btn.disabled = !endingVideoOn;
+          btn.disabled = !endingVideoMakes();
         });
       }
-      if (endingBackgroundLabel) endingBackgroundLabel.classList.toggle('opacity-50', !endingVideoOn);
+      if (endingBackgroundLabel) endingBackgroundLabel.classList.toggle('opacity-50', !endingVideoMakes());
     }
 
     function saveEndingOptions() {
@@ -2112,11 +2124,62 @@
     // call once their files are in place.
     const SOUND_MODE_KEY = 'comfycrawler.soundMode';
     const SOUND_MODES = ['skip', 'sound_only', 'music_and_sound'];
-    if (soundModeSelect && SOUND_MODES.includes(prefs.get(SOUND_MODE_KEY))) {
-      soundModeSelect.value = prefs.get(SOUND_MODE_KEY);
+    // The player's own pick, which the dropdown shows only while its models are installed -
+    // otherwise it shows (and CREATE sends) the most this machine can make, soundModeMax, and the
+    // pick comes back on its own once the models arrive. See applyModelAvailability.
+    let soundModeWish = soundModeSelect ? soundModeSelect.value : 'music_and_sound';
+    let soundModeMax = SOUND_MODES.length - 1;
+    if (SOUND_MODES.includes(prefs.get(SOUND_MODE_KEY))) {
+      soundModeWish = prefs.get(SOUND_MODE_KEY);
     }
+
+    function effectiveSoundMode() {
+      return SOUND_MODES[Math.min(Math.max(0, SOUND_MODES.indexOf(soundModeWish)), soundModeMax)];
+    }
+
+    function paintSoundModeSelect() {
+      if (!soundModeSelect) return;
+      for (const opt of soundModeSelect.options) {
+        paintModelGatedOption(opt, SOUND_MODES.indexOf(opt.value) <= soundModeMax);
+      }
+      soundModeSelect.value = effectiveSoundMode();
+    }
+
     if (soundModeSelect) {
-      soundModeSelect.addEventListener('change', () => prefs.set(SOUND_MODE_KEY, soundModeSelect.value));
+      soundModeSelect.addEventListener('change', () => {
+        soundModeWish = soundModeSelect.value;
+        prefs.set(SOUND_MODE_KEY, soundModeWish);
+      });
+    }
+    paintSoundModeSelect();
+
+    // Greys out one dropdown choice whose models aren't installed, and says so in its own text -
+    // a disabled option with no reason given reads as broken. The arrow keys skip it like the
+    // mouse does. The original wording is kept in data-label to put back once the models arrive.
+    function paintModelGatedOption(opt, available) {
+      if (!opt) return;
+      if (opt.dataset.label === undefined) opt.dataset.label = opt.textContent;
+      if (opt.dataset.title === undefined) opt.dataset.title = opt.title || '';
+      opt.disabled = !available;
+      opt.textContent = available ? opt.dataset.label : `${opt.dataset.label} (models not installed)`;
+      opt.title = available ? opt.dataset.title
+        : "Its models aren't installed in ComfyUI yet - the main menu's Optional extras can download them.";
+    }
+
+    // What Sound Generation and Ending Video can make on this machine, from a /api/preflight report
+    // (renderPreflight calls this with every one it gets). Only a group the report positively says
+    // is missing files greys anything out: no report yet, or ComfyUI not answering (its groups then
+    // list nothing as missing), leaves every choice open - the server refuses CREATE then anyway.
+    function applyModelAvailability(report) {
+      const groups = (report && report.groups) || [];
+      const installed = (label) => {
+        const g = groups.find((x) => x.label === label);
+        return !g || !g.missing || g.missing.length === 0;
+      };
+      soundModeMax = installed('Sound effects') ? (installed('Music') ? 2 : 1) : 0;
+      endingVideoAvailable = installed('Ending video');
+      paintSoundModeSelect();
+      paintEndingOptionRows();
     }
 
     // Secret Settings (index.html #secretSettingsSection): five presses in a row on the gear in
@@ -2238,11 +2301,11 @@
     // reached, so finishing "Sound effects" or "Music" from the setup screen turns sound on
     // without a trip to Options - see onDownloadJobFinished.
     function raiseSoundMode(rank) {
-      if (!soundModeSelect) return;
-      const current = Math.max(0, SOUND_MODES.indexOf(soundModeSelect.value));
+      const current = Math.max(0, SOUND_MODES.indexOf(soundModeWish));
       if (rank <= current) return;
-      soundModeSelect.value = SOUND_MODES[rank];
-      prefs.set(SOUND_MODE_KEY, soundModeSelect.value);
+      soundModeWish = SOUND_MODES[rank];
+      prefs.set(SOUND_MODE_KEY, soundModeWish);
+      paintSoundModeSelect();
     }
 
     // `focusTarget` is where the cursor starts - the dialog's own first visible control when
@@ -3800,6 +3863,51 @@
       return cv;
     }
 
+    // A copy of a frame with its overhead marker - a Sims plumbob, at `box` from bundle.enemy_markers
+    // - recoloured to `rgb`, the way a Sim's plumbob changes with its mood. Only the marker's own
+    // coloured pixels change: each is repainted in `rgb` at its own lightness, so the diamond keeps
+    // its facets, and near-grey pixels (its white glints, anything behind it) are left alone. Same
+    // caching and image-like canvas as hurtTintFrame. Colour is not tested, so a pack foe's
+    // hue-rotated plumbob recolours just the same.
+    const _markerTintCache = new WeakMap();
+    function markerTintFrame(img, box, rgb) {
+      if (!img || !img.complete || !(img.naturalWidth > 0) || !Array.isArray(box)) return img;
+      let per = _markerTintCache.get(img);
+      if (!per) { per = new Map(); _markerTintCache.set(img, per); }
+      const key = box.join(',') + '|' + rgb.join(',');
+      const hit = per.get(key);
+      if (hit) return hit;
+      const w = img.naturalWidth, h = img.naturalHeight;
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const cx = cv.getContext('2d');
+      cx.drawImage(img, 0, 0, w, h);
+      const x0 = Math.max(0, box[0] | 0), y0 = Math.max(0, box[1] | 0);
+      const x1 = Math.min(w, box[2] | 0), y1 = Math.min(h, box[3] | 0);
+      if (x1 > x0 && y1 > y0) {
+        const px = cx.getImageData(x0, y0, x1 - x0, y1 - y0);
+        const d = px.data;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 30) continue;
+          const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+          if (mx - mn < 40) continue;
+          const k = (mx + mn) / 255;            // lightness x2: under 1 darkens, over 1 lightens
+          for (let c = 0; c < 3; c++) {
+            d[i + c] = k <= 1 ? rgb[c] * k : rgb[c] + (255 - rgb[c]) * (k - 1);
+          }
+        }
+        cx.putImageData(px, x0, y0);
+      }
+      Object.defineProperty(cv, 'naturalWidth', { value: w });
+      Object.defineProperty(cv, 'naturalHeight', { value: h });
+      Object.defineProperty(cv, 'complete', { value: true });
+      per.set(key, cv);
+      return cv;
+    }
+    // The plumbob's mood colours: red while the Sim attacks, yellow while it reels from a hit.
+    const MARKER_ATTACK_RGB = [235, 30, 30];
+    const MARKER_HURT_RGB = [250, 210, 30];
+
     // The {idle, attack, block} set a variant draws with. Base variants own theirs; a pack foe
     // borrows its base's and recolours every frame of it. Null means the sprite it needs never
     // arrived, which is the caller's cue to fall back to whatever the mode did ship.
@@ -5038,7 +5146,7 @@ void main() {
         if (entry && entry.has_ending_video) loadEndingClip(endingRunId);
         return;
       }
-      pollEndingStatus(endingRunId, endingVideoOn && endingBackgroundOn);
+      pollEndingStatus(endingRunId, endingVideoMakes() && endingBackgroundOn);
     }
 
     async function pollEndingStatus(id, mayStart) {
@@ -7700,11 +7808,12 @@ void main() {
         // borrows has finished decoding - in which case enemyFramesFor hands back the untinted
         // original and quietly upgrades itself once the source is ready.
         const frames = enemyFramesFor(e.variant) || enemyFrames;
-        let frame, sizeRef = null;
+        let frame, sizeRef = null, frameKey = null;
         // Last Attack Frame as it applies to THIS foe - Mixed resolves to quick or flip by variant.
         const attackMode = attackFrameModeFor(e);
         if (frames && frames.idle) {
           frame = frames.idle;
+          frameKey = 'idle';
           // Attack wins over block: the AI clears blockTimer when it commits to a strike, so
           // these do not overlap in practice, but the strike is the one that must read.
           // The attack frame goes up with the telegraph, well before the blow lands, and
@@ -7720,9 +7829,20 @@ void main() {
           //   mixed - quick on the ground, except that the boss's charge takes its pose as the
           //           run-in starts; flip in the air. See attackPoseUp.
           const landed = e.state === 'attack' && e.strikeLanded;
-          if (landed && attackMode === 'on' && frames.strike) frame = frames.strike;
-          else if (attackPoseUp(e, attackMode)) frame = frames.attack || frame;
-          else if (e.blockTimer > 0) frame = frames.block || frame;
+          if (landed && attackMode === 'on' && frames.strike) { frame = frames.strike; frameKey = 'strike'; }
+          else if (attackPoseUp(e, attackMode)) {
+            if (frames.attack) { frame = frames.attack; frameKey = 'attack'; }
+          } else if (e.blockTimer > 0 && frames.block) { frame = frames.block; frameKey = 'block'; }
+          // A Sim's plumbob changes colour with what it is doing - see markerTintFrame. A pack foe
+          // draws its base variant's frames, so it looks its marker up under that variant too.
+          const base = (ENEMY_VARIANTS[e.variant] && ENEMY_VARIANTS[e.variant].recolorOf) || e.variant;
+          const box = enemyMarkerBoxes[base] && enemyMarkerBoxes[base][frameKey];
+          if (box) {
+            if (e.state === 'hurt') frame = markerTintFrame(frame, box, MARKER_HURT_RGB);
+            else if (frameKey === 'attack' || frameKey === 'strike' || landed) {
+              frame = markerTintFrame(frame, box, MARKER_ATTACK_RGB);
+            }
+          }
           // Scale EVERY frame by the idle's content box. Sizing each frame on its own box
           // would shrink the whole foe whenever it lunged, since a thrust-out limb measures
           // bigger; anchoring on the idle keeps it a constant size and lets the attack frame
@@ -11517,6 +11637,7 @@ void main() {
       enemyStyleName = ((dungeonStory && dungeonStory.foe) || b.enemy_style || '').trim();
       enemyBossName = ((dungeonStory && dungeonStory.boss) || '').trim();
       enemyVariantNames = (b.enemy_names && typeof b.enemy_names === 'object') ? b.enemy_names : {};
+      enemyMarkerBoxes = (b.enemy_markers && typeof b.enemy_markers === 'object') ? b.enemy_markers : {};
       pickEnemyVariant();
 
       let shown;
@@ -11614,9 +11735,9 @@ void main() {
     }
 
     // ---- Intro crawl -------------------------------------------------------
-    // Rendered as soon as the story lands, while every sprite is still being generated.
-    // The CSS animation runs with fill-mode forwards, so if the text outruns the art it
-    // simply settles on its last frame and holds while the bar keeps moving underneath.
+    // Rendered as soon as the story lands, while every sprite is still being generated. Still
+    // called the crawl, but it no longer moves - a static block, see "Intro story" in
+    // index.html. The two numbers below only time crawlReadingUntil.
     const CRAWL_SECONDS_PER_PARAGRAPH = 22;
     const CRAWL_MIN_SECONDS = 55;
 
@@ -11656,31 +11777,12 @@ void main() {
 
       const seconds = Math.max(CRAWL_MIN_SECONDS,
                                (paras.length + (story.hook ? 2 : 1)) * CRAWL_SECONDS_PER_PARAGRAPH);
-      crawlText.style.setProperty('--crawl-duration', seconds + 's');
       crawlReadingUntil = Date.now() + seconds * 1000;
-      crawlRollStartedAt = Date.now();
-      // Restart cleanly if a previous dungeon left the animation on the node.
-      crawlText.classList.remove('rolling');
-      crawlText.style.animationDelay = '';
-      void crawlText.offsetWidth;
-      crawlText.classList.add('rolling');
 
       startNarration();
       // A story with no audio (generation failed, or a mode that never renders any) has no
       // "when the narrator stops" moment to wait for, so the loading loop starts now.
       if (!narrationActive()) playScreenMusic('loading');
-    }
-
-    // The static-block media queries in index.html switch the animation off rather than pause
-    // it, so a window that crosses one mid-story (a small tablet rotated to landscape, a
-    // desktop window dragged wider) gets a brand-new animation that would start the crawl over
-    // from the bottom. Pushing its start back by the time already spent reading picks it up
-    // where it would have been instead; changing the delay retimes the running animation.
-    if (crawlText) {
-      crawlText.addEventListener('animationstart', (e) => {
-        if (e.target !== crawlText || !crawlText.classList.contains('rolling')) return;
-        crawlText.style.animationDelay = -((Date.now() - crawlRollStartedAt) / 1000) + 's';
-      });
     }
 
     // Classic Win98 install-bar: fixed-pitch blocks sized to the trough's actual width, so
@@ -11719,10 +11821,7 @@ void main() {
       pendingBundle = null;
       dungeonStory = null;
       applyHeroStatusLabel();
-      if (crawlText) {
-        crawlText.classList.remove('rolling');
-        crawlText.innerHTML = '';
-      }
+      if (crawlText) crawlText.innerHTML = '';
       if (crawlPending) {
         crawlPending.textContent = pendingText;
         crawlPending.style.display = '';
@@ -12116,10 +12215,25 @@ void main() {
     const preflightList = document.getElementById('preflightList');
     const btnPreflightRecheck = document.getElementById('btnPreflightRecheck');
     const btnPreflightSettings = document.getElementById('btnPreflightSettings');
-    const preflightRequired = document.getElementById('preflightRequired');
-    const preflightRequiredList = document.getElementById('preflightRequiredList');
-    const preflightOptional = document.getElementById('preflightOptional');
-    const preflightOptionalList = document.getElementById('preflightOptionalList');
+    const btnPreflightHide = document.getElementById('btnPreflightHide');
+
+    // The notice's ✕ (only offered while nothing but optional models is missing) saves the labels
+    // of the optional groups missing at that moment. The notice stays hidden while every missing
+    // group is one of those, and comes back when a different one goes missing - a group a later
+    // update adds, say. Options keeps the same Download rows either way (#optionsModels).
+    const PREFLIGHT_HIDDEN_KEY = 'comfycrawler.hiddenModelNotice';
+
+    function missingOptionalLabels(report) {
+      return ((report && report.groups) || [])
+        .filter((g) => !g.required && g.missing && g.missing.length).map((g) => g.label);
+    }
+
+    function hiddenModelLabels() {
+      try {
+        const labels = JSON.parse(prefs.get(PREFLIGHT_HIDDEN_KEY) || '[]');
+        return Array.isArray(labels) ? labels : [];
+      } catch (_) { return []; }
+    }
 
     // The missing models and nodes in a preflight report, one {text, needed} per group or node -
     // `needed` meaning it blocks CREATE. Used by Options' status box; the setup notice itself now
@@ -12155,6 +12269,7 @@ void main() {
       lastPreflightReport = report;
       let lines = [];
       let title = '';
+      let optionalOnly = false;
       const anyMissing = !!(report && report.groups && report.groups.some((g) => g.missing && g.missing.length));
       if (report && report.comfy && report.comfy.error) {
         title = "⛔ ComfyUI isn't ready";
@@ -12162,10 +12277,14 @@ void main() {
       } else if (report) {
         lines = requiredNodeProblems(report).map((item) => item.text);
         if (lines.length || anyMissing) {
+          optionalOnly = !!report.ready;
           title = report.ready ? '⚠️ Some optional ComfyUI models are missing'
                                : '⛔ ComfyUI is missing files a dungeon needs';
         }
       }
+      const hidden = hiddenModelLabels();
+      const hiddenByPlayer = optionalOnly && missingOptionalLabels(report).every((label) => hidden.includes(label));
+      if (btnPreflightHide) btnPreflightHide.classList.toggle('hidden', !optionalOnly);
       preflightTitle.textContent = title;
       preflightList.replaceChildren(...lines.map((text) => {
         const li = document.createElement('li');
@@ -12174,7 +12293,8 @@ void main() {
       }));
       renderModelGroups(report);
       renderAboutModels(report);
-      preflightNotice.classList.toggle('hidden', lines.length === 0 && !anyMissing);
+      applyModelAvailability(report);
+      preflightNotice.classList.toggle('hidden', (lines.length === 0 && !anyMissing) || hiddenByPlayer);
       // Inside ComfyUI (the custom node) there's no connection to set, so no shortcut to it.
       if (btnPreflightSettings) {
         btnPreflightSettings.classList.toggle('hidden', !!(report && report.comfy && report.comfy.embedded));
@@ -12200,6 +12320,16 @@ void main() {
 
     if (btnPreflightRecheck) btnPreflightRecheck.addEventListener('click', checkPreflight);
     if (btnPreflightSettings) btnPreflightSettings.addEventListener('click', () => openSettings(comfyFields.url));
+    if (btnPreflightHide) {
+      btnPreflightHide.addEventListener('click', () => {
+        const hadFocus = preflightNotice.contains(document.activeElement);
+        prefs.set(PREFLIGHT_HIDDEN_KEY, JSON.stringify(missingOptionalLabels(lastPreflightReport)));
+        renderPreflight(lastPreflightReport);
+        // The cursor goes to Options - where the models it just hid still are - rather than
+        // dropping off the page with the notice.
+        if (hadFocus && btnSettings) btnSettings.focus({ preventScroll: true });
+      });
+    }
 
     // ---- Model downloads --------------------------------------------------------------------
     // One group (COMFY_MODEL_GROUPS label) downloading at a time, app-wide - see server.py's
@@ -12220,26 +12350,55 @@ void main() {
     // One row per COMFY_MODEL_GROUPS group with something missing, or whose download is active /
     // just failed / was cancelled (a finished, satisfied group renders no row, same as one that
     // was never missing anything). Split into the Required / Optional extras sections so the two
-    // are visually obvious rather than one flat list.
+    // are visually obvious rather than one flat list. Drawn twice: in the setup notice, and in
+    // Options under ComfyUI Connection, which is where they stay once the notice's ✕ hides it.
+    // `wrap` is the Options copy's own box, shown only while it has a row to show.
+    const modelGroupViews = ['preflight', 'optionsModels'].map((id) => ({
+      wrap: id === 'optionsModels' ? document.getElementById(id) : null,
+      required: document.getElementById(`${id}Required`),
+      requiredList: document.getElementById(`${id}RequiredList`),
+      optional: document.getElementById(`${id}Optional`),
+      optionalList: document.getElementById(`${id}OptionalList`),
+    })).filter((v) => v.required && v.requiredList && v.optional && v.optionalList);
+
     function renderModelGroups(report) {
-      if (!preflightRequired || !preflightOptional || !preflightRequiredList || !preflightOptionalList) return;
-      const requiredRows = [];
-      const optionalRows = [];
-      for (const g of (report && report.groups) || []) {
-        const jobHere = downloadJob.group === g.label ? downloadJob : null;
-        const showJob = !!jobHere && (downloadJobActive(jobHere) || jobHere.state === 'failed' || jobHere.state === 'cancelled');
-        if (!g.missing.length && !showJob) continue;
-        (g.required ? requiredRows : optionalRows).push(buildModelGroupRow(g, showJob ? jobHere : null));
+      for (const view of modelGroupViews) {
+        const requiredRows = [];
+        const optionalRows = [];
+        for (const g of (report && report.groups) || []) {
+          const jobHere = downloadJob.group === g.label ? downloadJob : null;
+          const showJob = !!jobHere && (downloadJobActive(jobHere) || jobHere.state === 'failed' || jobHere.state === 'cancelled');
+          if (!g.missing.length && !showJob) continue;
+          (g.required ? requiredRows : optionalRows).push(buildModelGroupRow(g, showJob ? jobHere : null));
+        }
+        // The rows are rebuilt every poll while a download runs, which would knock the keyboard
+        // cursor off the button it sat on - so it goes back onto that group's new one.
+        const focused = document.activeElement;
+        const focusedGroup = focused && focused.dataset && focused.dataset.modelGroup
+          && (view.requiredList.contains(focused) || view.optionalList.contains(focused))
+          ? focused.dataset.modelGroup : null;
+        view.requiredList.replaceChildren(...requiredRows);
+        view.optionalList.replaceChildren(...optionalRows);
+        view.required.classList.toggle('hidden', requiredRows.length === 0);
+        view.optional.classList.toggle('hidden', optionalRows.length === 0);
+        if (view.wrap) view.wrap.classList.toggle('hidden', requiredRows.length + optionalRows.length === 0);
+        if (focusedGroup) {
+          const again = modelGroupButtonIn(view, focusedGroup);
+          if (again && !again.disabled) again.focus({ preventScroll: true });
+        }
       }
-      preflightRequiredList.replaceChildren(...requiredRows);
-      preflightOptionalList.replaceChildren(...optionalRows);
-      preflightRequired.classList.toggle('hidden', requiredRows.length === 0);
-      preflightOptional.classList.toggle('hidden', optionalRows.length === 0);
     }
 
+    function modelGroupButtonIn(view, groupLabel) {
+      return [...view.requiredList.querySelectorAll('button'), ...view.optionalList.querySelectorAll('button')]
+        .find((b) => b.dataset.modelGroup === groupLabel) || null;
+    }
+
+    // A flat line, not a raised box of its own: five boxed rows made the notice 330px tall and
+    // pushed the main menu's title bar and CREATE off a 1080p screen.
     function buildModelGroupRow(g, job) {
       const li = document.createElement('li');
-      li.className = 'win95-box p-1.5 bg-white/60 flex flex-col gap-1';
+      li.className = 'px-1.5 py-0.5 bg-white/60 flex flex-col gap-0.5';
 
       const head = document.createElement('div');
       head.className = 'flex items-center justify-between gap-2';
@@ -12252,6 +12411,7 @@ void main() {
       const btn = document.createElement('button');
       btn.className = 'win95-btn px-2 py-0.5 text-[11px] text-black hover:bg-slate-300'
         + (active ? '' : ' bg-slate-200');
+      btn.dataset.modelGroup = g.label;   // how renderModelGroups finds it again after a rebuild
       if (active) {
         btn.textContent = 'Cancel';
         btn.addEventListener('click', () => askStopModelDownload(g.label, btn));
@@ -12336,11 +12496,14 @@ void main() {
     const btnDownloadStopClose = document.getElementById('btnDownloadStopClose');
     const btnDownloadStopKeep = document.getElementById('btnDownloadStopKeep');
     const btnDownloadStopGo = document.getElementById('btnDownloadStopGo');
-    let downloadStopPending = null;   // {group, btn} while the box is asking about a download
+    let downloadStopPending = null;   // {group, btn, view} while the box is asking about a download
 
     function askStopModelDownload(groupLabel, btn) {
       if (!modalDownloadStopConfirm) return;
-      downloadStopPending = { group: groupLabel, btn: btn || null };
+      // Which copy of the rows it was asked from - the notice's or Options' - so the cursor can go
+      // back to that copy's button even after a poll has rebuilt it.
+      const view = btn ? modelGroupViews.find((v) => v.requiredList.contains(btn) || v.optionalList.contains(btn)) : null;
+      downloadStopPending = { group: groupLabel, btn: btn || null, view: view || null };
       if (downloadStopName) downloadStopName.textContent = groupLabel;
       modalDownloadStopConfirm.classList.remove('hidden');
       paintStopModelDownload();
@@ -12365,7 +12528,9 @@ void main() {
 
     function closeStopModelDownload() {
       const wasOpen = modalDownloadStopConfirm && !modalDownloadStopConfirm.classList.contains('hidden');
-      const back = downloadStopPending && downloadStopPending.btn;
+      const pending = downloadStopPending;
+      const back = pending && pending.btn && !pending.btn.isConnected && pending.view
+        ? modelGroupButtonIn(pending.view, pending.group) : pending && pending.btn;
       downloadStopPending = null;
       if (modalDownloadStopConfirm) modalDownloadStopConfirm.classList.add('hidden');
       if (!wasOpen) return;
@@ -12927,15 +13092,16 @@ void main() {
             // Whether those pictures are drawn from or only described - see pictureModeSelect.
             picture_mode: pictureModeSelect ? pictureModeSelect.value : 'reference',
             mode: activeMode,
-            sound_mode: soundModeSelect ? soundModeSelect.value : 'music_and_sound',
+            // What this machine can make of the player's pick - see applyModelAvailability.
+            sound_mode: effectiveSoundMode(),
             graphics_quality: gfxQualitySelect ? gfxQualitySelect.value : 'normal',
             // One more frame per foe, shown when its blow lands - see lastAttackFrameMode. Quick
             // needs nothing generated, so only 'on' asks for it.
             last_attack_frame: lastAttackFrameMode === 'on',
             // The ending cutscene, and whether it is filmed on this loading screen or in the
             // background once the run starts - see the ENDING CUTSCENE section.
-            ending_video: endingVideoOn,
-            ending_video_background: endingVideoOn && endingBackgroundOn
+            ending_video: endingVideoMakes(),
+            ending_video_background: endingVideoMakes() && endingBackgroundOn
           })
         });
 
@@ -13252,9 +13418,10 @@ void main() {
     // that scrolls the whole line past on a loop. Called once per line after the list is
     // in the DOM, so scrollWidth/clientWidth are real.
     //
-    // Deliberately NOT gated on prefers-reduced-motion. Nothing else here is - the intro
-    // crawl aside, the confetti, the starfield and the screensaver's own story marquee all
-    // run regardless - and Windows ships plenty of machines with "Show animations" off, so
+    // Deliberately NOT gated on prefers-reduced-motion. Nothing else here is - the confetti,
+    // the starfield and the screensaver's own story marquee all run regardless (the intro crawl
+    // used to be, until it was made static for everyone) - and Windows ships plenty of machines
+    // with "Show animations" off, so
     // the gate only ever meant a line clipped with no way to read the rest of it.
     function marqueeIfOverflowing(el) {
       if (!el || !el.clientWidth) return;

@@ -4,7 +4,7 @@
 
 **Play it here:** https://mowmeow.net/ComfyCrawlerTest/?agent (the read-only edition, in agent mode; the page itself is https://mowmeow.net/ComfyCrawlerTest/)
 
-ComfyCrawler is by sorryaboutyourcats, built together with Claude (Anthropic) in Claude Code. It is MIT licensed: https://github.com/sorryaboutyourcats/ComfyCrawler
+ComfyCrawler is by sorryaboutyourcats, built together with Claude (Anthropic) in Claude Code. It is licensed under the GNU GPL v3: https://github.com/sorryaboutyourcats/ComfyCrawler
 
 ## What the game is
 

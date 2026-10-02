@@ -280,43 +280,35 @@
       display: inline-block;
     }
 
-    /* ---- Star Wars style intro crawl -------------------------------------
-       The stage is the fixed viewport; #crawlText is taller than it and slides up through
-       it under a perspective tilt. animation-fill-mode: forwards is what makes the text
-       settle on its last frame and stay there when it outruns the asset generation. */
+    /* ---- Intro story -----------------------------------------------------
+       Yellow text on black, standing still. It began as a Star Wars crawl sliding up under a
+       perspective tilt, with this static block as the fallback for prefers-reduced-motion and
+       phone widths - but the dev box always reports reduce (machine-reports-reduced-motion in
+       project memory), so the static block was the version everyone had signed off on, and
+       the crawl only surfaced on a Mac playing the showcase, where it read as a bug. One
+       layout everywhere now.
+       The story still has to fit the screen: at height:auto a long one grew the window past
+       the bottom edge and cut off the progress bar and Enter button. So the stage is capped at
+       what the rest of the loading window leaves (title bar, header row, progress bar, status
+       line, button, padding and gaps - about 240px) and scrolls; playNarrationClip in game.js
+       keeps the paragraph being read in view. */
     #crawlStage {
       position: relative;
-      height: 430px;
-      overflow: hidden;
       background: #000000;
-      perspective: 320px;
-      perspective-origin: 50% 0%;
       border: 2px inset #808080;
-    }
-    #crawlViewport {
-      position: absolute;
-      inset: 0;
-      overflow: hidden;
-      /* dissolve into the black horizon at the top */
-      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 38%, #000 100%);
-      mask-image: linear-gradient(to bottom, transparent 0%, #000 38%, #000 100%);
+      overflow-x: hidden;
+      overflow-y: auto;
+      max-height: max(120px, calc(100dvh - 240px));
+      min-height: min(200px, max(120px, calc(100dvh - 240px)));
     }
     #crawlText {
-      position: absolute;
-      top: 100%;
-      left: 8%;
-      width: 84%;
-      transform-origin: 50% 0%;
-      transform: rotateX(34deg);
+      padding: 16px 20px;
       color: #ffe81f;
       text-align: center;
       font-weight: bold;
       font-size: 15px;
       line-height: 1.55;
       text-shadow: 0 0 6px rgba(255, 232, 31, 0.35);
-    }
-    #crawlText.rolling {
-      animation: crawlUp var(--crawl-duration, 80s) linear forwards;
     }
     #crawlText p { margin: 0 0 14px 0; }
     #crawlText .crawl-title {
@@ -329,10 +321,9 @@
       font-style: italic;
       letter-spacing: 0.5px;
     }
-    /* Narration follow-along. Brightness only, no motion, so it stays appropriate for a
-       reader who asked for reduced motion. .narrating is only on the node while speech is
-       actually running, so if narration is off or blocked the text renders at full opacity
-       exactly as it did before. */
+    /* Narration follow-along. Brightness only, no motion. .narrating is only on the node
+       while speech is actually running, so if narration is off or blocked the text renders at
+       full opacity exactly as it did before. */
     #crawlText p { transition: opacity 0.25s ease, text-shadow 0.25s ease; }
     #crawlText.narrating p { opacity: 0.45; }
     #crawlText.narrating p.speaking {
@@ -346,57 +337,14 @@
       z-index: 3;
       font-size: 11px;
     }
-    @keyframes crawlUp {
-      0%   { top: 100%; }
-      100% { top: -260%; }
-    }
     #crawlPending {
-      position: absolute;
-      inset: 0;
       display: flex;
       align-items: center;
       justify-content: center;
+      padding: 24px;
       color: #ffe81f;
       font-size: 12px;
       opacity: 0.8;
-    }
-    /* A scrolling wall of text is exactly what this setting exists to suppress. */
-    @media (prefers-reduced-motion: reduce) {
-      #crawlText.rolling { animation: none; }
-      #crawlText { position: relative; top: 0; left: 0; width: 100%; transform: none;
-                   padding: 16px 20px; }
-      #crawlViewport { position: relative; inset: auto; overflow: visible;
-                       -webkit-mask-image: none; mask-image: none; }
-      /* Capped and scrolling, same as the phone block below explains. */
-      #crawlStage { perspective: none; height: auto; overflow-x: hidden; overflow-y: auto;
-                    max-height: max(120px, calc(100dvh - 240px));
-                    min-height: min(200px, max(120px, calc(100dvh - 240px))); }
-      #crawlPending { position: relative; padding: 24px; }
-    }
-    /* Same static block on a phone, but reached by screen width rather than the setting
-       above - see machine-reports-reduced-motion in project memory: the dev box used to test
-       this always reports prefers-reduced-motion: reduce, which is NOT representative of a
-       real visitor's phone, so that media query can't be trusted as a mobile signal. The tilted
-       Star Wars crawl also has nowhere near enough width to work with once the window is
-       phone-sized. 760px matches the phone breakpoint the rest of this stylesheet uses.
-       The second condition is the same phone turned on its side (the landscape query further
-       down): 844px wide clears the width test, so without it rotating mid-story switched the
-       animation back on and the text started crawling up from the bottom - and a 430px stage
-       doesn't fit a ~390px-tall screen anyway.
-       The static story still has to fit the screen, though: at height:auto a long one grew
-       the window past the bottom edge and cut off the progress bar and Enter button. So the
-       stage is capped at what the rest of the loading window leaves (title bar, header row,
-       progress bar, status line, button, padding and gaps - about 240px) and scrolls. */
-    @media (max-width: 760px), (max-height: 520px) and (orientation: landscape) {
-      #crawlText.rolling { animation: none; }
-      #crawlText { position: relative; top: 0; left: 0; width: 100%; transform: none;
-                   padding: 16px 20px; }
-      #crawlViewport { position: relative; inset: auto; overflow: visible;
-                       -webkit-mask-image: none; mask-image: none; }
-      #crawlStage { perspective: none; height: auto; overflow-x: hidden; overflow-y: auto;
-                    max-height: max(120px, calc(100dvh - 240px));
-                    min-height: min(200px, max(120px, calc(100dvh - 240px))); }
-      #crawlPending { position: relative; padding: 24px; }
     }
     #btnEnterDungeon:disabled {
       color: #808080;
@@ -1914,13 +1862,13 @@
        centres the window with justify-content - which, once the window is the taller of the
        two, centres it by pushing its top off the screen where no scroll can reach: the title
        bar and the first blank were simply gone on a 360x740 phone, and on its side CREATE was
-       too. Starting the column at the top loses nothing when the window fits, because its own
-       margin: auto still centres it. */
-    @media (max-width: 760px), (max-height: 520px) {
-      body:has(> #appContainer.mode-setup) {
-        justify-content: flex-start;
-        overflow-y: auto;
-      }
+       too. Not just on small screens: with every model missing the notice took the desktop
+       menu from 613px to 955px, past a 1080p browser's ~953px and far past a laptop's ~660px,
+       and the title bar and CREATE went off both ends there as well. Starting the column at the
+       top loses nothing when the window fits, because its own margin: auto still centres it. */
+    body:has(> #appContainer.mode-setup) {
+      justify-content: flex-start;
+      overflow-y: auto;
     }
 
     @media (max-width: 760px) {
@@ -2134,13 +2082,17 @@
            answering, a model file missing, or the KJNodes node missing. game.js fills the list
            (renderPreflight) and "Check again" asks again once files are added or ComfyUI is
            started. The server refuses CREATE by itself for anything required - this is the
-           early warning, not the gate. -->
+           early warning, not the gate. The ✕ only shows while nothing but optional models is
+           missing, and hides the notice until a different one goes missing; Options lists the
+           same Download rows (#optionsModels), so nothing is lost by closing it. -->
       <div id="preflightNotice" class="hidden win95-box p-2 bg-yellow-50 border-2 border-yellow-600 text-xs text-slate-900 flex flex-col gap-1.5" role="status" aria-live="polite">
         <div class="flex items-center justify-between gap-2">
           <span id="preflightTitle" class="font-bold"></span>
           <div class="flex gap-1.5 shrink-0">
             <button id="btnPreflightSettings" class="win95-btn px-2 py-0.5 text-xs text-black hover:bg-slate-300" title="Set ComfyUI's address or folders by hand">⚙️ ComfyUI settings</button>
             <button id="btnPreflightRecheck" class="win95-btn px-2 py-0.5 text-xs text-black hover:bg-slate-300" title="Ask ComfyUI again">🔄 Check again</button>
+            <button id="btnPreflightHide" class="hidden win95-btn px-2 py-0.5 text-xs text-black hover:bg-red-200" aria-label="Hide this notice"
+                    title="Hide this notice. Options still lists the missing models and can download them.">✕</button>
           </div>
         </div>
         <ul id="preflightList" class="flex flex-col gap-0.5 break-words"></ul>
@@ -2150,11 +2102,11 @@
              a download can't fix (ComfyUI unreachable, a missing custom node). -->
         <div id="preflightRequired" class="hidden flex flex-col gap-1">
           <div class="font-bold text-[11px] uppercase tracking-wide text-slate-700">Required</div>
-          <ul id="preflightRequiredList" class="flex flex-col gap-1"></ul>
+          <ul id="preflightRequiredList" class="flex flex-col gap-0.5"></ul>
         </div>
         <div id="preflightOptional" class="hidden flex flex-col gap-1">
           <div class="font-bold text-[11px] uppercase tracking-wide text-slate-700">Optional extras</div>
-          <ul id="preflightOptionalList" class="flex flex-col gap-1"></ul>
+          <ul id="preflightOptionalList" class="flex flex-col gap-0.5"></ul>
         </div>
       </div>
 
@@ -2830,6 +2782,21 @@
               <div id="comfyStatusDetails" class="scroll-pane mt-1 h-28 overflow-y-auto flex flex-col gap-0.5 break-words hidden"
                    tabindex="0" role="region" aria-label="Full ComfyUI report"></div>
             </div>
+            <!-- The setup notice's Download rows again (renderModelGroups in game.js fills both),
+                 so the models stay downloadable after that notice's ✕ has hidden it. Outside
+                 comfySettingsFields on purpose: downloading works inside ComfyUI too. Hidden
+                 while nothing is missing. -->
+            <div id="optionsModels" class="hidden flex flex-col gap-1">
+              <div class="text-[11px] font-bold text-slate-700 mt-0.5">Missing models</div>
+              <div id="optionsModelsRequired" class="hidden flex flex-col gap-1">
+                <div class="font-bold text-[11px] uppercase tracking-wide text-slate-700">Required</div>
+                <ul id="optionsModelsRequiredList" class="flex flex-col gap-0.5 text-xs text-slate-900"></ul>
+              </div>
+              <div id="optionsModelsOptional" class="hidden flex flex-col gap-1">
+                <div class="font-bold text-[11px] uppercase tracking-wide text-slate-700">Optional extras</div>
+                <ul id="optionsModelsOptionalList" class="flex flex-col gap-0.5 text-xs text-slate-900"></ul>
+              </div>
+            </div>
             <!-- The editable part. Hidden when ComfyCrawler runs inside ComfyUI (the custom node):
                  then it talks to the ComfyUI it runs in, and there is nothing to set. -->
             <div id="comfySettingsFields" class="flex flex-col gap-1.5">
@@ -2844,7 +2811,7 @@
                    placeholder="Auto-detect">
             <label class="text-[11px] font-bold text-slate-700" for="comfyModelsDirInput">Models folder</label>
             <input id="comfyModelsDirInput" type="text" class="win95-input w-full text-xs" spellcheck="false" autocomplete="off"
-                   placeholder="Auto-detect" title="Only needed if downloading models from the setup screen can't find the right folder by itself">
+                   placeholder="Auto-detect" title="Only needed if downloading models can't find the right folder by itself">
             <div class="flex justify-end gap-1.5 mt-0.5">
               <button type="button" id="btnComfyAuto" class="win95-btn px-3 py-1 text-xs text-black hover:bg-slate-300"
                       title="Empties the fields so ComfyUI is found automatically. Nothing changes until you press Apply.">
@@ -3118,7 +3085,7 @@
                every file in COMFY_MODEL_GROUPS and not only the missing ones. Each row is a
                button that asks the server to open the folder that file belongs in - the same
                /api/open_folder the History window's two buttons use, with a "model:<folder>"
-               key. Nothing here downloads: the setup screen on the main menu does that.
+               key. Nothing here downloads: the setup screen on the main menu and Options do that.
                Meaningless without ComfyUI, so hidden whole in the showcase export - see the
                boot-time SHOWCASE_MODE block in game.js. -->
           <div id="aboutModelsSection" class="flex flex-col gap-1.5">
@@ -3133,7 +3100,7 @@
             <p class="text-[11px] text-slate-700" id="aboutModelsNote">
               Every file the pipeline loads, and whether this machine&rsquo;s ComfyUI can see it.
               Click one to open the folder it belongs in. Anything missing can be downloaded from
-              the setup panel on the main menu.
+              the setup panel on the main menu, or from &#9881;&#65039; Options.
             </p>
             <div id="aboutModelsList" class="flex flex-col gap-2.5"></div>
           </div>
@@ -3804,9 +3771,7 @@
       </div>
 
       <div id="crawlStage">
-        <div id="crawlViewport">
-          <div id="crawlText"></div>
-        </div>
+        <div id="crawlText"></div>
         <div id="crawlPending">The chronicle is being written...</div>
         <button id="btnNarrateManual" class="win95-btn px-2 py-1 text-black hidden">🔊 Narrate</button>
       </div>

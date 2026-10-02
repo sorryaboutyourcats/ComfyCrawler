@@ -39,8 +39,15 @@ Then it's a game:
 | *A fruit dungeon, mid wind-up* | *Named characters work too* |
 | ![Mario with a Yoshi hammer faces a Bowser grunt](screenshots/mario-vs-bowser.png) | ![The opening crawl for "3rd Floor Pizza Hut", in yellow text on black](screenshots/opening-crawl.png) |
 | *Quoted names become that exact character* | *Every dungeon opens with its story* |
-| ![The Dungeon Creation Wizard with four filled-in blanks](screenshots/creation-wizard.png) | ![The History window listing saved dungeons with Start, Prompts, movie, favorite and delete buttons](screenshots/history.png) |
+| ![The Dungeon Creation Wizard with four filled-in blanks, an Attach button on each, quick-idea buttons and a difficulty picker](screenshots/creation-wizard-update.png) | ![The History window listing saved dungeons with Start, Prompts, movie, favorite and delete buttons](screenshots/history.png) |
 | *The Dungeon Creation Wizard* | *Replay a dungeon, reuse its prompts, watch its ending* |
+
+## 🎥 Videos
+
+| | |
+| :---: | :---: |
+| [![ComfyCrawler: Type 4 Words, Get a Dungeon Crawler Drawn by ComfyUI (local AI)](https://i.ytimg.com/vi/8j3NIyREUTw/hqdefault.jpg)](https://www.youtube.com/watch?v=8j3NIyREUTw) | [![Elmo & Jolly the Muse mascot "working together" in ComfyCrawler](https://i.ytimg.com/vi/oys6fGvBzuc/hqdefault.jpg)](https://www.youtube.com/watch?v=oys6fGvBzuc) |
+| *Type 4 words, get a dungeon crawler drawn by ComfyUI* | *Elmo & Jolly the Muse mascot "working together"* |
 
 ---
 
@@ -48,7 +55,7 @@ Then it's a game:
 
 * **ComfyUI 0.34.2 or newer**, on the same computer. Developed and tested on ComfyUI Desktop for Windows with an **NVIDIA RTX 3090**.
 * **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** - required. Its SageAttention patch is also used automatically, when installed, to speed up the ending cutscene.
-* **The models below** - ComfyCrawler downloads them for you. Required and optional are shown separately, so you can start with just the required ones and add the rest (sound, music, the ending cutscene) later; finishing an optional group turns on the Option it unlocks by itself.
+* **The models below** - ComfyCrawler downloads them for you. Required and optional are shown separately, so you can start with just the required ones and add the rest (sound, music, the ending cutscene) later; finishing an optional group turns on the Option it unlocks by itself. The setup screen's notice about missing optional models can be closed with its ✕ - ⚙️ Options lists the same models and downloads them too.
 
 ### Models
 
