@@ -8,6 +8,14 @@
     // export: no CREATE, no delete, saved-dungeon list from a static manifest instead of the
     // server, favorite/beaten kept in this browser's own localStorage instead of meta.json.
     const SHOWCASE_MODE = window.COMFYCRAWLER_SHOWCASE === true;
+    // Set only in a trimmed showcase export (tools/publish_itch.py's itch.io build, via
+    // export_showcase.py --full-url): where the full showcase lives. The gallery links there, and
+    // a row's 🔗 hands out a link to it - inside itch's iframe this page's own address is a CDN
+    // one, and a ?run= on the itch page never reaches the game.
+    const FULL_SHOWCASE_URL = SHOWCASE_MODE && typeof window.COMFYCRAWLER_FULL_SHOWCASE === 'string'
+      ? window.COMFYCRAWLER_FULL_SHOWCASE : '';
+    // How many runs that full showcase's gallery lists - dungeons.json's full_count.
+    let showcaseFullCount = 0;
 
     // THE TRAILERS - this page at <site>/trailer (or /trailer2, or with ?trailer / ?trailer=2)
     // plays a 30-second trailer instead of the menu: trailer.js, injected by the boot block at
@@ -560,7 +568,7 @@
     // 4=switch OFF, 5=switch ON; 6=opened door, which is walkable and drawn as a sprite). The
     // aiDoorImg / aiSwitchImg are the style-matched cutouts the builders composite in; null
     // falls back to procedural shapes. There is only ONE switch cutout: the on texture is the
-    // off texture's own fixture with its colours inverted. See buildDoorTexture /
+    // off texture's own fixture with its colors inverted. See buildDoorTexture /
     // buildSwitchWallTextures.
     let doorTexture = null;
     // The open gate (MAP tile 6) is a see-through billboard, not a wall texture - see
@@ -1954,7 +1962,7 @@
     // lastAttackFrameMode themselves. Every mode applies to all foes alike except Mixed, which
     // splits them by how they move: ground foes (walker, runts, boss) play Quick and air foes
     // (flyer, fledglings) play Flip. The pack foes follow their `fly` flag like everything else,
-    // so runts go with the walker they are recoloured from and fledglings with the flyer.
+    // so runts go with the walker they are recolored from and fledglings with the flyer.
     function attackFrameModeFor(e) {
       if (lastAttackFrameMode !== 'mixed') return lastAttackFrameMode;
       const cfg = ENEMY_VARIANTS[e.variant] || ENEMY_VARIANTS.walker;
@@ -2229,6 +2237,56 @@
       pictureModeSelect.addEventListener('change', () => prefs.set(PICTURE_MODE_KEY, pictureModeSelect.value));
     }
 
+    // Dungeon Style Attachment Sensitivity (Generation Settings): how closely the walls, floor and
+    // ceiling follow a picture attached to the dungeon line, sent as wall_picture_level - the
+    // stops are server.py WALL_PICTURE_LEVELS, in the same order. Each is [name, what it does];
+    // the name goes in the label's readout and the rest under the slider. Only 'reference'
+    // draws from the picture at all, so on 'describe' the slider is disabled and says why.
+    const WALL_PICTURE_LEVEL_KEY = 'comfycrawler.wallPictureLevel';
+    const WALL_PICTURE_LEVEL_DEFAULT = 2;
+    const WALL_PICTURE_STOPS = [
+      ['Inspired', 'Only its colors and style are used - a new pattern is designed from them.'],
+      ['Light', 'Walls are rebuilt from the picture\u2019s own parts; floor and ceiling are inspired by it.'],
+      ['Remix', 'Walls are rebuilt from the picture\u2019s own parts; so is the ceiling, in a different color. The floor is inspired by it, in colors that complement the walls.'],
+      ['Strong', 'Floor and ceiling are pieces of the picture itself; walls are a remix of it.'],
+      ['Exact', 'Every wall, the floor and the ceiling are the picture itself.'],
+    ];
+    const wallPictureLevelSlider = document.getElementById('wallPictureLevelSlider');
+    const wallPictureLevelValue = document.getElementById('wallPictureLevelValue');
+    const wallPictureLevelText = document.getElementById('wallPictureLevelText');
+
+    // The stop the slider is on, 0-4 - the default when it is missing or holds anything else.
+    function wallPictureLevel() {
+      const n = wallPictureLevelSlider ? parseInt(wallPictureLevelSlider.value, 10) : NaN;
+      return Number.isInteger(n) && n >= 0 && n < WALL_PICTURE_STOPS.length ? n : WALL_PICTURE_LEVEL_DEFAULT;
+    }
+
+    function syncWallPictureLevel() {
+      if (!wallPictureLevelSlider) return;
+      const [name, what] = WALL_PICTURE_STOPS[wallPictureLevel()];
+      const drawn = !pictureModeSelect || pictureModeSelect.value === 'reference';
+      wallPictureLevelSlider.disabled = !drawn;
+      wallPictureLevelSlider.setAttribute('aria-valuetext', name);
+      if (wallPictureLevelValue) wallPictureLevelValue.textContent = name;
+      if (wallPictureLevelText) {
+        wallPictureLevelText.textContent = drawn ? what
+          : 'Only used while Attachments is set to \u201cUse the picture itself\u201d.';
+      }
+    }
+
+    if (wallPictureLevelSlider) {
+      const saved = parseInt(prefs.get(WALL_PICTURE_LEVEL_KEY), 10);
+      if (Number.isInteger(saved) && saved >= 0 && saved < WALL_PICTURE_STOPS.length) {
+        wallPictureLevelSlider.value = String(saved);
+      }
+      wallPictureLevelSlider.addEventListener('input', () => {
+        prefs.set(WALL_PICTURE_LEVEL_KEY, String(wallPictureLevel()));
+        syncWallPictureLevel();
+      });
+      if (pictureModeSelect) pictureModeSelect.addEventListener('change', syncWallPictureLevel);
+      syncWallPictureLevel();
+    }
+
     // Attachments notice (index.html #modalAttachNotice): the first press of any line's Attach
     // button while Attachments is on 'reference' opens it instead of the file picker - pictures
     // make creating a dungeon slower, and 'describe' is the faster way. It cannot be closed for
@@ -2470,9 +2528,11 @@
 
     // The link a row's 🔗 hands out: this page's own address, so it keeps whatever folder the
     // export is hosted under, with only ?run and the difficulty picked right now - a visitor's
-    // ?agent is theirs, not the link's.
+    // ?agent is theirs, not the link's. A trimmed export links into the full one instead (see
+    // FULL_SHOWCASE_URL), which has every run this one does.
     function sharedRunUrl(id) {
-      return window.location.origin + window.location.pathname + '?run=' + encodeURIComponent(id)
+      return (FULL_SHOWCASE_URL || window.location.origin + window.location.pathname)
+        + '?run=' + encodeURIComponent(id)
         + '&difficulty=' + encodeURIComponent(selectedDifficulty);
     }
 
@@ -3605,7 +3665,7 @@
 
       // --- PACK FOES. Neither one costs a generation: `recolorOf` names the variant whose
       // sprites they borrow and hue/sat is the filter laid over every frame of them (see
-      // recolorFrame), so a swarm reads as its own creature drawn in another colour. Their
+      // recolorFrame), so a swarm reads as its own creature drawn in another color. Their
       // heightFrac/widthFrac are the base variant's x0.7 - the "30% smaller" - and `group` is
       // how many of them spawn at once. `spd` overrides the grounded walk speed.
       //
@@ -3798,7 +3858,7 @@
     // and the next run's are neither. Rolled inside 60-300 degrees because a rotation near
     // 0/360 is a rotation of nothing, which would draw a pack foe as an undersized copy of the
     // creature it borrows its sprites from. Saturation is left alone; it is tuned per variant
-    // to keep the recolour from washing out. recolorFrame caches per (frame, hue|sat), so a
+    // to keep the recolor from washing out. recolorFrame caches per (frame, hue|sat), so a
     // new roll simply lands in a new cache slot rather than fighting the old one.
     const PACK_HUE_MIN = 60, PACK_HUE_MAX = 300;
     function rollPackHues() {
@@ -3828,7 +3888,7 @@
       cv.width = w; cv.height = h;
       const cx = cv.getContext('2d');
       // A browser with no canvas-filter support just draws the copy through untinted - the
-      // pack still fights at its own size and stats, it simply isn't recoloured.
+      // pack still fights at its own size and stats, it simply isn't recolored.
       cx.filter = `hue-rotate(${hue}deg) saturate(${sat})`;
       cx.drawImage(img, 0, 0, w, h);
       Object.defineProperty(cv, 'naturalWidth', { value: w });
@@ -3864,11 +3924,11 @@
     }
 
     // A copy of a frame with its overhead marker - a Sims plumbob, at `box` from bundle.enemy_markers
-    // - recoloured to `rgb`, the way a Sim's plumbob changes with its mood. Only the marker's own
-    // coloured pixels change: each is repainted in `rgb` at its own lightness, so the diamond keeps
+    // - recolored to `rgb`, the way a Sim's plumbob changes with its mood. Only the marker's own
+    // colored pixels change: each is repainted in `rgb` at its own lightness, so the diamond keeps
     // its facets, and near-grey pixels (its white glints, anything behind it) are left alone. Same
-    // caching and image-like canvas as hurtTintFrame. Colour is not tested, so a pack foe's
-    // hue-rotated plumbob recolours just the same.
+    // caching and image-like canvas as hurtTintFrame. Color is not tested, so a pack foe's
+    // hue-rotated plumbob recolors just the same.
     const _markerTintCache = new WeakMap();
     function markerTintFrame(img, box, rgb) {
       if (!img || !img.complete || !(img.naturalWidth > 0) || !Array.isArray(box)) return img;
@@ -3904,12 +3964,12 @@
       per.set(key, cv);
       return cv;
     }
-    // The plumbob's mood colours: red while the Sim attacks, yellow while it reels from a hit.
+    // The plumbob's mood colors: red while the Sim attacks, yellow while it reels from a hit.
     const MARKER_ATTACK_RGB = [235, 30, 30];
     const MARKER_HURT_RGB = [250, 210, 30];
 
     // The {idle, attack, block} set a variant draws with. Base variants own theirs; a pack foe
-    // borrows its base's and recolours every frame of it. Null means the sprite it needs never
+    // borrows its base's and recolors every frame of it. Null means the sprite it needs never
     // arrived, which is the caller's cue to fall back to whatever the mode did ship.
     function enemyFramesFor(key) {
       const cfg = ENEMY_VARIANTS[key];
@@ -3943,9 +4003,9 @@
       let key = haveVariants
         ? (forceKey || ENEMY_ROLL_KEYS[Math.floor(Math.random() * ENEMY_ROLL_KEYS.length)])
         : 'walker';
-      // A pack foe exists only as a recolour, so it needs the sprite it borrows. Dropping back
+      // A pack foe exists only as a recolor, so it needs the sprite it borrows. Dropping back
       // to that base variant keeps a marker drawn as a swarm from arriving as three foes with
-      // no art, at the cost of it arriving as the one big foe it was recoloured from.
+      // no art, at the cost of it arriving as the one big foe it was recolored from.
       if (ENEMY_VARIANTS[key] && ENEMY_VARIANTS[key].recolorOf && !enemyFramesFor(key)) {
         key = ENEMY_VARIANTS[key].recolorOf;
       }
@@ -3967,7 +4027,7 @@
 
       // Only swap the active sprite when we have a real per-variant set; otherwise leave
       // whatever the bundle loaded (e.g. v3/v4's 3-frame idle/attack/hurt enemy). A pack parks
-      // its BASE frames here - the recolour is done per draw by enemyFramesFor, so a sprite
+      // its BASE frames here - the recolor is done per draw by enemyFramesFor, so a sprite
       // that was still decoding at this point still comes out tinted once it lands.
       const set = enemyVariantImgs[cfg.recolorOf || key];
       if (set && set.idle && haveVariants) {
@@ -6536,7 +6596,7 @@ void main() {
         playerStmBar.style.width = `${(combatState.playerStm / combatState.playerMaxStm) * 100}%`;
         // Past the point where a swing is affordable the bar stops reporting how much is left
         // and starts warning: it flips from green to a flashing red. Cleared back to '' rather
-        // than to a colour, so the bar returns to its bg-green-500 class.
+        // than to a color, so the bar returns to its bg-green-500 class.
         playerStmBar.style.backgroundColor = combatState.exhaustion > 0.15
           ? (Math.floor(Date.now() / 200) % 2 ? '#ef4444' : '#7f1d1d')
           : '';
@@ -6667,9 +6727,9 @@ void main() {
           c.fillRect(2, 2, 40, 40);
         }
 
-        // Combat state is shown ONLY through the border colour. Full-portrait tints used to be
+        // Combat state is shown ONLY through the border color. Full-portrait tints used to be
         // laid over the face too, but the per-frame krea2 expressions now carry the state
-        // (open-mouthed for attack, eyes shut for hurt, and so on), and the coloured wash just
+        // (open-mouthed for attack, eyes shut for hurt, and so on), and the colored wash just
         // muddied a portrait that is already doing the job. Pupils / eyebrows / mouth painted at
         // fixed coordinates were dropped earlier for the same reason - the portrait can be hooded,
         // feline, helmeted or masked, so nothing can be drawn on top at a fixed spot.
@@ -7071,13 +7131,25 @@ void main() {
     // doesn't take it at all: it is already pinned against the ceiling of the view.
     //   median walker mass ~0.44; anime villain lady 0.19 -> x1.30, waifu 0.17 -> x1.30,
     //   Sailor Moon 0.20 -> x1.27, Enderman 0.23 -> x1.19.
+    //
+    // A FLYER takes far less of it. Every px of height a flyer is given comes straight back
+    // out of its hover: the name plate caps how high its head can go (see the clamp in
+    // drawEnemyBody), so a taller flyer is one whose feet hang lower. At the full x1.3 a slim
+    // one - a Sim, standing upright - was 107px tall with its feet 23px off the floor, UNDER
+    // the 34px line the player's strike uses for "airborne", so the picture showed a foe in
+    // reach that every swing went straight through. At x1.1 it is 91px with 39px of daylight
+    // under it. The circler borrows the flyer's sprites and takes the same cap, which keeps it
+    // the same 30% smaller than the flyer it is a fledgling of.
     const SLENDER_MASS_REF = 0.32;
     const SLENDER_BOOST_MAX = 1.3;
+    const SLENDER_BOOST_MAX_FLY = 1.1;
     function slenderBoost(img, variant) {
       if (variant === 'boss' || !img || !img.complete || !img.naturalWidth) return 1;
       const box = solidContentBox(img);
       if (!box || !(box.mass > 0)) return 1;
-      return Math.min(SLENDER_BOOST_MAX, Math.max(1, Math.sqrt(SLENDER_MASS_REF / box.mass)));
+      const cfg = ENEMY_VARIANTS[variant];
+      const max = cfg && cfg.fly ? SLENDER_BOOST_MAX_FLY : SLENDER_BOOST_MAX;
+      return Math.min(max, Math.max(1, Math.sqrt(SLENDER_MASS_REF / box.mass)));
     }
 
     // Draw an enemy frame so its SOLID content is `targetH` px tall (but never wider than
@@ -7123,8 +7195,8 @@ void main() {
     // smoothed combatState.exhaustion) and both no-op at zero, so the fresh hero pays nothing
     // for them beyond a comparison.
 
-    // Drain the colour out of the sprite. A hero with an empty bar goes grey and dim rather
-    // than being tinted some new colour, because the frames are generated art in an unknown
+    // Drain the color out of the sprite. A hero with an empty bar goes grey and dim rather
+    // than being tinted some new color, because the frames are generated art in an unknown
     // palette - washing out what is there survives any of them, where a wash of red or green
     // would fight half the characters the generator produces. Set as a canvas filter so it
     // costs one state change rather than a per-pixel pass; the callers clear it afterwards.
@@ -7803,7 +7875,7 @@ void main() {
       if (enemySpriteFrames && enemySpriteFrames.length > 0) {
         // Per-variant frame set (idle / attack / block) when the bundle has one; otherwise the
         // legacy flat [idle, attack, hurt] array from v3/v4.
-        // Looked up per draw rather than read off the global: a pack foe's set is a recolour
+        // Looked up per draw rather than read off the global: a pack foe's set is a recolor
         // built on demand, and the first frames of a fight can land before the sprite it
         // borrows has finished decoding - in which case enemyFramesFor hands back the untinted
         // original and quietly upgrades itself once the source is ready.
@@ -7833,7 +7905,7 @@ void main() {
           else if (attackPoseUp(e, attackMode)) {
             if (frames.attack) { frame = frames.attack; frameKey = 'attack'; }
           } else if (e.blockTimer > 0 && frames.block) { frame = frames.block; frameKey = 'block'; }
-          // A Sim's plumbob changes colour with what it is doing - see markerTintFrame. A pack foe
+          // A Sim's plumbob changes color with what it is doing - see markerTintFrame. A pack foe
           // draws its base variant's frames, so it looks its marker up under that variant too.
           const base = (ENEMY_VARIANTS[e.variant] && ENEMY_VARIANTS[e.variant].recolorOf) || e.variant;
           const box = enemyMarkerBoxes[base] && enemyMarkerBoxes[base][frameKey];
@@ -7901,10 +7973,16 @@ void main() {
           bottomY += bob;
 
           c.save();
-          // Ground shadow - fades and shrinks as a flyer climbs, and travels up the canvas with
-          // its owner's feet as a withdrawn foe backs away.
-          const sh = cfg.fly ? Math.max(0.14, 1 - ((e.altitude || 0) + altLift) / 90) : 1;
-          c.fillStyle = `rgba(0,0,0,${0.28 * sh})`;
+          // Ground shadow - shrinks as a flyer climbs, and travels up the canvas with its
+          // owner's feet as a withdrawn foe backs away. It shrinks but does NOT fade: it used
+          // to do both off the one factor, which at full hover left a third-size smudge at 10%
+          // black that vanished against a bright floor. The shadow on the floor and the gap
+          // above it are the only things that say "up in the air" rather than "standing
+          // further down the hall" - an upright foe drawn higher on the canvas reads as the
+          // second without them - so it stays as dark as a grounded foe's and gives up less
+          // of its size (0.6 at full hover, where it was 0.36).
+          const sh = cfg.fly ? Math.max(0.5, 1 - ((e.altitude || 0) + altLift) / 145) : 1;
+          c.fillStyle = 'rgba(0,0,0,0.28)';
           c.beginPath();
           c.ellipse(ex, groundY + 3, targetH * 0.32 * sh, targetH * 0.08 * sh, 0, 0, Math.PI * 2);
           c.fill();
@@ -8325,7 +8403,7 @@ void main() {
       wallLanternTexture = c.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
     }
 
-    // Average colour of a wall/floor texture, so the stairwell below can be cut from the same
+    // Average color of a wall/floor texture, so the stairwell below can be cut from the same
     // stone as the dungeon it sits in rather than being one fixed grey in every theme.
     function averageTextureColor(imgData, fallback = { r: 122, g: 118, b: 112 }) {
       if (!imgData || !imgData.data) return fallback;
@@ -10142,7 +10220,7 @@ void main() {
       // v6_krea (the only engine mode left) always ships all three base variants. Packs get the
       // same free ride: pickEnemyVariant() re-checks enemyFramesFor() at the moment a fight
       // actually starts - long after the bundle has landed - and downgrades a pack to its full
-      // size base variant there if it ever genuinely has no sprite to recolour, so no readiness
+      // size base variant there if it ever genuinely has no sprite to recolor, so no readiness
       // check belongs here.
       const ROAM_WEIGHTS = { walker: 4, flyer: 3, swarmer: 3, circler: 2 };
       const roamBag = [];
@@ -10370,7 +10448,7 @@ void main() {
         const distShade = 1.0 / (1.0 + perpWallDist * 0.38);
         const lanternSelfGlow = (hit === 2) ? 0.35 : 0;
         // No switchGlow term here - an ON switch is shaded like any other wall tile. Its
-        // inverted fixture colours are the only difference from OFF, and they are baked into
+        // inverted fixture colors are the only difference from OFF, and they are baked into
         // the texture (buildSwitchWallTextures), so the lighting maths never has to know
         // which state a switch is in.
         const finalShade = Math.min(1.0, (sideShade * distShade) + wallLanternLight + lanternSelfGlow);
@@ -10712,7 +10790,7 @@ void main() {
           const wx = offsetX + w.x * tileSize;
           const wy = offsetY + w.y * tileSize;
 
-          // An opened gate is a passage now, not a wall - floor-coloured with the jamb left
+          // An opened gate is a passage now, not a wall - floor-colored with the jamb left
           // as an outline, so the map shows where the gate was and that it is through.
           if (mv === 6) {
             c.fillStyle = '#2563eb';
@@ -11496,7 +11574,7 @@ void main() {
       if (!b) return Promise.resolve();
       // Playing now, so the tab stops advertising a run that already started.
       resetTabTitle();
-      // New run, new pack colours. Rolled here rather than in restartDungeon, which rolls THIS
+      // New run, new pack colors. Rolled here rather than in restartDungeon, which rolls THIS
       // run back to its first step and so keeps the foes the player has already met looking the
       // way they looked. Has to land before the first render either way: the world markers tint
       // through the same enemyFramesFor path the battle sprites do.
@@ -13091,6 +13169,8 @@ void main() {
             enemy_image: attachedImages.enemy || null,
             // Whether those pictures are drawn from or only described - see pictureModeSelect.
             picture_mode: pictureModeSelect ? pictureModeSelect.value : 'reference',
+            // How closely a pictured dungeon's surfaces follow the picture - see wallPictureLevel.
+            wall_picture_level: wallPictureLevel(),
             mode: activeMode,
             // What this machine can make of the player's pick - see applyModelAvailability.
             sound_mode: effectiveSoundMode(),
@@ -13360,12 +13440,32 @@ void main() {
       // compare against on this screen (no live run, no mad-lib draft).
       sortHistoryEntries(shown)
         .forEach(entry => showcaseList.appendChild(buildHistoryEntryEl(entry)));
+      // A trimmed export (the itch.io build) ends its list with the way to the rest. Last, so it
+      // is what a visitor who scrolled through every run finds; .hist-grid spans it across the
+      // tiles' row the way it spans every non-tile child.
+      const more = FULL_SHOWCASE_URL && !SHOWCASE_UNLISTED_VIEW && showcaseFullCount > entries.length;
+      if (more) {
+        const box = document.createElement('div');
+        box.className = 'win95-box p-3 bg-slate-100 text-xs font-bold text-slate-800 text-center';
+        box.appendChild(document.createTextNode('These are ' + entries.length + ' of '
+          + showcaseFullCount + ' dungeons. '));
+        const link = document.createElement('a');
+        link.className = 'about-link';
+        link.href = FULL_SHOWCASE_URL;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Play all ' + showcaseFullCount + ' at '
+          + FULL_SHOWCASE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '') + ' ↗';
+        box.appendChild(link);
+        showcaseList.appendChild(box);
+      }
       requestAnimationFrame(() => {
         showcaseList.querySelectorAll('.hist-meta').forEach(marqueeIfOverflowing);
       });
       if (showcaseFootNote) {
         const favorites = entries.filter(e => e.favorite).length;
-        showcaseFootNote.textContent = entries.length + (SHOWCASE_UNLISTED_VIEW ? ' unlisted' : '')
+        showcaseFootNote.textContent = entries.length + (more ? ' of ' + showcaseFullCount : '')
+          + (SHOWCASE_UNLISTED_VIEW ? ' unlisted' : '')
           + ' dungeon' + (entries.length === 1 ? '' : 's')
           + (SHOWCASE_UNLISTED_VIEW ? '  ·  only reachable by their 🔗 link' : '')
           + (favorites ? '  ·  ' + favorites + ' favorite' + (favorites === 1 ? '' : 's') : '')
@@ -15602,6 +15702,7 @@ void main() {
         const data = await res.json();
         historyEntries = Array.isArray(data.sessions) ? data.sessions : [];
         if (SHOWCASE_MODE) applyShowcaseOverlay(historyEntries);
+        if (FULL_SHOWCASE_URL && Number.isFinite(data.full_count)) showcaseFullCount = data.full_count;
       } catch (err) {
         console.error('History fetch error:', err);
         historyEntries = null;

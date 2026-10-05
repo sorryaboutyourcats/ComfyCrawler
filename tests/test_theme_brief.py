@@ -220,7 +220,7 @@ ck("{}" in srv._WALLPAPER_RESCUE, "the rescue prompt lost its theme slot")
 
 # ---- washout adjectives are stripped from the three TILING slots ------------------
 # FLUX schnell at 4 steps cannot resolve detail a line calls "faint" - it draws the ground
-# colour and nothing else. Measured on the line that shipped a white supermarket: std dev
+# color and nothing else. Measured on the line that shipped a white supermarket: std dev
 # 2.7/3.5/17.0 across three seeds, and 36.3/46.0/61.2 on those same seeds without these words.
 import re
 washed = srv.parse_theme_brief(
@@ -301,7 +301,7 @@ for typed in ("chat", "Chat", "twitch chat", "stream chat", "chatters", "emotes"
     lit = srv._enemy_literal(typed)
     ck(lit is not None, f"{typed!r} should get the hand-tuned subject")
     if lit:
-        # a COLOURED bubble ABOVE the head. White is matted away with the background, and a
+        # a COLORED bubble ABOVE the head. White is matted away with the background, and a
         # held placard covers the foe's face - both were rendered and both were reported.
         ck(srv._CHAT_ENEMY_MARK in lit and "over their head" in lit,
            f"{typed!r} lost the bubble or its placement: {lit!r}")
@@ -340,7 +340,7 @@ ck(srv._enemy_look_lead(sp_other, "gummy bear")["walker"]["look"]
    == "A moss-covered dire bear with heavy claws", "a non-chat theme was given the clause")
 ck(srv._enemy_look_lead(None, srv._enemy_literal("chat")) is None, "None species must pass through")
 # and it is actually wired into the designer
-ck("_enemy_look_lead(species, enemy_style)" in inspect.getsource(srv.generate_enemy_species),
+ck("_enemy_look_lead(species, enemy_style" in inspect.getsource(srv.generate_enemy_species),
    "generate_enemy_species does not apply the placement clause")
 
 # the override is applied AFTER the reply is parsed (so _theme_enemy_subject cannot trim the
@@ -348,7 +348,7 @@ ck("_enemy_look_lead(species, enemy_style)" in inspect.getsource(srv.generate_en
 # exactly the shape that trimmer cuts), and it also survives the reply failing entirely
 brief_src = inspect.getsource(srv.generate_theme_brief)
 ck('brief["enemy"] = literal' in brief_src, "the literal must overwrite the designed enemy")
-ck(brief_src.count('return {"enemy": literal} if literal else None') == 2,
+ck(brief_src.count('return _kept() or None') == 2 and '("enemy", literal)' in brief_src,
    "a failed reply must still carry the hand-tuned enemy - the raw typed word is the bug")
 
 # ---- progress plan ------------------------------------------------------------
@@ -401,12 +401,66 @@ finally:
 # the flyer's all-wings line dropped it and krea2 drew it bare (hat flyer 0/16 before, 12/12
 # with the rule). Only a "wearing" enemy gets the rule; everything else is byte-identical.
 worn_prompt = srv._enemy_species_prompt("alien from Alien wearing rubber duck shoes")
-ck("It is wearing rubber duck shoes. Pick ONE colour" in worn_prompt,
+ck("It is wearing rubber duck shoes. Pick ONE color" in worn_prompt,
    "a worn item did not reach the bestiary's LOOK rules")
 ck(worn_prompt.index("It is wearing") < worn_prompt.index("\n2. "),
    "the worn-item rule should sit under rule 1")
 ck("It is wearing" not in srv._enemy_species_prompt("alien from Alien"),
    "an enemy wearing nothing should not get the worn-item rule")
+
+# A road vehicle typed as the dungeon is shown from OUTSIDE ('"GTI" car' drew a dashboard):
+# its WALL is written in code, and the identity call's "known for" part loses its cabin words.
+gti = {"name": "GTI", "kind": "car", "known": True,
+       "landmarks": "shiny exterior, chrome wheels, dashboard gauges"}
+ck(srv._vehicle_wall(gti) == "a wallpaper of whole GTI cars seen side-on from outside, shiny "
+   "exterior, chrome wheels, repeated edge to edge in rows",
+   f"vehicle wall line wrong: {srv._vehicle_wall(gti)!r}")
+ck(srv._vehicle_wall(dict(gti, known=False)) == "a wallpaper of whole GTI cars seen side-on from "
+   "outside, repeated edge to edge in rows", "an unrecognised car should drop the known-for part")
+ck("buses seen side-on" in srv._vehicle_wall({"name": "Magic", "kind": "school bus"}),
+   "the vehicle plural is wrong")
+ck(srv._vehicle_wall({"name": "Hogwarts", "kind": "castle", "known": True}) is None,
+   "a place got the vehicle wall")
+ck(srv._vehicle_wall(None) is None, "no wall entity got the vehicle wall")
+ck("Show it from the OUTSIDE" in srv._theme_brief_surfaces(gti)
+   and "plain repeating car material" not in srv._theme_brief_surfaces(gti),
+   "the vehicle sentence did not replace the plain-material one")
+ck("Show it from the OUTSIDE" not in srv._theme_brief_surfaces(
+       {"name": "Manhattan", "kind": "city", "known": True, "landmarks": "a park"}),
+   "a place got the vehicle sentence")
+
+# A weapon typed as its own name is kept as typed - the designer re-themed the Master Sword
+# into a "GTI steering wheel" hilt. A plain or abstract word is still designed.
+for typed, named, want in [("Master Sword", None, "Master Sword"), ("Buster Sword", None, "Buster Sword"),
+                           ("sword", None, None), ("Memes", None, None), ("Internet Memes", None, None),
+                           ("master sword", None, None), ("", None, None),
+                           ("Frostmourne", {"name": "Frostmourne", "kind": "sword", "known": True}, "Frostmourne"),
+                           ("Bob", {"name": "Bob", "kind": "sword", "known": False}, None)]:
+    ck(srv._named_weapon(typed, named) == want, f"_named_weapon({typed!r}) != {want!r}")
+
+_saved_submit = srv._submit_and_collect_text
+srv._submit_and_collect_text = lambda *a, **k: (
+    "WALL: red vinyl with silver trim\nFLOOR: black rubber mat with tread\nCEILING: grey metal "
+    "panels with trim\nLANTERN: red GTI headlight housing glowing\nDOOR: steel door leaf shaped "
+    "like a bumper\nSWITCH: chrome gear shift knob lever\nWEAPON: silver blade with red grip, hilt "
+    "shaped like a steering wheel\nENEMY: link from Zelda")
+try:
+    got = srv.generate_theme_brief("GTI, the real car", "Master Sword", "Link, the real hero from Zelda",
+                                   wall_named=gti, weapon_typed="Master Sword")
+    ck(got["weapon"] == "Master Sword", f"a named weapon was re-designed: {got['weapon']!r}")
+    ck(got["wall"] == srv._vehicle_wall(gti), f"a vehicle wall was left to the designer: {got['wall']!r}")
+    ck(got["floor"] == "black rubber mat with tread", "the other surfaces should stay designed")
+    got = srv.generate_theme_brief("GTI, the real car", "sword", "goblin", wall_named=gti)
+    ck(got["weapon"].startswith("silver blade"), "an unnamed weapon should still be designed")
+    srv._submit_and_collect_text = lambda *a, **k: ""
+    got = srv.generate_theme_brief("GTI, the real car", "Master Sword", "goblin",
+                                   wall_named=gti, weapon_typed="Master Sword")
+    ck(got == {"weapon": "Master Sword", "wall": srv._vehicle_wall(gti)},
+       f"the kept lines must survive a failed reply: {got}")
+    ck("_named_weapon(named[\"clean\"][\"weapon\"]" in v6_src,
+       "run_batch_v6_krea no longer hands the set designer a named weapon")
+finally:
+    srv._submit_and_collect_text = _saved_submit
 
 print("FAIL" if fails else "all set-designer checks passed")
 sys.exit(1 if fails else 0)

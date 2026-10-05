@@ -127,8 +127,39 @@ ck(spooky_spliced == "spooky castle",
 
 billy_ents = srv.parse_named_styles('"Billy" the cat')
 billy_spliced = srv._apply_named_splices('"Billy" the cat', billy_ents)
-ck(billy_spliced == "a cat called Billy the cat",
+# The trailing "the cat" only repeats the kind the rewrite already names, so it goes with it.
+ck(billy_spliced == "a cat called Billy",
    f"splice did not rewrite the quoted span in place: {billy_spliced!r}")
+gti_ents = [dict(srv.parse_named_styles('"GTI" car')[0], kind="car", known=True)]
+ck(srv._apply_named_splices('"GTI" car', gti_ents) == "GTI, the real car",
+   f"a typed kind after a known name was doubled: {srv._apply_named_splices(chr(34) + 'GTI' + chr(34) + ' car', gti_ents)!r}")
+ck(srv._apply_named_splices('"GTI" car wash', gti_ents) == "GTI, the real car wash",
+   "only the repeated kind word may be swallowed")
+ck(srv._apply_named_splices('"Billy" the enormous cat', billy_ents[:0] or srv.parse_named_styles('"Billy" the enormous cat'))
+   == "a cat called Billy the enormous cat", "a described kind is not a repeat and must stay")
+ck(srv._apply_named_splices('"Link" from Zelda', [{"raw": "Link", "name": "Link", "kind": "hero",
+                                                   "known": True, "span": (0, 6)}])
+   == "Link, the real hero from Zelda", "text after a name that is not its kind must stay")
+
+# A _KNOWN_CHARACTER_LOOKS name is drawn from its written look - on the PLAYER line's art text
+# only. The story still says the name, and the same name on another line is untouched.
+howard = srv._KNOWN_CHARACTER_LOOKS["howard the duck"]
+_saved_identify = srv.identify_names
+srv.identify_names = lambda items: [{"type": None, "known": False, "seen": None} for _ in items]
+try:
+    got = srv.resolve_named_styles("", '"Howard the Duck"', "", '"Howard the Duck"')
+    ck(got["text"]["player"] == howard, f"the hero's art text is not the written look: {got['text']['player']!r}")
+    ck(got["story"]["player"] == "a duck called Howard The Duck",
+       f"the story lost the hero's name: {got['story']['player']!r}")
+    ck(got["clean"]["player"] == "Howard the Duck", "the sound prompts must keep the typed name")
+    ck(got["text"]["enemy"] == "a duck called Howard The Duck", "the look reached the enemy line")
+    got = srv.resolve_named_styles("", "Howard the Duck", "", "")
+    ck(got["text"]["player"] == howard and got["story"]["player"] == "Howard the Duck",
+       "an unquoted whole-line name should be drawn from the look too")
+    got = srv.resolve_named_styles("", "a duck named Howard", "", "")
+    ck(got["text"]["player"] == "a duck named Howard", "a line that is not the name was changed")
+finally:
+    srv.identify_names = _saved_identify
 ck(srv._apply_named_splices_clean('"Billy" the cat', billy_ents) == "Billy the cat",
    "the clean split (for sfx/music) must only strip quotes, no rewrite clause")
 ck(srv._apply_named_splices("plain text, no quotes", []) == "plain text, no quotes",
@@ -285,7 +316,7 @@ ck("NAME1_TYPE" in two_item_prompt and "NAME2_TYPE" in two_item_prompt,
 # ---- existing test_theme_brief.py greps for must both survive this change -------------
 gtb_src = inspect.getsource(srv.generate_theme_brief)
 ck('brief["enemy"] = literal' in gtb_src, "the literal-overwrite line must still be present")
-ck(gtb_src.count('return {"enemy": literal} if literal else None') == 2,
+ck(gtb_src.count('return _kept() or None') == 2 and '("enemy", literal)' in gtb_src,
    "both failure-path returns for the hand-tuned enemy must still be present")
 ck("enemy_named" in gtb_src and "_enemy_literal(enemy_style)" in gtb_src,
    "the enemy_named guard around _enemy_literal is missing")

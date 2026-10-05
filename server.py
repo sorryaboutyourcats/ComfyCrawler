@@ -1164,7 +1164,7 @@ SURFACE_MIN_GAMMA = 0.38     # any harder and dark-region compression noise come
 # angle and neither fills the view the way the wall ahead of you does.
 SURFACE_MIN_CONTRAST = 16.0
 
-# AND THE SAME COMPLAINT BY A FOURTH ROUTE, this time on the DOOR: a grey door in a colourful
+# AND THE SAME COMPLAINT BY A FOURTH ROUTE, this time on the DOOR: a grey door in a colorful
 # corridor. The door is a full map cell, so its edges ARE the corridor wall either side of the
 # opening - and when the model draws a product-shot door instead (one leaf centred on an empty
 # ground), those edges arrive as flat black or flat white and the whole cell reads as a hole
@@ -1181,11 +1181,11 @@ SURFACE_MIN_CONTRAST = 16.0
 # at ring saturation 15.7 or below (the white pet-store door 2.6, a chrome one 0.4, a matte
 # black Dreamcast 0.2), and the lowest door that reads as right is 23.2. 19.0 sits in that gap.
 #
-# Gated on the WALL actually being colourful, so a deliberately monochrome theme keeps its
+# Gated on the WALL actually being colorful, so a deliberately monochrome theme keeps its
 # monochrome door - two archived themes rendered near-greyscale walls (saturation 3.5 and 22.0)
 # and a grey door is the correct answer in both.
 DOOR_MIN_RING_SAT = 19.0     # below this the door's surround is not the corridor's material
-DOOR_WALL_MIN_SAT = 40.0     # ...but only judge it against a wall with colour of its own
+DOOR_WALL_MIN_SAT = 40.0     # ...but only judge it against a wall with color of its own
 
 
 def _mean_luma(img):
@@ -1201,7 +1201,7 @@ def _surface_contrast(img):
 
 
 def _mean_saturation(img):
-    """Mean HSV saturation - how much colour the surface carries at all."""
+    """Mean HSV saturation - how much color the surface carries at all."""
     return ImageStat.Stat(img.convert("HSV").getchannel("S")).mean[0]
 
 
@@ -1274,7 +1274,7 @@ def _lift_dark_surface(path, label):
 # shape the hand-tuned `cat` and `people` buckets have always used, which is exactly why
 # neither of those has ever produced this failure.
 _WALLPAPER_RESCUE = ("A flat 2D wallpaper texture of dense repeating pictures of {}, bold "
-                     "saturated colours, colorful repeating pattern filling the whole frame "
+                     "saturated colors, colorful repeating pattern filling the whole frame "
                      "edge to edge, flat straight-on orthographic view, zero perspective, "
                      "no room, no borders.")
 
@@ -1366,7 +1366,7 @@ def _fix_blank_wall(path, wall_style, tile_px):
 # seeds: 86.1-234.7, every single render above the 19.0 floor and above its own control.
 _DOOR_RESCUE = ("A shut door completely filling the picture, the door leaf {door}, set into a "
                 "surrounding wall of {wall} that reaches every edge of the frame, bold "
-                "saturated colours, flat straight-on orthographic front view, zero "
+                "saturated colors, flat straight-on orthographic front view, zero "
                 "perspective, zero horizon, no floor, no room, {sign}.")
 
 
@@ -1427,7 +1427,7 @@ def _fix_offtheme_door(d_path, w_path, door_line, wall_line, tile_px, wall_named
     if ring >= DOOR_MIN_RING_SAT:
         return d_path
     if wall_sat < DOOR_WALL_MIN_SAT:
-        # The corridor has no colour of its own, so neither should the door - see
+        # The corridor has no color of its own, so neither should the door - see
         # DOOR_WALL_MIN_SAT.
         print(f"[surface] door ring saturation {ring:.1f} matches a near-greyscale wall "
               f"({wall_sat:.1f}) - leaving it alone")
@@ -1457,7 +1457,7 @@ def _fix_offtheme_door(d_path, w_path, door_line, wall_line, tile_px, wall_named
 # corridor was the hill and the sky, and the door cell a red brick wall with a door in it - the
 # designed DOOR line ("solid red plastic brick door ... archway framed in same material") took
 # its bricks from the weapon, and nothing in a door prompt ever sees the wall texture. The ring
-# guard above cannot catch it either: a brick surround is colourful, just the wrong colour.
+# guard above cannot catch it either: a brick surround is colorful, just the wrong color.
 # A typed theme's wall is a material the door prompt can name again; a photographed view is not
 # something FLUX will paint twice the same way - the horizon lands at another height, the hills
 # change shape. So the door is drawn alone on white, cut out, and pasted onto the finished wall
@@ -1885,14 +1885,14 @@ def get_shield_prompts(player_style):
     Like the sword, this is generated separately because the character pass kept declining to
     draw a shield at all - and when it did, it sometimes drew two."""
     p_style = player_style.strip() if (player_style and player_style.strip()) else "armored knight"
-    # The style words describe the shield's MATERIALS AND COLOURS, never its subject. Phrased as
+    # The style words describe the shield's MATERIALS AND COLORS, never its subject. Phrased as
     # "styled to match a {style} warrior" the model painted the style noun onto the shield as a
     # crest - a "cat" warrior got a shield with a big cat portrait on it, which is both odd and
     # precisely the face the rest of the pipeline works to keep out of frame.
     shield_positive = (
         f"A single round battle shield seen face-on, one circular shield with a plain raised central boss "
         f"and a decorated rim, bare undecorated surface, no emblem, no crest, no painted figure. Low-poly "
-        f"game item sprite, in the colours and materials of a {p_style} "
+        f"game item sprite, in the colors and materials of a {p_style} "
         f"warrior's gear. Isolated alone and centered on a solid plain white background, no character, "
         f"no person, no hands, no sword."
     )
@@ -2126,7 +2126,7 @@ def generate_player_sprite_ipadapter(player_style, weapon_style=None):
         # an IPAdapter running from step 0 was voting on COMPOSITION using a full-body reference
         # while the prompt asked for a single bust - and the model settled that argument by tiling
         # the bust into a 2x2 grid. Letting the prompt own the first third of the schedule fixes the
-        # composition; IPAdapter still supplies the character's colours and design after that.
+        # composition; IPAdapter still supplies the character's colors and design after that.
         "ipa_portrait": {"inputs": {"model": ["lora", 0], "ipadapter": ["ipa_loader", 1], "image": ["ref_crop", 0], "weight": 0.7, "weight_type": "style transfer", "combine_embeds": "concat", "start_at": 0.35, "end_at": 1.0, "embeds_scaling": "V only"}, "class_type": "IPAdapterAdvanced"},
         # Deliberately TALL rather than square. On a square canvas the bust framing kept coming back
         # as two portraits side by side; a 3:4 canvas simply has no room to lay two heads out
@@ -2144,7 +2144,7 @@ def generate_player_sprite_ipadapter(player_style, weapon_style=None):
     #
     # Deriving the three expressions from the idle frame by partial-denoise img2img was also tried
     # and reverted: it held identity perfectly but this 8-step distilled model handles partial
-    # denoise badly, tearing the results into glitchy colour patches while barely changing the
+    # denoise badly, tearing the results into glitchy color patches while barely changing the
     # expression at all.
     #
     # The residual risk of a shared seed is that a seed which tiles the bust into a grid tiles all
@@ -2479,33 +2479,33 @@ def keep_largest_figure(frame_path, thresh=20):
 # background to BiRefNet, and it dropped the blade, or everything but its thin white core. So
 # the hero frames get back what BiRefNet dropped when it is plainly LIGHT: every test below was
 # needed, and measured over all 2534 frames in ComfyUI's output folder (hero and foe):
-#  * coloured, not grey (GLOW_SEED_CHROMA), and reaching out from the body - fur BiRefNet trimmed
+#  * colored, not grey (GLOW_SEED_CHROMA), and reaching out from the body - fur BiRefNet trimmed
 #    off Elmo's outline came back as a red fringe with white specks; dropped fringe reached at
 #    most 7.8px out (140 frames), the lightsaber glows 9-190px (GLOW_REACH_PX). Reach is measured
 #    from the body with thin kept lines opened away, or the glow round a kept white core never
 #    reaches out from that core;
-#  * one colour (GLOW_HUE) and see-through against the white (GLOW_INK): a pile of bricks lying
-#    beside the hero came back whole - many colours (hue agreement 0.23-0.27, glows 1.00) and
-#    solid (mean colour-to-alpha 0.88-0.90, glows 0.38-0.52);
+#  * one color (GLOW_HUE) and see-through against the white (GLOW_INK): a pile of bricks lying
+#    beside the hero came back whole - many colors (hue agreement 0.23-0.27, glows 1.00) and
+#    solid (mean color-to-alpha 0.88-0.90, glows 0.38-0.52);
 #  * bright (GLOW_BRIGHT): krea2's slash frames ask for motion blur, and a coin's and a hoop's
 #    blur came back as smears. Light laid over white keeps its strongest channel near full, so
-#    its colour-to-alpha colour is at full strength (chroma/ink 0.91-1.00); a painted thing's
-#    blur is that colour thinned (0.53-0.80).
+#    its color-to-alpha color is at full strength (chroma/ink 0.91-1.00); a painted thing's
+#    blur is that color thinned (0.53-0.80).
 # What passes is only glowing weapons: every lightsaber run and a Kingdom Hearts keyblade, 0 of
-# the other hero frames. The glow is given back as colour-to-alpha from white, so it keeps its
-# colour and fades out on any floor, and the white-hot core the glow closes over (GLOW_CORE_PX)
+# the other hero frames. The glow is given back as color-to-alpha from white, so it keeps its
+# color and fades out on any floor, and the white-hot core the glow closes over (GLOW_CORE_PX)
 # goes back solid. Hero frames only: foes have their own gates, and a patterned blue background
 # on an office-chair foe passed the first two tests.
-GLOW_SEED_CHROMA = 60   # max-min channel spread of a dropped pixel that is clearly coloured
+GLOW_SEED_CHROMA = 60   # max-min channel spread of a dropped pixel that is clearly colored
 GLOW_EDGE_PX = 2        # the band hugging the body, left to BiRefNet (trimmed fur and hair)
 GLOW_THIN_PX = 2        # kept lines this thin (a blade's core) do not count as body
 GLOW_REACH_PX = 10      # how far a dropped part must reach out from the body
 GLOW_TOUCH_PX = 8       # ...having started this close to it
 GLOW_HUE = 0.8          # hue agreement (0-1) of its dropped pixels
-GLOW_INK = 0.7          # their mean colour-to-alpha against white
-GLOW_BRIGHT = 0.85      # their median chroma / colour-to-alpha
-GLOW_GROW_PX = 6        # how far past the coloured part the faint halo is taken back
-GLOW_MIN_INK = 0.05     # colour-to-alpha below this is the white background itself
+GLOW_INK = 0.7          # their mean color-to-alpha against white
+GLOW_BRIGHT = 0.85      # their median chroma / color-to-alpha
+GLOW_GROW_PX = 6        # how far past the colored part the faint halo is taken back
+GLOW_MIN_INK = 0.05     # color-to-alpha below this is the white background itself
 GLOW_CORE_PX = 4        # the widest white-hot core the glow's two sides close over
 
 
@@ -2520,7 +2520,7 @@ def restore_dropped_glow(frame_path):
         a = arr[:, :, 3].astype(float) / 255.0
         solid = a > 0.5
         chroma = rgb.max(2) - rgb.min(2)
-        ink = (255.0 - rgb.min(2)) / 255.0            # colour-to-alpha against pure white
+        ink = (255.0 - rgb.min(2)) / 255.0            # color-to-alpha against pure white
         body = ndimage.binary_opening(solid, iterations=GLOW_THIN_PX)
         dist = ndimage.distance_transform_edt(~body)
         lab, n = ndimage.label((chroma > GLOW_SEED_CHROMA) & ~solid & (dist > GLOW_EDGE_PX))
@@ -2542,7 +2542,7 @@ def restore_dropped_glow(frame_path):
         core = (ndimage.binary_fill_holes(closed) | closed) & ~halo & ~solid
         new_a = np.where(core, 1.0, np.where(halo, ink, 0.0))
         take = new_a > a
-        # Un-premultiplied from white, so the halo keeps its colour as it fades.
+        # Un-premultiplied from white, so the halo keeps its color as it fades.
         unmul = np.clip(255.0 - (255.0 - rgb) / np.maximum(new_a, 1e-3)[:, :, None], 0, 255)
         arr[:, :, :3] = np.where((take & halo)[:, :, None], unmul, rgb).astype(np.uint8)
         arr[:, :, 3] = np.where(take, np.round(new_a * 255), arr[:, :, 3]).astype(np.uint8)
@@ -2559,7 +2559,7 @@ def restore_overhead_marker(frame_path, thresh=50):
 
     Measured on a "The Sims" run: krea2 drew the plumbob on every foe, and BiRefNet kept it on
     the boss but dropped it whole on the walker (alpha 3 at most), its green still sitting in
-    the saved RGB under alpha 0. What comes back is one strongly coloured blob of dropped
+    the saved RGB under alpha 0. What comes back is one strongly colored blob of dropped
     pixels in the band over the head that _overhead_marker accepts, holes filled (a gem's pale
     facets are low-chroma), solid. Returns how many pixels it gave back."""
     import numpy as np
@@ -2602,11 +2602,11 @@ def restore_overhead_marker(frame_path, thresh=50):
 # FIRE on a foe's attack frame - an "attacks" entry with "fire"; the Sims fire punch and fire
 # breath used it, both since replaced by kicks, so no family does today - that the
 # cut-out took away. Fire on white reads as background to BiRefNet like any glow, but
-# restore_dropped_glow's colour-to-alpha (right for a lightsaber's light on white) turned pale
+# restore_dropped_glow's color-to-alpha (right for a lightsaber's light on white) turned pale
 # yellow flame into olive smoke on the dark corridor. Fire is painted, not light, so this puts
 # back the drawn pixels as they are: warm (orange to yellow, almost no blue), in pieces of at
 # least FIRE_MIN_PX that start within FIRE_TOUCH_PX of the body, holes closed (the white-hot
-# middle of a plume has no colour to find), plus a soft rim. On 6 Sims fire-breath frames it
+# middle of a plume has no color to find), plus a soft rim. On 6 Sims fire-breath frames it
 # gave back 1.2k-57k px each and every plume came back orange.
 FIRE_TOUCH_PX = 12
 FIRE_MIN_PX = 150
@@ -2685,7 +2685,7 @@ def _body_and_plumbobs(arr, thresh=50, fire=False):
     A plumbob blob is a SMALL lime piece (30+ px, under 6% of the figure) whose bottom is no
     lower than PLUMBOB_HEAD_REACH of the figure below the top of everything else - over the
     head, or drawn into the hair. Lime is not cut out of the body otherwise: once the Sims
-    wore "brightly coloured clothes", a lime-green shirt was taken for a plumbob, erased at
+    wore "brightly colored clothes", a lime-green shirt was taken for a plumbob, erased at
     the collar, and the head lost - the plumbob went on the face.
 
     Fire is left out of the body on a frame that has some (`fire`) - only there, because skin
@@ -2847,9 +2847,9 @@ def _normalise_markers(frames, fallback=None, fire_frames=()):
         return fallback
 
 
-def _colour_share(frame_path, thresh=50):
-    """Share of a cut-out foe frame's solid pixels that are in colour (channel spread over 25),
-    plumbob left out - 0.01 on a black-and-white Sim, 0.3 and up on a coloured one."""
+def _color_share(frame_path, thresh=50):
+    """Share of a cut-out foe frame's solid pixels that are in color (channel spread over 25),
+    plumbob left out - 0.01 on a black-and-white Sim, 0.3 and up on a colored one."""
     import numpy as np
     try:
         arr = np.array(Image.open(frame_path).convert("RGBA"))
@@ -2859,24 +2859,24 @@ def _colour_share(frame_path, thresh=50):
             return 1.0
         return float(np.mean((rgb.max(2) - rgb.min(2))[solid] > 25))
     except Exception as e:
-        print(f"[Colour Share Error] {e}")
+        print(f"[Color Share Error] {e}")
         return 1.0
 
 
 def _foe_redraw_reason(family, variant, paths):
     """Why this foe's freshly drawn frames ({branch key: path}) must be re-drawn, or None.
-    Checked only for a _KNOWN_ENEMY_LOOKS family that asks: "min_colour" (black and white -
-    _SIMS_COLOUR), "one_person" (a second figure in the idle or attack frame - the Sims kick
+    Checked only for a _KNOWN_ENEMY_LOOKS family that asks: "min_color" (black and white -
+    _SIMS_COLOR), "one_person" (a second figure in the idle or attack frame - the Sims kick
     drew a Sim kicking a second Sim on one seed in every wording tried) and "boss_woman" (the
     boss's idle shows a man - a suit beat the woman wording on 1 run of 3). The last two ask
     qwen3vl for a description (_vlm_describe), which read 13 of 13 test frames right."""
     idle = paths.get(f"enemy_{variant}_idle")
     if not (family and idle):
         return None
-    if family.get("min_colour"):
-        share = _colour_share(idle)
-        if share < family["min_colour"]:
-            return f"came out black and white ({share:.2f} in colour)"
+    if family.get("min_color"):
+        share = _color_share(idle)
+        if share < family["min_color"]:
+            return f"came out black and white ({share:.2f} in color)"
     said = {}
     for f in ("idle", "attack"):
         fp = paths.get(f"enemy_{variant}_{f}")
@@ -2892,7 +2892,7 @@ def _foe_redraw_reason(family, variant, paths):
 
 
 def _redraw_grey_foe(look, guard, enemy_style, variant, frames, size, steps, prefix):
-    """Every frame of one foe again on a fresh seed, for a family with "min_colour" whose idle
+    """Every frame of one foe again on a fresh seed, for a family with "min_color" whose idle
     came back black and white. Returns ({branch key: path}, seed), or (None, None)."""
     try:
         payload = _krea2_loaders()
@@ -2914,7 +2914,7 @@ def _redraw_grey_foe(look, guard, enemy_style, variant, frames, size, steps, pre
 
 def _marker_box(frame_path):
     """[x0, y0, x1, y1] of the plumbob in a FINISHED (cropped) Sims frame, or None - for game.js,
-    which recolours it when the foe is hit or attacks. Found by colour, since by now the
+    which recolors it when the foe is hit or attacks. Found by color, since by now the
     plumbob may touch a plume of fire: the topmost bright lime-green blob of at least 80 px,
     taller than wide like the diamond. A green shirt is lower down and far bigger."""
     import numpy as np
@@ -3271,7 +3271,7 @@ _STYLE_BUCKETS_NAMED = [
     ("lsd",      ['lsd']),        # after lsddream, so the game keeps its own look
     # The Matrix's falling green code. Used to be a key of the 'cyber' bucket, which paints
     # cyan-and-purple circuitry - and quoted, "The Matrix" skipped the buckets for the set
-    # designer, which rolled the colour fresh every run (measured 2026-09-23 on the same input:
+    # designer, which rolled the color fresh every run (measured 2026-09-23 on the same input:
     # "neon green digital rain", then "black-and-white film grain", then "black-and-cyan
     # digital rain"). Everyone pictures the same green rain, so it is answered here.
     ("matrix",   ['matrix', 'digital rain', 'code rain', 'falling code']),
@@ -3412,7 +3412,7 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
     elif bucket == "lsddream":
         # "LSD dream emulator" - the 1998 PS1 game. Its look is a collage of clashing tiled
         # photo-textures (Japanese woodblock faces, eyes, kanji, torii, tatami) on blocky
-        # low-poly geometry with garish shifting colour. The player asked for game textures
+        # low-poly geometry with garish shifting color. The player asked for game textures
         # too; there is no way to pull them off the disc, so the aesthetic is described instead.
         wall_p = ("A flat 2D repeating wall texture in the style of the PlayStation 1 game LSD Dream Emulator: "
                   "a tight grid of clashing low-resolution square tiles - Japanese woodblock-print faces, wide "
@@ -3425,7 +3425,7 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
                   "moon and floating disembodied eyes, low-resolution and pixelated, camera pointing straight up at "
                   "90 degrees, seamless repeating 2D pattern, zero perspective.")
         floor_p = ("A flat 2D repeating floor texture in PlayStation 1 LSD Dream Emulator style: warped woven tatami "
-                   "matting and Japanese woodblock patterns broken up by squares of coloured static, single staring "
+                   "matting and Japanese woodblock patterns broken up by squares of colored static, single staring "
                    "eyes and black kanji, clashing pink, green and blue, low-resolution 32-bit console texture, "
                    "camera pointing straight down at 90 degrees, seamless repeating 2D pattern, zero large objects.")
         lantern_p = (f"A round red Japanese paper chochin lantern painted with one big staring eye and black kanji, "
@@ -3434,18 +3434,18 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
 
     elif bucket == "lsd":
         # "LSD" alone = trippy surreal. Swirl / spiral / paisley / mandala family (the drip
-        # family belongs to "acid" below), bold blacklight-poster colour.
+        # family belongs to "acid" below), bold blacklight-poster color.
         wall_p = ("A flat 2D vertical wall texture of a swirling psychedelic tie-dye mural - liquid spirals and "
                   "fractal paisley in vivid clashing magenta, orange, lime green, cyan and violet, melting and "
-                  "flowing together, bold high-contrast 1960s blacklight-poster colours, flat orthographic front "
+                  "flowing together, bold high-contrast 1960s blacklight-poster colors, flat orthographic front "
                   "view, seamless tileable wall material, zero perspective, zero horizon, zero sky.")
         ceil_p = ("A flat 2D ceiling texture of a kaleidoscopic psychedelic mandala, radiating fractal spirals of "
-                  "magenta, gold, turquoise and purple, bold saturated colour, camera pointing straight up at 90 "
+                  "magenta, gold, turquoise and purple, bold saturated color, camera pointing straight up at 90 "
                   "degrees, seamless repeating 2D pattern, zero perspective.")
-        floor_p = ("A flat 2D floor texture of swirling marbled psychedelic colour, paisley and liquid spirals in "
+        floor_p = ("A flat 2D floor texture of swirling marbled psychedelic color, paisley and liquid spirals in "
                    "saturated magenta, green, blue and orange flowing edge to edge, camera pointing straight down at "
                    "90 degrees, seamless flat floor material, zero objects, zero horizon.")
-        lantern_p = (f"A glass orb swirling with liquid rainbow colour, glowing brilliantly from within, casting "
+        lantern_p = (f"A glass orb swirling with liquid rainbow color, glowing brilliantly from within, casting "
                      f"shifting psychedelic light across its surface. {_LANTERN_TAIL}")
 
     elif bucket == "acid":
@@ -3454,33 +3454,33 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
         # running and pooling instead. Drip / melt / pour family, distinct from "lsd"'s swirls.
         wall_p = ("A flat 2D vertical wall texture of thick glossy psychedelic paint dripping and running downward "
                   "in molten rainbow rivulets - magenta, orange, electric green, cyan and violet - marbled and "
-                  "swirled together as they melt, wet and saturated, bold high-contrast acid colours, flat "
+                  "swirled together as they melt, wet and saturated, bold high-contrast acid colors, flat "
                   "orthographic front view, seamless tileable wall material, zero perspective, zero horizon.")
         ceil_p = ("A flat 2D ceiling texture of swirled molten rainbow paint pooling and dripping downward, glossy "
                   "wet magenta, orange, green and violet marbled together, camera pointing straight up at 90 "
                   "degrees, seamless repeating 2D pattern, zero perspective.")
         floor_p = ("A flat 2D floor texture of poured psychedelic paint, glossy swirled pools of molten rainbow "
-                   "colour - magenta, cyan, lime and violet - blended edge to edge, camera pointing straight down at "
+                   "color - magenta, cyan, lime and violet - blended edge to edge, camera pointing straight down at "
                    "90 degrees, seamless flat floor material, zero objects, zero horizon.")
         lantern_p = (f"A clear glass orb full of swirling molten rainbow liquid, glowing brilliantly from within, "
-                     f"wet colour dripping down its outside surface. {_LANTERN_TAIL}")
+                     f"wet color dripping down its outside surface. {_LANTERN_TAIL}")
 
     elif bucket == "glitch":
         # "glitch" = glitched effects / glitched photos. Datamosh, pixel-sort, RGB channel
         # split, torn scanlines, corrupted JPEG blocks. The generic path drew a near-blank
         # purple wall (luma std 16.5, barely above the blank-wall floor).
         wall_p = ("A flat 2D vertical wall texture of a heavily glitched digital photo - horizontal datamosh "
-                  "smearing, torn and repeated scanlines, split red and cyan RGB colour channels, blocky corrupted "
+                  "smearing, torn and repeated scanlines, split red and cyan RGB color channels, blocky corrupted "
                   "JPEG squares and pixel-sorted vertical streaks over bands of magenta and green digital noise, "
                   "flat orthographic front view, seamless tileable wall material, zero perspective, zero horizon.")
         ceil_p = ("A flat 2D ceiling texture of a corrupted video frame - shifted RGB channels, torn scanlines and "
                   "blocky compression artefacts in cyan, magenta and green, camera pointing straight up at 90 "
                   "degrees, seamless repeating 2D pattern, zero perspective.")
         floor_p = ("A flat 2D floor texture of a databent image - horizontal pixel-sort streaks, displaced blocks "
-                   "and split colour channels in magenta, cyan and lime over dark digital noise, camera pointing "
+                   "and split color channels in magenta, cyan and lime over dark digital noise, camera pointing "
                    "straight down at 90 degrees, seamless flat floor material, zero objects.")
         lantern_p = (f"An old CRT computer monitor switched on and filling with a violently glitched, datamoshed "
-                     f"image, the screen bleeding coloured static and torn scanlines and casting flickering "
+                     f"image, the screen bleeding colored static and torn scanlines and casting flickering "
                      f"red-and-cyan light. {_LANTERN_TAIL}")
 
     elif bucket == "mario":
@@ -3489,14 +3489,14 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
         # generic path draws real forest fungus. Wallpaper-of-the-icon shape, like the cat bucket.
         wall_p = ("Retro 16-bit Super Nintendo video game wallpaper texture, a dense repeating grid of bright red "
                   "domed mushroom power-ups with big white circular spots and stubby cream stalks with simple "
-                  "cartoon eyes, Super Mario World sprite art, bold flat saturated colours, thick black outlines, "
+                  "cartoon eyes, Super Mario World sprite art, bold flat saturated colors, thick black outlines, "
                   "crisp pixel edges, flat 2D repeating pattern, no text, no room, no borders.")
         ceil_p = ("Retro 16-bit Super Mario World ceiling texture, a seamless repeating row of hard-edged orange "
                   "dirt blocks and glowing yellow question-mark blocks with a bolt in each corner, bold flat "
-                  "saturated colours, thick black outlines, camera pointing straight up at 90 degrees, seamless "
+                  "saturated colors, thick black outlines, camera pointing straight up at 90 degrees, seamless "
                   "repeating 2D pattern.")
         floor_p = ("Retro 16-bit Super Mario World ground texture, a seamless repeating band of hard-edged "
-                   "orange-brown earth blocks topped with a bright green grassy crust, bold flat saturated colours, "
+                   "orange-brown earth blocks topped with a bright green grassy crust, bold flat saturated colors, "
                    "thick black outlines, camera pointing straight down at 90 degrees, seamless repeating 2D "
                    "pattern, zero objects.")
         lantern_p = (f"One bright red Super Mario mushroom power-up with big white circular spots and a stubby cream "
@@ -3535,18 +3535,18 @@ def get_surface_prompts(wall_style, brief=None, wall_named=None):
         # were a katamari's junk-covered surface), the ceiling its rainbow cosmos, the floor a
         # giant tatami room - everyday things at the wrong scale is the whole joke.
         wall_p = ("A flat 2D vertical wall texture of the playful outer space of Katamari Damacy: a deep "
-                  "violet and midnight blue galaxy full of swirling pink and turquoise nebulae, colourful "
+                  "violet and midnight blue galaxy full of swirling pink and turquoise nebulae, colorful "
                   "cartoon planets with rings and polka dots, smiling rainbow stars, comets with sparkly "
                   "tails and little katamari balls of rolled-up toys and candies floating like moons, bright "
-                  "cheerful candy colours, simple low-poly PlayStation 2 video game style, flat orthographic "
+                  "cheerful candy colors, simple low-poly PlayStation 2 video game style, flat orthographic "
                   "front view, seamless tileable wall material, zero perspective, zero horizon.")
         ceil_p = ("A flat 2D texture of the bright cosmic sky of Katamari Damacy: soft swirling rainbow pastel "
                   "bands of pink, yellow, mint and sky blue strewn with twinkling sparkly stars and glowing "
-                  "rainbow star shapes, cheerful candy-coloured cosmos, flat orthographic front view, seamless "
+                  "rainbow star shapes, cheerful candy-colored cosmos, flat orthographic front view, seamless "
                   "tileable material, zero perspective, zero horizon.")
         floor_p = ("A flat 2D texture of giant pale green tatami mats from a Katamari Damacy living room, with "
                    "oversized everyday things lying flat on them - a huge thumbtack, a coin, a domino, a "
-                   "wrapped candy, a matchbox - simple low-poly PlayStation 2 shapes in bright pastel colours, "
+                   "wrapped candy, a matchbox - simple low-poly PlayStation 2 shapes in bright pastel colors, "
                    "flat orthographic front view, seamless tileable material, zero perspective, zero horizon.")
         lantern_p = (f"A small round katamari ball of rolled-up candies, toys, pencils and rubber ducks stuck "
                      f"together, glowing brilliantly from within with warm rainbow light and sparkles, bright "
@@ -3633,12 +3633,12 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
     Both the door and the switch are SINGLE-STATE art. The door is only ever generated closed
     (buildOpenDoorTexture derives the open gate from the closed door's own pixels), and the
     switch is only ever generated at rest - buildSwitchWallTextures derives the thrown state
-    by inverting this one cutout's colours. Two earlier attempts at generating the ON pose are
+    by inverting this one cutout's colors. Two earlier attempts at generating the ON pose are
     worth not repeating: two independent txt2img renders of "the same plate, handle thrown"
     came back as two visibly different fixtures (FLUX redraws the plate, screws, bevel and
     palette every time), and img2img over the OFF render fixed that but at any denoise low
     enough to preserve the fixture the handle barely moved. A generated pose is either not the
-    same switch or not a different pose; a colour inversion is unmistakably both.
+    same switch or not a different pose; a color inversion is unmistakably both.
 
     Buckets mirror get_surface_prompts' (same keywords, same relative order, so an ambiguous
     style resolves to the same theme on both sides) - every style get_surface_prompts special-
@@ -3776,7 +3776,7 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
 
     elif bucket == "lsddream":
         door_p = (f"A closed sliding Japanese shoji screen door, its paper panels painted with one giant "
-                  f"staring eye and swirling clashing psychedelic colour, set into a surrounding archway of the "
+                  f"staring eye and swirling clashing psychedelic color, set into a surrounding archway of the "
                   f"same clashing tiled woodblock-face, eye and kanji textures as the corridor wall, blocky "
                   f"PlayStation 1 low-poly style, flat straight-on orthographic front view, {NO_MARGINS}, zero "
                   f"perspective, zero horizon.")
@@ -3790,31 +3790,31 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
         door_p = (f"A closed door painted with a bold swirling psychedelic tie-dye spiral in clashing magenta, "
                   f"orange and lime green, set into a surrounding archway swirled with the same paisley "
                   f"psychedelic mural as the corridor wall, flat straight-on orthographic front view, "
-                  f"{NO_MARGINS}, bold saturated colours, zero perspective, zero horizon.")
-        # Lantern is a glass orb of liquid colour - the switch is a swirled lollipop.
+                  f"{NO_MARGINS}, bold saturated colors, zero perspective, zero horizon.")
+        # Lantern is a glass orb of liquid color - the switch is a swirled lollipop.
         switch_p = ("A small hand-sized lever handle shaped like a swirled rainbow lollipop on a stick, glossy "
                     "and saturated, mounted on a psychedelic paisley plate, the handle resting down. "
                     + _GATE_TAIL)
 
     elif bucket == "acid":
-        door_p = (f"A closed door that is one thick slab of clear casting resin with molten rainbow colour "
+        door_p = (f"A closed door that is one thick slab of clear casting resin with molten rainbow color "
                   f"swirled and frozen mid-drip inside it, glossy and saturated, set into a surrounding archway "
                   f"marbled with the same molten psychedelic paint as the corridor wall, flat straight-on "
-                  f"orthographic front view, {NO_MARGINS}, wet saturated colours, zero perspective, zero horizon.")
+                  f"orthographic front view, {NO_MARGINS}, wet saturated colors, zero perspective, zero horizon.")
         # Lantern is a glass orb of liquid rainbow - the switch is a melting popsicle.
         switch_p = ("A small hand-sized lever handle shaped like a melting rainbow popsicle on a stick, glossy "
-                    "colour running and dripping off it, mounted on a marbled psychedelic plate, the handle "
+                    "color running and dripping off it, mounted on a marbled psychedelic plate, the handle "
                     "resting down. " + _GATE_TAIL)
 
     elif bucket == "glitch":
         door_p = (f"A closed door faced with one large cracked flat-screen monitor showing a frozen glitched, "
-                  f"datamoshed image with split red and cyan colour channels and torn scanlines, set into a "
+                  f"datamoshed image with split red and cyan color channels and torn scanlines, set into a "
                   f"surrounding archway of the same corrupted JPEG-block and pixel-sorted noise texture as the "
                   f"corridor wall, flat straight-on orthographic front view, {NO_MARGINS}, zero perspective, "
                   f"zero horizon.")
         # Lantern is a glitching CRT monitor - the switch is a shattered smartphone.
         switch_p = ("A small hand-sized lever handle shaped like a shattered smartphone with a glitched, "
-                    "colour-split screen, mounted on a plate of corrupted pixel noise, the handle resting "
+                    "color-split screen, mounted on a plate of corrupted pixel noise, the handle resting "
                     "down. " + _GATE_TAIL)
 
     elif bucket == "mario":
@@ -3822,7 +3822,7 @@ def get_gate_prompts(wall_style, brief=None, wall_named=None):
                   f"World, hard-edged with thick black outlines and a bolt in each corner, set into a "
                   f"surrounding archway of the same repeating red-and-white mushroom power-up wallpaper as the "
                   f"corridor wall, flat straight-on orthographic front view, {NO_MARGINS}, bold saturated "
-                  f"colours, thick black outlines, zero perspective.")
+                  f"colors, thick black outlines, zero perspective.")
         # Lantern is a red mushroom power-up - the switch is a gold coin, a different Mario icon.
         switch_p = ("A small wall-mounted lever handle shaped like a shiny gold Super Mario coin stamped with a "
                     "star, on a red brick block plate, bold 16-bit video game art with thick black outlines, "
@@ -4208,7 +4208,7 @@ def krea2_shield_prompt(player_style):
     return (
         f"A single round battle shield seen straight on from the front, one shield only, with a "
         f"plain raised central boss and a simple decorated rim. Bare surface, no emblem, no crest, "
-        f"no painted face or animal. Styled in the colours and materials of a {p}'s gear. Clean game "
+        f"no painted face or animal. Styled in the colors and materials of a {p}'s gear. Clean game "
         f"item icon, centered with a clear margin on every side, even lighting. No hands, no arms, no "
         f"character, no weapon. Plain solid pure white background."
     )
@@ -4223,7 +4223,7 @@ ENEMY_VARIANT_NAMES = ["walker", "flyer", "boss"]
 # This used to generate the walker and derive the other two as FLUX Kontext edits of it,
 # which held identity perfectly - and that turned out to be the problem. Kontext preserves
 # the subject by construction, so on a gargoyle the "flyer" came back as the SAME gargoyle
-# with wings bolted on and the boss as the same gargoyle recoloured. Correct, and boring.
+# with wings bolted on and the boss as the same gargoyle recolored. Correct, and boring.
 #
 # So the LLM that writes the intro crawl now also designs three separate foes from the typed
 # idea (generate_enemy_species) and krea2 draws each one independently. The variety comes
@@ -4348,7 +4348,7 @@ ENEMY_FRAME_POSES = {
 #  * No LIST of body parts. krea2 draws every word it is given, so "a wing, a shell or a
 #    plated back" draws one foe with all three bolted on. SHELL therefore names no part at
 #    all and lets the subject supply its own.
-#  * The barrier must TOUCH the subject and be strongly coloured. keep_largest_figure keeps
+#  * The barrier must TOUCH the subject and be strongly colored. keep_largest_figure keeps
 #    only the largest connected blob, so a bubble floating clear of the foe is either erased
 #    or - being the bigger shape - erases the foe. And it is cut out of a pure white
 #    background, so a white or pale glow is cut away along with it. Overlapping the body and
@@ -4392,16 +4392,16 @@ should think "those are three kinds of {enemy}", never "that is the same one wit
 Rules for the LOOK lines. They are fed straight to an image generator, so:
 
 1. Every LOOK must NAME {enemy} in the sentence and describe THAT thing. Change the build,
-   the silhouette, the extra parts and the colours; never rename it to something else and
+   the silhouette, the extra parts and the colors; never rename it to something else and
    never describe only the differences. Asked for three dragons, "heavy scaled armour with
    jagged teeth, standing on two thick legs" is WRONG - it forgot to say dragon.
 {rule_kind}
 {rule_lift}
-{rule_colour}
+{rule_color}
 5. Describe ONLY what is in the picture. NEVER write what a foe is not, or what it lacks, or
    what it should not look like - every single word you write will be drawn.
 6. One sentence each, under 30 words. Plain physical description: shape, build, materials,
-   colours, parts. No story, no history, no mood words unless they are visibly on the model.
+   colors, parts. No story, no history, no mood words unless they are visibly on the model.
 {rule_bulk}
 
 Rules for the NAME lines. A name is what the health bar shows during the fight, so it has to
@@ -4450,12 +4450,12 @@ _SPECIES_PARTS = {
    then all three stay that object. Give it machinery, mountings, housings and moving parts.
    Faces, limbs, claws, scales and feathers would replace it with a monster.
 """,
-    # "Three clearly different colours" alone recoloured the SUBJECT itself: "spaghetti
+    # "Three clearly different colors" alone recolored the SUBJECT itself: "spaghetti
     # monster" came back as olive-green, brown and crimson noodle heaps that read as moss or
     # rope - only the pale-yellow ones ever read as pasta (4 runs, 2026-09-29).
-    "rule_colour": """4. Tell the three apart instantly in a dark corridor with clearly different colours. If
-   {enemy} is known by its colour - pasta is pale yellow, a pumpkin is orange, slime is green -
-   all three keep that colour on their bodies; put the differences in the other colours
+    "rule_color": """4. Tell the three apart instantly in a dark corridor with clearly different colors. If
+   {enemy} is known by its color - pasta is pale yellow, a pumpkin is orange, slime is green -
+   all three keep that color on their bodies; put the differences in the other colors
    instead: eyes, sauce, glow, trim, markings.
 """,
     "rule_lift": """3. Say how the FLYER stays up, with something that suits {enemy} specifically: feathered
@@ -4476,15 +4476,42 @@ _SPECIES_PARTS_PERSON = {
   regal, in a grander and more dramatic version of the same outfit.
 """,
     "rule_kind": """2. {enemy} is a person, so each foe is ONE whole person in natural human proportions,
-   shown from head to feet. Tell the three apart by build, outfit, hairstyle, colours and stance.
+   shown from head to feet. Tell the three apart by build, outfit, hairstyle, colors and stance.
 """,
-    "rule_colour": """4. Keep every colour the words "{enemy}" name. Tell the three apart with the other
-   colours - hair, skin tone, accessories, trim - so a player spots the difference instantly.
+    "rule_color": """4. Keep every color the words "{enemy}" name. Tell the three apart with the other
+   colors - hair, skin tone, accessories, trim - so a player spots the difference instantly.
 """,
     "rule_lift": """3. The FLYER floats by itself - describe it hovering in mid-air with its feet off the ground.
 """,
     "rule_bulk": """7. Menace comes from build, stance and outfit. Calling a foe armoured, plated, helmeted or
    robotic replaces the person with a generic armoured warrior and the subject vanishes.
+""",
+}
+# A known CHARACTER (_known_character_enemy) - "Link" from Zelda. The default parts made him a
+# monster: "thick, muscular link with broad shoulders and heavy iron gauntlets ... skin cracked
+# and stained with dark green moss", "limbs doubled and thickened ... hammer-like fists" - the
+# green goblin Link of the 2026-10-02 run. That bulk is all upper body, and krea2 framed it as
+# a chest-up bust: 2 of 3 seeds on one designed walker, even with the head-to-feet lead
+# (_CHARACTER_ENEMY_LOOK) in front; a LOOK without the bulk went 9 of 9 whole with the lead.
+# Not the person parts: their rule 7 bans helmets and armour, and for a known character those
+# are often the look itself (Darth Vader - see _SPECIES_BOSS_INDIVIDUAL).
+_SPECIES_PARTS_CHARACTER = {
+    "roles": """- GRUNT: fights on foot on the ground: {enemy} just as they are best known.
+- FLYER: floats in the air all by itself, hovering with both feet dangling well above the
+  ground, hair and clothes billowing around them.
+- BOSS: the champion - the one and only {enemy} at their most imposing: tall and commanding,
+  in a grander and more dramatic version of their own best-known outfit and gear.
+""",
+    "rule_kind": """2. {enemy} is one particular well-known character, so each foe is {enemy} themselves: ONE
+   whole figure with their own face, body shape and best-known outfit, shown from head to feet.
+   Tell the three apart by stance, gear, accessories and colors.
+""",
+    "rule_color": """4. Keep the colors {enemy} is known for on all three. Tell the three apart with the other
+   colors - trim, accessories, glow - so a player spots the difference instantly.
+""",
+    "rule_lift": _SPECIES_PARTS_PERSON["rule_lift"],
+    "rule_bulk": """7. Menace comes from stance, expression and their own gear made grander. Their body keeps
+   the natural proportions {enemy} is known for.
 """,
 }
 
@@ -4506,11 +4533,11 @@ def _species_worn_rule(enemy_style):
     m = _WORN_RE.search((enemy_style or "").strip().rstrip("."))
     if not m:
         return ""
-    return ("   It is wearing " + m.group(1) + ". Pick ONE colour and material for that item and\n"
+    return ("   It is wearing " + m.group(1) + ". Pick ONE color and material for that item and\n"
             "   put the very same item on all three foes, the FLYER and the BOSS included. It\n"
             "   stays an ordinary worn item - it is not how the FLYER flies and not part of the\n"
-            "   BOSS's bulk. Every LOOK must describe it: that colour, that material, and\n"
-            "   exactly where on the body it sits. Rule 4's colours are for their bodies.")
+            "   BOSS's bulk. Every LOOK must describe it: that color, that material, and\n"
+            "   exactly where on the body it sits. Rule 4's colors are for their bodies.")
 
 
 # A known INDIVIDUAL's boss is that one individual, bigger. The default BOSS line asks a family
@@ -4525,14 +4552,20 @@ _SPECIES_BOSS_INDIVIDUAL = """- BOSS: the champion, far bigger and heavier than 
 """
 
 
-def _enemy_species_prompt(enemy_style, individual=False):
+def _enemy_species_prompt(enemy_style, individual=False, character=False):
     """Same hand-built chat template as _story_prompt - see there for why the <|im_start|>
     opener and the empty <think> block are both mandatory.
 
     The kind-dependent parts (_SPECIES_PARTS) go in before the {enemy} fill, since they name
     {enemy} themselves. `individual` is a known named one (resolve_named_styles' "known") -
-    see _SPECIES_BOSS_INDIVIDUAL."""
-    parts = _SPECIES_PARTS_PERSON if _enemy_is_person(enemy_style) else _SPECIES_PARTS
+    see _SPECIES_BOSS_INDIVIDUAL. `character`: that known one is a character with a body of
+    their own (_known_character_enemy) - see _SPECIES_PARTS_CHARACTER."""
+    if _enemy_is_person(enemy_style):
+        parts = _SPECIES_PARTS_PERSON
+    elif character:
+        parts = _SPECIES_PARTS_CHARACTER
+    else:
+        parts = _SPECIES_PARTS
     if individual and parts is _SPECIES_PARTS:
         roles = parts["roles"]
         parts = dict(parts, roles=roles[:roles.index("- BOSS:")] + _SPECIES_BOSS_INDIVIDUAL)
@@ -4684,6 +4717,26 @@ def _read_guard(guard, is_creature):
     return "arms" if is_creature else "field"
 
 
+# The eight reply labels in the order the brief asks for them - see _species_labelled_lines.
+_SPECIES_REPLY_ORDER = ("KIND", "GUARD", "GRUNT_NAME", "GRUNT_LOOK", "FLYER_NAME", "FLYER_LOOK",
+                        "BOSS_NAME", "BOSS_LOOK")
+
+
+def _species_labelled_lines(text):
+    """The reply's lines, with the labels put back on a reply that dropped every one of them.
+    Asked to design "Link" from Zelda as a known character, 4 replies of 12 came back as the
+    eight answers alone, in order and otherwise right ("CREATURE", "ARMS", "LinkGrunt", "Link
+    from Zelda stands squat ..."), and the whole family was thrown away for want of a "KIND:".
+    Read by position only when it is exactly that: no line with a colon, eight lines, and the
+    first one the KIND word."""
+    lines = [l.strip().strip(_STORY_STRIP) for l in (text or "").splitlines()]
+    lines = [l for l in lines if l]
+    if (len(lines) == len(_SPECIES_REPLY_ORDER) and not any(":" in l for l in lines)
+            and re.fullmatch(r"(?i)creature|object", lines[0].strip(" ."))):
+        return [f"{label}: {line}" for label, line in zip(_SPECIES_REPLY_ORDER, lines)]
+    return (text or "").splitlines()
+
+
 def parse_enemy_species(text):
     """Pull the labels out of the reply. Returns {variant: {"name", "look", "guard"}} for the
     three variants, or None if any of them is missing - a partial set would silently mix a
@@ -4701,7 +4754,7 @@ def parse_enemy_species(text):
     got = {}
     kind = ""
     guard = ""
-    for raw_line in (text or "").splitlines():
+    for raw_line in _species_labelled_lines(text):
         line = raw_line.strip().strip(_STORY_STRIP)
         if ":" not in line:
             continue
@@ -4793,10 +4846,11 @@ def _tidy_species_names(species, enemy_style):
     return species
 
 
-def generate_enemy_species(enemy_style, individual=False):
+def generate_enemy_species(enemy_style, individual=False, character=False):
     """Design the three foes. Never raises: on any failure returns None and the caller falls
     back to the walker-plus-Kontext-derivation path, which still produces three usable
-    enemies - just three that look more alike. `individual` - see _SPECIES_BOSS_INDIVIDUAL."""
+    enemies - just three that look more alike. `individual` - see _SPECIES_BOSS_INDIVIDUAL;
+    `character` - see _SPECIES_PARTS_CHARACTER."""
     payload = {
         # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
         "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
@@ -4804,7 +4858,7 @@ def generate_enemy_species(enemy_style, individual=False):
         "species_gen": {
             "inputs": {
                 "clip": ["k_clip", 0],
-                "prompt": _enemy_species_prompt(enemy_style, individual),
+                "prompt": _enemy_species_prompt(enemy_style, individual, character),
                 "max_length": ENEMY_SPECIES_MAX_TOKENS,
                 "sampling_mode": "on",
                 "sampling_mode.temperature": ENEMY_SPECIES_TEMPERATURE,
@@ -4828,7 +4882,7 @@ def generate_enemy_species(enemy_style, individual=False):
             print(f"[species] reply did not carry all six foe labels - deriving instead\n{raw[:300]}")
             return None
         species = _tidy_species_names(species, enemy_style)
-        species = _enemy_look_lead(species, enemy_style)
+        species = _enemy_look_lead(species, enemy_style, character=character)
         for v in ENEMY_VARIANT_NAMES:
             print(f"[species] {v:6s} {species[v]['name']!r} - {species[v]['look']}")
         print(f"[species] three foes designed in {time.time()-t0:.1f}s")
@@ -4898,7 +4952,7 @@ _THEME_TEXTURE_SLOTS = {"wall", "floor", "ceiling"}
 
 # The washout adjectives, and they are not a matter of taste. FLUX schnell runs these surfaces
 # at 4 steps and cfg 1.0, where it cannot resolve low-contrast detail at all - so a line that
-# says its own detail is "faint" or "faded" leaves the flat ground colour as the only thing in
+# says its own detail is "faint" or "faded" leaves the flat ground color as the only thing in
 # the prompt the model can draw, and the wall arrives as blank paper. That is what shipped a
 # white supermarket: "glossy white plastic with faint barcode patterns and faded price tags in
 # black ink" measured std dev 2.7 / 3.5 / 17.0 across three seeds (blank on all three) and
@@ -5022,7 +5076,7 @@ def _theme_inline(value):
 # rather than reasoned about - three earlier wordings were drawn and then thrown away by the
 # pipeline itself, and a fourth hid the foe behind its own prop:
 #
-#  * A COLOUR, NEVER WHITE. A white bubble is drawn and then matted away - these sprites are
+#  * A COLOR, NEVER WHITE. A white bubble is drawn and then matted away - these sprites are
 #    cut out of a pure white background, so white-on-white is invisible to BiRefNet and to
 #    the eye. Purple survives the cut, reads as chat, and stays clear of the cyan the block
 #    pose paints its barrier in, which a cyan bubble was getting confused with.
@@ -5104,16 +5158,16 @@ ENEMY_CHOMP_ATTACK = (
     "about to bite, on a person swooping at the viewer with their arms spread wide")
 _SIMS_SMILE = " and a big cheerful smile lights up their face"
 # Some seeds draw a Sim in black and white - all its frames, since they share the seed. Measured
-# on one such seed (share of the figure in colour): as is 0.01; "in full vivid natural colour"
-# 0.18 (skin only, the clothes stayed grey); adding "wearing brightly coloured clothes" 0.55,
+# on one such seed (share of the figure in color): as is 0.01; "in full vivid natural color"
+# 0.18 (skin only, the clothes stayed grey); adding "wearing brightly colored clothes" 0.55,
 # and it lifted the other two Sims tested from 0.50/0.31 to 0.95/0.66. Any Sim still drawn grey
-# is re-drawn on a fresh seed (_redraw_grey_foe). "Brightly coloured" alone let every pose pick
-# its own colours - one Sim wore a green shirt to idle and a red one to block - so each foe is
-# given one concrete pair from _SIMS_COLOURS when its LOOK lines are built (_enemy_look_lead),
+# is re-drawn on a fresh seed (_redraw_grey_foe). "Brightly colored" alone let every pose pick
+# its own colors - one Sim wore a green shirt to idle and a red one to block - so each foe is
+# given one concrete pair from _SIMS_COLORS when its LOOK lines are built (_enemy_look_lead),
 # the same words in all its frames. No green: the plumbob is the one green thing.
-_SIMS_COLOUR = (", wearing bright {a} and {b} clothes, the whole picture in full vivid natural "
-                "colour")
-_SIMS_COLOURS = ("red", "orange", "yellow", "blue", "purple", "pink", "teal", "turquoise",
+_SIMS_COLOR = (", wearing bright {a} and {b} clothes, the whole picture in full vivid natural "
+                "color")
+_SIMS_COLORS = ("red", "orange", "yellow", "blue", "purple", "pink", "teal", "turquoise",
                  "coral", "magenta", "navy blue", "sky blue")
 
 
@@ -5158,19 +5212,19 @@ _KNOWN_ENEMY_LOOKS = {
         # reads the head noun before the first joiner, and a comma is one.
         "subject": "happy smiling everyday people from the video game The Sims",
         "lead": ("A glowing green diamond plumbob floats in the air above their head" + _SIMS_SMILE
-                 + _SIMS_COLOUR),
-        "lead_colours": _SIMS_COLOURS,
-        # Re-draw a foe that comes out with less than this share of it in colour, with a
+                 + _SIMS_COLOR),
+        "lead_colors": _SIMS_COLORS,
+        # Re-draw a foe that comes out with less than this share of it in color, with a
         # second person in its idle or attack frame, or (the boss) as a man - _foe_redraw_reason.
-        "min_colour": 0.12,
+        "min_color": 0.12,
         "one_person": True,
         "boss_woman": True,
-        # The boss is beautiful rather than colourful (the user's call) - one rich colour, so
-        # she is still never black and white: her own colour clause replaces the shared one.
+        # The boss is beautiful rather than colorful (the user's call) - one rich color, so
+        # she is still never black and white: her own color clause replaces the shared one.
         "variant_leads": {"boss": "a beautiful, glamorous woman"},
-        "colour_clause": _SIMS_COLOUR,
-        "variant_colour": {"boss": (", wearing a stunning, elegant {a} gown, the whole picture "
-                                    "in full vivid natural colour")},
+        "color_clause": _SIMS_COLOR,
+        "variant_color": {"boss": (", wearing a stunning, elegant {a} gown, the whole picture "
+                                    "in full vivid natural color")},
         "variant_swaps": {"boss": _FEMININE_WORDS},
         "variant_subjects": {"boss": "a beautiful, glamorous woman from the video game The Sims"},
         # The head-to-feet framing names the boss a woman too, not a person - same seed as above.
@@ -5247,7 +5301,7 @@ def _enemy_literal(enemy_style):
 #
 # So a person enemy keeps the typed words as the subject (no designer rewrite), and the
 # bestiary gets person-shaped role lines: one whole person each, told apart by build, outfit
-# and colour, the flyer levitating and the boss a grander version of the same person.
+# and color, the flyer levitating and the boss a grander version of the same person.
 #
 # Detected on the HEAD noun - the last word before the first joiner - so "Lady in the red
 # dress" is a lady, while "man-eating plant" is a plant and "ladybug" never matches at all.
@@ -5277,8 +5331,33 @@ def _enemy_is_person(enemy_style):
 # Led onto every LOOK line of a person family - see _enemy_look_lead.
 _PERSON_ENEMY_LOOK = "one whole person seen from the top of the head down to the feet"
 
+# A known CHARACTER typed as the enemy - "Link" from Zelda. Not a person by its words ("link"
+# is no person noun), so it went down the monster path and came back a chest-up bust in two of
+# the three foes' idles. The identity call's TYPE says what it is ("hero" and "character" for
+# Link on four calls); these are the TYPEs that mean one figure with a body of their own.
+# Objects, places and franchises ("game", "movie", "car") are left out on purpose - a head and
+# feet would be wrong on them.
+_CHARACTER_ENEMY_KINDS = frozenset("""
+    character hero heroine villain protagonist antagonist person man woman boy girl kid elf
+    wizard witch sorcerer sorceress mage knight warrior princess prince king queen soldier ninja
+    samurai pirate superhero supervillain plumber detective adventurer swordsman swordswoman
+    fighter mascot robot android cyborg alien agent spy cowboy outlaw
+""".split())
+# Led onto every LOOK line of a known character's family - see _enemy_look_lead. Stance-neutral,
+# like the person one, so the flyer can still hover. The feet guard (_person_feet_max) finds the
+# family by it, since that check only sees the LOOK and the enemy line.
+_CHARACTER_ENEMY_LOOK = "the whole figure seen from the top of the head down to the feet"
 
-def _enemy_look_lead(species, enemy_style):
+
+def _known_character_enemy(enemy_named):
+    """True when the enemy field's resolve_named_styles entity is a recognised character
+    (_CHARACTER_ENEMY_KINDS). A _KNOWN_ENEMY_LOOKS name keeps its own hand-tuned family."""
+    return bool(enemy_named and enemy_named.get("known")
+                and _norm_type(enemy_named.get("kind")) in _CHARACTER_ENEMY_KINDS
+                and not _known_enemy_look(enemy_named))
+
+
+def _enemy_look_lead(species, enemy_style, character=False):
     """Put this family's hand-tuned placement clause in FRONT of each designed LOOK line.
 
     Kept OUT of the subject and bolted on here instead, for two reasons. The subject is
@@ -5291,9 +5370,18 @@ def _enemy_look_lead(species, enemy_style):
     A PERSON enemy (_enemy_is_person) gets _PERSON_ENEMY_LOOK the same way, for the chest-up
     bust reason written up on _CHAT_ENEMY_LOOK: "fill the frame" on a tall standing figure is
     licence to crop in, and a lady cut off at the waist is drawn at the idle's scale as a
-    giant pair of legs.
+    giant pair of legs. A known CHARACTER (`character`, _known_character_enemy) gets
+    _CHARACTER_ENEMY_LOOK for the same reason.
 
     Returns `species` unchanged for every other theme."""
+    if species and character and not _enemy_is_person(enemy_style):
+        for v in species.values():
+            look = (v.get("look") or "").strip().rstrip(".").strip()
+            if look:
+                v["look"] = f"{_CHARACTER_ENEMY_LOOK}: {_theme_inline(look)}"
+        print(f"[species] led all {len(species)} LOOK lines with the head-to-feet framing "
+              f"(a known character)")
+        return species
     if species and _enemy_is_person(enemy_style):
         sign = _enemy_signature(enemy_style)
         family = _known_enemy_family(enemy_style) or {}
@@ -5311,10 +5399,10 @@ def _enemy_look_lead(species, enemy_style):
                 if own.get(key):
                     v["look"] = f"{own[key]}, {v['look']}"
                 if sign:
-                    pair = random.sample(family.get("lead_colours") or ("bright",) * 2, 2)
+                    pair = random.sample(family.get("lead_colors") or ("bright",) * 2, 2)
                     lead = sign
-                    if (family.get("variant_colour") or {}).get(key):
-                        lead = lead.replace(family["colour_clause"], family["variant_colour"][key])
+                    if (family.get("variant_color") or {}).get(key):
+                        lead = lead.replace(family["color_clause"], family["variant_color"][key])
                     v["look"] = f"{lead.format(a=pair[0], b=pair[1])}, {v['look']}"
         print(f"[species] led all {len(species)} LOOK lines with the head-to-feet framing"
               + (" and the hand-tuned signature" if sign else ""))
@@ -5468,14 +5556,43 @@ def _norm_type(s):
     return _singular_creature_name(words[-1]) if words else None
 
 
-def _named_style_text(ent):
+# Characters whose look krea2 gets wrong from the name alone, keyed on the typed name lowercased,
+# with the line drawn in its place. "Howard the Duck" (2026-10-02): the user meant the 1986
+# live-action movie Howard, and "a duck called Howard The Duck" drew a generic white duck in a
+# Link-style tunic - the name covers a comic, a cartoon and a film, and krea2 picks none of them.
+# This line drew the movie Howard on 3 of 3 seeds, back-view frames and HUD bust alike: maroon
+# blazer, pink sweater vest, diamond-pattern tie, white tuft, blue eyes, and krea2's own feathers.
+# PLAYER line only (resolve_named_styles): the enemy's designer and bestiary were never measured
+# with one. Written to read after "a" (krea2_frame_prompts) and "one" (krea2_portrait_prompt).
+_KNOWN_CHARACTER_LOOKS = {
+    "howard the duck": (
+        "three-foot-tall anthropomorphic white duck, Howard the Duck exactly as he appears in the "
+        "1986 live-action movie: a realistic animatronic duck puppet with soft white feathers, a "
+        "fluffy tuft of white feathers on top of his head, a wide orange bill, big round blue "
+        "human-looking eyes and fluffy white feathered hands, wearing a dark maroon blazer over a "
+        "salmon-pink knitted sweater vest, a white necktie with a red and black diamond pattern, a "
+        "silver wristwatch, and orange webbed duck feet"),
+}
+
+
+def _known_character_look(typed):
+    """The _KNOWN_CHARACTER_LOOKS line for a typed name (quotes and case ignored), or None."""
+    return _KNOWN_CHARACTER_LOOKS.get(re.sub(r'["“”]', "", typed or "").strip().lower())
+
+
+def _named_style_text(ent, art=False):
     """The phrase that replaces one quoted span in the text handed to the LLM prompts.
 
     Known place -> its real-world framing, so the set designer can put what it's actually
     known for on the lantern/door/switch. Typed but unresolved-as-a-specific-instance -> a
     plain 'a TYPE called NAME' phrase; the rules already say a specific physical thing is kept
     as typed, so this just spells out what kind of thing it is. No kind resolved AT ALL -> the
-    exact text between the quotes, unmodified - today's raw-word behaviour, verbatim."""
+    exact text between the quotes, unmodified - today's raw-word behaviour, verbatim.
+
+    `art`: the text is for the image prompts, where a name in _KNOWN_CHARACTER_LOOKS is drawn
+    from its written look instead."""
+    if art and _known_character_look(ent["raw"]):
+        return _known_character_look(ent["raw"])
     kind = ent.get("kind")
     if not kind:
         return ent["raw"]
@@ -5484,14 +5601,28 @@ def _named_style_text(ent):
     return f"{_a_or_an(kind)} called {ent['name']}"
 
 
-def _apply_named_splices(text, entities):
+def _repeated_kind(after, kind):
+    """Length of a leading ' car' / ' the cat' in `after` (the text right after a quoted name)
+    that only says `kind` again, else 0. The rewrite already names the kind, so '"GTI" car' came
+    out "GTI, the real car car" and '"Billy" the cat' "a cat called Billy the cat"."""
+    if not kind:
+        return 0
+    word = re.escape(kind.split()[-1])
+    m = re.match(rf"\s*,?\s*(?:(?:the|an?)\s+)?{word}s?\b", after or "", re.I)
+    return m.end() if m else 0
+
+
+def _apply_named_splices(text, entities, art=False):
     """Replace every entity's quoted span (span, incl. the quote marks) with _named_style_text's
-    rewrite. Applied back-to-front so an earlier span's offsets stay valid after a later one is
-    replaced. [] entities (the common, unquoted case) returns `text` completely untouched."""
+    rewrite, along with a typed kind right after it that the rewrite already says
+    (_repeated_kind). Applied back-to-front so an earlier span's offsets stay valid after a
+    later one is replaced. [] entities (the common, unquoted case) returns `text` completely
+    untouched. `art` - see _named_style_text."""
     out = text or ""
     for ent in sorted(entities, key=lambda e: e["span"][0], reverse=True):
         s, e = ent["span"]
-        out = out[:s] + _named_style_text(ent) + out[e:]
+        e += _repeated_kind(out[e:], ent.get("kind"))
+        out = out[:s] + _named_style_text(ent, art) + out[e:]
     return out
 
 
@@ -5798,9 +5929,13 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pi
             text[k] = clean[k] = look
             story[k] = f"{look}, called {name}" if (name and look) else (name or look)
             continue
-        text[k] = _apply_named_splices(v or "", parsed[k])
+        # The hero's art draws a _KNOWN_CHARACTER_LOOKS name from its written look, quoted or
+        # typed as the whole line. The story keeps the name.
+        text[k] = _apply_named_splices(v or "", parsed[k], art=(k == "player"))
+        if k == "player" and not parsed[k] and _known_character_look(v):
+            text[k] = _known_character_look(v)
         clean[k] = _apply_named_splices_clean(v or "", parsed[k])
-        story[k] = text[k]
+        story[k] = _apply_named_splices(v or "", parsed[k])
 
     out = {k: (parsed[k][0] if parsed[k] else None) for k in fields}
     for k in pictures:
@@ -5839,6 +5974,151 @@ PICTURE_SLOTS = ("wall", "player", "weapon", "enemy")
 # falls back to when its Kontext job fails.
 PICTURE_MODES = ("reference", "describe")
 PICTURE_MODE_DEFAULT = "reference"
+
+# Options' "Dungeon Style Attachment Sensitivity" slider (2026-10-04): how closely a pictured
+# dungeon's walls, floor and ceiling follow the picture, 0-4, sent as wall_picture_level. Asked
+# for from play after a fractal's surfaces were first cut straight out of it: "this is too much
+# but would make a great option ... the slider to the max looks like how the last run was [where
+# every wall literally looked like the attachment], and just inspiration like how it was before
+# the fix is in the other end ... what we want for these runs is closer to the middle of those
+# two - take parts from it, and remix it."
+# Three ways a surface can be made, each measured on its own (see generate_kontext_surfaces):
+#   inspired - a texture designed from the picture's colors and materials (kontext_surface_prompt)
+#   remix    - the picture's own parts in a new arrangement (_remix_surfaces)
+#   exact    - a piece of the picture itself (_pattern_surfaces)
+# and the five stops walk from one to the next a surface at a time - the walls lead on the way up
+# to the remix, and are the last to become the picture itself:
+#   0 inspired   every surface inspired
+#   1 light      walls remixed, floor and ceiling inspired
+#   2 remix      walls remixed; ceiling remixed in another color; floor inspired, in
+#                colors that go with the walls (WALL_PICTURE_REMIX_HUES)   (the default)
+#   3 strong     floor and ceiling exact, walls remixed
+#   4 exact      every surface exact
+# A REMIX is only for a picture that is itself a pattern (_WALL_PATTERN_Q) - a fractal, a texture,
+# abstract art. A photograph of a PLACE is still painted as that place, the way that was tuned on
+# the Windows XP hill (_theme_brief_surfaces), wherever "remix" stands above; its floor and
+# ceiling, then its walls, become the photograph itself only at 3 and 4.
+WALL_PICTURE_LEVELS = ("inspired", "light", "remix", "strong", "exact")
+WALL_PICTURE_LEVEL_DEFAULT = 2
+
+
+def _wall_picture_level(value):
+    """The slider's stop from a request's wall_picture_level - the default for anything that is
+    not a whole number from 0 to 4 (an older page sends none)."""
+    try:
+        level = int(value)
+    except (TypeError, ValueError):
+        return WALL_PICTURE_LEVEL_DEFAULT
+    return level if 0 <= level < len(WALL_PICTURE_LEVELS) else WALL_PICTURE_LEVEL_DEFAULT
+
+
+def _wall_picture_recipes(level, pattern):
+    """{"wall", "floor", "ceiling"}: "inspired" | "remix" | "exact" for the slider's stop `level`
+    and whether the picture is a `pattern` - see WALL_PICTURE_LEVELS."""
+    level = _wall_picture_level(level)
+    middle = "remix" if pattern else "inspired"
+    wall = ("inspired", middle, middle, middle, "exact")[level]
+    ceiling = ("inspired", "inspired", middle, "exact", "exact")[level]
+    floor = ("inspired", "inspired", "inspired", "exact", "exact")[level]
+    return {"wall": wall, "floor": floor, "ceiling": ceiling}
+
+
+# THE REMIX STOP'S COLORS (2026-10-04). Asked for from play, after five runs up the slider: "for
+# Remix, the walls should be rebuilt from the picture's own parts in a new arrangement like it is
+# now, and same goes for the ceiling except the ceiling will always be a different color [so if
+# the attachment is mostly green, it could do pink]. The floor will only be inspired by the image
+# and can select colors that complement the wall."
+# Done to the finished textures in code, not asked of Kontext: a hue is turned round the color
+# wheel (_shift_surface_hue), which keeps every shape and shade and cannot come back the old
+# color. Each surface is turned until its own main hue sits this many degrees round from the
+# WALL's - the two split complements, so the three differ from each other as well: green walls
+# get a pink ceiling (+210) and an indigo floor (+150). Only a pattern picture is remixed, so
+# only a pattern picture is recolored.
+WALL_PICTURE_REMIX_HUES = {"ceiling": 210, "floor": 150}
+
+
+def _wall_picture_hues(level, pattern):
+    """{surface: degrees round from the wall's hue} for the slider's stop `level` - only the
+    remix stop of a pattern picture has any (WALL_PICTURE_REMIX_HUES)."""
+    if pattern and WALL_PICTURE_LEVELS[_wall_picture_level(level)] == "remix":
+        return dict(WALL_PICTURE_REMIX_HUES)
+    return {}
+
+
+# Below this much color (mean saturation, 0-1, of the pixels that are neither black nor white)
+# a texture has no hue to turn - a grey one is tinted with the target hue instead.
+SURFACE_MIN_SATURATION = 0.12
+
+
+def _surface_hue(path):
+    """(hue in degrees, mean saturation 0-1) of the texture at `path`: the circular mean of its
+    hues, each pixel weighted by how colorful and how bright it is. (None, 0.0) when it cannot
+    be read."""
+    import numpy as np
+    try:
+        hsv = np.asarray(Image.open(path).convert("RGB").resize((96, 96), Image.BILINEAR).convert("HSV"),
+                         dtype=float)
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not read the hue of {os.path.basename(path)}: {e}")
+        return None, 0.0
+    h = hsv[:, :, 0] / 255.0 * 2 * np.pi
+    sat, val = hsv[:, :, 1] / 255.0, hsv[:, :, 2] / 255.0
+    w = sat * val
+    if w.sum() < 1e-6:
+        return 0.0, 0.0
+    hue = float(np.degrees(np.arctan2((np.sin(h) * w).sum(), (np.cos(h) * w).sum())) % 360)
+    return hue, float((sat * val).sum() / max(val.sum(), 1e-6))
+
+
+def _shift_surface_hue(path, target):
+    """A copy of the texture at `path` with its main hue turned to `target` degrees - every hue
+    in it turned by the same amount, so its shapes, shades and contrasts stay as they are. A
+    texture with next to no color is tinted `target` instead. Returns the copy's path, or
+    `path` itself when it cannot be done."""
+    import numpy as np
+    hue, sat = _surface_hue(path)
+    if hue is None:
+        return path
+    try:
+        hsv = np.asarray(Image.open(path).convert("RGB").convert("HSV")).astype(np.int32)
+        if sat < SURFACE_MIN_SATURATION:
+            hsv[:, :, 0] = int(round(target / 360.0 * 255)) % 256
+            hsv[:, :, 1] = np.maximum(hsv[:, :, 1], 110)
+        else:
+            hsv[:, :, 0] = (hsv[:, :, 0] + int(round(((target - hue) % 360) / 360.0 * 255))) % 256
+        out = os.path.splitext(path)[0] + f"_hue{int(target) % 360}.png"
+        Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB").save(out, format="PNG")
+        return out
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not recolor {os.path.basename(path)}: {e}")
+        return path
+
+
+def _recolor_remix(out, hues, picture):
+    """Turn each surface of `out` named in `hues` ({surface: degrees round from the wall's hue})
+    to its color, in place - see WALL_PICTURE_REMIX_HUES. The wall's hue is the finished wall's,
+    or the picture's own when there is no wall to measure."""
+    if not hues or not out:
+        return out
+    wall_hue = _surface_hue(out["wall"])[0] if out.get("wall") else None
+    if wall_hue is None and picture:
+        try:
+            tmp = os.path.join(COMFY_OUTPUT_DIR, f"kxwall_hue_src_{int(time.time()*1000)}.png")
+            _decode_picture(picture).save(tmp, format="PNG")
+            wall_hue = _surface_hue(tmp)[0]
+        except Exception as e:
+            print(f"[Kontext Ref Error] could not read the picture's hue: {e}")
+    if wall_hue is None:
+        return out
+    done = []
+    for surface, degrees in hues.items():
+        if out.get(surface):
+            target = (wall_hue + degrees) % 360
+            out[surface] = _shift_surface_hue(out[surface], target)
+            done.append(f"{surface} to {target:.0f}")
+    if done:
+        print(f"[Kontext Ref] remix colors: walls at hue {wall_hue:.0f}, " + ", ".join(done))
+    return out
 PICTURE_MAX_TOKENS = 120
 PICTURE_TEMPERATURE = 0.5
 PICTURE_LOOK_MAX_WORDS = 36
@@ -5858,7 +6138,7 @@ PICTURE_SYSTEM = (
 # LOOK puts a phone in the other hand of every one of the nine pose frames.
 _PICTURE_ROLES = {
     "wall": ("the dungeon - the place its walls, floors and whole look are built from",
-             "the place: what its walls and floor are made of, their colours, and the things in it"),
+             "the place: what its walls and floor are made of, their colors, and the things in it"),
     "player": ("the hero the player plays as",
                "the person or character alone, not the background, in order from top to bottom: "
                "build, hair and face, then their top, then their legwear, then their shoes. "
@@ -5866,13 +6146,19 @@ _PICTURE_ROLES = {
                "in that costume: name the character it copies, then describe the costume as it "
                "really looks. Leave out anything they are holding"),
     "weapon": ("the weapon the hero fights with",
-               "the object alone, not the background: its shape, materials, colours and markings"),
+               "the object alone, not the background: its shape, materials, colors and markings"),
     "enemy": ("the enemy the dungeon is full of",
               "the subject alone, not the background. For a person or creature go in order "
               "from top to bottom: build, head and face, then its top or body, then its legs "
-              "or legwear, then its feet or shoes. For an object, its shape, materials, colours "
-              "and markings"),
+              "or legwear, then its feet or shoes, then any weapon it holds. For an object, its "
+              "shape, materials, colors and markings"),
 }
+# Why the enemy's LOOK names its weapon (2026-10-03), where the player's leaves out what they
+# hold. Reported from play: an anime fighter holding two huge cross-shaped swords came back an
+# empty-handed brawler - the LOOK ("tall man with spiky blonde hair, wearing a brown coat ...")
+# never said swords, and Kontext drew what it was told. With "holding two giant cross-shaped
+# swords" on the end, every one of 10 drawings held a sword, about half of them both. The
+# player's weapon is its own line; a foe's has nowhere else to come from.
 
 _PICTURE_USER = """This picture shows {role}.
 
@@ -6154,6 +6440,12 @@ _PICTURE_FIGURE_KINDS = frozenset("""
 """.split())
 
 
+def _picture_person_kind(kind):
+    """True for a KIND that is a person - "man", "old woman" - by its head noun."""
+    words = re.findall(r"[a-z]+", (kind or "").lower())
+    return bool(words) and words[-1] in _PERSON_ENEMY_NOUNS
+
+
 def _picture_is_object(kind):
     """True for a KIND with no body of its own - a car, a pile of bricks, a fish. None (unread)
     is not: an unread picture is drawn the way it always was."""
@@ -6164,7 +6456,7 @@ def _picture_is_object(kind):
 # A PLAYER or ENEMY picture of an object becomes a character built from it. Reported from play: a
 # photo of a blue sports car as the player came back as a man in a blue sweater - every hero
 # prompt says "character ... head to feet ... right hand ... face, hair, clothing", and with a car
-# to go on, Kontext kept the one thing it could, the colour. The typed "pickup truck robot" had
+# to go on, Kontext kept the one thing it could, the color. The typed "pickup truck robot" had
 # always worked, because the word robot was in it. The enemy the same: a silver car walker is
 # still a car, and its block edit ("both arms raised and crossed in front of its chest") drew a
 # man in black with no car at all - reported. So an object's form is picked here and its LOOK
@@ -6186,6 +6478,160 @@ def _picture_form_look(pic):
     if form == "robot":
         return f"robot built out of {_a_or_an(look)}, the whole {pic['kind']} forming its upper body"
     return f"living {pic['kind']} character with arms and legs, {look}"
+
+
+# PHOTO OR DRAWING, for a player or enemy picture of a person or creature (2026-10-03). Reported
+# from play: a mirror selfie came back as a smooth CG game character, and an anime fighting-game
+# enemy as a stocky cartoon man - every pictured hero and foe was drawn in one house style
+# (KONTEXT_REF_STYLE). Now a photo is drawn photorealistic and a drawing in its own art style.
+# Asked of Qwen3-VL about the SUBJECT: "is this a real PHOTO or ART" read Grandma's portrait and
+# two Zuckerberg pictures as ART; this one called all 9 plain photos REAL, both drawings (the
+# Wendy's logo, the anime fighter) DRAWN, and the edited ones - a big-headed caricature on an
+# op-art backdrop, a cat's head pasted on a dancer - DRAWN, which is fair: they are not photos.
+_PICTURE_MEDIUM_Q = ("Look at the main subject of this picture. Is it a REAL person or thing "
+                     "captured in a photograph, or is it DRAWN - a cartoon, anime or comic "
+                     "character, an illustration, a painting, a logo or a video game character? "
+                     "Reply REAL or DRAWN.")
+
+
+def _vlm_picture_medium(image_path):
+    """"photo" or "drawn" for the picture at `image_path` (see _PICTURE_MEDIUM_Q), or None."""
+    answer = _vlm_one_word(image_path, _PICTURE_MEDIUM_Q, "whether the picture is a photo")
+    return "photo" if answer.startswith("REAL") else "drawn" if answer.startswith("DRAWN") else None
+
+
+# AN ARMED ENEMY, SHOWN WHOLE, IS KEPT AS PICTURED (2026-10-04). Reported from play, twice: an
+# anime fighter holding two huge cross-shaped blades came back first empty-handed, then - with
+# the weapon written into his LOOK - carrying axes in 2 runs of 3. "The enemy *needs* to have
+# those cross blades ... if the attachment for an enemy shows them holding something then use
+# that as a weapon?" Every way of REDRAWING him lost them, 3 seeds each:
+#  * the LOOK's own words ("holding two large silver axes" - Qwen3-VL sees axes, and still wrote
+#    "axe-like weapons" when asked for the shape alone): axes 3 of 3;
+#  * no noun ("holding the same two weapons as in the picture"): clubs and pipes;
+#  * the blade cropped out by Qwen's grounding as a second reference, "the weapon from the
+#    second picture": rifles and a rocket launcher. Called a sword, in the crop's own description
+#    (read alone it IS a sword, 4 of 4), with the crop or without: big plain swords 6 of 6.
+# What kept them was not redrawing him: "put this exact character on a plain white background ...
+# exactly as it is in the picture" (KONTEXT_FOE_AS_PICTURED) returned the picture's own figure,
+# pose and both blades 3 of 3, and pose edits of THAT kept the blades (KONTEXT_ARMED_FOE_POSES).
+# It needs the whole figure in the picture, so two questions gate it. On 12 attached pictures
+# and 6 test drawings both matched every label: armed = only the fighter and the four drawings
+# holding axes, swords or guns (not the selfie's phone, a pendant, or pigtails that the
+# grounding call had boxed as "weapon"); whole = every head-to-feet figure, no bust or logo.
+_ENEMY_ARMED_Q = ("Is the main character in this picture holding a weapon in its hands - a sword, "
+                  "axe, gun, club or the like? Reply YES or NO.")
+_ENEMY_WHOLE_Q = ("Does this picture show the main character's whole body, from the top of its "
+                  "head all the way down to its feet? Reply YES or NO.")
+
+
+# A PATTERN FOR A DUNGEON IS USED AS IT IS (2026-10-04). Reported from play: a 3D fractal - a
+# glowing yellow-green core in lacy lattice walls - attached as the dungeon came back as plain
+# green tiles and grids. "The style and colors ... they do a good job taking inspiration from
+# and that's great, but sometimes, like when it's a fractal, it should pull from it more
+# directly so it's easier to recognize, instead of only just creating a simple fractal / pattern
+# of the same color." A picture of a PLACE is still read as one (the view, its ground, what is
+# overhead - see _theme_brief_surfaces); one that is itself a pattern has no ground or sky to
+# sort, and its surfaces are made out of it - remixed or cut straight from it, as far as Options'
+# slider says (WALL_PICTURE_LEVELS). Asked of Qwen3-VL: the
+# fractal and a tiling texture PATTERN; the Windows XP hill, a nebula, a night street and a
+# crowd photo PLACE. (How unlike a picture's top is to its bottom, _surface_scene_split, does
+# not tell them apart: the street measures 72, the fractal 111.)
+_WALL_PATTERN_Q = ("Is this picture an abstract PATTERN - a fractal, a texture, abstract art or "
+                   "the like - or is it a view of a PLACE, such as a landscape, a street, a room "
+                   "or a building? Reply PATTERN or PLACE.")
+
+
+# Where the face is in a PHOTO player's picture, for the HUD bust (see _photo_bust_ref). Asked
+# in Qwen3-VL's own grounding form, which answers [x1, y1, x2, y2] in thousandths of the picture.
+# On 8 player pictures it boxed the face of the man in the white cap out of a crowd (the one the
+# LOOK describes), the VR headset wearer, Grandma, Dr. Steve Brule and a full-length selfie's
+# small face; the Elmo suit got the whole suit, and the blue car "no person" and no box.
+_FACE_BOX_Q = ('Locate the face of the main person in this picture. Output its bounding box as '
+               'JSON: {"bbox_2d": [x1, y1, x2, y2]}')
+
+
+# THE HAIR'S REAL SHADE, for a photo player's sprite (2026-10-04). Reported from play: "the
+# player's portrait has brownish hair but the player sprite is blackish hair". The bust is drawn
+# from a close crop of the face and gets the photo's hair; the sprite is drawn from the whole
+# picture - a full-length selfie's head is ~60px - and from the LOOK's "short brown hair", which
+# the photorealistic style draws near-black, beard and all (4 of 4 seeds).
+# Only WORDS moved it: the face crop as a third reference left it black and blurred the drawing,
+# and a recolor edit against the crop turned the hair white (2 of 2 each), where "their hair is
+# blond and their beard is brown - no darker" drew mid-brown hair and a gingery beard 5 of 5. The
+# words have to come from the CROP: asked of the whole selfie Qwen3-VL said brown hair and a
+# dark-brown beard, of the crop blond and brown - and asked openly it only ever said "brown".
+# On five other player pictures the choices came back sensible: white for Grandma, black for a
+# dark-haired man, NONE under a cap.
+_HAIR_COLORS = ("BLACK", "DARK-BROWN", "BROWN", "LIGHT-BROWN", "BLOND", "RED", "GINGER", "GREY",
+                 "WHITE")
+_HAIR_Q = ("What color is the main person's hair? Choose the closest: BLACK, DARK-BROWN, BROWN, "
+           "LIGHT-BROWN, BLOND, RED, GREY, WHITE, or NONE if no hair shows. Reply with that one "
+           "word.")
+_BEARD_Q = ("What color is the main person's beard? Choose the closest: BLACK, DARK-BROWN, BROWN, "
+            "LIGHT-BROWN, BLOND, GINGER, GREY, WHITE, or NONE if they have no beard. Reply with "
+            "that one word.")
+
+
+# What the drawing is TOLD for a shade that was read - see _hair_sentence.
+_HAIR_SAID = {"dark brown": "brown", "brown": "light brown", "light brown": "blond"}
+
+
+def _face_crop(img, face):
+    """The square of the PIL picture `img` round the face box `face` (0-1000, _vlm_face_box),
+    PHOTO_BUST_CROP times the box and centred a little below it."""
+    W, H = img.size
+    x1, y1, x2, y2 = face[0] * W / 1000, face[1] * H / 1000, face[2] * W / 1000, face[3] * H / 1000
+    side = max(x2 - x1, y2 - y1) * PHOTO_BUST_CROP
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2 + side * 0.18
+    side = min(side, W, H)
+    left = min(max(0, cx - side / 2), W - side)
+    top = min(max(0, cy - side / 2), H - side)
+    return img.crop((int(left), int(top), int(left + side), int(top + side)))
+
+
+def _vlm_hair_colors(image_path, face):
+    """{"hair": words, "beard": words} for the person whose face box in the picture at
+    `image_path` is `face` - only the ones Qwen3-VL named a color for (see _HAIR_Q)."""
+    out = {}
+    try:
+        crop = _face_crop(Image.open(image_path).convert("RGB"), face)
+        path = os.path.join(COMFY_INPUT_DIR, f"picture_hair_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png")
+        crop.resize((KONTEXT_REF_PX, KONTEXT_REF_PX), Image.LANCZOS).save(path, format="PNG")
+    except Exception as e:
+        print(f"[pictures] could not crop the face for its hair color: {e}")
+        return out
+    for part, question in (("hair", _HAIR_Q), ("beard", _BEARD_Q)):
+        answer = _vlm_one_word(path, question, f"the {part} color").strip(" .:")
+        if answer in _HAIR_COLORS:
+            out[part] = answer.lower().replace("-", " ")
+    return out
+
+
+def _hair_sentence(pic):
+    """The hero drawing's line about a photo player's hair and beard (see _HAIR_Q), or ""."""
+    hair, beard = ((pic or {}).get(k) for k in ("hair", "beard"))
+    # ONE SHADE LIGHTER than it was read. The first real runs read the selfie "light brown hair,
+    # brown beard", said so, and still drew dark brown hair: the photorealistic style draws hair
+    # a step darker than it is told. On 4 seeds each, "light brown ... brown" came out dark brown
+    # 4 of 4 and "blond ... light brown" sandy brown with a gingery beard 4 of 4 - the portrait's.
+    hair, beard = (_HAIR_SAID.get(c, c) for c in (hair, beard))
+    parts = ([f"their hair is {hair}"] if hair else []) + ([f"their beard is {beard}"] if beard else [])
+    if not parts:
+        return ""
+    text = " and ".join(parts)
+    # "No darker" is what holds a fair shade; on hair that IS dark it would only lighten it.
+    dark = {"black", "dark brown"}
+    return f" {text[0].upper()}{text[1:]}{'' if {hair, beard} & dark else ' - no darker'}."
+
+
+def _vlm_face_box(image_path):
+    """[x1, y1, x2, y2] (0-1000) of the main face in the picture at `image_path`, or None."""
+    answer = _vlm_one_word(image_path, _FACE_BOX_Q, "where the face is", system="You are a "
+                           "helpful assistant.", start="", max_length=60)
+    nums = [int(n) for n in re.findall(r"\d+", answer.split("[", 1)[-1])[:4]] if "[" in answer else []
+    if len(nums) == 4 and nums[0] < nums[2] <= 1000 and nums[1] < nums[3] <= 1000:
+        return nums
+    return None
 
 
 def _picture_needs_lower(slot, kind, look):
@@ -6306,6 +6752,36 @@ def describe_pictures(pictures):
             machine = _vlm_wants_rotors(os.path.join(COMFY_INPUT_DIR, image_name))
             got = dict(got, form="robot" if machine else "living")
             print(f"[pictures] {slot} is a {got['kind']} - drawn as a {got['form']} character")
+        elif image_name and got["look"] and slot in ("player", "enemy"):
+            # Photo or drawing - see _PICTURE_MEDIUM_Q - and a photo player's face, for the bust.
+            path = os.path.join(COMFY_INPUT_DIR, image_name)
+            medium = _vlm_picture_medium(path)
+            if medium:
+                got = dict(got, medium=medium)
+            if medium == "photo" and slot == "player":
+                face = _vlm_face_box(path)
+                if face:
+                    # ...and the real shade of their hair, for the sprite - see _HAIR_Q.
+                    got = dict(got, face=face, **_vlm_hair_colors(path, face))
+            # An enemy pictured whole, weapon in hand, is kept as pictured - see _ENEMY_ARMED_Q.
+            if slot == "enemy" and _vlm_one_word(path, _ENEMY_ARMED_Q,
+                                                 "whether the enemy is armed").startswith("YES"):
+                got = dict(got, armed=True)
+                if _vlm_one_word(path, _ENEMY_WHOLE_Q,
+                                 "whether the enemy is shown whole").startswith("YES"):
+                    got = dict(got, whole=True)
+            print(f"[pictures] {slot} picture is {medium or 'unread'}"
+                  + (f", face at {got['face']}" if got.get("face") else "")
+                  + (f", {got['hair']} hair" if got.get("hair") else "")
+                  + (f", {got['beard']} beard" if got.get("beard") else "")
+                  + (", armed" if got.get("armed") else "")
+                  + (", shown whole" if got.get("whole") else ""))
+        if image_name and got["look"] and slot == "wall":
+            # A pattern, not a place, is remixed or used as it is - see _WALL_PATTERN_Q.
+            if _vlm_one_word(os.path.join(COMFY_INPUT_DIR, image_name), _WALL_PATTERN_Q,
+                             "whether the dungeon picture is a pattern").startswith("PATTERN"):
+                got = dict(got, pattern=True)
+                print("[pictures] wall picture is a pattern, not a place")
         out[slot] = got
         # A picture that would not stage never reached ComfyUI - its planned job is not coming.
         PROGRESS.skip_job(f"picture_{slot}")
@@ -6364,7 +6840,7 @@ def _save_session_pictures(folder, pictures):
 THEME_BRIEF_SYSTEM = (
     "You are the set designer for a 1990s first-person dungeon crawler. You are given the "
     "words a player typed and you turn each one into a concrete physical thing an artist can "
-    "paint: real materials, real objects, real colours. "
+    "paint: real materials, real objects, real colors. "
     "You never explain yourself and you never break format."
 )
 
@@ -6384,6 +6860,48 @@ _THEME_BRIEF_SURFACES = """- WALL: what covers the corridor walls - what you wou
 """
 
 
+# Road vehicles typed as the dungeon ('"GTI" car'). A dungeon "in" a car is its cabin, and told
+# the walls stay "plain repeating car material" the designer drew the inside on both "GTI" runs
+# of 2026-10-02 - chrome dashboard gauges, red vinyl with silver trim - where the player wanted
+# to see the car. So a vehicle's WALL is the car itself from outside (_theme_brief_surfaces).
+# Ships, trains and spaceships are left out: their corridors really are inside them.
+_VEHICLE_KINDS = frozenset("""
+    car truck van bus jeep suv sedan hatchback coupe convertible limo limousine taxi cab minivan
+    pickup automobile vehicle motorcycle motorbike scooter tractor supercar racecar roadster
+    wagon hotrod
+""".split())
+
+
+# Told to make the WALL "a wallpaper of the whole car seen side-on", the 4B designer still wrote
+# car PARTS - "red glossy paint, chrome trim, black tires, white lettering on side panels" - which
+# FLUX drew as a close-up of some red car's flank (a retro muscle car on 2 of 3 seeds) or a flat
+# red panel. So a vehicle's WALL line is written here instead (_vehicle_wall): "a wallpaper of
+# whole GTI cars seen side-on from outside, red exterior, silver rims, sporty design, repeated
+# edge to edge in rows" drew rows of red Golf GTIs on 4 of 4 seeds (luma std 58-82, far over
+# SURFACE_MIN_CONTRAST); without the identity call's "known for" part the paint color wandered
+# (black, white). That part can name the cabin - "shiny exterior, chrome wheels, dashboard
+# gauges" on the first "GTI" run - so those words are dropped from it.
+_VEHICLE_INSIDE = re.compile(
+    r"\b(?:dashboards?|gauges?|seats?|steering|interiors?|cabins?|engines?|upholstery|"
+    r"consoles?|pedals?|cockpits?)\b", re.I)
+
+
+def _vehicle_wall(wall_named):
+    """The WALL line for a vehicle typed as the dungeon (_VEHICLE_KINDS), else None."""
+    if not (wall_named and wall_named.get("name")
+            and _norm_type(wall_named.get("kind")) in _VEHICLE_KINDS):
+        return None
+    kind = wall_named["kind"].split()[-1].lower()
+    many = kind + ("es" if re.search(r"(?:s|x|ch|sh)$", kind) else "s")
+    looks = ""
+    if wall_named.get("known") and wall_named.get("landmarks"):
+        kept = [p.strip() for p in wall_named["landmarks"].split(",")
+                if p.strip() and not _VEHICLE_INSIDE.search(p)]
+        looks = "".join(f", {p}" for p in kept)
+    return (f"a wallpaper of whole {wall_named['name']} {many} seen side-on from outside{looks}, "
+            f"repeated edge to edge in rows")
+
+
 def _theme_brief_surfaces(wall_named=None):
     """The slot-description block above, plain for an ordinary typed theme, or with one
     appended sentence for a named place (and one for a pictured one - see the end). Appended as
@@ -6401,7 +6919,15 @@ def _theme_brief_surfaces(wall_named=None):
     if wall_named and wall_named.get("kind"):
         name, kind = wall_named["name"], wall_named["kind"]
         body += f"\n{name} is "
-        if wall_named.get("known") and wall_named.get("landmarks"):
+        if _norm_type(kind) in _VEHICLE_KINDS:
+            known_for = wall_named.get("landmarks") if wall_named.get("known") else None
+            body += ((f"a real {kind}, known for {known_for}. " if known_for else
+                      f"{_a_or_an(kind)}. ")
+                     + f"Show it from the OUTSIDE: the WALL is a wallpaper of the whole {kind} "
+                       f"seen side-on, repeated edge to edge, in its real paint colors with its "
+                       f"wheels, windows and badges. Put its best-known parts on the LANTERN, the "
+                       f"DOOR and the SWITCH. ")
+        elif wall_named.get("known") and wall_named.get("landmarks"):
             body += (f"a real {kind}, known for {wall_named['landmarks']}. Put the things it "
                      f"is actually known for on the LANTERN, the DOOR and the SWITCH - the "
                      f"WALL, FLOOR and CEILING stay plain repeating {kind} material, never a "
@@ -6460,7 +6986,7 @@ def _theme_brief_surfaces(wall_named=None):
 # opened NINE of the 36 designed walls in dungeon_sessions with the word "cracked".
 _THEME_RULES_SURFACE = [
     """WALL, FLOOR and CEILING each show what this theme LOOKS like: the material itself named
-   by its colours and its markings, or a wallpaper of the theme's own pictures repeated edge
+   by its colors and its markings, or a wallpaper of the theme's own pictures repeated edge
    to edge, or - when the theme is a real place - the view you get standing inside it, its
    fittings and its signage included. Never the bare plaster behind all that.""",
     """Those three fill the frame edge to edge with detail spread evenly and no one big object
@@ -6470,9 +6996,9 @@ _THEME_RULES_SURFACE = [
    from THIS theme - a plain iron dungeon door belongs to no theme and is always wrong. The
    door is SHUT: a solid slab you cannot see past. Say what the leaf is made of.""",
     """Those three surfaces are lit by one lantern and the game darkens them further with
-   distance, so give each one bold markings in strongly contrasting colours, readable from
+   distance, so give each one bold markings in strongly contrasting colors, readable from
    across a room. One even tone arrives on screen as an empty surface - if the theme's own
-   colour is a plain one, say what is boldly printed, stacked or lit across it.""",
+   color is a plain one, say what is boldly printed, stacked or lit across it.""",
 ]
 
 # The ENEMY rule is the one under the most tension: it has to be short (it becomes the {enemy}
@@ -6492,8 +7018,8 @@ _THEME_RULES_SUBJECT = [
 ]
 
 _THEME_RULES_ALWAYS_HEAD = [
-    """Write physical description only - material, build, parts, and COLOURS. Always name the
-   colours.""",
+    """Write physical description only - material, build, parts, and COLORS. Always name the
+   colors.""",
 ]
 
 # Rule "pictures not plumbing" is the headline fix of this round. The example must stay
@@ -6510,7 +7036,7 @@ _THEME_RULES_ALWAYS_TAIL = [
     """Describe only what is IN the picture. Never write what something is not, or lacks - every
    word you write gets drawn.""",
     """If the typed word is already a specific physical thing, keep it, adding at most a few
-   words of material and colour.""",
+   words of material and color.""",
     """One line each, under 25 words. No story, no mood, no explanation.""",
 ]
 
@@ -6624,9 +7150,37 @@ def parse_theme_brief(text, slots):
     return out
 
 
+# The last word of a weapon's own NAME - see _named_weapon.
+_WEAPON_NAME_NOUNS = frozenset("""
+    sword blade axe hammer mace spear bow staff wand dagger knife saber sabre lance scythe whip
+    club gun blaster rifle pistol katana glaive halberd trident flail rod scepter sceptre
+    keyblade lightsaber cannon
+""".split())
+
+
+def _named_weapon(typed, weapon_named=None):
+    """The typed weapon line when it names one particular weapon, else None - a quoted name the
+    identity call recognised, or a capitalised name ending on a weapon noun ("Master Sword").
+    The designer's WEAPON line belongs to the dungeon's world, so it re-themed the Master Sword
+    in a "GTI" car dungeon: "silver blade with red grip, hilt shaped like a GTI steering wheel",
+    or kept the name and gave it a red hilt. krea2 draws "holding a Master Sword" as typed -
+    blue-violet winged guard, silver blade - on 12 of 12 hero frames (2026-10-02). A single word
+    ("Memes") is never kept: making that drawable is the designer's whole job."""
+    typed = (typed or "").strip()
+    if not typed:
+        return None
+    if weapon_named and weapon_named.get("known"):
+        return typed
+    words = typed.split()
+    if (2 <= len(words) <= 4 and all(w[:1].isupper() for w in words)
+            and words[-1].lower() in _WEAPON_NAME_NOUNS):
+        return typed
+    return None
+
+
 def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=True,
                          wall_named=None, enemy_named=None, enemy_pictured=False,
-                         weapon_pictured=False, enemy_typed=None):
+                         weapon_pictured=False, enemy_typed=None, weapon_typed=None):
     """Turn the typed words into concrete drawable material. Never raises: on any failure
     returns None and every caller falls back to interpolating the typed words raw, which is
     exactly what shipped before this stage existed.
@@ -6635,6 +7189,8 @@ def generate_theme_brief(wall_style, weapon_style, enemy_style, want_surfaces=Tr
     reaches _theme_brief_prompt's landmark sentence. `enemy_named` guards _enemy_literal below -
     a quoted "chat" the cat must not be hijacked into the hand-tuned Twitch-viewer subject just
     because the word "chat" still appears in its own rewritten name.
+
+    `weapon_typed` is _named_weapon's verdict: a weapon typed as its own name is kept as typed.
 
     `want_surfaces` is False when _style_bucket() matched a hand-tuned theme, because those
     buckets' surface prompts are literals that ignore the brief anyway - so the reply only has
@@ -6701,6 +7257,14 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
                 and len(typed.split()) <= THEME_ENEMY_MAX_WORDS):
             literal = _theme_inline(typed)
 
+    # A vehicle's WALL is written in code - see _VEHICLE_INSIDE for why.
+    vehicle_wall = _vehicle_wall(wall_named) if want_surfaces else None
+
+    def _kept():
+        """What survives the reply failing altogether: the lines kept as given."""
+        return {k: v for k, v in (("enemy", literal), ("weapon", weapon_typed),
+                                  ("wall", vehicle_wall)) if v}
+
     def _attempt():
         payload = {
             # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
@@ -6745,7 +7309,7 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
         if not brief:
             print(f"[theme] reply still carried none of the {len(slots)} labels - "
                   f"using the typed words as they are - {raw[:200]!r}")
-            return {"enemy": literal} if literal else None
+            return _kept() or None
         if literal:
             brief["enemy"] = literal
         # A pictured WEAPON's LOOK is kept the same way. The designer re-imagined "soft white
@@ -6755,9 +7319,15 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
         weapon_kept = weapon_pictured and bool((weapon_style or "").strip())
         if weapon_kept:
             brief["weapon"] = _theme_inline(weapon_style.strip())
+        elif weapon_typed:
+            weapon_kept = True
+            brief["weapon"] = weapon_typed
+        if vehicle_wall:
+            brief["wall"] = vehicle_wall
         for s in slots:
             got = brief.get(s)
-            if (s == "enemy" and literal) or (s == "weapon" and weapon_kept):
+            if ((s == "enemy" and literal) or (s == "weapon" and weapon_kept)
+                    or (s == "wall" and vehicle_wall)):
                 print(f"[theme] {s:8s} {got}  (kept as given, the designed line is ignored)")
                 continue
             print(f"[theme] {s:8s} {got if got else '(missing - using the typed words)'}")
@@ -6766,7 +7336,7 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     except Exception as e:
         print(f"[theme Error] {e} - using the typed words as they are")
         PROGRESS.finish_job("theme_brief")
-        return {"enemy": literal} if literal else None
+        return _kept() or None
 
 def _a_or_an(noun):
     return ("an " if noun[:1].lower() in "aeiou" else "a ") + noun
@@ -6823,7 +7393,7 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
                 f"outstretched to either side, and it hovers in mid-air well clear of the "
                 f"ground. {e} keeps its own exact shape, proportions and surface, with the "
                 f"broad outstretched wings simply attached to it")
-        look = (f"Its colouring is lighter and paler than usual, sun-bleached and airy, "
+        look = (f"Its coloring is lighter and paler than usual, sun-bleached and airy, "
                 f"catching a bright highlight from above")
         fill = (f"Drawn LARGE and filling the frame edge to edge, the wingtips reaching out "
                 f"close to the left and right edges and the body filling the height, with "
@@ -6832,14 +7402,14 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
         role = (f"It is the colossal, hulking boss form of {e} - massively built, thickset and "
                 f"towering, heavily reinforced with jagged dark metal armour plating bolted "
                 f"across it, looming over the viewer")
-        look = (f"Its colouring is far darker and heavier than usual - blackened, deeply "
+        look = (f"Its coloring is far darker and heavier than usual - blackened, deeply "
                 f"shadowed tones shot through with glowing molten red seams, its surface "
                 f"scorched, cracked, pitted and battle-scarred")
         fill = fill_tb
     else:
         role = (f"It faces the camera head-on, squarely on the ground in a menacing, "
                 f"combat-ready fighting stance")
-        look = (f"Its colouring is its ordinary, natural, everyday one, clean, bright and "
+        look = (f"Its coloring is its ordinary, natural, everyday one, clean, bright and "
                 f"undamaged")
         fill = fill_tb
 
@@ -6851,7 +7421,7 @@ def krea2_enemy_prompt(enemy_style, variant="walker", tighten=0):
     # actually typed ("taco monster" still gets a monster); the subject itself is left alone.
     return (
         f"A full-body video game enemy sprite of {e}. The subject is literally {e}, drawn "
-        f"exactly as {e} really looks, with the true shape, proportions, colours and details "
+        f"exactly as {e} really looks, with the true shape, proportions, colors and details "
         f"of {e}, instantly recognisable as {e} at a glance. {role}. {look}. {fill}, the "
         f"whole thing completely inside the picture with nothing cut off at any edge. "
         f"Dramatic even lighting, sharp detailed textures. Plain solid pure white "
@@ -6971,7 +7541,7 @@ KONTEXT_PORTRAIT_RES = 256
 # mouth and left the eyes near-neutral. `block` also gets visible mouth/jaw TENSION (not
 # just "closed") so it doesn't come back identical to idle on a face whose eyes are hidden
 # behind glasses.
-_KEEP = ("Keep the exact same face, identity, head shape, hair, skin, any glasses, colours, "
+_KEEP = ("Keep the exact same face, identity, head shape, hair, skin, any glasses, colors, "
          "lighting, pose and framing - change nothing else.")
 KONTEXT_EXPRESSION_EDITS = {
     "attack": f"Change the facial expression to berserk fury: mouth wide open roaring, teeth "
@@ -7136,12 +7706,14 @@ def _bust_offset(matted_path):
     return abs(cx - 0.5)
 
 
-def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=None, form=None):
+def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=None, form=None,
+                                  pic=None):
     """Four HUD portrait busts: a krea2 idle, then FLUX.1 Kontext expression edits of it.
 
     Job A (krea2): one idle bust at `size` px, plain RGB. With `ref` - the player's picture,
     staged as a Kontext reference - it is a Kontext drawing of the face in that picture instead
-    (kontext_bust_prompt, with `form` for an object made a character), and falls back to krea2
+    (kontext_bust_prompt, with `form` for an object made a character, or as a photo when `pic`,
+    describe_pictures' reading of it, says it is a photo of a person), and falls back to krea2
     if that job fails.
     Job B (Kontext, `_kontext_expression_job`): edit the idle into attack/block/hurt (no
     FluxKontextImageScale - see KONTEXT_PORTRAIT_RES). Any reaction frame that comes back
@@ -7153,19 +7725,44 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
 
     # --- Job A: the idle bust (no background removal - Kontext needs the full RGB) ---
     idle_src = None
+    # A photo of a person is drawn as a photo, from a crop of their face - see KONTEXT_PHOTO_BUST.
+    photo = (not form and (pic or {}).get("medium") == "photo"
+             and _picture_person_kind((pic or {}).get("kind")))
     if ref:
+        bust_ref = _photo_bust_ref(ref, pic["face"]) if photo and pic.get("face") else ref
         try:
-            # Redrawn when the face is pushed off to one side - see KONTEXT_BUST_MAX_OFFSET. The
-            # last try is kept whatever it is.
-            for attempt in range(KONTEXT_BUST_ATTEMPTS):
-                got = _kontext_ref_job([ref], {"idle": kontext_bust_prompt(player_style, form)},
+            # Redrawn when the face is pushed off to one side - see KONTEXT_BUST_MAX_OFFSET - or
+            # a photo bust comes back blurred (PHOTO_BUST_MIN_SHARPNESS). The last try is kept
+            # whatever it is.
+            best = ((False, False, -1.0), None)     # the best centred photo bust so far
+            for attempt in range(KONTEXT_PHOTO_BUST_ATTEMPTS if photo else KONTEXT_BUST_ATTEMPTS):
+                got = _kontext_ref_job([bust_ref],
+                                       {"idle": kontext_bust_prompt(player_style, form, photo)},
                                        seed + attempt, size=size, keep_rgb=True, prefix="kxp_src",
                                        job_key="portrait_idle" if not attempt else None)
                 idle_src = got["idle_rgb"]
                 offset = _bust_offset(got["idle"])
-                if offset <= KONTEXT_BUST_MAX_OFFSET:
-                    break
-                print(f"[Kontext Portrait] bust drawn {offset:.2f} off centre - redrawing it")
+                if offset > KONTEXT_BUST_MAX_OFFSET:
+                    print(f"[Kontext Portrait] bust drawn {offset:.2f} off centre - redrawing it")
+                    continue
+                if photo:
+                    # The person in the picture, and in focus - see _BUST_SAME_Q.
+                    q = size // 4
+                    sharp = _image_sharpness(idle_src, size, (q, q, size - q, size - q))
+                    same = _bust_same_person(bust_ref, idle_src)
+                    best = max(best, ((same, sharp >= PHOTO_BUST_MIN_SHARPNESS, sharp), idle_src))
+                    if not same:
+                        print("[Kontext Portrait] photo bust is somebody else - redrawing it")
+                        continue
+                    if sharp < PHOTO_BUST_MIN_SHARPNESS:
+                        print(f"[Kontext Portrait] photo bust came back blurred ({sharp:.0f}) - "
+                              f"redrawing it")
+                        continue
+                break
+            else:
+                # None passed: the best of them - the right person first, then the sharpest -
+                # not whichever came last.
+                idle_src = best[1] or idle_src
         except GenerationCancelled:
             raise
         except Exception as e:
@@ -7177,7 +7774,9 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
     shutil.copy(idle_src, os.path.join(COMFY_INPUT_DIR, idle_in))
 
     # --- Job A2: a typed face detail, painted onto the idle - see _PORTRAIT_FACE_WORDS ---
-    face = _portrait_face_detail(player_style)
+    # Not on a photo bust: its player_style is the picture's LOOK, not typed words, and "Add short
+    # brown hair and a beard, wearing a light gray t-shirt ..." repainted the photo's own face.
+    face = None if photo else _portrait_face_detail(player_style)
     if face:
         try:
             edit = f"Add {face}. Keep the exact same face, expression, skin, lighting and framing."
@@ -7317,7 +7916,7 @@ def generate_flux_surfaces_only(wall_style, gfx=None, brief=None, wall_named=Non
     # Switch is an isolated object (a wall lever), matted onto the wall on the client the same
     # way the lantern is - so it gets its own square canvas + BiRefNet cutout. ONE render, of
     # the resting/off pose only: the client derives the thrown pose from this cutout's own
-    # pixels by inverting its colours (buildSwitchWallTextures). See get_gate_prompts for the
+    # pixels by inverting its colors (buildSwitchWallTextures). See get_gate_prompts for the
     # two generated-ON-pose approaches that were tried here first and why neither worked.
     payload["s_lat"] = {"inputs": {"width": obj_px, "height": obj_px, "batch_size": 1}, "class_type": "EmptyLatentImage"}
     payload["s_pos"] = {"inputs": {"text": switch_p, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"}
@@ -10396,9 +10995,14 @@ ENEMY_MAX_BORDER = 0.60
 ENEMY_PERSON_FEET_MAX = {"walker": 0.25, "flyer": 0.25, "boss": 0.45}
 
 
-def _person_feet_max(enemy_style, variant):
-    """The bottom-edge bound for this foe, or None when it is not a person."""
-    return ENEMY_PERSON_FEET_MAX.get(variant) if _enemy_is_person(enemy_style) else None
+def _person_feet_max(enemy_style, variant, look=None):
+    """The bottom-edge bound for this foe, or None when it is not a person. A known character
+    counts as one, found by the head-to-feet lead on its LOOK (_CHARACTER_ENEMY_LOOK): "Link"
+    from Zelda's chest-up busts covered 0.41-0.66 of the bottom row, his whole figure 0.00-0.25
+    (51 test frames, 2026-10-02)."""
+    if _enemy_is_person(enemy_style) or _CHARACTER_ENEMY_LOOK in (look or ""):
+        return ENEMY_PERSON_FEET_MAX.get(variant)
+    return None
 
 
 def _enemy_frame_problem(img_path, thresh=50, feet_max=None):
@@ -10449,7 +11053,7 @@ def _krea2_regen_enemy(enemy_style, size, steps, prefix, attempts=2, variant="wa
                           size, size, steps, random.randint(1, 1000000000), prefix)
         last = _krea2_submit_and_collect(payload, ["enemy"])["enemy"]
         keep_largest_figure(last, thresh=50)
-        problem = _enemy_frame_problem(last, feet_max=_person_feet_max(enemy_style, variant))
+        problem = _enemy_frame_problem(last, feet_max=_person_feet_max(enemy_style, variant, look))
         if problem is None:
             print(f"[krea2] {variant} enemy regen attempt {i + 1} is clean")
             return last
@@ -10476,7 +11080,7 @@ def _krea2_regen_pose_frame(look, enemy_style, guard, pose, seed, size, steps, p
     if _fire_attack_frame(enemy_style, variant, pose):
         restore_dropped_fire(fp)
     keep_largest_figure(fp, thresh=50)
-    problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, variant))
+    problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, variant, look))
     print(f"[krea2] {variant} {pose} reframe at a wider margin is "
           f"{problem or 'clean'}")
     return None if problem else fp
@@ -10524,7 +11128,7 @@ def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=N
 # "colossal", "spikes" each summon a humanoid knight, and they do it in krea2 AND in Kontext -
 # an early boss edit ("cover it in thick jagged black armour plating, colossal armoured boss
 # version") turned a green RAM stick into a generic armoured demon, exactly like the direct
-# krea2 boss prompt did. Rewritten to touch only surface and colour, naming no character at
+# krea2 boss prompt did. Rewritten to touch only surface and color, naming no character at
 # all, it keeps the RAM stick and just makes it a scorched, lava-cracked RAM stick.
 #
 # Unlike krea2 (cfg 1.0, no negative guidance, so "don't draw X" draws X), Kontext is a real
@@ -10545,7 +11149,7 @@ def _krea2_add_enemy_variants(payload, enemy_style, sq, steps, prefix, species=N
 KONTEXT_WING_EDIT = (
     "Add a pair of large wings to this object, spread wide and fully outstretched to the "
     "left and right. If it already has wings, simply spread those same wings out wide. "
-    "Keep the object completely unchanged - identical shape, colours, markings and "
+    "Keep the object completely unchanged - identical shape, colors, markings and "
     "details - with the wings simply attached to its sides. Plain white background."
 )
 # For a MACHINE, wings are the wrong answer - a legged security drone with feathered wings
@@ -10573,7 +11177,7 @@ KONTEXT_THRUSTER_EDIT = (
     "Add a pair of large glowing jet thrusters to this object, mounted one on each side on "
     "short arms, angled downward and firing bright blue-white exhaust flames beneath it so "
     "that it hovers in mid-air above the ground. Keep the object completely unchanged - "
-    "identical shape, colours, markings and details - with the thrusters simply attached to "
+    "identical shape, colors, markings and details - with the thrusters simply attached to "
     "its sides. Plain white background."
 )
 
@@ -10589,10 +11193,10 @@ KONTEXT_THRUSTER_EDIT = (
 # Verified on a taco (charred shell, glowing filling - still obviously a taco), a RAM stick
 # (embers glowing between the chips) and a drone (rusted, glowing red eye).
 KONTEXT_BOSS_EDIT = (
-    "Recolour this object so it looks angry and dangerous: darkened and scorched, its surface "
+    "Recolor this object so it looks angry and dangerous: darkened and scorched, its surface "
     "cracked, chipped and battle-damaged, with hot glowing orange-red embers burning in the "
     "cracks. Keep the object completely unchanged in shape and form, still clearly "
-    "recognisable, with every detail visible - only its colour and surface texture change. "
+    "recognisable, with every detail visible - only its color and surface texture change. "
     "Plain white background."
 )
 
@@ -10751,7 +11355,7 @@ def _vlm_is_man(text):
 
 
 # The palette-similarity gate that used to live here (keep a direct krea2 flyer when its
-# colours still matched the walker, else re-do it as a Kontext edit) is GONE, along with
+# colors still matched the walker, else re-do it as a Kontext edit) is GONE, along with
 # FLYER_IDENTITY_MIN. It existed only because krea2 was generating the flyer directly. Both
 # the flyer and the boss are Kontext edits of the walker now, which preserves identity by
 # construction, so there is nothing left to gate.
@@ -10901,7 +11505,8 @@ def _krea2_finish_enemy_variants(paths, enemy_style, sq, steps, prefix, species=
             if _fire_attack_frame(enemy_style, v, f):
                 print(f"[krea2] {prefix} {v} {f} got {restore_dropped_fire(fp)} px of fire back")
             keep_largest_figure(fp, thresh=50)
-            problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(enemy_style, v))
+            problem = _enemy_frame_problem(fp, feet_max=_person_feet_max(
+                enemy_style, v, species[v]["look"] if species else None))
             if problem and f == "idle":
                 print(f"[krea2] {prefix} {v} idle enemy is {problem} - regenerating it alone")
                 look = species[v]["look"] if species else None
@@ -11146,6 +11751,29 @@ KONTEXT_REF_STYLE = ("a detailed, realistic 3D-rendered video game character wit
                      "textures and even lighting, like a modern game's character model")
 KONTEXT_REF_FOE_STYLE = ("a detailed, realistic 3D-rendered video game enemy with sharp detailed "
                          "textures and even lighting")
+# ...but a PHOTO is drawn as a photo, and a DRAWING in its own art style (describe_pictures'
+# `medium`, see _PICTURE_MEDIUM_Q). Reported from play (2026-10-03): a mirror selfie as the
+# player came back a smooth CG game model - "if it's a photo like that, it should be a more
+# realistic portrait and sprite" - and an anime fighter as the enemy a stocky 3D cartoon man,
+# lean build, anime face and both swords gone. Measured on those two pictures, two to three seeds:
+#  * the hero in KONTEXT_REF_PHOTO_STYLE looked like a photo of the man, 4 of 4 (two wordings);
+#  * the foe told to keep "exactly the same art style as the picture - the same drawing style,
+#    line work, shading and body proportions" stayed drawn 6 of 6 and kept the lean build 3 of 6,
+#    where the house style made him a thickset 3D brawler 2 of 2.
+# Objects made characters (KONTEXT_OBJECT_FORMS) keep the house style either way.
+KONTEXT_REF_PHOTO_STYLE = ("a photorealistic real {who}, exactly like a real photograph of them - "
+                           "{textures}, natural even studio lighting")
+KONTEXT_REF_DRAWN_FOE = ("on its own in exactly the same art style as the picture - the same "
+                         "drawing style, line work, shading and body proportions")
+
+
+def _photo_style(kind):
+    """KONTEXT_REF_PHOTO_STYLE for a picture whose KIND is `kind` - a real person, or a real cat."""
+    head = (re.findall(r"[a-z]+", (kind or "").lower()) or ["person"])[-1]
+    if _picture_person_kind(head):
+        return KONTEXT_REF_PHOTO_STYLE.format(
+            who="person", textures="real skin, real hair and real fabric textures")
+    return KONTEXT_REF_PHOTO_STYLE.format(who=head, textures="its real textures and colors")
 # A pose frame closer than this to the drawing it was edited from (_portrait_frame_diff, grey
 # mean-abs 0-255) did not move, so it is regenerated once at higher guidance - the portraits'
 # safety net. Measured: moved poses 12-16, a do-nothing edit 1.5, a barely-shifted stance 6.7.
@@ -11185,13 +11813,13 @@ KONTEXT_SHIELD_BACK = os.path.join(PROJECT_DIR, "workflows", "shield_back.png")
 # ONE SHIELD FOR EVERY HERO, THOUGH. Asked from play (2026-09-30): "is the shield always going to
 # look the same when an attachment is used?" So each run now has krea2 draw its own shield's back
 # for the block to raise, and the fixed picture above is only what a failed drawing falls back on.
-# krea2 keeps it a BACK: "painted in {p}'s own colours" drew planks or plate with straps and a grip
+# krea2 keeps it a BACK: "painted in {p}'s own colors" drew planks or plate with straps and a grip
 # 18 of 18 over six heroes (the car robot's blue, Elmo's red and blue, a pirate's stripes), as did
-# "in the colours and materials of their gear" (18 of 18, but mostly black and grey). Measured and
+# "in the colors and materials of their gear" (18 of 18, but mostly black and grey). Measured and
 # not used: FLUX schnell, already loaded for the door and lantern, drew the painted FRONT with its
 # boss 18 of 18 whatever the words; Kontext repainting the fixed picture kept the back 12 of 12
 # but painted the hero onto it twice - a man's portrait for Jar Jar, a sweater for Grandma.
-KONTEXT_SHIELD_PROMPT = ("The back of a round battle shield painted in {p}'s own colours, seen from "
+KONTEXT_SHIELD_PROMPT = ("The back of a round battle shield painted in {p}'s own colors, seen from "
                          "behind: its plain inner side, with two leather arm straps and a hand grip "
                          "running across the middle. One shield only, seen straight on, isolated on "
                          "a plain pure white background.")
@@ -11210,7 +11838,7 @@ KONTEXT_SHIELD_PROMPT = ("The back of a round battle shield painted in {p}'s own
 KONTEXT_HERO_TURN = ("Turn this character around so their back is to the camera and they look "
                      "away into the distance: we see the back of their head, their back, the "
                      "backs of their arms and legs and the heels of their feet. Keep the exact "
-                     "same character, body, clothing, colours and art style, and whatever they "
+                     "same character, body, clothing, colors and art style, and whatever they "
                      "hold still in their hand. The whole figure stays in frame from head to feet "
                      "on the plain white background.")
 KONTEXT_HERO_TURN_ATTEMPTS = 3
@@ -11241,7 +11869,7 @@ _HERO_WEAPON_Q = ("Where is the {w}? Reply HAND if one of the character's hands 
                   "shoulder. Reply NONE if there is no {w} in the picture.")
 KONTEXT_HERO_HOLD = ("They hold {w} in their free hand instead of on their back: gripped by one end, "
                      "dangling from their hand and held out to the side away from their body, "
-                     "clearly visible. Keep the exact same character, clothing, colours and art "
+                     "clearly visible. Keep the exact same character, clothing, colors and art "
                      "style, the strict back view facing away from the camera, and the plain white "
                      "background. The whole figure stays in frame from head to feet.")
 KONTEXT_HERO_HOLD_ATTEMPTS = 3
@@ -11258,7 +11886,7 @@ KONTEXT_HERO_HOLD_ATTEMPTS = 3
 # "The object in their right hand becomes ..." did no better on the same seeds.
 KONTEXT_HERO_SWAP = ("Replace the weapon in their right hand with the object from the second picture, "
                      "{w}, gripped by its handle and held out from the body, clearly visible. Keep the "
-                     "exact same character, face, clothing, colours and art style, the strict back "
+                     "exact same character, face, clothing, colors and art style, the strict back "
                      "view facing away from the camera, and the plain white background. The whole "
                      "figure stays in frame from head to feet.")
 
@@ -11270,7 +11898,7 @@ KONTEXT_HERO_SWAP = ("Replace the weapon in their right hand with the object fro
 # reference kept, one sword floating free).
 KONTEXT_HERO_GRIP = ("Their hand grips the {w} by its handle, the rest of it pointing away from "
                      "the hand. Only one {w}.")
-KONTEXT_HERO_KEEP = ("Keep the exact same character, face, hair, clothing, colours, weapon and art "
+KONTEXT_HERO_KEEP = ("Keep the exact same character, face, hair, clothing, colors, weapon and art "
                      "style, the strict back view facing away from the camera, and the plain white "
                      "background. The whole figure stays in frame from head to feet.")
 # The block edit barely moved at KONTEXT_REF_GUIDANCE on both full runs (0.2 and 0.3 from the
@@ -11284,13 +11912,21 @@ KONTEXT_HERO_POSES = {
     # (Jar Jar, six seeds x two guidances) - the one part that says who the hero is. Out to the
     # side at shoulder height, clear of the head: 22 of 24 heads in view over Jar Jar, the Sith
     # and Grandma, the shield's back to the camera in all 24.
+    # ON THE LEFT ARM, STANDING AS THEY STOOD (2026-10-05, the "no shield or strange shields"
+    # report). The wording before this said "on their free forearm ... and drop into a low braced
+    # crouch": on three of that player's drawings, two seeds each, with a clean shield picture it
+    # turned him side-on or sent him into a running lunge 4 of 6 and kept the sword 1 of 6. Naming
+    # the LEFT forearm and the RIGHT hand, and asking for bent knees instead of a crouch: upright,
+    # facing away and full size 6 of 6, the shield's back to the camera 6 of 6, sword still in
+    # view 3 of 6.
     "block":  ("Change the character's pose: still facing away from the camera, they raise the "
-               "round wooden shield from the second picture on their free forearm, held out to "
-               "that side at shoulder height and clear of their head so the back of their head "
-               "still shows, their forearm through its leather straps, the same side of it facing "
-               "the camera as in the second picture, and drop into a low braced crouch, knees "
-               "bent. Their other hand still grips the weapon, lowered and drawn back, clearly "
-               "visible. One shield only."),
+               "round wooden shield from the second picture on their LEFT forearm, held out to "
+               "their left side at shoulder height and clear of their head so the back of their "
+               "head still shows, their left forearm through its leather straps, the same side of "
+               "it facing the camera as in the second picture, their knees bent in a braced "
+               "stance. Their right hand still grips the weapon, lowered at their right side and "
+               "pointing down, well away from the shield and clearly visible. One shield only. "
+               "They stay exactly as large in the frame as before."),
     # THE SWING, as krea2 draws it. Reported from play (2026-09-30): a typed hero's attack stays
     # centred, the weapon swung in close and behind them, where a pictured hero's is "extended
     # outward". krea2's attack frames stand upright, the windup's weapon high over the head with
@@ -11308,10 +11944,23 @@ KONTEXT_HERO_POSES = {
     #  * "Above their head" shrank the whole figure to fit the weapon in, to about 70% of its
     #    height in every windup, "exactly as large as before" or not - a hero who pops small as
     #    they wind up. Cocked back BEHIND the head, over the shoulder, they stay full size.
+    # ONE HAND, the weapon out at their side (2026-10-04). Reported from play: "holding the
+    # weapon strangely at times" - the windup that drew it "back behind their head ... pointing
+    # back over their shoulder and down behind their back" laid a big sword across both
+    # shoulders, a hand on each end like a barbell, in all three of that picture's runs. Adding
+    # "their right hand alone ... their other hand never touches it" to the grip line changed
+    # nothing (3 of 3 barbells); the same pose with the left arm spelled out got one hand 3 of 6.
+    # Held UPRIGHT beside the head it was one hand 6 of 6 - and in the next real run the whole
+    # figure shrank to three quarters to fit the blade in, the "above their head" trap again. So
+    # it is cocked back and angled OUT to the side, and told to stay as large: one hand and full
+    # size 4 of 6 (the others turned side-on or shrank). No wording tried held every seed.
     "windup": ("Change the character's pose: standing upright with their feet planted under "
-               "them, they draw the weapon back behind their head to wind up a chop: the right "
-               "hand up beside their right ear, the elbow bent and raised, the weapon pointing "
-               "back over their shoulder and down behind their back."),
+               "them, they wind up a one-handed chop: the right arm bent out at their right side "
+               "with the right fist at shoulder height, holding the weapon cocked back and "
+               "angled out to the right, its far end pointing up and away from their body, ready "
+               "to swing down. Their left arm hangs straight down at their left side, the left "
+               "hand empty and nowhere near the weapon. They stay exactly as large in the frame "
+               "as before, their head and feet in the same places."),
     "slash1": ("Change the character's pose: standing upright with their feet planted under "
                "them, they chop the weapon down in front of them, away from the camera: the right "
                "arm reaching forward past their right shoulder, the weapon angled down and forward "
@@ -11336,7 +11985,7 @@ KONTEXT_HERO_POSES = {
 # Kontext gives even a pile of toy bricks arms and feet for that - so these name limbs, which is
 # what makes them move (see above). A drawing with no arms to raise just comes back unchanged,
 # fails the diff check twice, and is dropped; the frontend then uses the idle for that pose.
-KONTEXT_FOE_KEEP = ("Keep it exactly the same - identical shape, colours, markings, details and "
+KONTEXT_FOE_KEEP = ("Keep it exactly the same - identical shape, colors, markings, details and "
                     "art style - still facing the viewer, with the whole of it in frame from top "
                     "to bottom on the plain white background.")
 KONTEXT_FOE_POSES = {
@@ -11355,14 +12004,43 @@ KONTEXT_FOE_POSES = {
 }
 
 
+# An ARMED pictured foe (see _ENEMY_ARMED_Q): the walker is the picture's own figure, lifted onto
+# white, and its poses keep what it holds. On the kept-as-pictured fighter, two seeds each: the
+# plain attack kept both blades 2 of 2 and so did this one; the plain block ("both arms raised
+# and crossed in front of its chest") crossed two EMPTY arms 2 of 2, where this one braced a
+# blade across the chest 2 of 2. The keep line names the weapons - KONTEXT_FOE_KEEP's "shape,
+# colors, markings" does not.
+KONTEXT_FOE_AS_PICTURED = (
+    "Put this exact character on a plain solid pure white background, with nothing else in "
+    "frame. Keep the character exactly as it is in the picture - the same art style, pose, face, "
+    "hair, clothing, colors and everything it holds, unchanged. The whole of it in view from top "
+    "to bottom, including everything it holds, filling the frame.")
+KONTEXT_ARMED_FOE_KEEP = ("Keep it exactly the same - identical face, hair, clothing, colors, "
+                          "details and art style, and the same weapons still gripped in its "
+                          "hands - still facing the viewer, with the whole of it in frame from "
+                          "top to bottom on the plain white background.")
+KONTEXT_ARMED_FOE_POSES = {
+    "attack": ("Change its pose into a vicious attack: it lunges forward and swings the weapon in "
+               "one hand high and slashing down at the viewer, leaning hard into the blow with "
+               "one foot stepping forward."),
+    "block":  ("Change its pose into a hard defensive guard: it pulls the weapons it holds in "
+               "close and crosses them in front of its chest like a shield, elbows tucked in, "
+               "shoulders hunched, feet planted wide apart on the ground."),
+}
+# A kept-as-pictured walker softer than this (_image_sharpness over the figure, at 512px) is
+# drawn again: one of three came back a blur of the picture (60, against 2274-4688 for every
+# sharp foe drawing measured, kept or redrawn).
+KONTEXT_FOE_MIN_SHARPNESS = 500
+
+
 # A pictured OBJECT hero or foe (_picture_form_look) is asked for the transformation in so many
 # words - see the note above _PICTURE_FORMS for what the plain "Redraw the ..." did with a car.
 # {k} is the picture's KIND, and the prompt gives its LOOK as read (the object, not the
 # character). Its keep line names no face, hair or clothing, which an object hasn't got and
 # Kontext would invent a man for.
 # ROBOT: the user asked for the pickup truck robot - the truck itself as the upper body on robot
-# limbs - not a humanoid in car-coloured armour. The first wording ("the car's own recognisable
-# parts, panels and colours form the robot's head, chest, arms and legs") gave that 2 of 3 on the
+# limbs - not a humanoid in car-colored armour. The first wording ("the car's own recognisable
+# parts, panels and colors form the robot's head, chest, arms and legs") gave that 2 of 3 on the
 # hero, 0 of 3 on more seeds, and a grey robot with headlight eyes on the foe; "the whole car,
 # still in one piece ... forms the robot's upper body" gave it 3 of 3 on both, same seeds. The foe
 # then poses as the robot: attack and block 4 of 4 kept the car on top, where the bare car's block
@@ -11373,18 +12051,21 @@ KONTEXT_OBJECT_FORMS = {
               "robot's upper body, with big mechanical robot arms and legs unfolding out from under "
               "it"),
     "living": ("a living {k} character that stands and walks on two legs, with arms and legs of "
-               "its own - its body is the {k} itself, with the same shape, colours and markings, "
+               "its own - its body is the {k} itself, with the same shape, colors and markings, "
                "like a cartoon mascot"),
 }
 
 
-def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=False, form=None):
+def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=False, form=None,
+                        photo_kind=None, hair=""):
     """Stage 1 for the hero: the idle frame, drawn from the player's picture, the weapon's, or
     both - chained in that order, which is what "the first picture" / "the second picture" mean.
     The descriptions are the same words krea2 would have been given (the LOOK beside a picture),
     kept so a crowd photo still says which person, and so a weapon picture of a whole PILE of
     bricks is held as the brief's one brick. `form` is the player picture's describe_pictures
-    reading when it is an object made a character (KONTEXT_OBJECT_FORMS)."""
+    reading when it is an object made a character (KONTEXT_OBJECT_FORMS). `photo_kind` is the
+    KIND of a player picture that is a photo - drawn photorealistic (_photo_style) - and `hair`
+    that photo's _hair_sentence."""
     p = (player_desc or "").strip() or "armored warrior knight"
     w = (weapon_desc or "").strip() or "sword"
     shape = (form or {}).get("form") if player_pic else None
@@ -11393,11 +12074,12 @@ def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=Fa
         who = (f"Turn the {k} from {'the first picture' if weapon_pic else 'this picture'} into "
                f"{KONTEXT_REF_STYLE}: {KONTEXT_OBJECT_FORMS[shape].format(k=k)}. "
                f"The {k}: {form['look']}.")
-        keep = f" Keep the {k}'s exact colours, markings and details."
+        keep = f" Keep the {k}'s exact colors, markings and details."
     elif player_pic:
+        style = _photo_style(photo_kind) if photo_kind else KONTEXT_REF_STYLE
         who = (f"Redraw the {p} from {'the first picture' if weapon_pic else 'this picture'} as "
-               f"{KONTEXT_REF_STYLE}.")
-        keep = " Keep their exact face, hair, clothing and colours."
+               f"{style}.")
+        keep = " Keep their exact face, hair, clothing and colors." + (hair if photo_kind else "")
     else:
         who = f"Draw {_a_or_an(p)} as {KONTEXT_REF_STYLE}."
         keep = ""
@@ -11426,20 +12108,32 @@ def _hero_weapon_keep(weapon_desc):
     return f"The weapon stays exactly as it is - the same {w} - only its position changes."
 
 
-def kontext_foe_prompt(look, form=None):
+def kontext_foe_prompt(look, form=None, medium=None, kind=None, as_pictured=False):
     """Stage 1 for the pictured foe: the walker's idle frame. `form` is the enemy picture's
-    describe_pictures reading when it is an object made a character (KONTEXT_OBJECT_FORMS)."""
+    describe_pictures reading when it is an object made a character (KONTEXT_OBJECT_FORMS);
+    `medium` its "photo"/"drawn" reading and `kind` its KIND (see KONTEXT_REF_DRAWN_FOE).
+    `as_pictured` - an armed enemy shown whole is not redrawn at all: KONTEXT_FOE_AS_PICTURED."""
+    if as_pictured and (form or {}).get("form") not in KONTEXT_OBJECT_FORMS:
+        return KONTEXT_FOE_AS_PICTURED
     if (form or {}).get("form") in KONTEXT_OBJECT_FORMS:
         k = form["kind"]
         return (f"Turn the {k} from this picture into {KONTEXT_REF_FOE_STYLE}: "
                 f"{KONTEXT_OBJECT_FORMS[form['form']].format(k=k)}. The {k}: {form['look']}. "
-                f"Facing the viewer, ready to fight. Keep the {k}'s exact colours, markings and "
+                f"Facing the viewer, ready to fight. Keep the {k}'s exact colors, markings and "
                 f"details. The whole of it in view from head to feet, standing large and filling "
                 f"the frame. Plain solid pure white background, nothing else in frame.")
     subject = (look or "").strip() or "creature"
+    if medium in ("photo", "drawn"):
+        style = (KONTEXT_REF_DRAWN_FOE if medium == "drawn"
+                 else f"on its own as {_photo_style(kind)}")
+        return (f"Redraw the {subject} from this picture {style} - facing the viewer, ready to "
+                f"fight. Keep it exactly as it looks in the picture - the same face, hair, "
+                f"clothing, colors, markings, details and whatever it holds. The whole of it in "
+                f"view from top to bottom, standing large and filling the frame. Plain solid pure "
+                f"white background, nothing else in frame.")
     return (f"Redraw the {subject} from this picture on its own as {KONTEXT_REF_FOE_STYLE}, "
             f"facing the viewer, ready to fight. Keep it exactly as it looks in the picture - the "
-            f"same shape, colours, markings and details. The whole of it in view from top to "
+            f"same shape, colors, markings and details. The whole of it in view from top to "
             f"bottom, standing large and filling the frame. Plain solid pure white background, "
             f"nothing else in frame.")
 
@@ -11456,15 +12150,103 @@ KONTEXT_BUST_FORMS = {
               "transforming: the {k}'s own parts, still plainly recognisable, form its head and "
               "shoulders, and its face is a mechanical robot faceplate with glowing eyes"),
     "living": ("a living character built out of the {k} - its head and shoulders are made of the "
-               "{k} itself, with the same colours, materials and markings, and it has eyes and a "
+               "{k} itself, with the same colors, materials and markings, and it has eyes and a "
                "mouth of its own, like a cartoon mascot"),
 }
 
 
-def kontext_bust_prompt(player_desc, form=None):
+# A PHOTO player's bust (2026-10-03, see KONTEXT_REF_PHOTO_STYLE) - the person in the photograph,
+# kept as they are, from a close crop of their head (_photo_bust_ref). Measured on the full-length
+# mirror selfie the report came from, whose face is ~60px tall in the whole picture:
+#  * every "photorealistic portrait photograph" redraw of the WHOLE picture - with the LOOK, with
+#    an "identical likeness: the same face shape, hair color ..." clause, without the LOOK -
+#    drew a stock bearded model, dark-haired where he is fair, or copied the selfie, phone and
+#    all - nearly every one of 26 takes over five wordings. "Short brown hair" in the LOOK pulled
+#    the hair dark, so it is not in here.
+#  * the head-and-neck crop at 256px is what gives HIM - round face, fair hair, ginger beard. The
+#    same at 512px drew strangers 8 of 8 (one with a watermark).
+#  * LIKENESS OVER TIDINESS (2026-10-04). The first wording asked for the phone removed and the
+#    face turned to the camera ("remove anything this person is holding ... have them face the
+#    camera"), and a "looking straight at the camera?" check redrew the ones that copied the
+#    selfie - which favoured the strangers: three runs gave one likeness, one studio model and
+#    one selfie copy kept after 6 tries. The user, on those: "I don't mind something like the
+#    phone getting in the portrait shot if it means the end result is closer to the actual
+#    photo." So this wording keeps the person "exactly as they are in the picture" - him 4 of
+#    4 (the phone in 2, sharp and looking down), against 7 of 8 before - and nothing is redrawn
+#    for where it looks. Only a BLURRED copy is (a 60px face scaled up comes back soft 1 in 4).
+KONTEXT_PHOTO_BUST = ("Make this a head and shoulders portrait of this exact person in front of a "
+                      "plain dark grey studio backdrop, the head centred. Keep the person exactly "
+                      "as they are in the picture - the same face, hair, skin, facial hair and "
+                      "clothing, unchanged - sharp and in focus, as a real photograph.")
+# How much of the picture round the face box the crop takes: 1.7x the box's long side, centred a
+# little below the face. 2.6x (head and shoulders) put more of the phone in the reference.
+PHOTO_BUST_CROP = 1.7
+# A bust softer than this (_image_sharpness of its middle) is redrawn. Measured on 16 photo busts
+# at 256px: the blurred copies 19-99, every sharp one 343-1153. The first real run drew 3 blurred
+# ones in its 4 tries and kept the last - so it gets 6 (a few seconds each), and when none is
+# sharp enough the sharpest is the one kept.
+PHOTO_BUST_MIN_SHARPNESS = 200
+KONTEXT_PHOTO_BUST_ATTEMPTS = 6
+# ...and one that is SOMEBODY ELSE. Even the keep-exactly wording hands back a stock studio model
+# now and then (1 of the next 6 busts), sharp and centred, and for someone who asked for their
+# own face that is the worst bust there is. Nothing measured on the pixels told him from them
+# (correlation with the crop: -0.35 to 0.41 for him, -0.17 to 0.29 for strangers), so Qwen3-VL is
+# shown the crop and the bust side by side (_bust_same_person). On 26 labelled busts it was
+# right on 24: 10 of 11 strangers NO, 14 of 15 of him YES - phone copies, blurred ones and all.
+_BUST_SAME_Q = ("These are two pictures side by side. Is the person in the RIGHT picture the same "
+                "person as in the LEFT picture - the same hair color, the same beard and the "
+                "same face shape? Reply YES or NO.")
+
+
+def _bust_same_person(ref, bust_path):
+    """Whether the bust at `bust_path` shows the person in the staged picture `ref` (see
+    _BUST_SAME_Q). True unless Qwen3-VL says NO - an unasked question redraws nothing."""
+    try:
+        path = _side_by_side(os.path.join(COMFY_INPUT_DIR, ref), bust_path, "bustpair")
+    except Exception as e:
+        print(f"[Kontext Portrait] could not compare the bust with the picture: {e}")
+        return True
+    return not _vlm_one_word(path, _BUST_SAME_Q, "whether the bust is the same person").startswith("NO")
+
+
+def _image_sharpness(path, size, box=None):
+    """How sharp the picture at `path` is: the variance of its Laplacian at `size` px square,
+    over `box` (left, top, right, bottom) or - without one - over everything that isn't the
+    white background. 99999 when it cannot be measured, so nothing is redrawn for it."""
+    import numpy as np
+    try:
+        g = np.asarray(Image.open(path).convert("L").resize((size, size)), dtype=float)
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not measure {os.path.basename(path)}: {e}")
+        return 99999.0
+    lap = -4 * g[1:-1, 1:-1] + g[:-2, 1:-1] + g[2:, 1:-1] + g[1:-1, :-2] + g[1:-1, 2:]
+    if box:
+        lap = lap[box[1]:box[3], box[0]:box[2]]
+    else:
+        lap = lap[g[1:-1, 1:-1] < 245]
+    return float(lap.var()) if lap.size else 99999.0
+
+
+def _photo_bust_ref(ref, face):
+    """A square crop of the staged picture `ref` round the face box `face` (0-1000, from
+    _vlm_face_box), staged at KONTEXT_REF_PX for the photo bust - or `ref` itself when it
+    cannot be made."""
+    try:
+        crop = _face_crop(Image.open(os.path.join(COMFY_INPUT_DIR, ref)).convert("RGB"), face)
+        crop = crop.resize((KONTEXT_REF_PX, KONTEXT_REF_PX), Image.LANCZOS)
+        name = f"picture_face_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+        crop.save(os.path.join(COMFY_INPUT_DIR, name), format="PNG")
+        return name
+    except Exception as e:
+        print(f"[Kontext Portrait] could not crop the face ({e}) - using the whole picture")
+        return ref
+
+
+def kontext_bust_prompt(player_desc, form=None, photo=False):
     """Stage 1 for the HUD portrait: the idle bust the expression edits start from. Same framing
     as krea2_portrait_prompt, but the face is the picture's - or, for an object made a character
-    (`form`, see kontext_hero_prompt), the character built from it."""
+    (`form`, see kontext_hero_prompt), the character built from it. `photo` - the player's
+    picture is a photo of a person or creature: KONTEXT_PHOTO_BUST."""
     if (form or {}).get("form") in KONTEXT_BUST_FORMS:
         k = form["kind"]
         return (f"Turn the {k} from this picture into a head and shoulders portrait bust of "
@@ -11473,6 +12255,8 @@ def kontext_bust_prompt(player_desc, form=None):
                 f"calm, steady expression, the head filling the upper frame and the shoulders "
                 f"squared at the bottom. Video game status-screen portrait, Doom and Valbrace "
                 f"style, dramatic lighting. Plain uncluttered solid background.")
+    if photo:
+        return KONTEXT_PHOTO_BUST
     p = (player_desc or "").strip() or "armored warrior knight"
     return (f"Redraw the {p} from this picture as a head and shoulders portrait bust facing the "
             f"viewer, the whole head and face centred in the middle of the frame, "
@@ -11502,7 +12286,7 @@ def _surface_line(line):
 
 def kontext_surface_prompt(line):
     """One tiling surface from the dungeon's picture. `line` is the brief's material for it."""
-    return ("Create a flat, seamless tiling texture taken from this picture's colours and "
+    return ("Create a flat, seamless tiling texture taken from this picture's colors and "
             "materials. Only the surface itself fills the whole image edge to edge, seen "
             "straight on and evenly lit. Remove any horizon, landscape and scenery entirely - "
             "no perspective, no people, no objects standing in it. The surface: "
@@ -11520,7 +12304,7 @@ def _kontext_loaders():
 
 def _kontext_ref_job(refs, branches, seed, size=None, guidance=KONTEXT_REF_GUIDANCE, alpha=True,
                      keep_rgb=False, with_source=False, seeds=None, guidances=None, prefix="kxref",
-                     job_key=None):
+                     job_key=None, denoise=1.0, init=None):
     """One Kontext job over the input-folder pictures `refs`, each chained on as a
     ReferenceLatent in order. Returns {name: path}.
 
@@ -11532,14 +12316,21 @@ def _kontext_ref_job(refs, branches, seed, size=None, guidance=KONTEXT_REF_GUIDA
     the unmatted RGB as well, keyed "<name>_rgb" - a drawing about to be edited has to go back in
     as full RGB, while the quality gate needs it cut out. `with_source` mattes refs[0] itself
     too, keyed "source", so the drawing and its edits share one BiRefNet pass. `seeds` and
-    `guidances` override `seed` and `guidance` per branch."""
+    `guidances` override `seed` and `guidance` per branch.
+
+    `init` is an input-folder picture every branch starts FROM instead: sampled over its latent
+    at `denoise` (under 1.0 keeps that much of it), with `refs` as references only - how a
+    pictured dungeon's remix is made (_remix_surfaces)."""
     b = _kontext_loaders()
     for i, name in enumerate(refs):
         b[f"ref{i}_load"] = {"inputs": {"image": name}, "class_type": "LoadImage"}
         b[f"ref{i}_enc"] = {"inputs": {"pixels": [f"ref{i}_load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"}
-    if size:
+    if init:
+        b["init_load"] = {"inputs": {"image": init}, "class_type": "LoadImage"}
+        b["init_enc"] = {"inputs": {"pixels": ["init_load", 0], "vae": ["vae", 0]}, "class_type": "VAEEncode"}
+    elif size:
         b["draw_lat"] = {"inputs": {"width": size, "height": size, "batch_size": 1}, "class_type": "EmptySD3LatentImage"}
-    latent = ["draw_lat", 0] if size else ["ref0_enc", 0]
+    latent = ["init_enc", 0] if init else ["draw_lat", 0] if size else ["ref0_enc", 0]
     want = []
     if with_source:
         _kontext_alpha_nodes(b, "source", "ref0_load", prefix)
@@ -11557,7 +12348,7 @@ def _kontext_ref_job(refs, branches, seed, size=None, guidance=KONTEXT_REF_GUIDA
         b[f"{name}_neg"] = {"inputs": {"conditioning": [f"{name}_pos", 0]}, "class_type": "ConditioningZeroOut"}
         b[f"{name}_samp"] = {"inputs": {"seed": (seeds or {}).get(name, seed), "steps": KONTEXT_STEPS,
                                         "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
-                                        "denoise": 1.0, "model": ["unet", 0], "positive": [f"{name}_g", 0],
+                                        "denoise": denoise, "model": ["unet", 0], "positive": [f"{name}_g", 0],
                                         "negative": [f"{name}_neg", 0], "latent_image": latent},
                              "class_type": "KSampler"}
         b[f"{name}_dec"] = {"inputs": {"samples": [f"{name}_samp", 0], "vae": ["vae", 0]}, "class_type": "VAEDecode"}
@@ -11624,22 +12415,24 @@ def _vlm_weapon_where(image_path, weapon_name):
     return None
 
 
-def _vlm_one_word(image_path, question, what):
+def _vlm_one_word(image_path, question, what, system=None, start="ANSWER:", max_length=8):
     """Qwen3-VL's one-word answer to `question` about the image at `image_path`, upper-cased, or
-    "" when it could not be asked. The reply is begun on "ANSWER:" - see _HERO_VIEW_Q."""
+    "" when it could not be asked. The reply is begun on "ANSWER:" - see _HERO_VIEW_Q. `system`,
+    `start` and `max_length` are for a longer answer (_vlm_face_box)."""
     try:
         name = f"vlmask_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
         shutil.copy(image_path, os.path.join(COMFY_INPUT_DIR, name))
-        prompt = ("<|im_start|>system\nYou check drawings for a video game. You answer with one "
-                  "word.<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
-                  + question + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nANSWER:")
+        system = system or "You check drawings for a video game. You answer with one word."
+        prompt = ("<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n"
+                  "<|vision_start|><|image_pad|><|vision_end|>"
+                  + question + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n" + start)
         payload = {
             # Byte-identical to _krea2_loaders()["k_clip"] on purpose - see generate_intro_story.
             "k_clip": {"inputs": {"clip_name": KREA2_CLIP, "type": "krea2", "device": "default"},
                        "class_type": "CLIPLoader"},
             "img": {"inputs": {"image": name}, "class_type": "LoadImage"},
             "gen": {"inputs": {"clip": ["k_clip", 0], "image": ["img", 0], "prompt": prompt,
-                               "max_length": 8, "sampling_mode": "off",
+                               "max_length": max_length, "sampling_mode": "off",
                                "use_default_template": False, "thinking": False},
                     "class_type": "TextGenerate"},
             "prev": {"inputs": {"source": ["gen", 0]}, "class_type": "PreviewAny"},
@@ -11683,7 +12476,13 @@ def _weapon_short(weapon_desc):
     with rounded limbs, smiling face" - to be named inside a pose ("they raise the soft white
     plush high overhead"). Never "the weapon": that reads as a sword, and a windup drew one."""
     w = (weapon_desc or "").strip().rstrip(".") or "sword"
-    head = re.split(r",|\s+(?:with|in|and|that|which|made|covered|featuring)\s+", w, 1)[0]
+    head = re.split(r",|\s+(?:with|in|that|which|made|covered|featuring)\s+", w, 1)[0]
+    # An "and" ends the name too - unless it only joins two colors in front of the noun. "Black
+    # and silver cross-shaped sword with rivets" was cut to "black", and a whole run's pose
+    # edits read "their hand grips the black by its handle ... Only one black" (2026-10-03).
+    before, sep, _after = head.partition(" and ")
+    if sep and len(before.split()) >= 2:
+        head = before
     words = head.split()
     return " ".join(words[:6]) if words else "sword"
 
@@ -11714,6 +12513,194 @@ def _kontext_hold_weapon(drawn, weapon_name, weapon_pic, seed):
     return drawn
 
 
+# NOBODY ON THE SHIELD (2026-10-05). Reported from play: "recent runs have been created with no
+# shield or strange shields". For a photo player - "man with short brown hair and a beard,
+# wearing a light gray t-shirt ..." - KONTEXT_SHIELD_PROMPT's "painted in {p}'s own colours" had
+# krea2 paint the MAN on the shield, a little figure in a grey t-shirt, 9 of that player's last 10
+# shields; and the block edit handed that for its second picture raised the shield on the sword
+# arm, lost the sword, or raised nothing at all. (The characters it was tuned on - Jar Jar, a
+# robot, Elmo - have colours of their own to paint a shield in; a person in a t-shirt has not.)
+# So the drawing is asked of Qwen3-VL (_SHIELD_FIGURE_Q: right on 21 of 21 shields, 9 with the
+# man on and 12 without), and one with somebody on it is drawn again with no player in the words
+# at all (KONTEXT_SHIELD_PLAIN, a material picked per run - 8 of 8 clean backs over the four);
+# if even that has a figure on it, the block raises KONTEXT_SHIELD_BACK's wooden one.
+_SHIELD_FIGURE_Q = "Is a person, a character or a face drawn on this shield? Reply YES or NO."
+KONTEXT_SHIELD_PLAIN = ("The back of a round battle shield made of {m}, seen from behind: its plain "
+                        "inner side, with two leather arm straps and a hand grip running across the "
+                        "middle. One shield only, seen straight on, isolated on a plain pure white "
+                        "background.")
+SHIELD_PLAIN_MATERIALS = ("weathered oak planks with an iron rim", "dark stained wood with a bronze rim",
+                          "black iron plate with rivets", "pale ash planks bound in rawhide")
+
+
+def _shield_has_figure(path):
+    """True when Qwen3-VL sees somebody drawn on the shield at `path` (_SHIELD_FIGURE_Q)."""
+    return _vlm_one_word(path, _SHIELD_FIGURE_Q, "whether the shield has a figure on it").startswith("YES")
+
+
+def _clean_shield(path, steps, seed):
+    """The shield drawing at `path` when nobody is painted on it, else a plain one drawn without
+    the player (KONTEXT_SHIELD_PLAIN), else None - the caller raises KONTEXT_SHIELD_BACK."""
+    if not path or not _shield_has_figure(path):
+        return path
+    print("[Kontext Ref] the hero is painted on their shield - drawing a plain one")
+    try:
+        payload = _krea2_loaders()
+        text = KONTEXT_SHIELD_PLAIN.format(m=random.choice(SHIELD_PLAIN_MATERIALS))
+        _krea2_add_branch(payload, "shield", text, KONTEXT_REF_PX, KONTEXT_REF_PX, steps, seed + 7, "kxhero")
+        del payload["shield_mask"], payload["shield_maskinv"]
+        payload["shield_save"] = {"inputs": {"filename_prefix": f"kxhero_krea2_plainshield_{int(time.time()*1000)}",
+                                             "images": ["shield_dec", 0]}, "class_type": "SaveImage"}
+        plain = _krea2_submit_and_collect(payload, ["shield"])["shield"]
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] plain shield: {e} - raising the wooden one")
+        return None
+    if _shield_has_figure(plain):
+        print("[Kontext Ref] the plain shield has a figure on it too - raising the wooden one")
+        return None
+    return plain
+
+
+# A RAISED SHIELD SHOWS IN THE FIGURE'S SIZE (2026-10-05): the block frame of the same report's
+# newest run had no shield at all, the hero half turned and shrunk. A shield is the biggest thing
+# a pose can add: over 28 block frames the matted figure covered 1.11-1.58 times its idle's area
+# with one raised (the low end with the sword gone), 0.73 on the frame without, and the other
+# seven poses of four runs 0.77-1.13. A block under this is drawn again on a fresh seed.
+SHIELD_MIN_AREA = 1.08
+SHIELD_ATTEMPTS = 3
+
+
+def _figure_area(path):
+    """How many pixels of the matted frame at `path` are figure, or None when it cannot be read."""
+    import numpy as np
+    try:
+        return float((np.asarray(Image.open(path).convert("RGBA").getchannel("A")) > 128).sum())
+    except Exception:
+        return None
+
+
+def _shield_raised(idle_path, block_path):
+    """Whether the block frame holds up a shield, by how much figure it adds to the idle
+    (SHIELD_MIN_AREA). True when either cannot be measured - nothing is redrawn on a guess."""
+    idle, block = _figure_area(idle_path), _figure_area(block_path)
+    if not idle or block is None:
+        return True
+    return block / idle >= SHIELD_MIN_AREA
+
+
+# THE SHIELD IS PUT AT THEIR LEFT SIDE, NOT ASKED FOR (2026-10-05, same report). Even with a clean
+# shield picture and the left arm named, Kontext raised the shield on the WEAPON arm 5 of 6 and
+# the first run after the fix shipped it there, the sword held across it. So the block frame is
+# composed: the run's shield is pasted behind the hero's left side at shoulder height
+# (_shield_block_canvas) - which already reads shield-left, sword-right, the hero untouched - and
+# one gentle edit (KONTEXT_SHIELD_GRIP at KONTEXT_SHIELD_GRIP_GUIDANCE) brings the left hand up
+# to its handle. Measured on three of that player's drawings, two seeds each:
+#  * guidance 3.5: nothing moved, 6 of 6 (0.93-1.00 against the composite);
+#  * 4.5 with this wording: the left hand on the handle 4 of 6, the other two the composite as
+#    it was; shield still at the left and the sword in the right hand 6 of 6 (0.98-1.00);
+#  * 6.0, "they lift their left arm and hold up the shield": the shield carried over to the sword
+#    arm and the sword lost 4 of 6 (0.38-0.52).
+# An edit that drifts under SHIELD_GRIP_MIN_MATCH is drawn again, and failing that the composite
+# itself is the block frame.
+KONTEXT_SHIELD_GRIP = (
+    "Change only the character's left arm: the left elbow bends and the left hand comes up to "
+    "grip the handle on the back of the round shield beside them, the forearm resting against "
+    "the shield. Nothing else moves: the shield stays exactly where it is on the left, and the "
+    "character stays standing exactly where they are.")
+KONTEXT_SHIELD_GRIP_GUIDANCE = 4.5
+SHIELD_GRIP_MIN_MATCH = 0.9
+SHIELD_GRIP_ATTEMPTS = 2
+# The shield's size against the hero's height, and where its middle sits down their body.
+SHIELD_BLOCK_SIZE = 0.44
+SHIELD_BLOCK_HEIGHT = 0.36
+
+
+def _shield_block_canvas(hero_name, idle_matted, shield_name):
+    """The hero's drawing (`hero_name`, in ComfyUI's input folder) with the shield (`shield_name`,
+    there too, on its white ground) set behind their left side - the side on the picture's left,
+    seen from behind. `idle_matted` is the same drawing cut out, which says what is hero. Returns
+    the staged name of the composite and the shield's (left, top, size) in it."""
+    import numpy as np
+    from PIL import ImageDraw
+    hero = Image.open(os.path.join(COMFY_INPUT_DIR, hero_name)).convert("RGB")
+    W, H = hero.size
+    fig = np.asarray(Image.open(idle_matted).convert("RGBA").resize((W, H)).getchannel("A")) > 128
+    ys, xs = np.nonzero(fig)
+    x0, y0, y1 = xs.min(), ys.min(), ys.max()
+    # The body's own left edge at shoulder height - a weapon can reach further out than the body.
+    band = fig[int(y0 + 0.18 * (y1 - y0)):int(y0 + 0.45 * (y1 - y0))]
+    cols = np.nonzero(band.any(axis=0))[0]
+    body_left = cols.min() if len(cols) else x0
+    d = max(16, int(SHIELD_BLOCK_SIZE * (y1 - y0)))
+    art = Image.open(os.path.join(COMFY_INPUT_DIR, shield_name)).convert("RGB")
+    sy, sx = np.nonzero(np.asarray(art, dtype=int).min(axis=2) < 236)
+    if len(sx):
+        art = art.crop((sx.min(), sy.min(), sx.max() + 1, sy.max() + 1))
+    art = art.resize((d, d), Image.LANCZOS)
+    disc = Image.new("L", (d, d), 0)
+    ImageDraw.Draw(disc).ellipse([1, 1, d - 2, d - 2], fill=255)
+    left = max(4, int(body_left + 0.02 * W) - int(d * 0.80))
+    top = max(4, int(y0 + SHIELD_BLOCK_HEIGHT * (y1 - y0)) - d // 2)
+    canvas = Image.new("RGB", (W, H), (255, 255, 255))
+    canvas.paste(art, (left, top), disc)
+    canvas.paste(hero, (0, 0), Image.fromarray((fig * 255).astype("uint8")))
+    name = f"kxhero_block_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+    canvas.save(os.path.join(COMFY_INPUT_DIR, name), format="PNG")
+    return name, (left, top, d)
+
+
+def _keep_shield(path, disc):
+    """Give the matted frame at `path` its shield back. BiRefNet cuts a shield standing BEHIND the
+    hero away as background - both frames of the first live try came back a man reaching for
+    nothing (0.9x the idle's area, where a shield makes it 1.1-1.6x). Its pixels are still there
+    under the cut (SaveImageWithAlpha keeps the render's RGB), and `disc` (left, top, size) says
+    where it was put, so that circle is made solid again."""
+    from PIL import ImageChops, ImageDraw
+    try:
+        im = Image.open(path).convert("RGBA")
+        left, top, d = disc
+        mask = Image.new("L", im.size, 0)
+        ImageDraw.Draw(mask).ellipse([left + 1, top + 1, left + d - 2, top + d - 2], fill=255)
+        im.putalpha(ImageChops.lighter(im.getchannel("A"), mask))
+        im.save(path, format="PNG")
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not keep the shield in {os.path.basename(path)}: {e}")
+    return path
+
+
+def _kontext_shield_block(src, idle_matted, shield, tail, seed):
+    """The hero's block frame, composed - see KONTEXT_SHIELD_GRIP - as a matted path, or None
+    when it could not be composed and the caller should have Kontext raise the shield instead.
+    `tail` is the keep lines every hero pose edit ends on."""
+    try:
+        canvas, disc = _shield_block_canvas(src, idle_matted, shield)
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not set the shield at the hero's side: {e}")
+        return None
+    canvas_path = os.path.join(COMFY_INPUT_DIR, canvas)
+    edit = {"block": f"{KONTEXT_SHIELD_GRIP} {tail}"}
+    composite = None
+    for attempt in range(SHIELD_GRIP_ATTEMPTS):
+        job = "hero_block" if not attempt else "hero_block_regen"
+        if attempt:
+            PROGRESS.add_job(job, "Raising your hero's shield again...", 20, KONTEXT_STEPS)
+        got = _kontext_ref_job([canvas], edit, seed + 300 * attempt, prefix="kxhero",
+                               guidance=KONTEXT_SHIELD_GRIP_GUIDANCE, with_source=True, job_key=job)
+        composite = _keep_shield(got["source"], disc)
+        match = _picture_match(canvas_path, got["block"])
+        _keep_shield(got["block"], disc)
+        if match >= SHIELD_GRIP_MIN_MATCH:
+            if not attempt:
+                PROGRESS.skip_job("hero_block_regen")   # planned for the usual case - see _plan_v6
+            print(f"[Kontext Ref] hero's shield set at their left side (grip edit {match:.2f})")
+            return got["block"]
+        print(f"[Kontext Ref] the shield grip edit drifted ({match:.2f}) - "
+              f"{'drawing it again' if attempt + 1 < SHIELD_GRIP_ATTEMPTS else 'keeping the composite'}")
+    return composite
+
+
 def _krea2_hero_art(player_desc, weapon_desc, size, steps, seed, hero=True):
     """krea2's part of a pictured hero, in one job: the shield the block raises (KONTEXT_SHIELD_PROMPT)
     and, with `hero`, the hero itself drawn from the words alone - kontext_hero_prompt with no
@@ -11736,12 +12723,12 @@ def _krea2_hero_art(player_desc, weapon_desc, size, steps, seed, hero=True):
 
 
 def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None,
-                                 steps=KREA2_STEPS_DEFAULT):
+                                 steps=KREA2_STEPS_DEFAULT, photo_kind=None, hair=""):
     """The nine V6_FRAME_NAMES frames drawn from the player's and/or weapon's picture (`refs`,
     {slot: staged name}), or None when Kontext failed and the caller should draw them with krea2
     from the words instead. Frames come back matted; the caller crops them exactly like krea2's.
-    `form` - see kontext_hero_prompt. With only the weapon pictured the hero itself is krea2's,
-    drawn in `steps` (see KONTEXT_HERO_SWAP)."""
+    `form` and `photo_kind` - see kontext_hero_prompt. With only the weapon pictured the hero
+    itself is krea2's, drawn in `steps` (see KONTEXT_HERO_SWAP)."""
     player_pic, weapon_pic = refs.get("player"), refs.get("weapon")
     seed = random.randint(1, 1000000000)
     try:
@@ -11757,12 +12744,16 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
                 raise
             print(f"[Kontext Ref Error] hero's shield: {e} - raising the plain wooden one")
             art = {}
-        shield = _to_input(art.get("shield") or KONTEXT_SHIELD_BACK, "kxshield")
+        # ...and nobody painted on it - see _SHIELD_FIGURE_Q.
+        shield = _to_input(_clean_shield(art.get("shield"), steps, seed) or KONTEXT_SHIELD_BACK,
+                           "kxshield")
         if player_pic:
             drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
                                      {"hero": kontext_hero_prompt(player_desc, weapon_desc,
                                                                   True, bool(weapon_pic),
-                                                                  form=form)},
+                                                                  form=form,
+                                                                  photo_kind=photo_kind,
+                                                                  hair=hair)},
                                      seed, size=size, alpha=False, prefix="kxhero",
                                      job_key="hero_ref")["hero"]
         else:
@@ -11793,13 +12784,35 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
                                  seeds=seeds, guidances=KONTEXT_HERO_POSE_GUIDANCE,
                                  job_key="hero_poses")
         paths["idle"] = paths.pop("source")
-        # The block raises the shield from its own picture - see KONTEXT_SHIELD_BACK.
-        paths.update(_kontext_ref_job([src, shield], block, seed, prefix="kxhero", seeds=seeds,
-                                      guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key="hero_block"))
         _kontext_unstick(src, paths, edits, "hero_pose_regen",
                          "Re-posing the hero frames that did not move...", "kxhero")
-        _kontext_unstick(src, paths, block, "hero_block_regen",
-                         "Raising your hero's shield again...", "kxhero", extra_refs=[shield])
+        # The block: the shield set at their left side and gripped - see KONTEXT_SHIELD_GRIP.
+        composed = _kontext_shield_block(src, paths["idle"], shield,
+                                         f"Their right hand still grips {wname} at their right "
+                                         f"side, exactly as it is. {KONTEXT_HERO_KEEP} "
+                                         f"{_hero_weapon_keep(weapon_desc)}", seed)
+        if composed:
+            paths["block"] = composed
+        else:
+            # ...or, when that could not be composed, raised by Kontext from the shield's own
+            # picture (KONTEXT_SHIELD_BACK) and redrawn while it shows no shield - see
+            # SHIELD_MIN_AREA. One that never raises it is kept as it last came: the frontend
+            # has to have a block frame.
+            paths.update(_kontext_ref_job([src, shield], block, seed, prefix="kxhero", seeds=seeds,
+                                          guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key="hero_block"))
+            for attempt in range(1, SHIELD_ATTEMPTS):
+                if _shield_raised(paths["idle"], paths["block"]):
+                    break
+                print(f"[Kontext Ref] the block frame shows no shield - raising it again (try {attempt + 1})")
+                job = "hero_block_regen" if attempt == 1 else f"hero_block_regen{attempt}"
+                PROGRESS.add_job(job, "Raising your hero's shield again...", 20, KONTEXT_STEPS)
+                paths.update(_kontext_ref_job([src, shield], block, seed + 500 * attempt, prefix="kxhero",
+                                              seeds={"block": seed + 500 * attempt},
+                                              guidances=KONTEXT_HERO_POSE_GUIDANCE, job_key=job))
+            else:
+                attempt = SHIELD_ATTEMPTS
+            if attempt == 1:
+                PROGRESS.skip_job("hero_block_regen")   # planned for the usual case - see _plan_v6
     except GenerationCancelled:
         raise
     except Exception as e:
@@ -11810,30 +12823,49 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
     return [paths[n] for n in V6_FRAME_NAMES]
 
 
-def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, form=None):
+def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, form=None,
+                                     pic=None):
     """All three foes from the enemy's picture, or None when Kontext failed and the caller should
     design them from the words instead. The walker is drawn from the picture and posed with
     KONTEXT_FOE_POSES; the flyer and the boss are the walker's own Kontext edits
     (generate_kontext_enemy_variants), which is what keeps all three the thing in the picture.
     `form` is the picture's describe_pictures reading when it is an object made a character -
-    see kontext_foe_prompt and _kontext_pictured_boss.
+    see kontext_foe_prompt and _kontext_pictured_boss. `pic` is describe_pictures' reading of the
+    picture, for its `medium` (KONTEXT_REF_DRAWN_FOE).
     Returns {variant: {frame: path}} like _krea2_finish_enemy_variants."""
+    medium = None if form else (pic or {}).get("medium")
+    # An armed enemy keeps its weapons through every pose, and one pictured whole is not redrawn
+    # at all - see _ENEMY_ARMED_Q.
+    armed = bool(not form and (pic or {}).get("armed"))
+    as_pictured = armed and bool((pic or {}).get("whole"))
+    if armed:
+        print(f"[Kontext Ref] the enemy is armed - "
+              f"{'kept as pictured' if as_pictured else 'redrawn'}, weapons held in every pose")
     frames = [f for f in _enemy_variant_frames("walker", last_attack_frame) if f != "idle"]
     feet_max = _person_feet_max(look, "walker")
     try:
         # The idle is quality-gated like krea2's (_enemy_frame_problem) and redrawn once on a
-        # fresh seed; a second bad one is kept - it is still the thing in the picture.
-        for attempt in range(2):
+        # fresh seed; a second bad one is kept - it is still the thing in the picture. One kept
+        # as pictured gets a third try, and is also redrawn when it comes back a blur.
+        for attempt in range(3 if as_pictured else 2):
             seed = random.randint(1, 1000000000)
-            drawn = _kontext_ref_job([ref], {"foe": kontext_foe_prompt(look, form)}, seed, size=size,
+            drawn = _kontext_ref_job([ref], {"foe": kontext_foe_prompt(look, form, medium,
+                                                                       (pic or {}).get("kind"),
+                                                                       as_pictured)},
+                                     seed, size=size,
                                      keep_rgb=True, prefix="kxfoe", job_key="enemy_ref")
             keep_largest_figure(drawn["foe"], thresh=50)
             problem = _enemy_frame_problem(drawn["foe"], feet_max=feet_max)
+            if not problem and as_pictured:
+                sharp = _image_sharpness(drawn["foe_rgb"], 512)
+                if sharp < KONTEXT_FOE_MIN_SHARPNESS:
+                    problem = f"blurred ({sharp:.0f})"
             if not problem:
                 break
             print(f"[Kontext Ref] walker drawing {attempt + 1} is {problem}")
         got = _kontext_pose_foe(_to_input(drawn["foe_rgb"], "kxfoe_src"), drawn["foe"], look,
-                                "walker", frames, seed, "enemy_poses", "enemy_pose_regen")
+                                "walker", frames, seed, "enemy_poses", "enemy_pose_regen",
+                                armed=armed)
     except GenerationCancelled:
         raise
     except Exception as e:
@@ -11842,7 +12874,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
 
     enemies = {"walker": got}
     derived = generate_kontext_enemy_variants(got["idle"], size=size, variants=["flyer"])
-    derived["boss"] = _kontext_pictured_boss(got["idle"], ref, size, form)
+    derived["boss"] = _kontext_pictured_boss(got["idle"], ref, size, form, armed=armed)
     for v, p in derived.items():
         p = p or _krea2_regen_enemy(look, size, KREA2_STEPS_DEFAULT, "kxfoe", attempts=1, variant=v)
         if not p:
@@ -11855,7 +12887,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
         try:
             enemies[v] = _kontext_pose_foe(_foe_pose_canvas(p, size, f"kxfoe_{v}"), None, look, v,
                                            vframes, seed + 1000 * (1 + ENEMY_VARIANT_NAMES.index(v)),
-                                           f"{v}_poses", f"{v}_pose_regen")
+                                           f"{v}_poses", f"{v}_pose_regen", armed=armed)
         except GenerationCancelled:
             raise
         except Exception as e:
@@ -11867,18 +12899,18 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
     return {v: enemies[v] for v in ENEMY_VARIANT_NAMES if enemies.get(v)}
 
 
-# A PICTURED enemy's boss. KONTEXT_BOSS_EDIT recolours the whole foe "darkened and scorched ...
+# A PICTURED enemy's boss. KONTEXT_BOSS_EDIT recolors the whole foe "darkened and scorched ...
 # embers in the cracks" - written for objects (a RAM stick, a taco), and on a person it repaints
 # everything that says who they are: skin, face, clothes all charred red-black. Reported from
 # play: the walker and flyer looked like the picture, the boss did not. So a pictured foe's boss
-# keeps the picture's colours and is made bigger and menacing instead, with the picture itself
+# keeps the picture's colors and is made bigger and menacing instead, with the picture itself
 # as a second reference to hold it to. Measured on the smiling man in a black tee: 2 of 2 kept
 # face, tee, pendant and jeans, broader with glowing red eyes; a "dark aura of crackling red
 # energy" variant mostly lost the aura to the matte and once turned it into veins on the chest.
 KONTEXT_PICTURED_BOSS_EDIT = (
     "Make this the boss version of this character: bigger, taller and more imposing, standing "
     "tall with a fierce, menacing glare and glowing red eyes. Keep exactly the same face, hair, "
-    "clothing, colours and markings as the character in the second picture, so it is still "
+    "clothing, colors and markings as the character in the second picture, so it is still "
     "clearly the same one. Plain white background.")
 
 
@@ -11886,28 +12918,32 @@ KONTEXT_PICTURED_BOSS_EDIT = (
 # play: a silver sports car's boss came back a black armoured ogre with red eyes - asked to keep
 # a car's "face, hair, clothing" and give it "glowing red eyes", Kontext drew the creature that
 # has them. Measured on the bare car first: a generic "boss version of this car" kept the car but
-# painted it black 3 of 3 - what held the silver was naming the object's own parts and colours
+# painted it black 3 of 3 - what held the silver was naming the object's own parts and colors
 # against the photo. On the robot-car walker this one kept the silver car on robot legs 2 of 2,
 # its headlights glowing red; on the living fish, the fish 2 of 2.
 KONTEXT_FORM_BOSS_EDITS = {
     "robot": ("Make this robot the boss version of itself: bigger, taller and more imposing, with "
               "a fierce red glow shining from its eyes and lights. Keep exactly the same {k} "
-              "parts, colours and markings - the ones from the {k} in the second picture - so it "
+              "parts, colors and markings - the ones from the {k} in the second picture - so it "
               "is still clearly the same robot built out of that {k}. Plain white background."),
     "living": ("Make this character the boss version of itself: bigger, taller and more imposing, "
                "with a fierce red glow shining from its eyes. Keep exactly the same {k} body, "
-               "colours and markings - the ones from the {k} in the second picture - so it is "
+               "colors and markings - the ones from the {k} in the second picture - so it is "
                "still clearly the same {k} character. Plain white background."),
 }
 
 
-def _kontext_pictured_boss(walker_path, ref, size, form=None):
+def _kontext_pictured_boss(walker_path, ref, size, form=None, armed=False):
     """The pictured foe's boss (KONTEXT_PICTURED_BOSS_EDIT, or KONTEXT_FORM_BOSS_EDITS for an
     object made a character - `form`, see kontext_foe_prompt) as a matted cut-out, or None when
     Kontext failed - the caller then draws one from the words, as for a failed derivation."""
     edit = KONTEXT_PICTURED_BOSS_EDIT
     if (form or {}).get("form") in KONTEXT_FORM_BOSS_EDITS:
         edit = KONTEXT_FORM_BOSS_EDITS[form["form"]].format(k=form["kind"])
+    elif armed:
+        # ...and an armed one its weapons - see _ENEMY_ARMED_Q.
+        edit = edit.replace(" Plain white background.",
+                            " It still grips the same weapons in its hands. Plain white background.")
     try:
         canvas = _foe_pose_canvas(walker_path, size, "kxenemy_boss")
         p = _kontext_ref_job([canvas, ref], {"boss": edit},
@@ -11951,7 +12987,7 @@ def _foe_pose_canvas(cut_path, size, tag):
     return name
 
 
-def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key):
+def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key, armed=False):
     """{frame: path} for one pictured foe: its idle and a KONTEXT_FOE_POSES edit of `src` (an
     input-folder name, the foe on white) for each of `frames`, the stuck ones re-rolled
     (_kontext_unstick) and the bad ones dropped (_enemy_frame_problem) - the frontend shows the
@@ -11960,10 +12996,13 @@ def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key
     _krea2_finish_enemy_variants: the frontend scales the lot by the idle's content, so the foe
     holds its size and a lunge really reaches further."""
     feet_max = _person_feet_max(look, variant)
-    edits = {f: f"{KONTEXT_FOE_POSES[f]} {KONTEXT_FOE_KEEP}" for f in frames}
+    # An `armed` foe poses with its weapons and keeps them - KONTEXT_ARMED_FOE_POSES.
+    keep = KONTEXT_ARMED_FOE_KEEP if armed else KONTEXT_FOE_KEEP
+    poses = dict(KONTEXT_FOE_POSES, **KONTEXT_ARMED_FOE_POSES) if armed else KONTEXT_FOE_POSES
+    edits = {f: f"{poses[f]} {keep}" for f in frames}
     job = dict(edits)
     if idle is None:
-        job["idle"] = f"{KONTEXT_FOE_IDLE} {KONTEXT_FOE_KEEP}"
+        job["idle"] = f"{KONTEXT_FOE_IDLE} {keep}"
     paths = _kontext_ref_job([src], job, seed, prefix="kxfoe", job_key=job_key,
                              with_source=idle is None)
     if idle is None:
@@ -11998,40 +13037,336 @@ def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key
     return got
 
 
-def generate_kontext_surfaces(ref, brief, look, size):
+# The surfaces of a PATTERN dungeon (_WALL_PATTERN_Q): three regions of the picture itself. The
+# wall is its middle - the largest square that fits - where its subject is; the floor and the
+# ceiling are a bottom and a top corner at half that size, so the three differ and the floor is
+# what the picture has underfoot. On the fractal: the glowing core on every wall, the pale
+# lattice below it as the floor, the dark curved structures above as the ceiling.
+# Each is then redrawn by Kontext at the texture's size, because a corner of a 512px picture is
+# 128px across: KONTEXT_PATTERN_REDRAW measured 0.99-1.00 against its own crop on all 7 regions
+# tried (other regions and a designed texture: 0.06-0.40) and 4 to 150 times as sharp. One that
+# drifts (PATTERN_MIN_MATCH) or comes back softer is dropped for the plain crop.
+# Tried and not used, on the same picture: "fill the image with this picture's own pattern"
+# letterboxed the whole 2:1 picture and padded it with strips of itself; "turn this picture
+# into a square wall mural" drew a framed print over a sofa.
+KONTEXT_PATTERN_REDRAW = ("Redraw this picture exactly as it is, sharp and finely detailed, "
+                          "filling the whole image edge to edge - the same shapes, structures, "
+                          "details and colors, unchanged.")
+PATTERN_MIN_MATCH = 0.8
+
+
+def _pattern_regions(w, h):
+    """{surface: (left, top, right, bottom)} of a w x h pattern picture - see above."""
+    s = min(w, h)
+    q = max(1, s // 2)
+    return {"wall": ((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s),
+            "floor": (0, h - q, q, h),
+            "ceiling": (w - q, 0, w, q)}
+
+
+def _picture_match(path_a, path_b):
+    """How alike two pictures of the same framing are: the correlation of their pixels at
+    32x32, 1.0 for the same picture. 0 when either cannot be read."""
+    import numpy as np
+    try:
+        a, b = (np.asarray(Image.open(p).convert("RGB").resize((32, 32), Image.BILINEAR), dtype=float)
+                for p in (path_a, path_b))
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not compare two pictures: {e}")
+        return 0.0
+    a, b = a - a.mean(), b - b.mean()
+    return float((a * b).sum() / (np.sqrt((a * a).sum() * (b * b).sum()) + 1e-9))
+
+
+def _decode_picture(picture):
+    """The attached picture `picture` (a data URL) flattened onto white, as RGB."""
+    img = Image.open(io.BytesIO(base64.b64decode(picture.split(",", 1)[-1]))).convert("RGBA")
+    flat = Image.new("RGB", img.size, (255, 255, 255))
+    flat.paste(img, (0, 0), img)
+    return flat
+
+
+def _stage_pil(img, tag, long_side=None):
+    """Write the PIL picture `img` into ComfyUI's input folder as a Kontext reference - its long
+    side `long_side` (KONTEXT_REF_PX), both sides rounded to 16 like _stage_reference - and
+    return its name."""
+    long_side = long_side or KONTEXT_REF_PX
+    scale = long_side / float(max(img.size))
+    w = max(16, int(round(img.width * scale / 16.0)) * 16)
+    h = max(16, int(round(img.height * scale / 16.0)) * 16)
+    name = f"{tag}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png"
+    img.convert("RGB").resize((w, h), Image.LANCZOS).save(os.path.join(COMFY_INPUT_DIR, name),
+                                                         format="PNG")
+    return name
+
+
+class _WallJobs:
+    """The loading bar's job for each Kontext prompt of a pictured dungeon's surfaces. The plan
+    has one, "wall_ref" (_plan_v6); a stop of the slider that draws the surfaces one prompt each
+    registers the rest as it goes, 19s apiece (measured, three exact surfaces, 2026-10-04)."""
+
+    def __init__(self):
+        self.used = 0
+
+    def next(self, surface):
+        self.used += 1
+        if self.used == 1:
+            return "wall_ref"
+        key = f"wall_ref_{self.used}"
+        PROGRESS.add_job(key, f"Painting the {surface} from your picture with Kontext...", 19,
+                         KONTEXT_STEPS)
+        return key
+
+
+def _pattern_surfaces(picture, size, only=None, job=None):
+    """{"wall", "ceiling", "floor"} (those in `only`, when given) cut from the pattern `picture`
+    (its data URL) - see _pattern_regions - each `size` px square and unseamed, or None when it
+    cannot be read. `job` names each prompt's loading-bar job (_WallJobs.next)."""
+    try:
+        flat = _decode_picture(picture)
+    except Exception as e:
+        print(f"[Kontext Ref Error] pattern surfaces: {e} - drawing them the usual way")
+        return None
+    out = {}
+    stamp = int(time.time() * 1000)
+    seed = random.randint(1, 1000000000)
+    for i, (surface, box) in enumerate(_pattern_regions(*flat.size).items()):
+        if only is not None and surface not in only:
+            continue
+        crop = flat.crop(box).resize((KONTEXT_REF_PX, KONTEXT_REF_PX), Image.LANCZOS)
+        name = f"picture_wall_{surface}_{stamp}.png"
+        crop.save(os.path.join(COMFY_INPUT_DIR, name), format="PNG")
+        # What ships when the redraw is no better: the crop itself, at the texture's size.
+        plain = os.path.join(COMFY_OUTPUT_DIR, f"kxwall_{surface}_crop_{stamp}.png")
+        crop.resize((size, size), Image.LANCZOS).save(plain, format="PNG")
+        out[surface] = plain
+        try:
+            drawn = _kontext_ref_job([name], {surface: KONTEXT_PATTERN_REDRAW}, seed + i, size=size,
+                                     alpha=False, prefix="kxwall",
+                                     job_key=job(surface) if job else None)[surface]
+        except GenerationCancelled:
+            raise
+        except Exception as e:
+            print(f"[Kontext Ref Error] pattern {surface}: {e} - using the picture's own pixels")
+            continue
+        match = _picture_match(plain, drawn)
+        sharper = _image_sharpness(drawn, size) >= _image_sharpness(plain, size)
+        if match >= PATTERN_MIN_MATCH and sharper:
+            out[surface] = drawn
+        else:
+            why = "drifted" if match < PATTERN_MIN_MATCH else "came back softer"
+            print(f"[Kontext Ref] pattern {surface} redraw {why} (match {match:.2f}) - using the "
+                  f"picture's own pixels")
+    print(f"[Kontext Ref] {', '.join(out)} cut from the picture itself "
+          f"({flat.width}x{flat.height})")
+    return out
+
+
+# A REMIX (WALL_PICTURE_LEVELS): the picture's own parts in a new arrangement - "take parts from
+# it, and remix it". Kontext draws it, from the part of the picture the surface belongs to
+# (_remix_sources): all of it for the walls, its bottom half for the floor and its top half for
+# the ceiling, which on the fractal gave a pale lattice floor and a dark arched ceiling where one
+# source for all three gave three of the same.
+# Measured on that fractal, every other route to a middle first (2026-10-04):
+#  * asked to "rearrange" the picture into "a seamless TILING wall texture": a near-copy on one
+#    seed, plain tiles and grids on the next - "tiling" is a request for tiles. Without the word
+#    but still as "a new picture": shards scattered on a white ground, and a sheet of spare parts.
+#  * pieces shuffled into a mosaic in code and melted by Kontext: it keeps the patch grid as a
+#    quilt at any strength short of redrawing the picture itself.
+#  * camera edits of the picture ("show another part of this structure", "zoom out") and
+#    outpainting from a piece of it: the picture again, 6 of 6.
+#  * a piece of it partly re-drawn from the designed words alone: its fine lattice gone by 50%.
+#  * a mirrored (kaleidoscope) cut of a region: a true remix in real pixels, but an ornament.
+# KONTEXT_PATTERN_REMIX's "all-over composition ... irregular ... flowing and organic, every part
+# at a different size and angle" drew the picture's own lattice, holes and glowing pieces in a new
+# arrangement 12 of 12 - four seeds a surface, three of them seeds that had drawn grids for the
+# wording before it ("an all-over PATTERN ... scattered and REPEATED", 7 of 10).
+KONTEXT_PATTERN_REMIX = (
+    "Make an all-over composition out of the parts of this picture: its own shapes, structures "
+    "and details, scattered across the whole image edge to edge in a new, irregular arrangement - "
+    "flowing and organic, every part at a different size and angle - with no single centrepiece "
+    "and no empty background. Keep its materials, colors, fine detail and style, so it is plainly "
+    "made from this picture.")
+# What a remix is redrawn for, up to REMIX_ATTEMPTS times (the last try is kept whatever it is):
+#  * it left the picture behind for a simple pattern in its colors - asked of Qwen3-VL with the
+#    source and the drawing side by side (_REMIX_SIMPLE_Q). Right on 31 of 33 labelled drawings:
+#    SIMPLE for all 9 plain grids drawn from the whole picture, SAME for all 12 real remixes; its
+#    two misses were tile-like floors it passed.
+#  * its parts sit on a white ground: 16-44% near-white on those, 0% on every remix.
+#  * it IS the picture (_picture_match with the surface's exact cut at PATTERN_MIN_MATCH). That
+#    only catches a straight copy - a shifted one measures like a remix, and "is the right picture
+#    a COPY of the left?" answered NEW for all 43 pairs asked, copies included.
+REMIX_ATTEMPTS = 3
+REMIX_MAX_WHITE = 0.08
+_REMIX_SIMPLE_Q = ("These are two pictures side by side. Is the RIGHT picture built out of the "
+                   "same detailed shapes and structures as the LEFT picture, or is it only a "
+                   "SIMPLE pattern in similar colors? Reply SAME or SIMPLE.")
+
+
+def _remix_sources(w, h):
+    """{surface: (left, top, right, bottom)} - the part of a w x h picture each remixed surface
+    is made from."""
+    return {"wall": (0, 0, w, h), "floor": (0, h // 2, w, h), "ceiling": (0, 0, w, h // 2)}
+
+
+def _side_by_side(left_path, right_path, tag):
+    """Two pictures in one, for a question Qwen3-VL answers by comparing them: `left_path` fitted
+    into a 256px square on white, a gap, `right_path` as a 256px square. Returns its path in
+    ComfyUI's input folder."""
+    side = 256
+    pair = Image.new("RGB", (side * 2 + 16, side), "white")
+    left = Image.open(left_path).convert("RGB")
+    left.thumbnail((side, side), Image.LANCZOS)
+    pair.paste(left, ((side - left.width) // 2, (side - left.height) // 2))
+    pair.paste(Image.open(right_path).convert("RGB").resize((side, side), Image.LANCZOS),
+               (side + 16, 0))
+    path = os.path.join(COMFY_INPUT_DIR, f"{tag}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}.png")
+    pair.save(path, format="PNG")
+    return path
+
+
+def _white_share(path):
+    """How much of the picture at `path` is near-white, 0-1 (0 when it cannot be read)."""
+    import numpy as np
+    try:
+        a = np.asarray(Image.open(path).convert("RGB").resize((64, 64), Image.BILINEAR))
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not measure {os.path.basename(path)}: {e}")
+        return 0.0
+    return float((a.min(axis=2) > 235).mean())
+
+
+def _remix_problem(source, drawn, exact):
+    """None when `drawn` is a remix of the staged picture `source`, else what is wrong with it -
+    see REMIX_ATTEMPTS. `exact` is the surface's own cut of the picture, to tell a copy by."""
+    white = _white_share(drawn)
+    if white > REMIX_MAX_WHITE:
+        return f"scattered on a white ground ({white:.0%})"
+    match = _picture_match(exact, drawn)
+    if match >= PATTERN_MIN_MATCH:
+        return f"a copy of the picture (match {match:.2f})"
+    try:
+        pair = _side_by_side(os.path.join(COMFY_INPUT_DIR, source), drawn, "remixpair")
+    except Exception as e:
+        print(f"[Kontext Ref Error] could not compare a remix with its picture: {e}")
+        return None
+    if _vlm_one_word(pair, _REMIX_SIMPLE_Q, "whether the remix kept the picture").startswith("SIMPLE"):
+        return "only a simple pattern in its colors"
+    return None
+
+
+def _remix_surfaces(picture, size, only=None, job=None):
+    """{"wall", "ceiling", "floor"} (those in `only`, when given) remixed from the picture
+    `picture` (its data URL) - see KONTEXT_PATTERN_REMIX - each `size` px square and unseamed, or
+    None when it cannot be read. A surface whose drawing failed outright is left out. `job`
+    names each prompt's loading-bar job (_WallJobs.next).
+
+    Drawn in ROUNDS: every surface still wanted is drawn, then all of that round's drawings are
+    checked together (_remix_problem), and only the ones that failed go round again. Checked one
+    at a time, each check loaded Qwen3-VL over Kontext and each next drawing loaded Kontext back:
+    three surfaces took 128s on the first real runs, 33-36s a drawing with ~26s of it the reload,
+    where three drawings in a row are ~19s each."""
+    try:
+        flat = _decode_picture(picture)
+    except Exception as e:
+        print(f"[Kontext Ref Error] remix surfaces: {e} - drawing them the usual way")
+        return None
+    out = {}
+    stamp = int(time.time() * 1000)
+    seed = random.randint(1, 1000000000)
+    cuts = _pattern_regions(*flat.size)
+    wanted = {}     # surface: (its place in the order, its staged source, its exact cut)
+    for i, (surface, box) in enumerate(_remix_sources(*flat.size).items()):
+        if only is not None and surface not in only:
+            continue
+        source = _stage_pil(flat.crop(box), f"picture_wall_remix_{surface}")
+        exact = os.path.join(COMFY_OUTPUT_DIR, f"kxwall_{surface}_cut_{stamp}.png")
+        flat.crop(cuts[surface]).resize((size, size), Image.LANCZOS).save(exact, format="PNG")
+        wanted[surface] = (i, source, exact)
+    for attempt in range(REMIX_ATTEMPTS):
+        drawn = {}
+        for surface, (i, source, _exact) in list(wanted.items()):
+            try:
+                drawn[surface] = _kontext_ref_job([source], {surface: KONTEXT_PATTERN_REMIX},
+                                                  seed + i * 10 + attempt, size=size, alpha=False,
+                                                  prefix="kxwall",
+                                                  job_key=job(surface) if job else None)[surface]
+            except GenerationCancelled:
+                raise
+            except Exception as e:
+                print(f"[Kontext Ref Error] remix {surface}: {e}")
+                del wanted[surface]
+        out.update(drawn)
+        for surface, path in drawn.items():
+            problem = _remix_problem(wanted[surface][1], path, wanted[surface][2])
+            if not problem:
+                del wanted[surface]
+                continue
+            print(f"[Kontext Ref] {surface} remix {attempt + 1} is {problem}"
+                  f"{' - drawing it again' if attempt + 1 < REMIX_ATTEMPTS else ' - kept'}")
+        if not wanted:
+            break
+    if out:
+        print(f"[Kontext Ref] {', '.join(out)} remixed from the picture's own parts "
+              f"({flat.width}x{flat.height})")
+    return out
+
+
+def generate_kontext_surfaces(ref, brief, look, size, pic=None, picture=None, level=None):
     """{"wall", "ceiling", "floor"} tiling textures from the dungeon's picture, unseamed, or None
-    when Kontext failed and FLUX schnell should paint them from the words as usual. Each one's
-    material is the brief's line for it - the picture supplies what it looks like, the line which
-    part of it this surface is (the sky is the ceiling, the grass the floor)."""
-    lines = {s: (brief or {}).get(s) or f"the {s} of {look or 'this place'}"
-             for s in ("wall", "ceiling", "floor")}
+    when Kontext failed and FLUX schnell should paint them from the words as usual.
+
+    How each one is made is Options' slider, `level` (WALL_PICTURE_LEVELS, with `pic` -
+    describe_pictures' reading - saying whether the picture is a pattern, and `picture` its data
+    URL): cut from the picture (_pattern_surfaces), remixed from its parts (_remix_surfaces), or
+    INSPIRED by it - a texture whose material is the brief's line for it, the picture supplying
+    what it looks like and the line which part of it this surface is (the sky is the ceiling,
+    the grass the floor). A surface whose cut or remix failed is drawn inspired instead. The
+    remix stop then turns the ceiling and the floor to their own colors (_recolor_remix)."""
+    recipes = _wall_picture_recipes(level, bool((pic or {}).get("pattern")))
+    hues = _wall_picture_hues(level, bool((pic or {}).get("pattern")))
+    if not picture:
+        recipes, hues = dict.fromkeys(recipes, "inspired"), {}
+    print(f"[Kontext Ref] dungeon picture at sensitivity {_wall_picture_level(level)} "
+          f"({WALL_PICTURE_LEVELS[_wall_picture_level(level)]}): "
+          + ", ".join(f"{s} {r}" for s, r in recipes.items()))
+    jobs = _WallJobs()
+    out = {}
+    for recipe, make in (("exact", _pattern_surfaces), ("remix", _remix_surfaces)):
+        wanted = [s for s, r in recipes.items() if r == recipe]
+        if wanted:
+            out.update(make(picture, size, only=wanted, job=jobs.next) or {})
+    # Inspired: asked for, or what a failed cut or remix falls back to.
+    inspired = [s for s in recipes if s not in out]
+    if not inspired:
+        return _recolor_remix(out, hues, picture)
+    lines = {s: (brief or {}).get(s) or f"the {s} of {look or 'this place'}" for s in inspired}
     try:
         paths = _kontext_ref_job([ref], {s: kontext_surface_prompt(t) for s, t in lines.items()},
                                  random.randint(1, 1000000000), size=size, alpha=False,
-                                 prefix="kxwall", job_key="wall_ref")
+                                 prefix="kxwall", job_key=jobs.next("walls"))
     except GenerationCancelled:
         raise
     except Exception as e:
         print(f"[Kontext Ref Error] surfaces: {e} - painting them from the words instead")
-        return None
+        return _recolor_remix(out, hues, picture) or None
     # The picture handed straight back is the one way this fails. It happens when the brief's
     # line describes the whole scene rather than a material ("repeating fields of vibrant green
     # grass under a bright blue sky, scattered white clouds" came back as the Bliss hill,
     # horizon and all) - and no wording in the instruction outvotes the line. Only that surface
     # goes back to FLUX schnell, which paints the same line with its zero-horizon framing.
-    good = {}
     for s, p in paths.items():
         split = _surface_scene_split(p)
         if split > KONTEXT_SURFACE_MAX_SPLIT:
             print(f"[Kontext Ref] {s} came back as the picture itself (split {split:.0f}) - "
                   f"painting it from the words instead")
         else:
-            good[s] = p
-    return good or None
+            out[s] = p
+    return _recolor_remix(out, hues, picture) or None
 
 
 # How different a texture's top third is from its bottom third (or its left from its right),
-# as the distance between their mean RGB colours. A tiling surface looks the same all over; a
+# as the distance between their mean RGB colors. A tiling surface looks the same all over; a
 # photograph has a sky above and a ground below. Measured: Kontext textures 2-83 (a floor seen
 # at a slight angle is the high end), the two times it returned the picture 207 and 213.
 KONTEXT_SURFACE_MAX_SPLIT = 150
@@ -12077,6 +13412,10 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     refs = refs or {}
     hero_form, enemy_form = (((pictures or {}).get(s) or {}) for s in ("player", "enemy"))
+    hero_pic, enemy_pic = hero_form, enemy_form
+    # A photo player is drawn photorealistic - see KONTEXT_REF_PHOTO_STYLE.
+    hero_photo_kind = (hero_pic.get("kind") or "person"
+                       if hero_pic.get("medium") == "photo" and not hero_pic.get("form") else None)
     hero_form = hero_form if hero_form.get("form") else None
     enemy_form = enemy_form if enemy_form.get("form") else None
     sq = _round16(gfx["player"])            # the 7 player pose frames
@@ -12106,17 +13445,20 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
     # by krea2 from the words in the job below instead, exactly as if it had had no picture.
     frame_paths = (generate_kontext_hero_frames(refs, player_style,
                                                 (brief or {}).get("weapon") or weapon_style, sq,
-                                                form=hero_form, steps=steps)
+                                                form=hero_form, steps=steps,
+                                                photo_kind=hero_photo_kind if refs.get("player") else None,
+                                                hair=_hair_sentence(hero_pic))
                    if (refs.get("player") or refs.get("weapon")) else None)
     ref_enemies = (generate_kontext_reference_enemy(refs["enemy"], enemy_style, esq,
                                                     last_attack_frame=last_attack_frame,
-                                                    form=enemy_form)
+                                                    form=enemy_form, pic=enemy_pic)
                    if refs.get("enemy") else None)
 
     # A pictured foe is the thing in the picture, not three designed species - the flyer and
     # the boss are its own Kontext edits, and nothing is left for the bestiary to design.
     species = None if ref_enemies else generate_enemy_species(
-        enemy_style, individual=bool(enemy_named and enemy_named.get("known")))
+        enemy_style, individual=bool(enemy_named and enemy_named.get("known")),
+        character=_known_character_enemy(enemy_named))
     # Keep the species-level fallback name in step with the title parse_story_block actually
     # uses (game.js reads the story's boss title FIRST and only falls back to this one), so the
     # two can never disagree if the story call itself happened to fail.
@@ -12163,7 +13505,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                                           species=species, generated=added,
                                                           seeds=seeds)
     portraits = generate_kontext_portrait_set(player_style, size=gfx["portrait"],
-                                              ref=refs.get("player"), form=hero_form)
+                                              ref=refs.get("player"), form=hero_form,
+                                              pic=hero_pic)
 
     print(f"[krea2] v6 {len(frame_paths)}-frame player + {len(enemies)} enemy variants complete - "
           f"player {sq}x{sq}, enemy {esq}x{esq}, portrait {gfx['portrait']}px, "
@@ -12172,7 +13515,7 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
             "enemies": enemies,
             "enemy_names": ({v: species[v]["name"] for v in species} if species else None),
             # {variant: {frame: [x0, y0, x1, y1] | None}} - where each frame's plumbob is, for
-            # game.js to recolour. Only for a family with an overhead marker.
+            # game.js to recolor. Only for a family with an overhead marker.
             "enemy_markers": ({v: {f: _marker_box(p) for f, p in fr.items()}
                                for v, fr in enemies.items()}
                               if enemies and _enemy_signature(enemy_style) else None),
@@ -12284,7 +13627,7 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
                       steps=KREA2_STEPS_DEFAULT, player_image=None,
                       sound_mode="music_and_sound", gfx=None, gfx_name=GFX_QUALITY_DEFAULT,
                       last_attack_frame=False, ending_video="off", pictures=None,
-                      picture_mode=PICTURE_MODE_DEFAULT):
+                      picture_mode=PICTURE_MODE_DEFAULT, wall_picture_level=None):
     """v6 krea2 turbo mode: like v5 but the player is a 7-frame swing animation (shared
     seed, text-posed) that the frontend swaps through on block / attack / hurt - the way
     v4 did it, on the stronger model.
@@ -12304,8 +13647,11 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
     pictures is {slot: data URL} for each mad-lib line the player attached a reference picture
     to - on those lines the typed words are its name. See the Reference pictures section.
     picture_mode is Options' Attachments row (PICTURE_MODES): "reference" also hands each
-    picture to FLUX Kontext to draw that line's art from; "describe" draws it from words only."""
+    picture to FLUX Kontext to draw that line's art from; "describe" draws it from words only.
+    wall_picture_level is Options' Dungeon Style Attachment Sensitivity slider
+    (WALL_PICTURE_LEVELS): how closely a pictured dungeon's surfaces follow the picture."""
     global gen_progress
+    wall_picture_level = _wall_picture_level(wall_picture_level)
     gfx = gfx or GFX_QUALITY_PROFILES[GFX_QUALITY_DEFAULT]
     pictures = {s: pictures[s] for s in PICTURE_SLOTS if (pictures or {}).get(s)}
     if picture_mode not in PICTURE_MODES:
@@ -12353,7 +13699,10 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
                                      wall_named=named["wall"], enemy_named=named["enemy"],
                                      enemy_pictured=bool((looks.get("enemy") or {}).get("look")),
                                      weapon_pictured=bool((looks.get("weapon") or {}).get("look")),
-                                     enemy_typed=named["clean"]["enemy"])
+                                     enemy_typed=named["clean"]["enemy"],
+                                     weapon_typed=(None if "weapon" in looks else
+                                                   _named_weapon(named["clean"]["weapon"],
+                                                                 named["weapon"])))
 
         # The story is published on its own, minutes ahead of the bundle, so the frontend can
         # start the crawl while everything else is still rendering. It keeps the player's OWN
@@ -12370,7 +13719,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
 
         gen_progress["current_step"] = 2
         ref_surfaces = (generate_kontext_surfaces(refs["wall"], brief, named["text"]["wall"],
-                                                  gfx["texture"])
+                                                  gfx["texture"], pic=looks.get("wall"),
+                                                  picture=pictures.get("wall"),
+                                                  level=wall_picture_level)
                         if refs.get("wall") else None)
         w_path, c_path, f_path, l_path, d_path, s_path = generate_flux_surfaces_only(
             named["text"]["wall"], gfx, brief, wall_named=named["wall"], surfaces=ref_surfaces)
@@ -12442,6 +13793,9 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
             # drawn from their picture by Kontext - a line missing from it with "reference"
             # set fell back to its words. None when nothing was attached.
             "picture_mode": picture_mode if pictures else None,
+            # Options' Dungeon Style Attachment Sensitivity (WALL_PICTURE_LEVELS) when the
+            # dungeon's picture was drawn from, else None.
+            "wall_picture_level": wall_picture_level if refs.get("wall") else None,
             "picture_refs": (sorted(set(bundle.get("ref_drawn") or ())
                                     | ({"wall"} if ref_surfaces else set()))
                              if pictures else None),
@@ -12979,6 +14333,7 @@ def save_dungeon_session(bundle, wall_style, player_style, weapon_style, enemy_s
             # absent on runs from before the Attachments option, which were all "describe".
             "picture_mode": bundle.get("picture_mode"),
             "picture_refs": bundle.get("picture_refs"),
+            "wall_picture_level": bundle.get("wall_picture_level"),
             "location": story.get("location", ""),
             "hero": story.get("hero", ""),
             "foe": story.get("foe", ""),
@@ -13346,7 +14701,7 @@ def ending_video_prompt(pictures, styles, has_audio):
     if "hero" in tag:
         refs.append(f"{tag['hero']} is the hero, {_a_or_an(player)} holding {_a_or_an(weapon)}, "
                     "seen from behind the way the player sees them in battle. Keep this exact "
-                    "character - body, clothes, colours and weapon - in every shot and from "
+                    "character - body, clothes, colors and weapon - in every shot and from "
                     "every angle.")
     else:
         refs.append(f"The hero is {_a_or_an(player)} holding {_a_or_an(weapon)}.")
@@ -13355,7 +14710,7 @@ def ending_video_prompt(pictures, styles, has_audio):
                     "the front shows exactly this face.")
     if "boss" in tag:
         refs.append(f"{tag['boss']} is the boss, {_a_or_an(enemy)}: the final opponent, towering "
-                    "over the hero. Keep its exact shape, colours and details in every shot.")
+                    "over the hero. Keep its exact shape, colors and details in every shot.")
     else:
         refs.append(f"The boss is a huge {enemy}, the final opponent, towering over the hero.")
     surfaces = [f"{tag[k]} is its {k}" if k != "wall" else f"{tag[k]} is its walls"
@@ -13402,7 +14757,7 @@ def _ending_open_image(src):
 
 def _ending_ref_image(src, name):
     """Write one reference picture into COMFY_INPUT_DIR and return its filename, or None.
-    The sprites are RGBA cutouts and LoadImage keeps only RGB - whatever colour the transparent
+    The sprites are RGBA cutouts and LoadImage keeps only RGB - whatever color the transparent
     pixels happen to hold would come through as a background - so everything is flattened onto
     plain white first, the way a character reference sheet looks."""
     if not src:
@@ -15110,6 +16465,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 picture_mode = data.get("picture_mode", PICTURE_MODE_DEFAULT)
                 if picture_mode not in PICTURE_MODES:
                     picture_mode = PICTURE_MODE_DEFAULT
+                # Options' Dungeon Style Attachment Sensitivity slider - see WALL_PICTURE_LEVELS.
+                wall_picture_level = _wall_picture_level(data.get("wall_picture_level"))
                 mode = data.get("mode", "v3_flux")
                 # v6-only; v5/v3/v4 ignore this. Matches the setup screen's default option.
                 sound_mode = data.get("sound_mode", "music_and_sound")
@@ -15194,7 +16551,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                                  "last_attack_frame": last_attack_frame,
                                                  "ending_video": ending_video,
                                                  "pictures": pictures,
-                                                 "picture_mode": picture_mode},
+                                                 "picture_mode": picture_mode,
+                                                 "wall_picture_level": wall_picture_level},
                                          daemon=True)
                 else:
                     t = threading.Thread(target=run_batch_v3_flux,
@@ -15203,7 +16561,8 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 print(f"[generate_dungeon] mode={mode} graphics_quality={graphics_quality} {gfx} "
                       f"last_attack_frame={last_attack_frame} ending_video={ending_video} "
                       f"pictures={sorted(pictures) or 'none'}"
-                      f"{f' ({picture_mode})' if pictures else ''}")
+                      f"{f' ({picture_mode})' if pictures else ''}"
+                      + (f" wall_picture_level={wall_picture_level}" if "wall" in pictures else ""))
                 t.start()
                 GEN_THREAD = t
                 return

@@ -352,7 +352,7 @@
       cursor: default;
     }
     /* CREATE is disabled while the server is still tearing a cancelled run out of ComfyUI -
-       see watchForSettling in game.js. An id selector because the button's colour comes from
+       see watchForSettling in game.js. An id selector because the button's color comes from
        Tailwind utility classes (bg-yellow-100 / hover:bg-yellow-200) that a class rule here
        would lose to. */
     #btnCreate:disabled {
@@ -369,7 +369,7 @@
       cursor: default;
     }
     /* "Erase Current Run" greys out when this run was never written to History, so there is
-       nothing on disk to erase. The two lines inside it carry their own Tailwind colours, so
+       nothing on disk to erase. The two lines inside it carry their own Tailwind colors, so
        the rule has to reach the spans as well as the button. */
     #btnQuitEraseRun:disabled {
       background: #c0c0c0;
@@ -1215,7 +1215,7 @@
        opened mid-run (the quit box's "Load a Different Dungeon" leaves the run standing), so
        with a dozen saved dungeons in the list the window has to answer "which of these am I
        already in?" without the player reading every title. A navy bar down the left edge and
-       a pale blue ground - the Win95 selected-item colours, kept light enough that the row's
+       a pale blue ground - the Win95 selected-item colors, kept light enough that the row's
        black text stays readable - and game.js scrolls the list to it on open.
 
        The bar is an inset shadow rather than a fat border so the row does not shift sideways
@@ -1625,7 +1625,7 @@
     }
     /* The caption under the picture goes the Win95 selected-item blue to match, which is also
        what says "this tile" on the half of it that isn't the ring. The tile for the running
-       dungeon already owns that colour (.hist-row--current above), so on that one the ring
+       dungeon already owns that color (.hist-row--current above), so on that one the ring
        alone is the difference - which is correct: it is the same tile either way. */
     #modalHistory .hist-tile:has(:focus-visible) .hist-tile__cap,
     #screenShowcase .hist-tile:has(:focus-visible) .hist-tile__cap {
@@ -1731,7 +1731,7 @@
     /* One .about-link row that is a <button> rather than an <a>: the Discord handle, which has
        no profile URL to point at and copies itself instead. Everything visual is inherited -
        this only undoes what a browser puts on a button by default, so the row is the same
-       height and colour as the real links above it and the arrow-key walker treats it the
+       height and color as the real links above it and the arrow-key walker treats it the
        same way. */
     button.about-link {
       border: 0;
@@ -2531,6 +2531,26 @@
                           title="Qwen3-VL describes the attached picture in words, and the art is drawn from that description.">Describe the picture in words (Qwen3-VL)</option>
                 </select>
               </div>
+            </div>
+
+            <!-- Dungeon Style Attachment Sensitivity: how closely the walls, floor and ceiling follow a
+                 picture attached to the DUNGEON line - five stops from "inspired by it" to "the
+                 picture itself", server.py WALL_PICTURE_LEVELS (sent as wall_picture_level). The
+                 readout in the label names the stop and the line under the ticks says what it
+                 does - game.js WALL_PICTURE_STOPS, kept in step with the server's list. Only
+                 means anything while Attachments is on "Use the picture itself": game.js
+                 disables it and says so on "Describe the picture in words". -->
+            <div id="wallPictureLevelRow" class="flex flex-col gap-1.5"
+                 title="How closely a picture attached to the dungeon line is followed. Remix rebuilds patterns such as fractals, textures and abstract art from their own parts; a photo of a place is painted as that place until Strong and Exact.">
+              <label class="text-xs font-bold text-slate-800" for="wallPictureLevelSlider">
+                Dungeon Style Attachment Sensitivity: <span id="wallPictureLevelValue" class="text-blue-900">Remix</span>
+              </label>
+              <input id="wallPictureLevelSlider" class="win95-slider" type="range" min="0" max="4" step="1" value="2"
+                     aria-describedby="wallPictureLevelText" />
+              <div class="flex justify-between text-[9px] font-bold text-slate-500 select-none -mt-1">
+                <span>Inspired</span><span>Light</span><span>Remix</span><span>Strong</span><span>Exact</span>
+              </div>
+              <div class="text-[10px] text-slate-500 font-bold" id="wallPictureLevelText">Walls are rebuilt from the picture&rsquo;s own parts; so is the ceiling, in a different color. The floor is inspired by it, in colors that complement the walls.</div>
             </div>
 
             <!-- Last Attack Frame: how a foe's attack frame lines up with the blow it throws, which

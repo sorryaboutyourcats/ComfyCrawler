@@ -5,6 +5,8 @@ Thumbs.db
 node_modules/
 .claude/
 showcase/
+# tools/publish_itch.py's builds (the html5 showcase and the staged ComfyUI node).
+itch/
 web/sounds/victory_candidates/
 web/sounds/trailer_candidates/
 # Everything a checkout writes as it runs - saved dungeons, settings, logs, voices (server.py DATA_DIR).

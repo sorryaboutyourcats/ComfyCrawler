@@ -85,7 +85,7 @@ try:
     if srv._fix_offtheme_door(blank_door, grey_wall, DOOR, WALL, 512) != blank_door or calls:
         fail("a monochrome theme had its monochrome door repainted")
 
-    # A grey door in a colourful corridor IS the bug - re-roll, and hand the rescue both
+    # A grey door in a colorful corridor IS the bug - re-roll, and hand the rescue both
     # designed lines so it can set the leaf into the wall.
     fixed = paint("fixed", HOT, HOT)
     srv._reroll_grey_door = stub(fixed)

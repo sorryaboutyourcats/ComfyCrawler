@@ -70,7 +70,7 @@
       'use strict';
 
       // ---- Seeded randomness -------------------------------------------------------------
-      // Every maze, pack colour and enemy roll in the engine goes through Math.random. Seeded,
+      // Every maze, pack color and enemy roll in the engine goes through Math.random. Seeded,
       // the trailer is the same film on every play; reseeded per shot, one shot's rolls can't
       // shift the next one's.
       function mulberry32(a) {

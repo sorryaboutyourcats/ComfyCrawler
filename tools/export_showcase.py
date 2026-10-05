@@ -5,6 +5,7 @@ Usage:
     python tools/export_showcase.py [--out showcase] [--ids tools/showcase_ids.txt] [--clean]
                                     [--favorites | --only-favorites]
                                     [--base-url mowmeow.net/ComfyCrawlerTest/]
+                                    [--budget-mb 480 --no-trailers --full-url <full export>]
 
 Incremental by default: a file already in the export with the same size and modified time as
 its source is left alone (copy2 carries the mtime over, so an unchanged bundle always matches),
@@ -28,6 +29,12 @@ the repo's web/trailers/ folder and shipped flat beside the page). Every dungeon
 this export ships - the curation above is what decides what goes public, and a trailer does not
 get to skip it - so a missing one stops the export. Each trailer dungeon also gets a trimmed copy
 of its bundle for the trailers to download instead (see trailer_files).
+
+--budget-mb, --no-trailers and --full-url make the trimmed build tools/publish_itch.py ships to
+itch.io, whose browser games are capped at 500 MB: the gallery's runs in its Default order until
+the budget is spent (unlisted runs left out - a ?run= link can't reach a game in itch's iframe),
+no trailers (their casts are picked from the full set), and the page told where the full showcase
+lives, so it can link there and hand out 🔗 links to it.
 """
 import argparse
 import json
@@ -66,6 +73,8 @@ SHOWCASE_FLAG_TAG = b'<script>window.COMFYCRAWLER_SHOWCASE = true;</script>\n  '
 # folder up.
 HTML_CHARSET_TAG = b'<meta charset="UTF-8">'
 TRAILER_BASE_TAG = b'\n  <base href="../">'
+# --full-url: read by game.js as FULL_SHOWCASE_URL.
+FULL_SHOWCASE_TAG = b'<script>window.COMFYCRAWLER_FULL_SHOWCASE = %s;</script>\n  '
 
 
 TRAILER_FULL = "trailer_bundle.json"   # a dungeon a trailer fights in
@@ -174,6 +183,21 @@ def normalize_base_url(base_url):
     return base_url if base_url.endswith("/") else base_url + "/"
 
 
+def pick_within_budget(metas, sizes, budget_bytes):
+    """The runs a size-capped export keeps: the gallery's own, in its Default order
+    (server.pick_sample_dungeons - unlisted runs out), up to the first one that would go over
+    `budget_bytes`. Stopping there rather than skipping ahead to a smaller run keeps the gallery
+    a clean top-of-the-list cut. `sizes` is {id: bytes}. Returns (kept, bytes used)."""
+    kept, used = [], 0
+    for meta in server.pick_sample_dungeons(metas, None):
+        size = sizes.get(meta["id"], 0)
+        if used + size > budget_bytes:
+            break
+        kept.append(meta)
+        used += size
+    return kept, used
+
+
 def _stats_in(folder):
     """{filename: stat} for every file directly in `folder`, or {} when it does not exist. One
     os.scandir per folder rather than an os.stat per file: on Windows the directory listing
@@ -190,6 +214,19 @@ def _same_file(src_stat, dest_stat):
     # A 2s window rather than equality: FAT/exFAT and some SMB servers round mtimes to 2s.
     return (dest_stat is not None and dest_stat.st_size == src_stat.st_size
             and abs(dest_stat.st_mtime - src_stat.st_mtime) < 2)
+
+
+def _shell_bytes(trailers):
+    """What the export takes up besides its dungeons - the page, engine, fonts and sounds - so a
+    --budget-mb cap covers the whole folder, not just the runs in it."""
+    total = 0
+    for folder, names in ((server.WEB_DIR, STATIC_SHELL_FILES + ["index.html"]),
+                          (os.path.join(server.WEB_DIR, "fonts"), FONT_FILES),
+                          (os.path.join(server.WEB_DIR, "sounds"), SOUND_WHITELIST),
+                          (server.TRAILERS_DIR, TRAILER_SHELL_FILES if trailers else [])):
+        stats = _stats_in(folder)
+        total += sum(stats[n].st_size for n in names if n in stats)
+    return total
 
 
 class _Sync:
@@ -227,7 +264,8 @@ class _Sync:
 
 
 def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url="",
-                    only_favorites=False):
+                    only_favorites=False, budget_mb=None, trailers=True, full_url="",
+                    full_count=None):
     favorites = favorites or only_favorites
     ids = [] if only_favorites else (
         read_curated_ids(ids_path) if os.path.exists(ids_path) or not favorites else [])
@@ -268,8 +306,25 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
         print("[showcase] none of the curated ids were found - nothing to export.")
         return
 
+    session_files = ("bundle.json", server.ENDING_FILENAME, server.CARD_FILENAME,
+                     server.CARD_BG_FILENAME, server.CARD_HERO_FILENAME)
+    # What the full gallery lists, for the page's "N of M" - counted before any budget cut,
+    # unless the caller read it off the full showcase itself.
+    if full_count is None:
+        full_count = sum(1 for meta in kept if not meta.get("unlisted"))
+    if budget_mb is not None:
+        sizes = {}
+        for meta in kept:
+            server.ensure_session_card(meta["id"])
+            stats = _stats_in(os.path.join(server.SESSIONS_DIR, meta["id"]))
+            sizes[meta["id"]] = sum(stats[n].st_size for n in session_files if n in stats)
+        budget = int(budget_mb * 1048576) - _shell_bytes(trailers)
+        kept, used = pick_within_budget(kept, sizes, budget)
+        print(f"[showcase] --budget-mb {budget_mb:g}: kept {len(kept)} of {full_count} listed "
+              f"run(s), {used / 1048576:.1f} MB of dungeons (unlisted runs left out)")
+
     # The trailers' casts have to be public already - see the module docstring.
-    trailers = read_trailers()
+    trailers = read_trailers() if trailers else {}
     kept_ids = {meta["id"] for meta in kept}
     for name, cfg in trailers.items():
         missing = sorted(set(trailer_files(cfg)) - kept_ids)
@@ -296,8 +351,6 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
 
     sync = _Sync()
     trailer_bytes = 0
-    session_files = ("bundle.json", server.ENDING_FILENAME, server.CARD_FILENAME,
-                     server.CARD_BG_FILENAME, server.CARD_HERO_FILENAME)
     total_bytes = 0
     for meta in kept:
         session_id = meta["id"]
@@ -324,8 +377,12 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
             else:
                 sync.skipped += 1
 
+    manifest = {"sessions": kept}
+    full_url = normalize_base_url(full_url)
+    if full_url:
+        manifest["full_count"] = full_count
     with open(os.path.join(out_dir, "dungeons.json"), "w", encoding="utf-8") as f:
-        json.dump({"sessions": kept}, f)
+        json.dump(manifest, f)
 
     # ---- Static shell: the same page and engine the live server serves, byte-identical except
     # for the one flag line spliced into index.html ahead of game.js. ----
@@ -334,7 +391,10 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
     if SAVED_SETTINGS_TAG not in html:
         raise SystemExit("index.html's #savedSettings tag has changed shape - "
                           "update SAVED_SETTINGS_TAG/SHOWCASE_FLAG_TAG in this script to match.")
-    html = html.replace(SAVED_SETTINGS_TAG, SHOWCASE_FLAG_TAG + SAVED_SETTINGS_TAG, 1)
+    flags = SHOWCASE_FLAG_TAG
+    if full_url:
+        flags += FULL_SHOWCASE_TAG % json.dumps(full_url).encode("utf-8")
+    html = html.replace(SAVED_SETTINGS_TAG, flags + SAVED_SETTINGS_TAG, 1)
     with open(os.path.join(out_dir, "index.html"), "wb") as f:
         f.write(html)
     # <export>/trailer/ (and trailer2/) is the same page, one folder down - so it says so in
@@ -350,7 +410,8 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
             f.write(html.replace(HTML_CHARSET_TAG, HTML_CHARSET_TAG + TRAILER_BASE_TAG, 1))
 
     sync.folder(server.WEB_DIR, out_dir, STATIC_SHELL_FILES)
-    sync.folder(server.TRAILERS_DIR, out_dir, TRAILER_SHELL_FILES)
+    if trailers:
+        sync.folder(server.TRAILERS_DIR, out_dir, TRAILER_SHELL_FILES)
     sync.folder(os.path.join(server.WEB_DIR, "fonts"), os.path.join(out_dir, "fonts"), FONT_FILES)
     # prune: a track dropped from STATIC_MUSIC stops shipping instead of lingering in the export.
     sync.folder(os.path.join(server.WEB_DIR, "sounds"), os.path.join(out_dir, "sounds"),
@@ -362,8 +423,9 @@ def export_showcase(out_dir, ids_path, clean=False, favorites=False, base_url=""
     print(f"[showcase] copied {sync.copied} file(s) ({copied_mb:.1f} MB), "
           f"{sync.skipped} already up to date, {sync.removed} removed")
     where = normalize_base_url(base_url) or "<address>/"
-    print(f"[showcase] trailers: {len(trailer)} dungeon(s), {trailer_bytes / 1048576:.1f} MB of "
-          f"trimmed bundles, at " + ", ".join(f"{where}{name}/" for name in trailers))
+    if trailers:
+        print(f"[showcase] trailers: {len(trailer)} dungeon(s), {trailer_bytes / 1048576:.1f} MB "
+              f"of trimmed bundles, at " + ", ".join(f"{where}{name}/" for name in trailers))
     print(f"[showcase] try it: cd {out_dir} && python -m http.server 8000")
     unlisted = [meta for meta in kept if meta.get("unlisted")]
     if unlisted:
@@ -399,6 +461,16 @@ if __name__ == "__main__":
                          help="Where the export will be hosted (e.g. mowmeow.net/ComfyCrawlerTest/) "
                               "- unlisted runs' links are then printed in full; https:// is "
                               "assumed when no scheme is given")
+    parser.add_argument("--budget-mb", type=float, default=None,
+                         help="Keep the gallery's runs in Default order only up to this many MB "
+                              "for the whole export, leaving unlisted runs out (the itch.io build)")
+    parser.add_argument("--no-trailers", action="store_true",
+                         help="Leave the trailers out")
+    parser.add_argument("--full-url", default="",
+                         help="Where the full showcase lives: the page links there and its 🔗 "
+                              "buttons copy links to it")
     args = parser.parse_args()
     export_showcase(args.out, args.ids, clean=args.clean, favorites=args.favorites,
-                    base_url=args.base_url, only_favorites=args.only_favorites)
+                    base_url=args.base_url, only_favorites=args.only_favorites,
+                    budget_mb=args.budget_mb, trailers=not args.no_trailers,
+                    full_url=args.full_url)

@@ -218,6 +218,10 @@ Options are saved by ComfyCrawler itself, so they're the same whichever address 
 
 Every dungeon you make is saved. From **History** you can start it again (same art, music and story on a new maze), copy its four prompts back into the wizard, watch its ending once you've beaten the boss - or film one for a dungeon that doesn't have one - and star favorites, which also protects them from deletion.
 
+The two view buttons at the bottom of the window switch between the list and a grid of thumbnails:
+
+![History in thumbnail view: a grid of saved dungeons, each showing its hero from behind against that dungeon's walls and floor, with the dungeon's name and its hero vs boss underneath](screenshots/history-thumbnail-view.png)
+
 Saved dungeons live in ComfyUI's `user/comfycrawler/` folder when ComfyCrawler is installed as a node, and in `data/dungeon_sessions/` for the standalone server.
 
 A new install starts with an empty History, so History offers **📥 Get Sample Dungeons**: three finished dungeons (about 55 MB) downloaded from the [showcase site](https://mowmeow.net/ComfyCrawlerTest/) into that same folder, tagged SAMPLE. Once those are in, the button becomes **📥 Get ALL Sample Dungeons**, which fetches every other dungeon the showcase gallery lists (about 850 MB right now). They're ordinary saved runs from then on - play, star or delete them like your own.
