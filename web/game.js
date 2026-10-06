@@ -2646,6 +2646,12 @@
     // A line with a picture is in NAME mode: the picture is what the thing looks like and the
     // words on the line are what it is called (server.py, "Reference pictures").
     const PICTURE_NAME_PLACEHOLDER = 'give it a name (optional)';
+    // ...except on the ENEMY line, which stays an ordinary prompt beside its picture: what is
+    // typed there is still read as a description ("Snowball holding an orange knife" - a name
+    // and something added to the picture). server.py PICTURE_TEXT_SLOTS. So that line keeps its
+    // label, its placeholder and whatever is typed on it when a picture comes or goes.
+    const PICTURE_TEXT_SLOTS = ['enemy'];
+    const pictureNamesLine = (key) => !PICTURE_TEXT_SLOTS.includes(key);
 
     function pictureSlotEls(key) {
       const Key = key.charAt(0).toUpperCase() + key.slice(1);
@@ -2678,17 +2684,20 @@
         if (word) word.textContent = has ? 'Change' : 'Attach';
         el.attach.title = has
           ? 'Change the ' + noun + ' picture' + (fileName ? ' (' + fileName + ')' : '')
-          : 'Attach a picture of the ' + noun + ' - what you type beside it becomes its name';
+          : 'Attach a picture of the ' + noun + (pictureNamesLine(key)
+            ? ' - what you type beside it becomes its name'
+            : ' - what you type beside it still describes it');
         el.attach.setAttribute('aria-label', has ? 'Change the ' + noun + ' picture'
                                                  : 'Attach ' + (/^[aeiou]/.test(noun) ? 'an ' : 'a ') + noun + ' picture');
       }
       if (el.clear) el.clear.classList.toggle('hidden', !has);
-      if (el.label) el.label.textContent = has ? 'NAME' : el.label.dataset.label;
+      const named = has && pictureNamesLine(key);
+      if (el.label) el.label.textContent = named ? 'NAME' : el.label.dataset.label;
       if (el.input) {
         if (el.input.dataset.stylePlaceholder === undefined) {
           el.input.dataset.stylePlaceholder = el.input.placeholder;
         }
-        el.input.placeholder = has ? PICTURE_NAME_PLACEHOLDER : el.input.dataset.stylePlaceholder;
+        el.input.placeholder = named ? PICTURE_NAME_PLACEHOLDER : el.input.dataset.stylePlaceholder;
       }
       // An <input type=file> holds on to the last file picked. Clearing it when the slot ends
       // up empty means picking that same photo again still fires a change event.
@@ -11499,7 +11508,7 @@ void main() {
             // nothing to record: the file is still being read at that point.
             const first = !attachedImages[key];
             setSlotPicture(key, dataUrl, file.name);
-            if (first) promptInput.value = '';
+            if (first && pictureNamesLine(key)) promptInput.value = '';
             recordSetupChange(null);
             // Straight into the blank for the name. Not on touch, where it would bring the
             // keyboard up over the menu (see setupOnTouch).
@@ -11516,7 +11525,7 @@ void main() {
           setSlotPicture(key, null);
           // The name goes with the picture it named: left on a line with no picture, it would
           // be drawn as a description - a sword called "The Beast" would come back a beast.
-          promptInput.value = '';
+          if (pictureNamesLine(key)) promptInput.value = '';
           recordSetupChange(null);
           // The ✕ just hid itself, so the focus needs somewhere to land: the blank on a
           // keyboard, the 🖼️ button on touch, which puts no keyboard up.

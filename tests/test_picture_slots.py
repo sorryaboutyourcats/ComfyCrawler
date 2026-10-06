@@ -425,7 +425,7 @@ srv.generate_kontext_portrait_set = lambda style, size=256, ref=None, form=None,
                                                                       or ["p.png"] * 4)
 try:
     srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None, photo_kind=None, hair="": [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
-    srv.generate_kontext_reference_enemy = lambda ref, look, size, last_attack_frame=False, form=None, pic=None: {
+    srv.generate_kontext_reference_enemy = lambda ref, look, size, last_attack_frame=False, form=None, pic=None, extra=None: {
         "walker": {"idle": "kx_walker.png"}}
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={
         "player": "me.png", "weapon": "brick.png", "enemy": "cat.png"})
@@ -1134,6 +1134,20 @@ try:
     srv._kontext_pose_foe("canvas.png", None, "rabbit", "boss", ["attack"], 1, "j", "r", calm=True)
     ck(jobs[0][0]["idle"].startswith(srv.KONTEXT_FOE_IDLE) and srv.KONTEXT_FOE_CALM in jobs[0][0]["idle"]
        and jobs[0][1] is True, f"a derived foe's redrawn idle is calmed too: {jobs}")
+    # An unarmed pictured foe blocks behind a shield (2026-10-06); an armed one guards with its
+    # weapons, and without the flag (an object made a character) the block is the crossed arms.
+    jobs.clear()
+    srv._kontext_pose_foe("src.png", "drawn.png", "rabbit", "walker", ["attack", "block"], 1, "j", "r", shield=True)
+    ck(jobs[0][0]["block"].startswith(srv.KONTEXT_FOE_SHIELD_BLOCK)
+       and jobs[0][0]["attack"].startswith(srv.KONTEXT_FOE_POSES["attack"]), f"shield block: {jobs[0][0]['block'][:60]!r}")
+    jobs.clear()
+    srv._kontext_pose_foe("src.png", "drawn.png", "man", "walker", ["block"], 1, "j", "r", armed=True, shield=True)
+    ck(jobs[0][0]["block"].startswith(srv.KONTEXT_ARMED_FOE_POSES["block"]), "an armed foe guards with its weapons")
+    jobs.clear()
+    srv._kontext_pose_foe("src.png", "drawn.png", "car", "walker", ["block"], 1, "j", "r")
+    ck(jobs[0][0]["block"].startswith(srv.KONTEXT_FOE_POSES["block"]), "no flag, no shield")
+    ck("face stay in full view" in srv.KONTEXT_FOE_SHIELD_BLOCK and "not glowing" in srv.KONTEXT_FOE_SHIELD_BLOCK
+       and ref_src.count("shield=not form") == 2, "shield block wording / wiring")
     jobs.clear()
     srv._enemy_frame_problem = lambda path, **kw: "clipped" if path == "idle.png" else None
     got = srv._kontext_pose_foe("src.png", "drawn.png", "rabbit", "walker", ["attack"], 1, "j", "r", calm=True)
@@ -1143,6 +1157,47 @@ finally:
      srv.crop_frames_to_common_bbox) = _saved
 ck("calm=calm" in ref_src and 'get("shouting")' in ref_src and "_kontext_pictured_boss(base," in ref_src,
    "the shouting reading no longer reaches the foe's frames")
+
+_game_early = open(os.path.join(ROOT, "web", "game.js"), encoding="utf-8").read()
+# The ENEMY line beside a picture is still a prompt (2026-10-05): a name and/or a description.
+for typed, want in (("Snowball holding an orange knife", ("Snowball", "holding an orange knife")),
+                    ('"Snowball" holding an orange knife', ("Snowball", "holding an orange knife")),
+                    ("Snowball", ("Snowball", "")), ("holding an orange knife", ("", "holding an orange knife")),
+                    ("Snowball, wearing a top hat", ("Snowball", "wearing a top hat")),
+                    ('"Dances with Wolves"', ("Dances with Wolves", "")), ("", ("", ""))):
+    ck(srv._picture_text_split(typed) == want, f"split {typed!r}: {srv._picture_text_split(typed)}")
+_rabbit = {"enemy": {"kind": "rabbit", "look": "white fluffy rabbit"}, "weapon": {"kind": "sword", "look": "steel sword"}}
+got = srv.resolve_named_styles("", "", "Slicer with love", "Snowball holding an orange knife", pictures=_rabbit)
+ck(got["text"]["enemy"] == got["clean"]["enemy"] == "white fluffy rabbit, holding an orange knife"
+   and got["story"]["enemy"] == "white fluffy rabbit, holding an orange knife, called Snowball"
+   and got["enemy"]["name"] == "Snowball" and got["extra"] == {"enemy": "holding an orange knife"},
+   f"enemy words beside a picture: {got['text']['enemy']!r} {got['story']['enemy']!r} {got['enemy']} {got['extra']}")
+ck("Snowball" not in got["text"]["enemy"], "the name must still never reach a picture prompt")
+ck(got["text"]["weapon"] == "steel sword" and got["weapon"]["name"] == "Slicer With Love",
+   f"every other pictured line is all name, as before: {got['weapon']}")
+got = srv.resolve_named_styles("", "", "", "holding an orange knife", pictures=_rabbit)
+ck(got["enemy"] is None and got["text"]["enemy"].endswith("holding an orange knife"), "a description alone names nobody")
+got = srv.resolve_named_styles("", "", "", "Snowball", pictures=_rabbit)
+ck(got["text"]["enemy"] == "white fluffy rabbit" and got["extra"] == {}, "a bare name adds nothing to the look")
+# What was typed about it is kept by every pose and by the boss.
+ck("extra=enemy_extra" in inspect.getsource(srv.generate_krea2_posed_bundle)
+   and 'named.get("extra")' in inspect.getsource(srv.run_batch_v6_krea)
+   and ref_src.count("extra=extra") >= 3 and "It is still {extra}." in inspect.getsource(srv._kontext_pose_foe),
+   "the enemy's typed words no longer reach its drawings")
+_saved = (srv._foe_pose_canvas, srv._kontext_ref_job, srv.keep_largest_figure, srv._save_tight)
+try:
+    sent = []
+    srv._foe_pose_canvas = lambda *a, **kw: "canvas.png"
+    srv._kontext_ref_job = lambda refs, branches, seed, **kw: sent.append(branches["boss"]) or {"boss": "boss.png"}
+    srv.keep_largest_figure = srv._save_tight = lambda *a, **kw: None
+    srv._kontext_pictured_boss("w.png", "ref.png", 512, extra="holding an orange knife")
+    ck("It is still holding an orange knife." in sent[-1] and "grips the same weapons" not in sent[-1], sent[-1])
+    srv._kontext_pictured_boss("w.png", "ref.png", 512)
+    ck("It is still" not in sent[-1], "no words typed, nothing added to the boss")
+finally:
+    srv._foe_pose_canvas, srv._kontext_ref_job, srv.keep_largest_figure, srv._save_tight = _saved
+ck("const PICTURE_TEXT_SLOTS = ['enemy'];" in _game_early and srv.PICTURE_TEXT_SLOTS == ("enemy",),
+   "the page and the server must agree on which pictured lines stay prompts")
 
 # The page sends the stop, and names as many stops as the server has.
 _game = open(os.path.join(ROOT, "web", "game.js"), encoding="utf-8").read()
@@ -1187,7 +1242,7 @@ try:
 finally:
     shutil.rmtree(srv.COMFY_INPUT_DIR, ignore_errors=True)
     srv.COMFY_INPUT_DIR = _saved_dir
-ck("_kontext_pictured_boss(base, ref, size, form, armed=armed)" in ref_src
+ck("_kontext_pictured_boss(base, ref, size, form, armed=armed, extra=extra)" in ref_src
    and "kontext_foe_prompt(look, form, medium" in ref_src, "the enemy's form no longer reaches its drawings")
 # ...and a pictured object's boss stays that object (a car's boss came back an ogre with red eyes).
 _saved = (srv._kontext_ref_job, srv._foe_pose_canvas, srv.keep_largest_figure, srv._save_tight)

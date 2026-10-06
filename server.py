@@ -5964,10 +5964,16 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pi
             ent.update(kind=look["kind"], source="known", known=True, landmarks=None)
 
     text, clean, story = {}, {}, {}
+    pic_names, extras = {}, {}
     for k, v in fields.items():
         if k in pictures:
             look = _picture_form_look(pictures[k]) or _PICTURE_FALLBACK_LOOK[k]
-            name = _picture_name(v)
+            # The enemy's line is a name and/or a description - see PICTURE_TEXT_SLOTS.
+            if k in PICTURE_TEXT_SLOTS:
+                pic_names[k], extras[k] = _picture_text_split(v)
+                if extras[k]:
+                    look = f"{look}, {extras[k]}" if look else extras[k]
+            name = _picture_name(pic_names.get(k, v))
             text[k] = clean[k] = look
             story[k] = f"{look}, called {name}" if (name and look) else (name or look)
             continue
@@ -5982,8 +5988,10 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pi
     out = {k: (parsed[k][0] if parsed[k] else None) for k in fields}
     for k in pictures:
         if k in fields:
-            out[k] = _picture_entity(k, fields[k], pictures[k])
+            out[k] = _picture_entity(k, pic_names.get(k, fields[k]), pictures[k])
     out["text"], out["clean"], out["story"] = text, clean, story
+    # What was typed ABOUT a pictured line besides its name ({slot: words}) - PICTURE_TEXT_SLOTS.
+    out["extra"] = {k: v for k, v in extras.items() if v}
     for k in fields:
         if out[k] and out[k].get("name"):
             print(f"[names] {k}: \"{out[k]['raw']}\" -> {out[k].get('kind') or '(unresolved)'}"
@@ -6865,6 +6873,42 @@ def _picture_name(typed):
     quote marks dropped, since the whole line is the name. "" when nothing was typed."""
     words = _ascii_ify((typed or "").replace('"', " ")).split()
     return " ".join(w[:1].upper() + w[1:] for w in words)
+
+
+# THE ENEMY'S WORDS STILL DESCRIBE IT (2026-10-05). Asked for from play: "instead of just writing
+# the name for an attachment prompt ... also have the text affect it. For example, if the
+# attachment for enemy is that bunny Snowball, then the text prompt could be something like
+# holding an orange knife" - and then: "we'll do this for the enemy prompt only, so it won't say
+# NAME anymore after an attachment is attached, it'll stay like a typical text prompt."
+# So the enemy line beside a picture is read in two parts (_picture_text_split): what the foe is
+# CALLED, which still never reaches a picture prompt (a rabbit called Snowball would be drawn a
+# snowball), and whatever DESCRIBES it, which is added to the picture's LOOK for every reader -
+# the drawing, the story, the sound. A quoted part is the name; without quotes the name ends at
+# the first describing word (_PICTURE_EXTRA_JOINER), and a line with neither is all name, as it
+# always was.
+# Measured on the rabbit's picture with "holding an orange knife": the walker's drawing held an
+# orange blade 3 of 3, and its attack, block and calmed idle kept it 4 of 4.
+PICTURE_TEXT_SLOTS = ("enemy",)
+_PICTURE_EXTRA_JOINER = re.compile(
+    r"(?:^|,\s*|\s+)(?:with|wearing|holding|carrying|wielding|gripping|riding|armed\s+with|"
+    r"dressed\s+(?:in|as)|covered\s+in|made\s+of|featuring|sporting|that|which|who|in\s+an?)\s+",
+    re.IGNORECASE)
+# Every pose edit and the boss are told it is "still" whatever was typed. (Posed with the wording
+# for an enemy PICTURED armed instead - KONTEXT_ARMED_FOE_POSES, written for two great blades -
+# the flyer's attack grew a second, black blade beside its orange knife.)
+
+
+def _picture_text_split(typed):
+    """(name, extra) for the words typed on a PICTURE_TEXT_SLOTS line beside its picture."""
+    text = " ".join(_ascii_ify(typed or "").split())
+    m = re.search(r'"([^"]+)"', text)
+    if m:
+        extra = " ".join((text[:m.start()] + " " + text[m.end():]).split()).strip(" ,")
+        return m.group(1).strip(), extra
+    m = _PICTURE_EXTRA_JOINER.search(text)
+    if m:
+        return text[:m.start()].strip(" ,"), text[m.start():].strip(" ,")
+    return text, ""
 
 
 def _picture_entity(slot, typed, pic):
@@ -12080,6 +12124,10 @@ KONTEXT_FOE_POSES = {
 # and crossed in front of its chest") crossed two EMPTY arms 2 of 2, where this one braced a
 # blade across the chest 2 of 2. The keep line names the weapons - KONTEXT_FOE_KEEP's "shape,
 # colors, markings" does not.
+KONTEXT_FOE_ADD = ("Change one thing about this character: it is now {x}. Keep everything else "
+                   "exactly the same - the same art style, pose, face, hair, clothing, colors and "
+                   "everything else it holds - on the plain white background, the whole of it in "
+                   "view from top to bottom.")
 KONTEXT_FOE_AS_PICTURED = (
     "Put this exact character on a plain solid pure white background, with nothing else in "
     "frame. Keep the character exactly as it is in the picture - the same art style, pose, face, "
@@ -12894,7 +12942,7 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
 
 
 def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, form=None,
-                                     pic=None):
+                                     pic=None, extra=None):
     """All three foes from the enemy's picture, or None when Kontext failed and the caller should
     design them from the words instead. The walker is drawn from the picture and posed with
     KONTEXT_FOE_POSES; the flyer and the boss are the walker's own Kontext edits
@@ -12906,6 +12954,10 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
     medium = None if form else (pic or {}).get("medium")
     # An armed enemy keeps its weapons through every pose, and one pictured whole is not redrawn
     # at all - see _ENEMY_ARMED_Q.
+    # `extra` is what was typed about the foe besides its name (PICTURE_TEXT_SLOTS) - already in
+    # `look`, so the drawing has it; every pose and the boss are told to keep it, and a foe kept
+    # as pictured has the words added by an edit.
+    extra = (extra or "").strip() if not form else ""
     armed = bool(not form and (pic or {}).get("armed"))
     as_pictured = armed and bool((pic or {}).get("whole"))
     if armed:
@@ -12933,6 +12985,19 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
             if not problem:
                 break
             print(f"[Kontext Ref] walker drawing {attempt + 1} is {problem}")
+        if as_pictured and extra:
+            # Kept as pictured, the drawing never read the words - they are added to it here.
+            try:
+                added = _kontext_ref_job([_to_input(drawn["foe_rgb"], "kxfoe_add")],
+                                         {"foe": KONTEXT_FOE_ADD.format(x=extra)}, seed,
+                                         keep_rgb=True, prefix="kxfoe")
+                keep_largest_figure(added["foe"], thresh=50)
+                if not _enemy_frame_problem(added["foe"], feet_max=feet_max):
+                    drawn = added
+            except GenerationCancelled:
+                raise
+            except Exception as e:
+                print(f"[Kontext Ref Error] adding {extra!r} to the enemy: {e}")
         # A foe pictured mid-shout rests with its mouth shut - see _ENEMY_SHOUT_Q. The flyer and
         # the boss are still made from the drawing as it was drawn, shout and all.
         calm = bool(not form and (pic or {}).get("shouting"))
@@ -12944,7 +13009,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
             _save_tight(base, thresh=50)
         got = _kontext_pose_foe(_to_input(drawn["foe_rgb"], "kxfoe_src"), drawn["foe"], look,
                                 "walker", frames, seed, "enemy_poses", "enemy_pose_regen",
-                                armed=armed, calm=calm)
+                                armed=armed, calm=calm, extra=extra, shield=not form)
     except GenerationCancelled:
         raise
     except Exception as e:
@@ -12954,7 +13019,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
     enemies = {"walker": got}
     base = base or got["idle"]
     derived = generate_kontext_enemy_variants(base, size=size, variants=["flyer"])
-    derived["boss"] = _kontext_pictured_boss(base, ref, size, form, armed=armed)
+    derived["boss"] = _kontext_pictured_boss(base, ref, size, form, armed=armed, extra=extra)
     for v, p in derived.items():
         p = p or _krea2_regen_enemy(look, size, KREA2_STEPS_DEFAULT, "kxfoe", attempts=1, variant=v)
         if not p:
@@ -12968,7 +13033,7 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
             enemies[v] = _kontext_pose_foe(_foe_pose_canvas(p, size, f"kxfoe_{v}"), None, look, v,
                                            vframes, seed + 1000 * (1 + ENEMY_VARIANT_NAMES.index(v)),
                                            f"{v}_poses", f"{v}_pose_regen", armed=armed,
-                                           calm=calm)
+                                           calm=calm, extra=extra, shield=not form)
         except GenerationCancelled:
             raise
         except Exception as e:
@@ -13014,7 +13079,7 @@ KONTEXT_FORM_BOSS_EDITS = {
 }
 
 
-def _kontext_pictured_boss(walker_path, ref, size, form=None, armed=False):
+def _kontext_pictured_boss(walker_path, ref, size, form=None, armed=False, extra=None):
     """The pictured foe's boss (KONTEXT_PICTURED_BOSS_EDIT, or KONTEXT_FORM_BOSS_EDITS for an
     object made a character - `form`, see kontext_foe_prompt) as a matted cut-out, or None when
     Kontext failed - the caller then draws one from the words, as for a failed derivation."""
@@ -13025,6 +13090,9 @@ def _kontext_pictured_boss(walker_path, ref, size, form=None, armed=False):
         # ...and an armed one its weapons - see _ENEMY_ARMED_Q.
         edit = edit.replace(" Plain white background.",
                             " It still grips the same weapons in its hands. Plain white background.")
+    if extra and edit.startswith(KONTEXT_PICTURED_BOSS_EDIT[:40]):
+        # ...and what was typed about it, which the picture it is held to does not show.
+        edit = edit.replace(" Plain white background.", f" It is still {extra}. Plain white background.")
     try:
         canvas = _foe_pose_canvas(walker_path, size, "kxenemy_boss")
         p = _kontext_ref_job([canvas, ref], {"boss": edit},
@@ -13068,8 +13136,32 @@ def _foe_pose_canvas(cut_path, size, tag):
     return name
 
 
+# A PICTURED FOE BLOCKS WITH A SHIELD (2026-10-06). Asked for from play, of a cartoon rabbit
+# attached as the enemy: "make it so it looks more like the enemy is blocking when they are
+# blocking". KONTEXT_FOE_POSES' block - "both arms raised and crossed in front of its chest" -
+# on a figure with short arms is its paws under its chin: the walker's read as shouting, the
+# boss's was its idle, and three of the five runs before had a block frame move so little it
+# was dropped for the idle. Measured on that run's walker and boss drawings, 2-3 seeds each:
+#  * arms over the face, or open paws thrust out like a stop sign: startled, or waving (0 of 8
+#    read as a block);
+#  * a force field or a glowing energy shield in front of it: unmistakable, but the glow tinted
+#    the whole foe cyan 9 of 12;
+#  * a big round steel shield "covering it from its chin down to its knees": a block 12 of 12,
+#    no tint - and the foe hidden behind it, only its ears showing;
+#  * this one, half its height at chest and belly, "its whole head and face in full view above
+#    the shield": a clear block with the face still glaring over it 6 of 6, and 4 of 4 on a
+#    cat-headed dancer. Every one moved 5-32 from its idle, against 1-5 for the crossed arms.
+# Not for a foe pictured ARMED, which guards with what it holds (KONTEXT_ARMED_FOE_POSES), nor
+# for an object made a character: on a car-bodied robot the shield covered the car, 2 of 2.
+KONTEXT_FOE_SHIELD_BLOCK = (
+    "Change its pose into a defensive block: it holds up a round steel shield in front of its "
+    "chest and belly with both hands - a shield about half as tall as it is - and braces behind "
+    "it with its knees bent and its shoulders hunched. Its whole head and face stay in full view "
+    "above the shield, glaring over the top of it. One shield only, solid metal, not glowing.")
+
+
 def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key, armed=False,
-                      calm=False):
+                      calm=False, extra=None, shield=False):
     """{frame: path} for one pictured foe: its idle and a KONTEXT_FOE_POSES edit of `src` (an
     input-folder name, the foe on white) for each of `frames`, the stuck ones re-rolled
     (_kontext_unstick) and the bad ones dropped (_enemy_frame_problem) - the frontend shows the
@@ -13081,7 +13173,13 @@ def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key
     feet_max = _person_feet_max(look, variant)
     # An `armed` foe poses with its weapons and keeps them - KONTEXT_ARMED_FOE_POSES.
     keep = KONTEXT_ARMED_FOE_KEEP if armed else KONTEXT_FOE_KEEP
+    # ...and one with words typed about it stays as they say - see PICTURE_TEXT_SLOTS.
+    if extra:
+        keep = f"{keep} It is still {extra}."
     poses = dict(KONTEXT_FOE_POSES, **KONTEXT_ARMED_FOE_POSES) if armed else KONTEXT_FOE_POSES
+    # ...and an unarmed one raises a shield to block - see KONTEXT_FOE_SHIELD_BLOCK.
+    if shield and not armed:
+        poses = dict(poses, block=KONTEXT_FOE_SHIELD_BLOCK)
     edits = {f: f"{poses[f]} {keep}" for f in frames}
     job = dict(edits)
     redraw = idle is None
@@ -13483,7 +13581,7 @@ def _surface_scene_split(path):
 def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                 steps=KREA2_STEPS_DEFAULT, gfx=None, brief=None,
                                 enemy_named=None, last_attack_frame=False, refs=None,
-                                pictures=None):
+                                pictures=None, enemy_extra=None):
     """v6: one krea2 prompt with the 7 shared-seed player pose frames and an enemy, then a
     separate krea2-idle + FLUX.1 Kontext job for the four HUD portrait frames (see
     generate_kontext_portrait_set). Returns {"frames": [7 paths], "enemy": path|None,
@@ -13546,7 +13644,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                    if (refs.get("player") or refs.get("weapon")) else None)
     ref_enemies = (generate_kontext_reference_enemy(refs["enemy"], enemy_style, esq,
                                                     last_attack_frame=last_attack_frame,
-                                                    form=enemy_form, pic=enemy_pic)
+                                                    form=enemy_form, pic=enemy_pic,
+                                                    extra=enemy_extra)
                    if refs.get("enemy") else None)
 
     # A pictured foe is the thing in the picture, not three designed species - the flyer and
@@ -13826,7 +13925,8 @@ def run_batch_v6_krea(wall_style, player_style=None, weapon_style=None, enemy_st
                                              named["text"]["enemy"], steps, gfx, brief,
                                              enemy_named=named["enemy"],
                                              last_attack_frame=last_attack_frame, refs=refs,
-                                             pictures=looks)
+                                             pictures=looks,
+                                             enemy_extra=(named.get("extra") or {}).get("enemy"))
 
         # Last, so the audio weights load after the krea2 UNET and Kontext are done with the
         # card rather than competing with them. Both calls are skippable via sound_mode. Audio
