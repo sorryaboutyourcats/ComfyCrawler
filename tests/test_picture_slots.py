@@ -676,7 +676,8 @@ _saved = (srv._stage_picture, srv._describe_attempt, srv._vlm_wants_rotors, srv.
           srv._vlm_picture_medium, srv._vlm_face_box, srv._vlm_one_word)
 try:
     asked = []
-    yes_no = {srv._ENEMY_ARMED_Q: "NO", srv._ENEMY_WHOLE_Q: "YES", srv._WALL_PATTERN_Q: "PLACE"}
+    yes_no = {srv._ENEMY_ARMED_Q: "NO", srv._ENEMY_WHOLE_Q: "YES", srv._WALL_PATTERN_Q: "PLACE",
+              srv._ENEMY_SHOUT_Q: "NO"}
     srv._vlm_one_word = lambda path, q, what, **kw: yes_no[q]
     srv._vlm_picture_medium = lambda path: "photo"
     srv._vlm_face_box = lambda path: [300, 50, 600, 200]
@@ -717,6 +718,12 @@ try:
     yes_no[srv._ENEMY_WHOLE_Q] = "NO"
     got = srv.describe_pictures({"enemy": "y"})
     ck(got["enemy"].get("armed") is True and "whole" not in got["enemy"], f"armed, cut off: {got}")
+    # ...and whether it was pictured shouting (its idle is then drawn with its mouth shut).
+    ck("shouting" not in got["enemy"], f"a calm enemy is not shouting: {got}")
+    yes_no[srv._ENEMY_SHOUT_Q] = "YES"
+    got = srv.describe_pictures({"player": "x", "enemy": "y"})
+    ck(got["enemy"].get("shouting") is True and "shouting" not in got["player"], f"shouting enemy: {got}")
+    yes_no[srv._ENEMY_SHOUT_Q] = "NO"
     # A dungeon picture is asked whether it is a pattern or a place - and nothing else is.
     reads["picture_wall"] = {"kind": "fractal", "look": "green fractal lattice"}
     got = srv.describe_pictures({"wall": "w", "enemy": "y"})
@@ -1105,6 +1112,38 @@ finally:
     shutil.rmtree(_cb_dir, ignore_errors=True)
 ck("_kontext_shield_block(" in inspect.getsource(srv.generate_kontext_hero_frames), "the block is no longer composed")
 
+# A foe pictured shouting rests with its mouth shut (2026-10-05): the idle is one more edit in the
+# pose job, and the attack still comes from the shouting drawing.
+_saved = (srv._kontext_ref_job, srv._kontext_unstick, srv.keep_largest_figure, srv._enemy_frame_problem,
+          srv.crop_frames_to_common_bbox)
+try:
+    jobs = []
+    srv._kontext_ref_job = lambda refs, branches, seed, **kw: (jobs.append((dict(branches), kw.get("with_source")))
+                                                               or dict({n: f"{n}.png" for n in branches}, source="source.png"))
+    srv._kontext_unstick = lambda *a, **kw: []
+    srv.keep_largest_figure = lambda *a, **kw: None
+    srv._enemy_frame_problem = lambda *a, **kw: None
+    srv.crop_frames_to_common_bbox = lambda *a, **kw: None
+    got = srv._kontext_pose_foe("src.png", "drawn.png", "rabbit", "walker", ["attack", "block"], 1, "j", "r", calm=True)
+    ck(got["idle"] == "idle.png" and jobs[0][0]["idle"].startswith(srv.KONTEXT_FOE_CALM)
+       and "Close its mouth" not in jobs[0][0]["attack"] and jobs[0][1] is False, f"calm walker: {got} {jobs}")
+    jobs.clear()
+    got = srv._kontext_pose_foe("src.png", "drawn.png", "rabbit", "walker", ["attack"], 1, "j", "r")
+    ck(got["idle"] == "drawn.png" and "idle" not in jobs[0][0], "a calm-faced picture's idle is the drawing itself")
+    jobs.clear()
+    srv._kontext_pose_foe("canvas.png", None, "rabbit", "boss", ["attack"], 1, "j", "r", calm=True)
+    ck(jobs[0][0]["idle"].startswith(srv.KONTEXT_FOE_IDLE) and srv.KONTEXT_FOE_CALM in jobs[0][0]["idle"]
+       and jobs[0][1] is True, f"a derived foe's redrawn idle is calmed too: {jobs}")
+    jobs.clear()
+    srv._enemy_frame_problem = lambda path, **kw: "clipped" if path == "idle.png" else None
+    got = srv._kontext_pose_foe("src.png", "drawn.png", "rabbit", "walker", ["attack"], 1, "j", "r", calm=True)
+    ck(got["idle"] == "drawn.png", "a calmed idle that fails its check falls back to the drawing")
+finally:
+    (srv._kontext_ref_job, srv._kontext_unstick, srv.keep_largest_figure, srv._enemy_frame_problem,
+     srv.crop_frames_to_common_bbox) = _saved
+ck("calm=calm" in ref_src and 'get("shouting")' in ref_src and "_kontext_pictured_boss(base," in ref_src,
+   "the shouting reading no longer reaches the foe's frames")
+
 # The page sends the stop, and names as many stops as the server has.
 _game = open(os.path.join(ROOT, "web", "game.js"), encoding="utf-8").read()
 _page = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
@@ -1148,7 +1187,7 @@ try:
 finally:
     shutil.rmtree(srv.COMFY_INPUT_DIR, ignore_errors=True)
     srv.COMFY_INPUT_DIR = _saved_dir
-ck("_kontext_pictured_boss(got[\"idle\"], ref, size, form, armed=armed)" in ref_src
+ck("_kontext_pictured_boss(base, ref, size, form, armed=armed)" in ref_src
    and "kontext_foe_prompt(look, form, medium" in ref_src, "the enemy's form no longer reaches its drawings")
 # ...and a pictured object's boss stays that object (a car's boss came back an ogre with red eyes).
 _saved = (srv._kontext_ref_job, srv._foe_pose_canvas, srv.keep_largest_figure, srv._save_tight)

@@ -99,6 +99,7 @@ Difficulty (pick it before loading a dungeon; the maze is drawn at load):
 | Walkable tiles | ~40 | ~77 | ~124 |
 | Foe health | ×1 | ×1.25 | ×1.6 |
 | Hero health / stamina | 125 / 125 | 100 / 100 | 75 / 100 |
+| Border around each switch | Bright yellow | Thin, pale | None |
 | Other | Walkers guard only 45% of swings; flyers break off when hit mid-dive; packs are 2 at most; no dead ends - every corridor but the stairs' hallway loops back | – | Foes close 10% faster (boss 25%); two doors open onto dead ends |
 
 The maze:

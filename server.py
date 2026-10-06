@@ -5206,6 +5206,10 @@ def _swap_words(text, table):
 # and "attacks", that foe's attack pose ({"clause", "leads": put in front of the whole prompt
 # instead of in the stance slot, "fire": its fire is put back after the cut-out by
 # restore_dropped_fire, "no_smile": a phrase taken out of the LOOK for that frame}).
+_SNOWBALL_ATTACK = (
+    "A furious, snarling face with angry slanted eyebrows, narrowed glaring eyes and a wide-open "
+    "shouting mouth showing two big buck teeth, on a small white rabbit leaping at the viewer "
+    "with its front paws thrown out")
 _KNOWN_ENEMY_LOOKS = {
     "the sims": {
         # "happy smiling" because the user asked for happier Sims. No comma: _enemy_is_person
@@ -5238,6 +5242,28 @@ _KNOWN_ENEMY_LOOKS = {
         # Every frame gets one upright plumbob over the head - see _normalise_markers.
         "marker": "plumbob",
     },
+    # '"Snowball" from Pets' (2026-10-05, asked for as: "Snowball" from Pets [from the Movie!!]).
+    # Qwen3-VL 4B does not know him: asked about the name it says "ball", "snowball" or "cat",
+    # and "cat" or "dog" even given "from the movie The Secret Life of Pets". And his NAME is the
+    # problem in the picture: "snowball from Pets" drew a snowball 2 of 2, and the typed-out
+    # 'snowball from The Secret Life of Pets, the small fluffy white rabbit' snowballs with feet
+    # 4 of 6 through the species prompt ("the subject is literally snowball ..."). This subject
+    # never says the word - krea2 knows the film's rabbit from the film's name - and drew him 6
+    # of 6 as walker, winged flyer and boss. Only on a line that says "pets" (`context`): there
+    # are other Snowballs. `kind` is what the story is told he is.
+    "snowball": {
+        "subject": ("white bunny rabbit from the animated movie The Secret Life of Pets, small "
+                    "and fluffy with long upright ears, a pink nose and big blue eyes"),
+        "context": "pets",
+        "kind": "rabbit",
+        # His face changes when he attacks (asked for from play, same day: "every enemy had the
+        # same exact expression"). The shared attack clause moves his body and leaves the film's
+        # friendly smile on it, and so did this face written into the stance slot (0 of 3). With
+        # the FACE as the subject, leading the prompt: furious brows, a glare and a shouting
+        # mouth with the buck teeth, paws thrown out - walker, flyer and boss, 6 of 6 over two
+        # seeds.
+        "attacks": dict.fromkeys(("walker", "flyer", "boss"), {"clause": _SNOWBALL_ATTACK, "leads": True}),
+    },
 }
 
 
@@ -5264,11 +5290,16 @@ def _fire_attack_frame(enemy_style, variant, frame):
     return frame == "attack" and bool((_known_enemy_attack(enemy_style, variant) or {}).get("fire"))
 
 
-def _known_enemy_look(enemy_named):
-    """The _KNOWN_ENEMY_LOOKS entry for a recognised enemy name, or None."""
-    if not (enemy_named and enemy_named.get("known")):
+def _known_enemy_look(enemy_named, typed=None):
+    """The _KNOWN_ENEMY_LOOKS entry for a recognised enemy name, or None. An entry with a
+    `context` is only for a typed line (`typed`) that says that word - and is then taken whether
+    or not the identity call recognised the name, which for such an entry it gets wrong."""
+    if not enemy_named:
         return None
-    return _KNOWN_ENEMY_LOOKS.get((enemy_named.get("name") or "").strip().lower())
+    look = _KNOWN_ENEMY_LOOKS.get((enemy_named.get("name") or "").strip().lower())
+    if look and look.get("context"):
+        return look if look["context"] in (typed or "").lower() else None
+    return look if enemy_named.get("known") else None
 
 
 def _enemy_literal(enemy_style):
@@ -5572,6 +5603,11 @@ _KNOWN_CHARACTER_LOOKS = {
         "human-looking eyes and fluffy white feathered hands, wearing a dark maroon blazer over a "
         "salmon-pink knitted sweater vest, a white necktie with a red and black diamond pattern, a "
         "silver wristwatch, and orange webbed duck feet"),
+    # '"Mr. Anderson" from The Matrix' (2026-10-05: "should look like keanu reeves"). As "Mr.
+    # Anderson, the real person from The Matrix" krea2 drew a stranger with bare shoulders, 4 of
+    # 4 - and "the character Mr. Anderson from the movie The Matrix" the same. It is the ACTOR'S
+    # name it knows: this line drew Keanu Reeves in the black coat, bust and back view, 4 of 4.
+    "mr. anderson": "Keanu Reeves as Mr. Anderson (Neo), short black hair, wearing a long black coat",
 }
 
 
@@ -5920,6 +5956,12 @@ def resolve_named_styles(wall_style, player_style, weapon_style, enemy_style, pi
                 kind, source = _name_compound_type(ent["raw"])
                 if kind:
                     ent["kind"], ent["source"] = kind, source
+
+    # A _KNOWN_ENEMY_LOOKS name the identity call cannot place is what its entry says it is.
+    for ent in parsed["enemy"]:
+        look = _known_enemy_look(ent, enemy_style)
+        if look and look.get("kind"):
+            ent.update(kind=look["kind"], source="known", known=True, landmarks=None)
 
     text, clean, story = {}, {}, {}
     for k, v in fields.items():
@@ -6518,6 +6560,29 @@ def _vlm_picture_medium(image_path):
 # and 6 test drawings both matched every label: armed = only the fighter and the four drawings
 # holding axes, swords or guns (not the selfie's phone, a pendant, or pigtails that the
 # grounding call had boxed as "weapon"); whole = every head-to-feet figure, no bust or logo.
+# A PICTURED ENEMY'S FACE CHANGES WHEN IT ATTACKS (2026-10-05). Asked for from play, of a run
+# with a picture of an angry, shouting cartoon rabbit attached as the enemy: "we need it to look
+# like the attachment but have the facial expressions for the enemy change when attacking". Every
+# frame is the picture's face - "keep it exactly as it looks" - so a foe pictured mid-shout
+# shouted through its idle, attack and block alike, walker, flyer and boss.
+# The attack cannot be made to differ: "its mouth stretches wide open in a huge roar, far wider
+# than before" drew the same shout with fangs added, and "its mouth clamps shut, teeth gritted"
+# left it open, 6 of 6 each. The REST can: KONTEXT_FOE_CALM closed the mouth into a tight scowl,
+# glare and everything else untouched, 16 of 16 (walker, winged flyer and red-eyed boss, alone
+# and inside the idle's redraw). So a foe whose picture is shouting rests with its mouth shut
+# and attacks with the picture's own face.
+# Which pictures: asked of Qwen3-VL here, where it is already loaded. On 31 pictures and
+# drawings it said YES to the 5 shouting rabbits and one fanged roar, and NO to the 6 calmed
+# ones, a smiling rabbit, an open-mouthed happy one and all 10 other attached enemies.
+# (A calm-faced picture is left as it is: the roar tried for its attack frame - "its mouth opens
+# wide in a furious roar, teeth bared" - took on a smiling rabbit 1 of 2.)
+_ENEMY_SHOUT_Q = ("Is this character shouting, roaring or snarling with its mouth wide open? "
+                  "Reply YES or NO.")
+KONTEXT_FOE_CALM = ("Close its mouth: its lips press shut in a tight, silent scowl, no teeth "
+                    "showing, while it keeps glaring with the same angry eyes and brows. Nothing "
+                    "else changes.")
+
+
 _ENEMY_ARMED_Q = ("Is the main character in this picture holding a weapon in its hands - a sword, "
                   "axe, gun, club or the like? Reply YES or NO.")
 _ENEMY_WHOLE_Q = ("Does this picture show the main character's whole body, from the top of its "
@@ -6763,6 +6828,10 @@ def describe_pictures(pictures):
                 if face:
                     # ...and the real shade of their hair, for the sprite - see _HAIR_Q.
                     got = dict(got, face=face, **_vlm_hair_colors(path, face))
+            # An enemy pictured mid-shout rests with its mouth shut - see _ENEMY_SHOUT_Q.
+            if slot == "enemy" and _vlm_one_word(path, _ENEMY_SHOUT_Q,
+                                                 "whether the enemy is shouting").startswith("YES"):
+                got = dict(got, shouting=True)
             # An enemy pictured whole, weapon in hand, is kept as pictured - see _ENEMY_ARMED_Q.
             if slot == "enemy" and _vlm_one_word(path, _ENEMY_ARMED_Q,
                                                  "whether the enemy is armed").startswith("YES"):
@@ -6775,7 +6844,8 @@ def describe_pictures(pictures):
                   + (f", {got['hair']} hair" if got.get("hair") else "")
                   + (f", {got['beard']} beard" if got.get("beard") else "")
                   + (", armed" if got.get("armed") else "")
-                  + (", shown whole" if got.get("whole") else ""))
+                  + (", shown whole" if got.get("whole") else "")
+                  + (", shouting" if got.get("shouting") else ""))
         if image_name and got["look"] and slot == "wall":
             # A pattern, not a place, is remixed or used as it is - see _WALL_PATTERN_Q.
             if _vlm_one_word(os.path.join(COMFY_INPUT_DIR, image_name), _WALL_PATTERN_Q,
@@ -7226,12 +7296,12 @@ RETRIES ON A FRESH SEED, and they are not optional. Qwen3-VL fails here in two
     # A name that starts with its own article ("The Sims") keeps it: _theme_inline's article
     # strip and lowercasing turned "The Sims" into "sims", a word with no picture of its own.
     # A name in _KNOWN_ENEMY_LOOKS is swapped for its hand-tuned subject instead.
-    if (literal is None and enemy_named and enemy_named.get("known")
+    known_look = _known_enemy_look(enemy_named, enemy_typed)
+    if known_look:
+        literal = known_look["subject"]
+    elif (literal is None and enemy_named and enemy_named.get("known")
             and (enemy_typed or "").strip()):
-        known_look = _known_enemy_look(enemy_named)
-        if known_look:
-            literal = known_look["subject"]
-        elif _THEME_ARTICLE.match(enemy_named.get("name") or ""):
+        if _THEME_ARTICLE.match(enemy_named.get("name") or ""):
             literal = enemy_typed.strip()
         else:
             literal = _theme_inline(enemy_typed.strip())
@@ -12515,11 +12585,11 @@ def _kontext_hold_weapon(drawn, weapon_name, weapon_pic, seed):
 
 # NOBODY ON THE SHIELD (2026-10-05). Reported from play: "recent runs have been created with no
 # shield or strange shields". For a photo player - "man with short brown hair and a beard,
-# wearing a light gray t-shirt ..." - KONTEXT_SHIELD_PROMPT's "painted in {p}'s own colours" had
+# wearing a light gray t-shirt ..." - KONTEXT_SHIELD_PROMPT's "painted in {p}'s own colors" had
 # krea2 paint the MAN on the shield, a little figure in a grey t-shirt, 9 of that player's last 10
 # shields; and the block edit handed that for its second picture raised the shield on the sword
 # arm, lost the sword, or raised nothing at all. (The characters it was tuned on - Jar Jar, a
-# robot, Elmo - have colours of their own to paint a shield in; a person in a t-shirt has not.)
+# robot, Elmo - have colors of their own to paint a shield in; a person in a t-shirt has not.)
 # So the drawing is asked of Qwen3-VL (_SHIELD_FIGURE_Q: right on 21 of 21 shields, 9 with the
 # man on and 12 without), and one with somebody on it is drawn again with no player in the words
 # at all (KONTEXT_SHIELD_PLAIN, a material picked per run - 8 of 8 clean backs over the four);
@@ -12863,9 +12933,18 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
             if not problem:
                 break
             print(f"[Kontext Ref] walker drawing {attempt + 1} is {problem}")
+        # A foe pictured mid-shout rests with its mouth shut - see _ENEMY_SHOUT_Q. The flyer and
+        # the boss are still made from the drawing as it was drawn, shout and all.
+        calm = bool(not form and (pic or {}).get("shouting"))
+        base = None
+        if calm:
+            print("[Kontext Ref] the enemy is pictured shouting - it rests with its mouth shut")
+            base = os.path.splitext(drawn["foe"])[0] + "_base.png"
+            shutil.copy(drawn["foe"], base)
+            _save_tight(base, thresh=50)
         got = _kontext_pose_foe(_to_input(drawn["foe_rgb"], "kxfoe_src"), drawn["foe"], look,
                                 "walker", frames, seed, "enemy_poses", "enemy_pose_regen",
-                                armed=armed)
+                                armed=armed, calm=calm)
     except GenerationCancelled:
         raise
     except Exception as e:
@@ -12873,8 +12952,9 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
         return None
 
     enemies = {"walker": got}
-    derived = generate_kontext_enemy_variants(got["idle"], size=size, variants=["flyer"])
-    derived["boss"] = _kontext_pictured_boss(got["idle"], ref, size, form, armed=armed)
+    base = base or got["idle"]
+    derived = generate_kontext_enemy_variants(base, size=size, variants=["flyer"])
+    derived["boss"] = _kontext_pictured_boss(base, ref, size, form, armed=armed)
     for v, p in derived.items():
         p = p or _krea2_regen_enemy(look, size, KREA2_STEPS_DEFAULT, "kxfoe", attempts=1, variant=v)
         if not p:
@@ -12887,7 +12967,8 @@ def generate_kontext_reference_enemy(ref, look, size, last_attack_frame=False, f
         try:
             enemies[v] = _kontext_pose_foe(_foe_pose_canvas(p, size, f"kxfoe_{v}"), None, look, v,
                                            vframes, seed + 1000 * (1 + ENEMY_VARIANT_NAMES.index(v)),
-                                           f"{v}_poses", f"{v}_pose_regen", armed=armed)
+                                           f"{v}_poses", f"{v}_pose_regen", armed=armed,
+                                           calm=calm)
         except GenerationCancelled:
             raise
         except Exception as e:
@@ -12987,25 +13068,39 @@ def _foe_pose_canvas(cut_path, size, tag):
     return name
 
 
-def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key, armed=False):
+def _kontext_pose_foe(src, idle, look, variant, frames, seed, job_key, regen_key, armed=False,
+                      calm=False):
     """{frame: path} for one pictured foe: its idle and a KONTEXT_FOE_POSES edit of `src` (an
     input-folder name, the foe on white) for each of `frames`, the stuck ones re-rolled
     (_kontext_unstick) and the bad ones dropped (_enemy_frame_problem) - the frontend shows the
     idle for a frame it lacks. `idle` is the foe's matted drawing, or None to redraw it from
     `src` in the same job (KONTEXT_FOE_IDLE). Every frame ends in one shared box, as in
     _krea2_finish_enemy_variants: the frontend scales the lot by the idle's content, so the foe
-    holds its size and a lunge really reaches further."""
+    holds its size and a lunge really reaches further. `calm`: `src` is shouting, and the idle
+    is drawn with its mouth shut (KONTEXT_FOE_CALM) - see _ENEMY_SHOUT_Q."""
     feet_max = _person_feet_max(look, variant)
     # An `armed` foe poses with its weapons and keeps them - KONTEXT_ARMED_FOE_POSES.
     keep = KONTEXT_ARMED_FOE_KEEP if armed else KONTEXT_FOE_KEEP
     poses = dict(KONTEXT_FOE_POSES, **KONTEXT_ARMED_FOE_POSES) if armed else KONTEXT_FOE_POSES
     edits = {f: f"{poses[f]} {keep}" for f in frames}
     job = dict(edits)
-    if idle is None:
-        job["idle"] = f"{KONTEXT_FOE_IDLE} {keep}"
+    redraw = idle is None
+    if redraw:
+        job["idle"] = f"{KONTEXT_FOE_IDLE} {KONTEXT_FOE_CALM + ' ' if calm else ''}{keep}"
+    elif calm:
+        job["idle"] = f"{KONTEXT_FOE_CALM} {keep}"
     paths = _kontext_ref_job([src], job, seed, prefix="kxfoe", job_key=job_key,
-                             with_source=idle is None)
-    if idle is None:
+                             with_source=redraw)
+    if calm and not redraw:
+        # The drawing with its mouth shut, unless it fails the check every frame gets.
+        calmed = paths.pop("idle")
+        keep_largest_figure(calmed, thresh=50)
+        problem = _enemy_frame_problem(calmed, feet_max=feet_max)
+        if problem:
+            print(f"[Kontext Ref] {variant} calmed idle is {problem} - keeping the drawing")
+        else:
+            idle = calmed
+    if redraw:
         # The redrawn idle, unless it fails the same check every frame gets - then `src` itself,
         # matted, which is what the idle was before KONTEXT_FOE_IDLE.
         idle, source = paths.pop("idle"), paths.pop("source")

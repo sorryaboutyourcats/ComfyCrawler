@@ -205,11 +205,15 @@
     //   noDeadEnds           every corridor leads somewhere: braidMaze ties off all of the tips
     //                        instead of MAZE.braidDeadEnds of them, and tieOffDeadEnds sees to
     //                        the few it could not reach. The stairs' hallway is the one exception.
+    //   switchBorder         the frame painted around every wall switch so it can be picked out
+    //                        down a corridor: 'bold' or 'light' - see buildSwitchWallTextures.
+    //                        Absent (Hard) the lever is left bare on the wall.
     const DIFFICULTIES = {
       easy:   { grids: 33,  enemyHpMul: 1,    baseHp: 125, baseStm: 125, reactiveBlockOdds: 0.45, flyersBreakOff: true, maxPack: 2,
-                noDeadEnds: true,
-                desc: 'Easy: a small looping labyrinth with no dead ends - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 125 health and stamina, foes guard far less, flyers break off when struck mid-dive, and packs come two at a time.' },
-      medium: { grids: 66,  enemyHpMul: 1.25, desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, and foes with 25% more health.' },
+                noDeadEnds: true, switchBorder: 'bold',
+                desc: 'Easy: a small looping labyrinth with no dead ends - 33 carved corridors plus shortcuts, with a nearby Exit. The hero starts with 125 health and stamina, foes guard far less, flyers break off when struck mid-dive, packs come two at a time, and every switch has a bright border.' },
+      medium: { grids: 66,  enemyHpMul: 1.25, switchBorder: 'light',
+                desc: 'Medium: 66 carved corridors plus shortcuts - branching routes, lanterns, a distant Exit, foes with 25% more health, and a light border around every switch.' },
       hard:   { grids: 111, enemyHpMul: 1.6,  baseHp: 75, enemySpdMul: 1.1, bossSpdMul: 1.25, decoyDoors: 2,
                 desc: 'Hard: 111 carved corridors plus shortcuts - a sprawling, looping maze with a long, well-gated route to the Exit and doors that open onto dead ends. Foes have 60% more health and close 10% faster (the dread foe 25%), and the hero starts with only 75 health.' }
     };
@@ -1905,9 +1909,11 @@
     // from DIFFICULTIES (and BASE_MAX_HP / BASE_MAX_STM for Medium) - retune one, update this.
     const DIFFICULTY_TOOLTIP = ['Difficulty - how the three differ:', '',
       'Easy: small looping maze with no dead ends, nearby Exit. Hero starts with 125 health and stamina.',
-      '  Foes guard far less, flyers break off when struck mid-dive, packs come two at a time.', '',
+      '  Foes guard far less, flyers break off when struck mid-dive, packs come two at a time.',
+      '  Every switch has a bright border.', '',
       'Medium: the standard game. 66-corridor branching maze, distant Exit.',
-      '  Hero starts with 100 health and stamina. Foes have 25% more health.', '',
+      '  Hero starts with 100 health and stamina. Foes have 25% more health.',
+      '  Every switch has a light border.', '',
       'Hard: sprawling 111-corridor maze with dead-end doors and a long route to the Exit.',
       '  Hero starts with only 75 health. Foes have 60% more health and close 10% faster',
       '  (the boss 25% faster).'].join('\n');
@@ -8815,12 +8821,53 @@ void main() {
       const ictx = inverted.getContext('2d');
       const fixData = fx.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
       const px = fixData.data;
+      // The fixture's real extent, read off its alpha while the pixels are in hand: the AI
+      // cutout rarely fills its maxW x maxH footprint, and the border below should hug the
+      // hardware that was actually drawn.
+      let minX = TEX_SIZE, minY = TEX_SIZE, maxX = -1, maxY = -1;
       for (let i = 0; i < px.length; i += 4) {
+        if (px[i + 3] > 16) {
+          const p = i >> 2, x = p % TEX_SIZE, y = (p - x) / TEX_SIZE;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
         px[i] = 255 - px[i];
         px[i + 1] = 255 - px[i + 1];
         px[i + 2] = 255 - px[i + 2];
       }
       ictx.putImageData(fixData, 0, 0);
+
+      // The difficulty's frame around the fixture (DIFFICULTIES.switchBorder), as a list of
+      // rings from the outside in: [thickness, color]. Painted onto the finished wall rather
+      // than the fixture overlay, so it is the same frame thrown or not and the inversion stays
+      // the only state tell. Bold is a hazard-yellow band between two black lines, which holds
+      // up against any wall the theme paints, light or dark; light is a thin pale line with a
+      // faint shadow outside it, so it survives a white wall without shouting on a dark one.
+      const BORDER_RINGS = {
+        bold:  [[2, '#000000'], [4, '#fde047'], [1, '#000000']],
+        light: [[1, 'rgba(0, 0, 0, 0.35)'], [2, 'rgba(255, 255, 255, 0.6)']]
+      };
+      const rings = maxX < 0 ? null : BORDER_RINGS[difficultyCfg().switchBorder];
+      const BORDER_GAP = 3;           // wall left showing between the fixture and its frame
+
+      function drawBorder(ctx2) {
+        const thick = rings.reduce((sum, r) => sum + r[0], 0);
+        let x = minX - BORDER_GAP - thick, y = minY - BORDER_GAP - thick;
+        let w = (maxX - minX + 1) + (BORDER_GAP + thick) * 2;
+        let h = (maxY - minY + 1) + (BORDER_GAP + thick) * 2;
+        // Four filled bars per ring, not strokeRect: whole pixels, no antialiased half-lines
+        // for the raycaster's nearest-texel sampling to flicker on.
+        for (const [t, color] of rings) {
+          ctx2.fillStyle = color;
+          ctx2.fillRect(x, y, w, t);
+          ctx2.fillRect(x, y + h - t, w, t);
+          ctx2.fillRect(x, y + t, t, h - t * 2);
+          ctx2.fillRect(x + w - t, y + t, t, h - t * 2);
+          x += t; y += t; w -= t * 2; h -= t * 2;
+        }
+      }
 
       function renderPose(on) {
         const c = document.createElement('canvas');
@@ -8829,6 +8876,7 @@ void main() {
         ctx2.imageSmoothingEnabled = false;
         if (baseWallImageData) ctx2.putImageData(baseWallImageData, 0, 0);
         ctx2.drawImage(on ? inverted : fixture, 0, 0);
+        if (rings) drawBorder(ctx2);
         return ctx2.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
       }
 

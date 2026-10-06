@@ -158,6 +158,33 @@ try:
        "an unquoted whole-line name should be drawn from the look too")
     got = srv.resolve_named_styles("", "a duck named Howard", "", "")
     ck(got["text"]["player"] == "a duck named Howard", "a line that is not the name was changed")
+    # "Mr. Anderson" from The Matrix is drawn as the actor (2026-10-05); the story keeps the name.
+    srv.identify_names = lambda items: [{"type": "person", "known": True, "seen": None} for _ in items]
+    got = srv.resolve_named_styles("", '"Mr. Anderson" from The Matrix', "", "")
+    ck(got["text"]["player"].startswith("Keanu Reeves as Mr. Anderson") and got["text"]["player"].endswith("from The Matrix")
+       and got["story"]["player"] == "Mr. Anderson, the real person from The Matrix",
+       f"Mr. Anderson: {got['text']['player']!r} / {got['story']['player']!r}")
+    # "Snowball" from Pets is the film's rabbit whatever the identity call guessed - but only
+    # on a line that says Pets.
+    srv.identify_names = lambda items: [{"type": "cat", "known": True, "seen": "fluffy tail"} for _ in items]
+    got = srv.resolve_named_styles("", "", "", '"Snowball" from Pets')
+    ck(got["enemy"]["kind"] == "rabbit" and got["enemy"]["known"] and got["text"]["enemy"] == "Snowball, the real rabbit from Pets",
+       f"Snowball from Pets: {got['enemy']} {got['text']['enemy']!r}")
+    snow = srv._KNOWN_ENEMY_LOOKS["snowball"]
+    ck(srv._known_enemy_look(got["enemy"], "Snowball from Pets") is snow and "snowball" not in snow["subject"].lower()
+       and "rabbit" in snow["subject"], "the rabbit's subject must never say snowball")
+    # ...and his attack frame leads with a furious face, for every one of the three foes.
+    for v in ("walker", "flyer", "boss"):
+        att = srv.krea2_species_prompt("White bunny rabbit, hovering.", snow["subject"], pose="attack", variant=v)
+        ck(att.startswith("A furious, snarling face") and snow["subject"] in att, f"{v} attack: {att[:80]!r}")
+    ck(not srv.krea2_species_prompt("White bunny rabbit.", snow["subject"], variant="walker").startswith("A furious"),
+       "only the attack frame is furious")
+    got = srv.resolve_named_styles("", "", "", '"Snowball" from The Simpsons')
+    ck(got["enemy"]["kind"] == "cat" and srv._known_enemy_look(got["enemy"], "Snowball from The Simpsons") is None,
+       f"another Snowball must be left alone: {got['enemy']}")
+    ck(srv._known_enemy_look({"name": "The Sims", "known": True}) is srv._KNOWN_ENEMY_LOOKS["the sims"]
+       and srv._known_enemy_look({"name": "The Sims", "known": False}) is None,
+       "an entry without a context still needs the identity call to know the name")
 finally:
     srv.identify_names = _saved_identify
 ck(srv._apply_named_splices_clean('"Billy" the cat', billy_ents) == "Billy the cat",
