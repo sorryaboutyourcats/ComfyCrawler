@@ -127,6 +127,14 @@ HOLD_RUN = [(None, 0.3), ("picture_wall", 9.3), ("picture_player", 3.6), ("pictu
 for _run in (USER_RUN, FAST_RUN, TURN_RUN, HOLD_RUN):
     _at = next(i for i, o in enumerate(_run) if o[0] == "hero_poses")
     _run[_at:_at + 1] = [("hero_poses", round(_run[_at][1] * 7 / 8, 1)), ("hero_block", 27.0)]
+# ...and the two walk frames are jobs of their own after the other five (KONTEXT_WALK_GUIDE): one
+# posed from a walking figure's picture, the other a step taken from that frame. Five sevenths of
+# those seven stay "hero_poses", and the two follow at the 20s apiece they took over six heroes
+# (2026-10-06).
+for _run in (USER_RUN, FAST_RUN, TURN_RUN, HOLD_RUN):
+    _at = next(i for i, o in enumerate(_run) if o[0] == "hero_poses")
+    _run[_at:_at + 1] = [("hero_poses", round(_run[_at][1] * 5 / 7, 1)),
+                         ("hero_walk", 20.0), ("hero_step", 20.0)]
 # ...and that shield is each run's own now (KONTEXT_SHIELD_PROMPT): a krea2 job straight after
 # schnell, before the hero's drawing - 17.4s and 16.6s, load included (2026-09-30).
 for _run in (USER_RUN, FAST_RUN, TURN_RUN, HOLD_RUN):

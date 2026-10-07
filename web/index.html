@@ -571,7 +571,7 @@
       #historyList { max-height: 56dvh !important; }
       #modalSettings > div, #modalHistory > div { max-height: 94dvh !important; }
       #modalSettings, #modalHistory,
-      #modalHistoryConfirm, #modalLeaveRunConfirm,
+      #modalHistoryConfirm, #modalRunOptions, #modalLeaveRunConfirm,
       #modalQuitConfirm, #modalEraseConfirm { padding: 0.5rem !important; }
 
       /* A dungeon row is thumbnail | name+cast+details | Start | movie | star, which needs
@@ -588,7 +588,8 @@
          one exactly and everything after it is pushed onto line two. */
       .hist-row:not(.hist-tile) > .flex-col { flex: 1 1 calc(100% - 3.5rem) !important; }
       .hist-row:not(.hist-tile) .hist-start { flex: 1 1 auto !important; }
-      /* Icons only on a phone: the ▶ and 📋 say it, and the titles still carry the words. */
+      /* Icons only on a phone. Start and Prompts are icons at every width now; this is for the
+         export's 🔗 Link, the one row button that still spells its word out. */
       .hist-row:not(.hist-tile) .hist-btn-word { display: none; }
 
       /* One 190px-minimum tile per row on a phone is a poster, not a list. Two fit. */
@@ -3449,6 +3450,59 @@
           </button>
           <button id="btnHistoryConfirmDelete" class="win95-btn px-4 py-1.5 text-xs text-black bg-red-100 hover:bg-red-200 font-black">
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RUN OPTIONS - a History run's ⚙️ button. What can be put right about a saved run after it
+         is made: for now, which of its hero and three foes are drawn the other way round (a
+         sprite that came out striding left walks backwards). Saved into the run's meta.json
+         (server.py RUN_MIRROR_SLOTS), so the showcase export plays it the same. Stacked over the
+         History window like the confirm boxes; opened and saved by openRunOptions /
+         saveRunOptions in game.js. Cancel has the focus when it opens. -->
+    <div id="modalRunOptions" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
+      <div class="win95-box w-full max-w-sm p-1 shadow-2xl">
+        <div class="win95-title flex items-center justify-between mb-2">
+          <span>⚙️ Run Options</span>
+          <button id="btnRunOptionsClose" class="win95-btn px-2 py-0.5 text-black hover:bg-red-200" aria-label="Close">✕</button>
+        </div>
+
+        <div class="p-4 flex flex-col gap-3">
+          <p id="runOptionsName" class="text-xs font-bold text-blue-900 break-words"></p>
+          <fieldset class="win95-box p-3 flex flex-col gap-2">
+            <legend class="text-xs font-black text-slate-900 px-1.5">Reverse left and right</legend>
+            <p class="text-[11px] text-slate-700">
+              Tick anyone who walks backwards &ndash; facing left while moving right.
+            </p>
+            <label class="flex items-center gap-2 text-xs text-slate-900 font-bold cursor-pointer select-none">
+              <input type="checkbox" id="runOptMirrorPlayer" class="win95-checkbox" data-mirror="player" />
+              <span id="runOptMirrorPlayerText">Player</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-900 font-bold cursor-pointer select-none">
+              <input type="checkbox" id="runOptMirrorWalker" class="win95-checkbox" data-mirror="walker" />
+              <span id="runOptMirrorWalkerText">Enemy</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-900 font-bold cursor-pointer select-none">
+              <input type="checkbox" id="runOptMirrorFlyer" class="win95-checkbox" data-mirror="flyer" />
+              <span id="runOptMirrorFlyerText">Flying enemy</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-900 font-bold cursor-pointer select-none">
+              <input type="checkbox" id="runOptMirrorBoss" class="win95-checkbox" data-mirror="boss" />
+              <span id="runOptMirrorBossText">Boss</span>
+            </label>
+          </fieldset>
+          <p class="text-[11px] text-slate-700">
+            Saved with this dungeon, so it plays the same from History and in an exported showcase.
+          </p>
+        </div>
+
+        <div class="px-4 pb-4 flex justify-end gap-2">
+          <button id="btnRunOptionsCancel" class="win95-btn px-4 py-1.5 text-xs text-black hover:bg-slate-300">
+            Cancel
+          </button>
+          <button id="btnRunOptionsSave" class="win95-btn px-4 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-black">
+            Save
           </button>
         </div>
       </div>

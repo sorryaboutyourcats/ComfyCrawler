@@ -2342,8 +2342,19 @@ def _tight_crop(img, thresh=20):
     return img.crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
 
 
-def crop_portrait_square(portrait_path):
+# How much wider than tall a bust drawn FROM A PICTURE may be - see crop_portrait_square. The
+# several-busts failure its 1.3 guards against is krea2's, drawing from words; Kontext redrawing
+# one picture has not tiled. Reported from play (2026-10-06): Nyan Cat's bust - a cat's head, ears
+# and cheeks, 1.31-1.32 wide once the cut-out had dropped its sliver of shoulders - was rejected in
+# all four frames, and the HUD showed the hero's back instead.
+PORTRAIT_PICTURED_MAX_WIDE = 1.6
+
+
+def crop_portrait_square(portrait_path, pictured=False):
     """Reduce the portrait to ONE head-and-shoulders bust and square it off for the HUD slot.
+    `pictured` - the bust was drawn from the player's picture: a wide head is one head
+    (PORTRAIT_PICTURED_MAX_WIDE), and is set on a square canvas, since the HUD stretches whatever
+    it is given into a square.
 
     Safety net for the duplicate-bust failure: when the model returns several busts, they come back
     as separate connected components once the background is removed, so keeping the largest one
@@ -2385,12 +2396,16 @@ def crop_portrait_square(portrait_path):
         # means several busts ended up connected to each other and got cropped together - the tiled
         # failure that coverage alone does not catch, because a tiled grid still has background
         # around it.
-        if img.width > img.height * 1.3:
+        if img.width > img.height * (PORTRAIT_PICTURED_MAX_WIDE if pictured else 1.3):
             print(f"[Portrait] rejected a frame - {img.width}x{img.height} is too wide for one bust")
             return False
 
         if img.height > img.width:
             img = img.crop((0, 0, img.width, img.width))
+        elif pictured and img.width > img.height:
+            square = Image.new("RGBA", (img.width, img.width), (0, 0, 0, 0))
+            square.paste(img, (0, (img.width - img.height) // 2))
+            img = square
         img.save(portrait_path, format="PNG")
         return True
     except Exception as e:
@@ -6355,10 +6370,33 @@ def _picture_look_finish(slot, kind, look):
     return look
 
 
-def _picture_prompt(slot):
+# The PLAYER's picture read a second time when the first read calls it an animal. Reported from
+# play (2026-10-06): Nyan Cat - a cat's head, legs and tail on a pink toaster pastry - read
+# "gray cat with pink frosting on its head, wearing a rectangular pink hat and black shoes", and
+# the hero came back with a pink box for a head. The player's brief is written for a person
+# (hair, top, legwear, shoes), so an animal's own body gets read as an outfit: of 5 more reads,
+# 3 put the pastry "on its back" and 3 gave it black shoes. This brief, on the same picture:
+# "a rectangular body shaped like a slice of cake with pink frosting and dots, four legs, paws,
+# and a tail", 4 of 4 - and KONTEXT_HERO_ANIMAL drew that body 6 of 6. On two pictures of a white
+# rabbit it reads what the first brief did plus the body and tail.
+# Measured and not used:
+#  * the same sentence added to the player's own brief instead: it read the pastry right, but
+#    moved pictures it was not for - "person with a cat's head, wearing a red tracksuit" became
+#    KIND cat 5 of 6, and two men lost their trousers and shoes 4 of 4;
+#  * an example of the wording wanted ('the way "a round green melon for a body" does'): 6 of 8
+#    reads gave Nyan Cat "a round pink melon for a body".
+_PICTURE_ANIMAL_LOOK = (
+    "the animal alone, not the background, in order from top to bottom: its head, then its "
+    "body - say the shape of its body, and when its body is an object and not an animal's own "
+    "body, name that object - then its legs, feet and tail. It wears nothing unless it plainly "
+    "does. Leave out anything it is holding")
+
+
+def _picture_prompt(slot, look=None):
     """Same hand-built chat template as _naming_prompt - see _story_prompt for why - with the
-    picture spliced in the way _story_prompt splices the player's."""
-    role, look = _PICTURE_ROLES[slot]
+    picture spliced in the way _story_prompt splices the player's. `look` replaces the line's
+    own LOOK brief (_PICTURE_ANIMAL_LOOK)."""
+    role, look = _PICTURE_ROLES[slot][0], look or _PICTURE_ROLES[slot][1]
     return (
         "<|im_start|>system\n" + PICTURE_SYSTEM + "<|im_end|>\n"
         "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
@@ -6467,20 +6505,34 @@ _PICTURE_LEGGED_KINDS = _PERSON_ENEMY_NOUNS | frozenset("""
     character creature monster figure humanoid hero heroine villain warrior knight wizard witch
     soldier ninja pirate robot android cyborg alien zombie skeleton ghoul goblin orc troll elf
     dwarf ogre demon devil vampire werewolf mascot doll clown
+""".split())
+# ...and the animals among them, which have a body of their own where a person has an outfit -
+# see KONTEXT_HERO_ANIMAL.
+_PICTURE_ANIMAL_KINDS = frozenset("""
     cat kitten kitty dog puppy pup bear cub fox wolf rabbit bunny hare mouse rat hamster squirrel
     raccoon pig piglet cow bull calf horse pony donkey goat sheep lamb lion tiger leopard cheetah
     panther monkey ape gorilla chimp chimpanzee frog toad duck duckling chicken chick hen rooster
     bird owl penguin parrot dinosaur dragon lizard gecko panda koala kangaroo deer elephant
     otter ferret hedgehog capybara meerkat sloth llama alpaca camel giraffe hippo rhino
 """.split())
+_PICTURE_LEGGED_KINDS = _PICTURE_LEGGED_KINDS | _PICTURE_ANIMAL_KINDS
 
 
-def _picture_legged_kind(kind):
+def _picture_kind_in(kind, kinds):
     words = re.findall(r"[a-z]+", (kind or "").lower())
     if not words:
         return False
     head = words[-1]
-    return head in _PICTURE_LEGGED_KINDS or (head.endswith("s") and head[:-1] in _PICTURE_LEGGED_KINDS)
+    return head in kinds or (head.endswith("s") and head[:-1] in kinds)
+
+
+def _picture_legged_kind(kind):
+    return _picture_kind_in(kind, _PICTURE_LEGGED_KINDS)
+
+
+def _picture_animal_kind(kind):
+    """True for a KIND that is an animal - "cat", "grey rabbit" - by its head noun."""
+    return _picture_kind_in(kind, _PICTURE_ANIMAL_KINDS)
 
 
 # Things that are not alive and have legs but already are a character's body - a plush toy, a
@@ -6793,6 +6845,24 @@ def _picture_add_lower(slot, image_name, got):
     return got
 
 
+def _picture_reread_animal(image_name, got):
+    """The player's LOOK read again as an animal's - see _PICTURE_ANIMAL_LOOK. Leaves `got` as
+    it was when the second read is unusable, no longer calls it an animal, or the call fails."""
+    try:
+        again = parse_picture_reply(_describe_attempt(
+            "player", image_name, prompt=_picture_prompt("player", look=_PICTURE_ANIMAL_LOOK)),
+            "player")
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[pictures Error] player read as an animal: {e}")
+        return got
+    if again["look"] and _picture_animal_kind(again["kind"]):
+        print(f"[pictures] player is a {got['kind']} - read again as an animal, not an outfit")
+        got = dict(got, look=again["look"])
+    return got
+
+
 def describe_pictures(pictures):
     """{slot: {"kind", "look"}} for every PICTURE_SLOTS line in `pictures` ({slot: data URL}).
     Never raises except to cancel: a picture that could not be read comes back with both None,
@@ -6817,6 +6887,8 @@ def describe_pictures(pictures):
                 break
             if got["look"]:
                 break
+        if image_name and got["look"] and slot == "player" and _picture_animal_kind(got["kind"]):
+            got = _picture_reread_animal(image_name, got)
         if image_name and got["look"]:
             got = _picture_add_lower(slot, image_name, got)
         if (image_name and got["look"] and slot in ("player", "enemy")
@@ -7881,6 +7953,7 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
             raise
         except Exception as e:
             print(f"[Kontext Ref Error] portrait: {e} - painting it from the words instead")
+    pictured = bool(idle_src)     # drawn from the picture, not krea2's from the words
     if not idle_src:
         idle_src = _krea2_portrait_idle(player_style, size, seed)
 
@@ -7888,9 +7961,11 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
     shutil.copy(idle_src, os.path.join(COMFY_INPUT_DIR, idle_in))
 
     # --- Job A2: a typed face detail, painted onto the idle - see _PORTRAIT_FACE_WORDS ---
-    # Not on a photo bust: its player_style is the picture's LOOK, not typed words, and "Add short
-    # brown hair and a beard, wearing a light gray t-shirt ..." repainted the photo's own face.
-    face = None if photo else _portrait_face_detail(player_style)
+    # Not on a pictured bust: its player_style is the picture's LOOK, not typed words, and "Add short
+    # brown hair and a beard, wearing a light gray t-shirt ..." repainted a photo's own face - and
+    # "Add pink cheeks, a rectangular body shaped like a slice of cake with pink frosting ..." a
+    # drawn grey cat's whole face pink (2026-10-06). The bust was drawn from the picture already.
+    face = None if (photo or ref) else _portrait_face_detail(player_style)
     if face:
         try:
             edit = f"Add {face}. Keep the exact same face, expression, skin, lighting and framing."
@@ -7937,7 +8012,8 @@ def generate_kontext_portrait_set(player_style, size=KONTEXT_PORTRAIT_RES, ref=N
             if d > diffs[n]:
                 paths[n] = retry[n]
 
-    frames = [paths[n] if crop_portrait_square(paths[n]) else None for n in PORTRAIT_FRAME_NAMES]
+    frames = [paths[n] if crop_portrait_square(paths[n], pictured=pictured) else None
+              for n in PORTRAIT_FRAME_NAMES]
     fallback = frames[0] or next((p for p in frames if p), None)
     if not fallback:
         return None
@@ -8317,7 +8393,12 @@ def _plan_v6(steps, sound_mode="music_and_sound", last_attack_frame=False, endin
             # Eight 512px edits: 142s, 156s and 212s (Kontext ran anywhere from 0.85 to 1.31
             # s/step across those runs, on the same card) - seven of them now, the block its own
             # job below: 184.5s and 143.0s for the seven (2026-09-29).
-            ("hero_poses", "Posing your hero with Kontext...",                         150, 7 * kx),
+            # Five since 2026-10-06, at the same ~21s each: the two walk frames are their own
+            # jobs after it - one posed from a walking figure's picture (KONTEXT_WALK_GUIDE), the
+            # other a step taken from that frame; 18 such pairs took about 20s a job.
+            ("hero_poses", "Posing your hero with Kontext...",                         110, 5 * kx),
+            ("hero_walk",  "Teaching your hero to walk...",                              20, kx),
+            ("hero_step",  "Teaching your hero to walk...",                              20, kx),
             # The block with the shield's picture as a second reference (KONTEXT_SHIELD_BACK):
             # 34.7s and 19.1s on the same two runs.
             ("hero_block", "Raising your hero's shield with Kontext...",                 27, kx),
@@ -12095,6 +12176,48 @@ KONTEXT_HERO_POSES = {
                "planted with the weight rolling onto it, the right leg stretched out long behind."),
 }
 
+# THE WALK HEADS RIGHT, from a picture of someone walking right. Reported from play (2026-10-06):
+# "sometimes ... the player looks like they're walking backwards [say, they face left when moving
+# right]". A typed hero's walk frames are back views with no heading at all; Kontext turns a
+# pictured hero side-on to stride, and picks the side per frame. The page draws the frames as
+# they are for a walk to the right and mirrored for one to the left (playerFacing in game.js), so
+# a frame striding left walks backwards both ways: 2 of the 18 walk frames in the last nine
+# pictured runs, one frame of a pair each time, which is why it came and went.
+# Measured, on six saved hero drawings (two men, a 3D and a pixel-art cat, a rabbit, a box-headed
+# doll):
+#  * "they walk toward the right edge of the picture, their body turned to face the right edge":
+#    the 3D cat headed LEFT in both frames on one seed of two - no better than the two edits above;
+#  * "still seen from directly behind ... they do not turn to either side": the men turned anyway;
+#  * no way found to SEE the heading and mirror a wrong frame: Qwen3-VL asked LEFT/RIGHT/AWAY
+#    called 23 of 36 frames-and-mirrors right (it says LEFT), asked whether a frame and its
+#    mirror image side by side walk TOWARD each other or APART 15 of 30 (it says APART), and the
+#    toes-ahead-of-the-ankle offset of the cut-out's feet contradicted plain cases;
+#  * the walking figure in KONTEXT_WALK_GUIDE as the edit's second picture, "walking toward the
+#    same edge of the picture as the mannequin": headed right in 42 of 42 frames, all six heroes,
+#    three seeds - the shield's lesson again (KONTEXT_SHIELD_BACK), a picture where words would
+#    not hold.
+# ONE guided frame, though, and the other an edit of it. A second guide caught in a long stride
+# gave the short-legged rabbit the mannequin's own long wooden legs on 5 of 7 seeds, "its legs
+# keep their own length - short legs stay short" or not; the guide here, feet together, never did
+# (18 of 18 clean). So walk2 is posed from the guide and walk1 is KONTEXT_HERO_WALK_STEP, a step
+# taken from that frame with no mannequin in sight: 18 of 18 still headed right, the same
+# character, the rabbit on its own legs. ("The legs have swapped" for the step did as well but
+# waved the weapon about on the cat.) The two edits above are what a failed job falls back on.
+KONTEXT_WALK_GUIDE = os.path.join(PROJECT_DIR, "workflows", "walk_pass.png")
+KONTEXT_HERO_WALK_POSE = (
+    "Change the character's pose to the walking pose of the mannequin in the second picture: "
+    "turned side-on and walking toward the same edge of the picture as the mannequin, at the "
+    "middle of a step with the feet close together under the body. The result shows only the "
+    "character from the first picture - the grey mannequin itself is not in it.")
+KONTEXT_HERO_WALK_STEP = (
+    "Change only the character's legs: they take a step, the front leg swung forward and the back "
+    "leg stretched out behind, as far apart as their own legs reach. They keep walking the same "
+    "way, toward the same edge of the picture, and everything else stays exactly as it is.")
+# KONTEXT_HERO_KEEP without its "strict back view" - these two frames are side-on on purpose.
+KONTEXT_HERO_WALK_KEEP = ("Keep the exact same character, face, hair, clothing, colors, weapon and "
+                          "art style, and the plain white background. The whole figure stays in "
+                          "frame from head to feet.")
+
 # The foe's pose edits. A pictured foe is always drawn "ready to fight" as a character, and
 # Kontext gives even a pile of toy bricks arms and feet for that - so these name limbs, which is
 # what makes them move (see above). A drawing with no arms to raise just comes back unchanged,
@@ -12174,8 +12297,27 @@ KONTEXT_OBJECT_FORMS = {
 }
 
 
+# A DRAWN ANIMAL for a hero keeps its own body. Reported from play (2026-10-06): Nyan Cat - a
+# grey cat's head, legs and tail on a pink toaster-pastry body - came back a grey doll with a
+# pink box for a head. The LOOK had read "wearing a rectangular pink hat and black shoes" (see
+# _PICTURE_ROLES), and the hero prompt keeps "face, hair, clothing". Measured on that picture,
+# six seeds a wording, counting the pastry body with its crust, the cat's head, legs and tail:
+#  * the LOOK as shipped: 0 of 3 (a cap, a hat, the pastry over the back of the head);
+#  * the LOOK read right ("pink polka-dotted pastry body"), prompt as it was: 2 of 6 - the rest
+#    a pink spotted sweater, a gown, a pink blob;
+#  * that LOOK with this sentence and keep line: 3 of 6;
+#  * a LOOK that gives the body its shape ("toast for a body", "rectangular body", "a
+#    rectangular ... pastry for a body") with them: 24 of 24.
+# Told the shape, Kontext follows the picture's own art style too - pixel art 20 of those 24,
+# where the looser LOOK stayed a 3D model 4 of 6. "Smooth, solid 3D shapes" in the style and a
+# sentence asking for a 3D model with volume changed neither count.
+KONTEXT_HERO_ANIMAL = ("It stands upright on its hind legs like a cartoon mascot: its head on top, "
+                       "its own body below that exactly as in the picture, its arms at its sides, "
+                       "its legs and tail underneath.")
+
+
 def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=False, form=None,
-                        photo_kind=None, hair=""):
+                        photo_kind=None, hair="", animal=False):
     """Stage 1 for the hero: the idle frame, drawn from the player's picture, the weapon's, or
     both - chained in that order, which is what "the first picture" / "the second picture" mean.
     The descriptions are the same words krea2 would have been given (the LOOK beside a picture),
@@ -12183,7 +12325,8 @@ def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=Fa
     bricks is held as the brief's one brick. `form` is the player picture's describe_pictures
     reading when it is an object made a character (KONTEXT_OBJECT_FORMS). `photo_kind` is the
     KIND of a player picture that is a photo - drawn photorealistic (_photo_style) - and `hair`
-    that photo's _hair_sentence."""
+    that photo's _hair_sentence. `animal` - the player picture is a drawing of an animal
+    (KONTEXT_HERO_ANIMAL)."""
     p = (player_desc or "").strip() or "armored warrior knight"
     w = (weapon_desc or "").strip() or "sword"
     shape = (form or {}).get("form") if player_pic else None
@@ -12193,6 +12336,10 @@ def kontext_hero_prompt(player_desc, weapon_desc, player_pic=True, weapon_pic=Fa
                f"{KONTEXT_REF_STYLE}: {KONTEXT_OBJECT_FORMS[shape].format(k=k)}. "
                f"The {k}: {form['look']}.")
         keep = f" Keep the {k}'s exact colors, markings and details."
+    elif player_pic and animal and not photo_kind:
+        who = (f"Redraw the {p} from {'the first picture' if weapon_pic else 'this picture'} as "
+               f"{KONTEXT_REF_STYLE}. {KONTEXT_HERO_ANIMAL}")
+        keep = " Keep its exact head, body, legs, tail, markings and colors."
     elif player_pic:
         style = _photo_style(photo_kind) if photo_kind else KONTEXT_REF_STYLE
         who = (f"Redraw the {p} from {'the first picture' if weapon_pic else 'this picture'} as "
@@ -12523,6 +12670,26 @@ def _vlm_hero_view(image_path):
     return "back" if answer.startswith("BACK") else "front" if answer.startswith("FRONT") else None
 
 
+# A DRAWN ANIMAL WITH NO HEAD is drawn again (2026-10-06). Told the shape of Nyan Cat's pastry
+# body, Kontext sometimes grows the body up over the head: two ears standing straight on the top
+# edge of the pastry, 17 of 62 drawings (always the same seeds, whichever KONTEXT_HERO_ANIMAL
+# wording - "its whole head ... standing clear above its body" and a head-body-legs list both
+# left them as they were). It then went wrong twice more: _vlm_hero_view called the faceless
+# thing FRONT, and the turn edit that sent it to drew a boy's head with brown hair on it.
+# Asked of those 62: this question called all 17 EARS, and 7 of the 45 with a head (a redraw
+# that was not needed). "Does it have a head of its own - YES or NO" and "what is directly under
+# its ears - HEAD or BODY" each passed 12 or more of the 17.
+_HERO_HEAD_Q = ("Look at the top of this character. Is there a HEAD above its body, or only EARS "
+                "stuck straight onto the body? Reply HEAD or EARS.")
+KONTEXT_HERO_HEAD_ATTEMPTS = 3
+
+
+def _vlm_hero_headless(image_path):
+    """True when the animal hero drawing at `image_path` has ears but no head - see _HERO_HEAD_Q.
+    An answer that could not be had is not a missing head."""
+    return _vlm_one_word(image_path, _HERO_HEAD_Q, "whether the hero has a head").startswith("EARS")
+
+
 def _vlm_weapon_where(image_path, weapon_name):
     """"hand", "back" or "none" - where the hero drawing's weapon is (see _HERO_WEAPON_Q) - or
     None when the question could not be asked or answered."""
@@ -12819,6 +12986,29 @@ def _kontext_shield_block(src, idle_matted, shield, tail, seed):
     return composite
 
 
+def _kontext_hero_walk(src, fallback, tail, seeds):
+    """The hero's two walk frames, both striding to the right, matted: walk2 posed from the
+    walking figure in KONTEXT_WALK_GUIDE, walk1 a step taken from that frame
+    (KONTEXT_HERO_WALK_STEP). `tail` is the grip and keep lines every pose edit ends on. Should
+    either job fail, both frames are posed from the words alone instead - `fallback`, their
+    KONTEXT_HERO_POSES edits as the pose job would have run them."""
+    try:
+        got = _kontext_ref_job([src, _to_input(KONTEXT_WALK_GUIDE, "kxwalk")],
+                               {"walk2": f"{KONTEXT_HERO_WALK_POSE} {tail}"}, seeds["walk2"],
+                               keep_rgb=True, prefix="kxhero", job_key="hero_walk")
+        step = _kontext_ref_job([_to_input(got["walk2_rgb"], "kxwalk_src")],
+                                {"walk1": f"{KONTEXT_HERO_WALK_STEP} {tail}"}, seeds["walk1"],
+                                prefix="kxhero", job_key="hero_step")
+        return {"walk1": step["walk1"], "walk2": got["walk2"]}
+    except GenerationCancelled:
+        raise
+    except Exception as e:
+        print(f"[Kontext Ref Error] hero's walk from its guide: {e} - posing it from the words")
+        PROGRESS.skip_job("hero_step")
+        return _kontext_ref_job([src], dict(fallback), seeds["walk1"], prefix="kxhero", seeds=seeds,
+                                job_key="hero_walk")
+
+
 def _krea2_hero_art(player_desc, weapon_desc, size, steps, seed, hero=True):
     """krea2's part of a pictured hero, in one job: the shield the block raises (KONTEXT_SHIELD_PROMPT)
     and, with `hero`, the hero itself drawn from the words alone - kontext_hero_prompt with no
@@ -12841,12 +13031,12 @@ def _krea2_hero_art(player_desc, weapon_desc, size, steps, seed, hero=True):
 
 
 def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None,
-                                 steps=KREA2_STEPS_DEFAULT, photo_kind=None, hair=""):
+                                 steps=KREA2_STEPS_DEFAULT, photo_kind=None, hair="", animal=False):
     """The nine V6_FRAME_NAMES frames drawn from the player's and/or weapon's picture (`refs`,
     {slot: staged name}), or None when Kontext failed and the caller should draw them with krea2
     from the words instead. Frames come back matted; the caller crops them exactly like krea2's.
-    `form` and `photo_kind` - see kontext_hero_prompt. With only the weapon pictured the hero
-    itself is krea2's, drawn in `steps` (see KONTEXT_HERO_SWAP)."""
+    `form`, `photo_kind` and `animal` - see kontext_hero_prompt. With only the weapon pictured
+    the hero itself is krea2's, drawn in `steps` (see KONTEXT_HERO_SWAP)."""
     player_pic, weapon_pic = refs.get("player"), refs.get("weapon")
     seed = random.randint(1, 1000000000)
     try:
@@ -12866,14 +13056,24 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
         shield = _to_input(_clean_shield(art.get("shield"), steps, seed) or KONTEXT_SHIELD_BACK,
                            "kxshield")
         if player_pic:
-            drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r],
-                                     {"hero": kontext_hero_prompt(player_desc, weapon_desc,
-                                                                  True, bool(weapon_pic),
-                                                                  form=form,
-                                                                  photo_kind=photo_kind,
-                                                                  hair=hair)},
-                                     seed, size=size, alpha=False, prefix="kxhero",
-                                     job_key="hero_ref")["hero"]
+            # A drawn animal is drawn again while it has no head - see _HERO_HEAD_Q. The last
+            # try is kept whatever it is.
+            animal = bool(animal and not photo_kind
+                          and (form or {}).get("form") not in KONTEXT_OBJECT_FORMS)
+            draw = {"hero": kontext_hero_prompt(player_desc, weapon_desc, True, bool(weapon_pic),
+                                                form=form, photo_kind=photo_kind, hair=hair,
+                                                animal=animal)}
+            for attempt in range(KONTEXT_HERO_HEAD_ATTEMPTS if animal else 1):
+                job = f"hero_ref_redraw{attempt}" if attempt else "hero_ref"
+                if attempt:
+                    print(f"[Kontext Ref] the hero was drawn with no head - drawing it again "
+                          f"(try {attempt + 1})")
+                    PROGRESS.add_job(job, "Drawing your hero again...", 45, KONTEXT_STEPS)
+                drawn = _kontext_ref_job([r for r in (player_pic, weapon_pic) if r], draw,
+                                         seed + 1000 * attempt, size=size, alpha=False,
+                                         prefix="kxhero", job_key=job)["hero"]
+                if not animal or not _vlm_hero_headless(drawn):
+                    break
         else:
             krea2_hero = _to_input(art["hero"], "kxhero_krea2")
             w = (weapon_desc or "").strip().rstrip(".") or "sword"
@@ -12898,12 +13098,16 @@ def generate_kontext_hero_frames(refs, player_desc, weapon_desc, size, form=None
         # hand back the same stride twice.
         seeds = {n: seed + i for i, n in enumerate(edits)}
         block = {"block": edits.pop("block")}
+        walk = {n: edits.pop(n) for n in ("walk1", "walk2")}
         paths = _kontext_ref_job([src], edits, seed, with_source=True, prefix="kxhero",
                                  seeds=seeds, guidances=KONTEXT_HERO_POSE_GUIDANCE,
                                  job_key="hero_poses")
         paths["idle"] = paths.pop("source")
         _kontext_unstick(src, paths, edits, "hero_pose_regen",
                          "Re-posing the hero frames that did not move...", "kxhero")
+        # The walk: both frames striding to the right - see KONTEXT_WALK_GUIDE.
+        paths.update(_kontext_hero_walk(
+            src, walk, f"{grip} {KONTEXT_HERO_WALK_KEEP} {_hero_weapon_keep(weapon_desc)}", seeds))
         # The block: the shield set at their left side and gripped - see KONTEXT_SHIELD_GRIP.
         composed = _kontext_shield_block(src, paths["idle"], shield,
                                          f"Their right hand still grips {wname} at their right "
@@ -13640,7 +13844,8 @@ def generate_krea2_posed_bundle(player_style, weapon_style, enemy_style,
                                                 (brief or {}).get("weapon") or weapon_style, sq,
                                                 form=hero_form, steps=steps,
                                                 photo_kind=hero_photo_kind if refs.get("player") else None,
-                                                hair=_hair_sentence(hero_pic))
+                                                hair=_hair_sentence(hero_pic),
+                                                animal=_picture_animal_kind(hero_pic.get("kind")))
                    if (refs.get("player") or refs.get("weapon")) else None)
     ref_enemies = (generate_kontext_reference_enemy(refs["enemy"], enemy_style, esq,
                                                     last_attack_frame=last_attack_frame,
@@ -14745,6 +14950,51 @@ def set_dungeon_session_favorite(session_id, favorite):
     meta = _update_session_meta(folder, {"favorite": bool(favorite)})
     print(f"[history] {'favorited' if meta['favorite'] else 'unfavorited'} {session_id}")
     return meta["favorite"]
+
+
+# RUN OPTIONS - History's ⚙ button on a saved run (2026-10-07). What a player can put right
+# about a run after it is made, kept in its meta.json as `run_options` so that every listing
+# carries it: the showcase export's dungeons.json is these same records, which is how a setting
+# saved here plays the same in the read-only gallery, and a sample downloaded from it too.
+#
+# `mirror` - reverse left and right for the hero, or for one kind of foe. Asked for from play:
+# a hero drawn from a picture came out striding the other way ("the player is actually facing
+# the opposite way"), and nothing on the page can see which way a sprite faces (see
+# KONTEXT_WALK_GUIDE for what was tried). The page draws a sprite as it is for a walk to the
+# right and mirrored for one to the left; a slot named here has that swapped. Stored sparse -
+# only the slots that are on - so a run nobody touched keeps no record at all.
+RUN_MIRROR_SLOTS = ("player",) + tuple(ENEMY_VARIANT_NAMES)
+
+
+def clean_run_options(options):
+    """`options` as it is stored: {"mirror": {slot: True, ...}} with only the RUN_MIRROR_SLOTS that
+    are switched on, or {} when none is. Raises ValueError for anything that is not that shape,
+    rather than storing a setting no page reads."""
+    if options is None:
+        return {}
+    if not isinstance(options, dict):
+        raise ValueError("Run options have to be an object.")
+    mirror = options.get("mirror") or {}
+    if not isinstance(mirror, dict):
+        raise ValueError("The mirror options have to be an object.")
+    unknown = sorted(set(mirror) - set(RUN_MIRROR_SLOTS))
+    if unknown:
+        raise ValueError(f"Unknown mirror option: {', '.join(map(str, unknown))}")
+    on = {slot: True for slot in RUN_MIRROR_SLOTS if mirror.get(slot) is True}
+    return {"mirror": on} if on else {}
+
+
+def set_dungeon_session_options(session_id, options):
+    """Save one run's options (see RUN_MIRROR_SLOTS). Returns them as written, or None if the
+    session is not there. Raises ValueError for options that are not the stored shape."""
+    cleaned = clean_run_options(options)
+    folder = _session_dir(session_id)
+    if not folder or not os.path.isdir(folder):
+        return None
+    _update_session_meta(folder, {"run_options": cleaned})
+    print(f"[history] run options for {session_id}: "
+          f"{', '.join(cleaned.get('mirror', {})) or 'none'} mirrored")
+    return cleaned
 
 
 def set_dungeon_session_sort_number(session_id, number):
@@ -16986,6 +17236,28 @@ class DungeonHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     body, code = {"success": True, "favorite": favorite}, 200
             except Exception as e:
                 print(f"[history] favorite failed ({e})")
+                body, code = {"success": False, "error": str(e)}, 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(body, ensure_ascii=True).encode("utf-8"))
+            return
+
+        elif self.path == "/api/history_options":
+            # Save on a run's Run Options window. Body is {id, options}; the reply carries the
+            # options as they now stand on disk, which is what the page keeps and plays from.
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                saved = set_dungeon_session_options(data.get("id"), data.get("options"))
+                if saved is None:
+                    body, code = {"success": False, "error": "That saved dungeon is gone."}, 404
+                else:
+                    body, code = {"success": True, "run_options": saved}, 200
+            except ValueError as e:
+                body, code = {"success": False, "error": str(e)}, 400
+            except Exception as e:
+                print(f"[history] run options failed ({e})")
                 body, code = {"success": False, "error": str(e)}, 500
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")

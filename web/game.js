@@ -332,6 +332,12 @@
     const btnHistoryConfirmClose = document.getElementById('btnHistoryConfirmClose');
     const btnHistoryConfirmCancel = document.getElementById('btnHistoryConfirmCancel');
     const btnHistoryConfirmDelete = document.getElementById('btnHistoryConfirmDelete');
+    // A run's ⚙️ button - see openRunOptions.
+    const modalRunOptions = document.getElementById('modalRunOptions');
+    const runOptionsName = document.getElementById('runOptionsName');
+    const btnRunOptionsClose = document.getElementById('btnRunOptionsClose');
+    const btnRunOptionsCancel = document.getElementById('btnRunOptionsCancel');
+    const btnRunOptionsSave = document.getElementById('btnRunOptionsSave');
     // ...and the one a row's Start or Prompts button opens when a run is live behind the window.
     const modalLeaveRunConfirm = document.getElementById('modalLeaveRunConfirm');
     const leaveRunConfirmIcon = document.getElementById('leaveRunConfirmIcon');
@@ -629,6 +635,27 @@
     // loadHistoryDungeon; openSetupScreen writes these back into the fields - as one undo step,
     // so whatever was typed there before is one Ctrl+Z away - then clears this back to null.
     let currentRunHistoryPrompts = null;
+    // RUN OPTIONS: which of the hero and the three foes the run being played draws the other way
+    // round - its saved `run_options.mirror` (History's ⚙️ button; server.py RUN_MIRROR_SLOTS,
+    // which this list has to match). A sprite is drawn as it is for a walk to the right and
+    // mirrored for one to the left, so one that was drawn striding left walks backwards both
+    // ways; a slot switched on here has that swapped. Set by applyRunOptions wherever
+    // currentRunHistoryId is: from the History entry on a replay (and in the showcase export,
+    // whose dungeons.json carries the same record), back to nothing for a freshly made run.
+    const RUN_MIRROR_SLOTS = ['player', 'walker', 'flyer', 'boss'];
+    let runMirror = {};
+    function runMirrorOf(options) {
+      const saved = (options && options.mirror) || {};
+      const out = {};
+      RUN_MIRROR_SLOTS.forEach(slot => { out[slot] = saved[slot] === true; });
+      return out;
+    }
+    function applyRunOptions(options) { runMirror = runMirrorOf(options); }
+    // A pack foe borrows a variant's sprites (recolorOf), so it turns with that variant.
+    function enemyMirrored(e) {
+      const cfg = ENEMY_VARIANTS[e.variant];
+      return !!runMirror[(cfg && cfg.recolorOf) || e.variant];
+    }
     let crawlStarted = false;
     // Date.now() timestamp until which the intro crawl counts as "being read", so the screen
     // saver's idle timer holds off even if the story shipped with no narration audio (or
@@ -1641,6 +1668,7 @@
       crawlReadingUntil = 0;
       currentRunHistoryId = null;
       currentRunFavorite = false;
+      applyRunOptions(null);
       // Landing back on the menu from a History replay: put that run's own prompts back into
       // the fields, so what's shown matches what was actually just played instead of whatever
       // draft was sitting there beforehand - and one undo step restores that draft if it was
@@ -7302,7 +7330,8 @@ void main() {
       // Mirrored for walking left. After the rotate, so the lean into the strafe stays a lean
       // the way they are going; before everything else, so the sprite frames, the procedural
       // rig's sword and shield, the sweat and the death keel-over all turn round together.
-      if (combatState.playerFacing < 0) c.scale(-1, 1);
+      // Run Options can reverse it for a hero whose sprites were drawn facing the other way.
+      if ((combatState.playerFacing < 0) !== !!runMirror.player) c.scale(-1, 1);
 
       // Death pose: keel the whole rig over 90 degrees so the character reads as face-down on
       // the ground. Applied at the shared save/translate so every render path below (sprite
@@ -8017,7 +8046,8 @@ void main() {
           // blow has landed (landEnemyStrike) - relative to whichever way it already faces, so a
           // foe walking left snaps round to the right - and it turns back as the attack ends.
           // Draw-time only: e.facing is left alone, so the walk-direction logic never sees it.
-          const flipped = attackMode === 'flip' && e.state === 'attack' && e.strikeLanded;
+          // Run Options reverses the lot for a foe whose sprites were drawn facing the other way.
+          const flipped = (attackMode === 'flip' && e.state === 'attack' && e.strikeLanded) !== enemyMirrored(e);
           c.save();
           if ((e.facing < 0) !== flipped) { c.translate(ex * 2, 0); c.scale(-1, 1); }
           drawEnemyContent(c, frame, ex, bottomY, targetH, maxW, sizeRef);
@@ -11317,6 +11347,7 @@ void main() {
       // the file, which already closes these regardless of which screen is showing.
       if ((modalHistory && !modalHistory.classList.contains('hidden')) ||
           (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) ||
+          (modalRunOptions && !modalRunOptions.classList.contains('hidden')) ||
           (modalLeaveRunConfirm && !modalLeaveRunConfirm.classList.contains('hidden'))) {
         return;
       }
@@ -12066,6 +12097,7 @@ void main() {
       if (modalAbout && !modalAbout.classList.contains('hidden')) return;
       if (modalHistory && !modalHistory.classList.contains('hidden')) return;
       if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) return;
+      if (modalRunOptions && !modalRunOptions.classList.contains('hidden')) return;
       if (modalAttachNotice && !modalAttachNotice.classList.contains('hidden')) return;
       if (e.target && e.target.tagName === 'TEXTAREA') return;
       // Now that the arrow keys can park the focus ring on any button here, Enter belongs to
@@ -12201,7 +12233,8 @@ void main() {
     // boxes sit on top of the window that opened them, so they win while they are up.
     function topmostOpenDialog() {
       const stack = [modalDownloadStopConfirm, modalEndingStopConfirm, modalEndingPlayer, modalEraseConfirm,
-                     modalHistoryConfirm, modalLeaveRunConfirm, modalQuitConfirm, modalLoadingExitConfirm,
+                     modalHistoryConfirm, modalRunOptions, modalLeaveRunConfirm, modalQuitConfirm,
+                     modalLoadingExitConfirm,
                      modalHistory, modalSettings, modalAbout, modalMakeOwn, modalSharedRun, modalAttachNotice];
       return stack.find(m => m && !m.classList.contains('hidden')) || null;
     }
@@ -13292,6 +13325,7 @@ void main() {
               generationInFlight = false;
               currentRunHistoryId = p.completed_bundle.history_id || null;
               currentRunFavorite = false;   // a freshly generated run has never been starred
+              applyRunOptions(null);        // ...nor had its Run Options touched
               armEnterDungeon(p.completed_bundle);
             } else if (p.error) {
               stopGenerationTimers();
@@ -13904,12 +13938,12 @@ void main() {
       const btnStart = document.createElement('button');
       btnStart.type = 'button';
       btnStart.className = 'hist-start win95-btn px-3 py-1.5 text-xs text-black bg-yellow-100 hover:bg-yellow-200 font-bold shrink-0';
-      // The word goes in its own span so a phone's list can drop it and keep just the icon.
-      btnStart.innerHTML = '▶<span class="hist-btn-word"> Start</span>';
+      // The icon alone - the word is in the tooltip and in the label a screen reader is given.
+      btnStart.textContent = '▶';
       btnStart.setAttribute('aria-label', 'Start');
       btnStart.title = isCurrentRun
         ? 'You are in this dungeon now - Start reloads it from the beginning, on a freshly drawn maze'
-        : 'Play this dungeon again - no generation, straight to the loading screen';
+        : 'Start - play this dungeon again: no generation, straight to the loading screen';
       btnStart.addEventListener('click', () => startHistoryDungeon(entry));
       row.appendChild(btnStart);
 
@@ -13922,15 +13956,17 @@ void main() {
         const btnPrompts = document.createElement('button');
         btnPrompts.type = 'button';
         btnPrompts.className = 'hist-prompts win95-btn px-2.5 py-1.5 text-xs text-black bg-blue-100 hover:bg-blue-200 font-bold shrink-0';
-        btnPrompts.innerHTML = '📋<span class="hist-btn-word"> Prompts</span>';
+        btnPrompts.textContent = '📋';
         btnPrompts.setAttribute('aria-label', 'Prompts');
         // The same typed words the thumbnail's tooltip lists, under a line saying what the
         // button does with them - this button IS the typed words, so showing them is the label.
-        btnPrompts.title = 'Put what was typed to make this dungeon back on the main menu,'
+        btnPrompts.title = 'Prompts - put what was typed to make this dungeon back on the main menu,'
           + ' ready to change a word and CREATE again.'
           + (promptBits.length ? '\n\n' + promptBits.join('\n') : '');
         btnPrompts.addEventListener('click', () => useHistoryPrompts(entry));
         row.appendChild(btnPrompts);
+        row.appendChild(buildRunOptionsButton(entry,
+          'hist-options win95-btn w-10 px-0 py-1.5 text-xs text-black shrink-0 hover:bg-slate-300'));
       } else {
         // The export's second verb in Prompts' place: a link straight to this dungeon (see
         // openSharedRun). The glyph has its own span so the ✅ flash leaves the word alone.
@@ -13977,7 +14013,34 @@ void main() {
 
       paintHistoryFavorite(row, entry);
       paintHistoryMovie(row, entry);
+      paintRunOptionsButton(row, entry);
       return row;
+    }
+
+    // A run's ⚙️: opens its Run Options window (openRunOptions). Not built in SHOWCASE_MODE - the
+    // export is read-only, and plays whatever was saved before it was exported.
+    function buildRunOptionsButton(entry, className) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = className;
+      btn.textContent = '⚙️';
+      btn.addEventListener('click', () => openRunOptions(entry));
+      return btn;
+    }
+
+    // Held down while the run has an option switched on, the way a starred run's star is - so a
+    // run that has been corrected can be told from one nobody has touched.
+    function paintRunOptionsButton(row, entry) {
+      const btn = row.querySelector('.hist-options');
+      if (!btn) return;
+      const saved = runMirrorOf(entry.run_options);
+      const on = RUN_MIRROR_SLOTS.filter(slot => saved[slot]);
+      btn.classList.toggle('is-selected', on.length > 0);
+      const says = 'Run options - reverse left and right for a hero or enemy that walks backwards'
+        + (on.length ? ' (' + on.length + ' reversed now)' : '');
+      btn.setAttribute('aria-label', says);
+      // The empty title on a tile is deliberate - see the same note in paintHistoryFavorite.
+      btn.title = btn.closest('.hist-tile') ? '' : says;
     }
 
     // ==========================================
@@ -13994,7 +14057,7 @@ void main() {
     // paintHistoryMovie, the two-second repaint while an ending films, the scroll-to-the-run-
     // you-are-in on open - therefore works on the grid without knowing which view is up.
     //
-    // What a tile does NOT carry is Use Prompts and the trash can: three buttons is what fits
+    // What a tile does NOT carry is Use Prompts and the trash can: four buttons is what fits
     // over a picture this size, and both of those live one click away in the list view.
     const HISTORY_VIEW_KEY = 'comfycrawler.historyView';
     // No stored choice yet - a fresh browser, or one predating this key - falls back two ways.
@@ -14418,14 +14481,15 @@ void main() {
       art.appendChild(badges);
       tile.appendChild(art);
 
-      // The three actions: overlaid on the bottom of the picture on desktop, in their own row
+      // The actions (Start, Run Options - a Link in the export - the star and the movie): overlaid
+      // on the bottom of the picture on desktop, in their own row
       // below it on a phone (see the .hist-tile grid-area rules in index.html - both are the
       // same DOM, just placed differently). A sibling of art rather than nested inside it, so
       // art's own overflow:hidden (there to clip the blurred loading placeholder) can't clip
       // this along with it once it's no longer confined to the picture's box. Built here rather
       // than shared with buildHistoryRow because only the classes and the handlers are common -
-      // a row's buttons are labelled ("▶ Start") and sized to sit in a line of text, a tile's
-      // are glyphs sized to sit on an image - but they carry the same .hist-* classes, so the
+      // a row's buttons are sized to sit in a line of text and carry tooltips, a tile's are
+      // sized to sit on an image and carry none - but they carry the same .hist-* classes, so the
       // paint functions and the filming repaint drive either one.
       const acts = document.createElement('div');
       acts.className = 'hist-tile__acts';
@@ -14454,6 +14518,8 @@ void main() {
         btnLink.setAttribute('aria-label', 'Copy a link to ' + historyTitleOf(entry));
         btnLink.addEventListener('click', () => copyRunLink(entry, btnLink, btnLink));
         acts.appendChild(btnLink);
+      } else {
+        acts.appendChild(buildRunOptionsButton(entry, 'hist-options win95-btn text-black hover:bg-slate-300'));
       }
 
       const btnStar = document.createElement('button');
@@ -14484,6 +14550,7 @@ void main() {
 
       paintHistoryFavorite(tile, entry);
       paintHistoryMovie(tile, entry);
+      paintRunOptionsButton(tile, entry);
       return tile;
     }
 
@@ -14559,7 +14626,7 @@ void main() {
         top: row.getBoundingClientRect().top,
         focusId: focusedRow ? focusedRow.dataset.id : null,
         focusClass: focusedRow
-          ? ['hist-start', 'hist-star', 'hist-movie'].find(c => document.activeElement.classList.contains(c))
+          ? ['hist-start', 'hist-options', 'hist-star', 'hist-movie'].find(c => document.activeElement.classList.contains(c))
           : null,
       };
     }
@@ -15988,6 +16055,7 @@ void main() {
         setTabTitlePercent(100);
         currentRunHistoryId = entry.id || null;
         currentRunFavorite = !!entry.favorite;
+        applyRunOptions(entry.run_options);
         currentRunHistoryPrompts = historyPromptsOf(entry);
         armEnterDungeon(bundle);
         if (progHeaderIcon) progHeaderIcon.textContent = '📜';
@@ -16147,6 +16215,78 @@ void main() {
       }
     }
 
+    // ---- A run's options ------------------------------------------------------
+    // The ⚙️ on a row or tile. One window for whatever can be put right about a run after it is
+    // made - for now which of its hero and foes are drawn the other way round (see runMirror).
+    // Nothing is written until Save; Cancel, ✕, ESC and a click on the dark list all back out.
+    let runOptionsEntry = null;
+    function runOptionBoxes() {
+      return modalRunOptions ? Array.from(modalRunOptions.querySelectorAll('input[data-mirror]')) : [];
+    }
+
+    function openRunOptions(entry) {
+      if (!entry || !modalRunOptions || SHOWCASE_MODE) return;
+      runOptionsEntry = entry;
+      if (runOptionsName) {
+        runOptionsName.textContent = historyTitleOf(entry)
+          + (entry.created_text ? '  —  ' + entry.created_text : '');
+      }
+      // Who each box turns round, by the names this run gave them.
+      const who = { player: ['Player', entry.hero], walker: ['Enemy', entry.foe],
+                    flyer: ['Flying enemy', ''], boss: ['Boss', entry.boss] };
+      const saved = runMirrorOf(entry.run_options);
+      runOptionBoxes().forEach(box => {
+        const slot = box.dataset.mirror;
+        box.checked = !!saved[slot];
+        const text = document.getElementById(box.id + 'Text');
+        if (text && who[slot]) text.textContent = who[slot][0] + (who[slot][1] ? ' - ' + who[slot][1] : '');
+      });
+      if (btnRunOptionsSave) btnRunOptionsSave.disabled = false;
+      modalRunOptions.classList.remove('hidden');
+      focusFirstIn(modalRunOptions, runOptionBoxes()[0]);
+    }
+
+    function closeRunOptions() {
+      const wasOpen = modalRunOptions && !modalRunOptions.classList.contains('hidden');
+      const entry = runOptionsEntry;
+      runOptionsEntry = null;
+      if (modalRunOptions) modalRunOptions.classList.add('hidden');
+      if (!wasOpen || !modalHistory || modalHistory.classList.contains('hidden')) return;
+      // Back onto the button that opened it, so the arrow keys carry on from that run.
+      const row = entry && historyList && historyRowById(historyList, entry.id);
+      const back = row && row.querySelector('.hist-options');
+      if (back) back.focus({ preventScroll: true });
+      else focusFirstIn(modalHistory, btnHistoryOk);
+    }
+
+    async function saveRunOptions() {
+      const entry = runOptionsEntry;
+      if (!entry) return;
+      const mirror = {};
+      runOptionBoxes().forEach(box => { if (box.checked) mirror[box.dataset.mirror] = true; });
+      if (btnRunOptionsSave) btnRunOptionsSave.disabled = true;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/history_options`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: entry.id, options: { mirror } })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || 'The server refused the change.');
+        entry.run_options = data.run_options || {};
+      } catch (err) {
+        console.error('Run options error:', err);
+        if (btnRunOptionsSave) btnRunOptionsSave.disabled = false;
+        alert('Could not save those run options.\n\n' + err.message);
+        return;
+      }
+      // The run behind the window turns round at once - no need to start it again.
+      if (entry.id && entry.id === currentRunHistoryId) applyRunOptions(entry.run_options);
+      const row = historyList && historyRowById(historyList, entry.id);
+      if (row) paintRunOptionsButton(row, entry);
+      closeRunOptions();
+    }
+
     async function confirmDeleteHistory() {
       const entry = historyPendingDelete;
       closeDeleteConfirm();
@@ -16197,6 +16337,15 @@ void main() {
     if (btnHistoryConfirmClose) btnHistoryConfirmClose.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmCancel) btnHistoryConfirmCancel.addEventListener('click', closeDeleteConfirm);
     if (btnHistoryConfirmDelete) btnHistoryConfirmDelete.addEventListener('click', confirmDeleteHistory);
+    if (btnRunOptionsClose) btnRunOptionsClose.addEventListener('click', closeRunOptions);
+    if (btnRunOptionsCancel) btnRunOptionsCancel.addEventListener('click', closeRunOptions);
+    if (btnRunOptionsSave) btnRunOptionsSave.addEventListener('click', saveRunOptions);
+    // Clicking the darkened History list behind the box backs out, like the other boxes on it.
+    if (modalRunOptions) {
+      modalRunOptions.addEventListener('click', (e) => {
+        if (e.target === modalRunOptions) closeRunOptions();
+      });
+    }
     if (btnLeaveRunConfirmClose) btnLeaveRunConfirmClose.addEventListener('click', closeLeaveRunConfirm);
     if (btnLeaveRunConfirmCancel) btnLeaveRunConfirmCancel.addEventListener('click', closeLeaveRunConfirm);
     if (btnLeaveRunConfirmContinue) btnLeaveRunConfirmContinue.addEventListener('click', confirmLeaveRun);
@@ -16243,6 +16392,9 @@ void main() {
       } else if (modalHistoryConfirm && !modalHistoryConfirm.classList.contains('hidden')) {
         e.preventDefault();
         closeDeleteConfirm();
+      } else if (modalRunOptions && !modalRunOptions.classList.contains('hidden')) {
+        e.preventDefault();
+        closeRunOptions();
       } else if (modalLeaveRunConfirm && !modalLeaveRunConfirm.classList.contains('hidden')) {
         e.preventDefault();
         closeLeaveRunConfirm();

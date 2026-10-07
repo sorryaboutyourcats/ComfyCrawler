@@ -99,6 +99,43 @@ try:
     if rows()[A].get("favorite") is not True:
         fail("saving a sort number dropped the star")
 
+    # Run Options (History's ⚙ button): which of the hero and the three foes are mirrored. Stored
+    # sparse in meta.json, so the listing - and the showcase export, which is the listing - has it.
+    saved = srv.set_dungeon_session_options(A, {"mirror": {"player": True, "boss": True, "flyer": False}})
+    if saved != {"mirror": {"player": True, "boss": True}} or rows()[A].get("run_options") != saved:
+        fail(f"run options were not saved and listed sparse: {saved} / {rows()[A].get('run_options')}")
+    if srv.set_dungeon_session_options(A, {"mirror": {"player": False}}) != {} or rows()[A].get("run_options") != {}:
+        fail("switching every mirror off should leave no options against the run")
+    for junk in ("yes", {"mirror": "all"}, {"mirror": {"wizard": True}}):
+        try:
+            srv.set_dungeon_session_options(A, junk)
+            fail(f"run options {junk!r} were accepted")
+        except ValueError:
+            pass
+    if srv.clean_run_options({"mirror": {"walker": 1, "player": "true"}}) != {}:
+        fail("only a real true switches a mirror on")
+    if tuple(srv.RUN_MIRROR_SLOTS) != ("player", "walker", "flyer", "boss"):
+        fail(f"the mirror slots changed - game.js RUN_MIRROR_SLOTS has to match: {srv.RUN_MIRROR_SLOTS}")
+    # ...and the page has to name the same four: a box in the Run Options window for each, and the
+    # list game.js reads a run's saved options through.
+    import re
+    with open(os.path.join(srv.WEB_DIR, "game.js"), encoding="utf-8") as f:
+        page = f.read()
+    with open(os.path.join(srv.WEB_DIR, "index.html"), encoding="utf-8") as f:
+        html = f.read()
+    listed = re.search(r"const RUN_MIRROR_SLOTS = \[([^\]]*)\]", page)
+    if not listed or tuple(re.findall(r"'(\w+)'", listed.group(1))) != tuple(srv.RUN_MIRROR_SLOTS):
+        fail("game.js RUN_MIRROR_SLOTS does not match server.py's")
+    for slot in srv.RUN_MIRROR_SLOTS:
+        if f'data-mirror="{slot}"' not in html:
+            fail(f"the Run Options window has no box for {slot}")
+    if "applyRunOptions(entry.run_options)" not in page or "/api/history_options" not in page:
+        fail("a replayed run no longer takes its saved Run Options, or the window cannot save them")
+    if srv.set_dungeon_session_options("20260101-000009-zzzzzz", {}) is not None:
+        fail("saving options for a run that is not there did not say so")
+    if rows()[A].get("favorite") is not True:
+        fail("saving run options dropped the star")
+
     # A clip landing beside the bundle shows up even though meta.json was not rewritten for it.
     with open(os.path.join(TMP, B, srv.ENDING_FILENAME), "wb") as f:
         f.write(b"not really an mp4")

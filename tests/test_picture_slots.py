@@ -424,7 +424,7 @@ srv._krea2_finish_enemy_variants = lambda *a, **kw: {"walker": {"idle": "krea2_w
 srv.generate_kontext_portrait_set = lambda style, size=256, ref=None, form=None, pic=None: (portrait_refs.append(ref)
                                                                       or ["p.png"] * 4)
 try:
-    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None, photo_kind=None, hair="": [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
+    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None, photo_kind=None, hair="", animal=False: [f"kx_{n}.png" for n in srv.V6_FRAME_NAMES]
     srv.generate_kontext_reference_enemy = lambda ref, look, size, last_attack_frame=False, form=None, pic=None, extra=None: {
         "walker": {"idle": "kx_walker.png"}}
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={
@@ -436,7 +436,7 @@ try:
        f"ref_drawn / portrait ref: {out['ref_drawn']} {portrait_refs}")
 
     krea2_keys.clear()
-    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None, photo_kind=None, hair="": None      # Kontext fell over
+    srv.generate_kontext_hero_frames = lambda refs, p, w, size, form=None, steps=None, photo_kind=None, hair="", animal=False: None      # Kontext fell over
     out = srv.generate_krea2_posed_bundle("man", "brick", "cat", refs={"weapon": "brick.png",
                                                                        "enemy": "cat.png"})
     ck(krea2_keys and krea2_keys[0] == srv.V6_FRAME_NAMES,
@@ -554,7 +554,8 @@ try:
         return {k: f"krea2_{k}.png" for k in keys}
     def fake_kx(refs, branches, seed, **kw):
         kx_calls.append((list(refs), dict(branches), kw))
-        return {n: f"kx_{n}.png" for n in list(branches) + (["source"] if kw.get("with_source") else [])}
+        return {n: f"kx_{n}.png" for n in list(branches) + (["source"] if kw.get("with_source") else [])
+                + ([f"{b}_rgb" for b in branches] if kw.get("keep_rgb") else [])}
     srv._krea2_submit_and_collect, srv._kontext_ref_job = fake_krea2, fake_kx
     srv._to_input = lambda p, tag: f"in_{p}"
     srv._kontext_turn_hero = lambda drawn, seed: drawn
@@ -603,6 +604,74 @@ try:
     block_jobs = [c for c in kx_calls if "block" in c[1]]
     ck(frames is not None and block_jobs and block_jobs[0][0][1] == f"in_{srv.KONTEXT_SHIELD_BACK}",
        f"a failed shield drawing must fall back on the plain wooden one: {block_jobs}")
+    # The walk heads right: walk2 is posed from a walking figure's picture and walk1 is a step
+    # taken from that frame - a pictured hero's walk frames used to pick a side each, and one
+    # striding left walks backwards on the page ("they face left when moving right").
+    srv._krea2_submit_and_collect = fake_krea2
+    kx_calls.clear()
+    frames = srv.generate_kontext_hero_frames({"player": "me.png"}, "man", "sword", 512)
+    pose_jobs = [c for c in kx_calls if "windup" in c[1]]
+    guided = [c for c in kx_calls if c[2].get("job_key") == "hero_walk"]
+    stepped = [c for c in kx_calls if c[2].get("job_key") == "hero_step"]
+    ck(frames is not None and len(frames) == len(srv.V6_FRAME_NAMES)
+       and not {"walk1", "walk2"} & set(pose_jobs[0][1]),
+       f"the walk frames must not be posed with the others: {sorted(pose_jobs[0][1])}")
+    ck(len(guided) == 1 and list(guided[0][1]) == ["walk2"] and guided[0][0][0] == "in_kx_hero.png"
+       and guided[0][0][1] == f"in_{srv.KONTEXT_WALK_GUIDE}" and guided[0][2].get("keep_rgb")
+       and "mannequin in the second picture" in guided[0][1]["walk2"]
+       and "strict back view" not in guided[0][1]["walk2"] and "Only one sword" in guided[0][1]["walk2"],
+       f"walk2 must be posed from the walking figure's picture: {guided}")
+    ck(len(stepped) == 1 and list(stepped[0][1]) == ["walk1"] and stepped[0][0] == ["in_kx_walk2_rgb.png"]
+       and srv.KONTEXT_HERO_WALK_STEP in stepped[0][1]["walk1"]
+       and "strict back view" not in stepped[0][1]["walk1"],
+       f"walk1 must be a step taken from walk2, with no mannequin in sight: {stepped}")
+    ck(frames[srv.V6_FRAME_NAMES.index("walk1")] == "kx_walk1.png"
+       and frames[srv.V6_FRAME_NAMES.index("walk2")] == "kx_walk2.png", f"walk frames out of place: {frames}")
+    ck(os.path.isfile(srv.KONTEXT_WALK_GUIDE), f"the walking figure's picture is missing: {srv.KONTEXT_WALK_GUIDE}")
+    # ...and a guide job that falls over costs the walk only its heading, never the hero.
+    def no_guide(refs, branches, seed, **kw):
+        if len(refs) == 2 and "walk2" in branches:
+            raise RuntimeError("guide job fell over")
+        return fake_kx(refs, branches, seed, **kw)
+    srv._kontext_ref_job = no_guide
+    kx_calls.clear()
+    frames = srv.generate_kontext_hero_frames({"player": "me.png"}, "man", "sword", 512)
+    worded = [c for c in kx_calls if set(c[1]) == {"walk1", "walk2"}]
+    ck(frames is not None and len(worded) == 1 and worded[0][0] == ["in_kx_hero.png"]
+       and worded[0][1]["walk1"].startswith(srv.KONTEXT_HERO_POSES["walk1"]),
+       f"a failed guide must fall back on the worded walk: {[sorted(c[1]) for c in kx_calls]}")
+    srv._kontext_ref_job = fake_kx
+    # A drawn animal that comes back with ears and no head is drawn again until it has one
+    # (Nyan Cat's pastry body grew up over the head) - and kept as it last came when it never does.
+    _real_headless = srv._vlm_hero_headless
+    try:
+        srv._krea2_submit_and_collect = fake_krea2
+        heads = iter([True, True, False])
+        srv._vlm_hero_headless = lambda p: next(heads)
+        kx_calls.clear()
+        frames = srv.generate_kontext_hero_frames({"player": "cat.png"}, "gray cat", "knife", 512,
+                                                  animal=True)
+        draws = [c for c in kx_calls if "hero" in c[1]]
+        ck(frames is not None and [c[2]["job_key"] for c in draws]
+           == ["hero_ref", "hero_ref_redraw1", "hero_ref_redraw2"]
+           and all(srv.KONTEXT_HERO_ANIMAL in c[1]["hero"] for c in draws),
+           f"a headless animal must be drawn again: {[c[2] for c in draws]}")
+        srv._vlm_hero_headless = lambda p: True
+        kx_calls.clear()
+        frames = srv.generate_kontext_hero_frames({"player": "cat.png"}, "gray cat", "knife", 512,
+                                                  animal=True)
+        ck(frames is not None
+           and len([c for c in kx_calls if "hero" in c[1]]) == srv.KONTEXT_HERO_HEAD_ATTEMPTS,
+           "an animal that never grows a head is kept after its attempts")
+        asked = []
+        srv._vlm_hero_headless = lambda p: asked.append(p) or True
+        for kw in ({}, {"animal": True, "photo_kind": "cat"}):
+            kx_calls.clear()
+            srv.generate_kontext_hero_frames({"player": "me.png"}, "man", "sword", 512, **kw)
+            ck(not asked and len([c for c in kx_calls if "hero" in c[1]]) == 1,
+               f"only a drawn animal is asked about its head: {kw} {asked}")
+    finally:
+        srv._vlm_hero_headless = _real_headless
 finally:
     for k, v in _saved.items():
         setattr(srv, k, v)
@@ -631,6 +700,38 @@ ck("edits=KONTEXT_EXPRESSION_RETRY if ref else None" in port_src and "if d > dif
 ck(all("glasses" in t and "exact same face" not in t for t in srv.KONTEXT_EXPRESSION_RETRY.values())
    and set(srv.KONTEXT_EXPRESSION_RETRY) == set(srv.KONTEXT_EXPRESSION_EDITS),
    "the retry wording must keep the person (and glasses) but not pin the exact face")
+# A wide head drawn from the player's picture is one head, not several busts: Nyan Cat's bust
+# (223x169) was rejected in all four frames and the HUD showed the hero's back. It is kept, on a
+# square canvas (the HUD stretches the portrait into a square); a typed run's rule is unchanged,
+# and two busts side by side are still rejected.
+_wide_dir = tempfile.mkdtemp()
+def _wide_bust(name, w, h):
+    im = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    im.paste((128, 128, 128, 255), (10, 40, 10 + w, 40 + h))
+    im.paste((128, 128, 128, 255), (120, 248, 128, 254))    # a cut-off sliver of shoulder
+    path = os.path.join(_wide_dir, name)
+    im.save(path)
+    return path
+ck(srv.crop_portrait_square(_wide_bust("typed.png", 223, 169)) is False,
+   "a typed run's bust wider than 1.3 must still be rejected")
+_pic = _wide_bust("pictured.png", 223, 169)
+ck(srv.crop_portrait_square(_pic, pictured=True) is True and Image.open(_pic).size == (223, 223)
+   and Image.open(_pic).getpixel((111, 5))[3] == 0 and Image.open(_pic).getpixel((111, 111))[3] == 255,
+   f"a pictured wide head must be kept, centred on a square: {Image.open(_pic).size}")
+ck(srv.crop_portrait_square(_wide_bust("two.png", 240, 130), pictured=True) is False,
+   "two busts side by side must be rejected whatever drew them")
+_tall = _wide_bust("tall.png", 120, 200)
+ck(srv.crop_portrait_square(_tall, pictured=True) is True and Image.open(_tall).size == (120, 120),
+   "a tall pictured bust is still cropped from the top")
+ck("crop_portrait_square(paths[n], pictured=pictured)" in port_src
+   and "pictured = bool(idle_src)" in port_src,
+   "only a bust Kontext drew from the picture gets the wide-head rule")
+# A pictured bust is never given the typed-face-detail edit: its words are the picture's LOOK,
+# and "Add pink cheeks, a rectangular body ..." painted a grey cat's face pink.
+ck("face = None if (photo or ref) else _portrait_face_detail(player_style)" in port_src,
+   "a pictured bust must not get the typed face-detail edit")
+ck(srv._portrait_face_detail("gray cat with pink cheeks, a rectangular body") is not None,
+   "the LOOK that set the edit off no longer would - the check above is then untested")
 
 # A photo bust pushed off to one side (half a face at the frame's edge) is redrawn.
 tmp_bust = tempfile.mkdtemp()
@@ -738,6 +839,32 @@ try:
     reads["picture_player"] = {"kind": "car", "look": "blue sports car"}
     ck("medium" not in srv.describe_pictures({"player": "x"})["player"],
        "an object made a character keeps the house style - no medium")
+    # An animal PLAYER is read a second time, as an animal: Nyan Cat's pastry body had been read
+    # as a pink hat. Its KIND stays; a person and an animal enemy are read once.
+    reads["picture_player"] = {"kind": "cat", "look": "gray cat wearing a rectangular pink hat and black shoes"}
+    reads["picture_enemy"] = {"kind": "rabbit", "look": "white rabbit with long ears and small paws"}
+    again = []
+    srv._describe_attempt = lambda slot, name, prompt=None: (
+        (again.append((slot, prompt)) or " cat\nLOOK: gray cat with a rectangular body shaped like "
+         "a slice of cake with pink frosting, four legs, paws, and a tail")
+        if prompt else dict(reads[name[:-4]]))
+    got = srv.describe_pictures({"player": "x", "enemy": "y"})
+    ck(got["player"]["kind"] == "cat" and "slice of cake" in got["player"]["look"]
+       and "hat" not in got["player"]["look"], f"animal player not read again: {got['player']}")
+    ck(len(again) == 1 and again[0][0] == "player" and srv._PICTURE_ANIMAL_LOOK in again[0][1]
+       and "legwear, then their shoes" not in again[0][1], f"the second read's brief: {again}")
+    ck(got["enemy"]["look"] == "white rabbit with long ears and small paws", f"enemy: {got['enemy']}")
+    # ...and a second read that is unusable, or calls it a person, leaves the first as it was.
+    srv._describe_attempt = lambda slot, name, prompt=None: (
+        " man\nLOOK: man in a cat costume with a pink hat" if prompt else dict(reads[name[:-4]]))
+    ck(srv.describe_pictures({"player": "x"})["player"]["look"] == reads["picture_player"]["look"],
+       "a second read that is no animal must not replace the first")
+    reads["picture_player"] = {"kind": "man", "look": "man in a cap, jeans and boots"}
+    again.clear()
+    srv._describe_attempt = lambda slot, name, prompt=None: (
+        again.append(prompt) or "NONE") if prompt else dict(reads[name[:-4]])
+    srv.describe_pictures({"player": "x"})
+    ck(not again, f"a person must not be read a second time: {again}")
 finally:
     (srv._stage_picture, srv._describe_attempt, srv._vlm_wants_rotors, srv.COMFY_INPUT_DIR,
      srv._vlm_picture_medium, srv._vlm_face_box, srv._vlm_one_word) = _saved
@@ -795,6 +922,36 @@ ck(srv.kontext_hero_prompt("man in a cap", "sword", True, False, hair=" Their ha
    "only a photo player's drawing is told its hair")
 ck("hair=_hair_sentence(hero_pic)" in inspect.getsource(srv.generate_krea2_posed_bundle),
    "the hair's shade no longer reaches the hero's drawing")
+# A drawn animal for a hero keeps its own body (2026-10-06, Nyan Cat's pastry body): stood up
+# like a mascot, and nothing in its keep line about hair or clothing.
+hero_cat = srv.kontext_hero_prompt("gray cat with a rectangular pastry body", "pocket knife", True,
+                                   False, animal=True)
+ck(srv.KONTEXT_HERO_ANIMAL in hero_cat and "Keep its exact head, body, legs, tail" in hero_cat
+   and "clothing" not in hero_cat and "3D-rendered" in hero_cat
+   and "seen strictly from directly behind" in hero_cat, hero_cat)
+ck(srv.kontext_hero_prompt("man in a cap", "sword", True, False, animal=False)
+   == srv.kontext_hero_prompt("man in a cap", "sword", True, False)
+   and srv.KONTEXT_HERO_ANIMAL not in hero_p, "a person's hero prompt must not change")
+ck(srv.kontext_hero_prompt("cat with grey fur", "sword", True, False, photo_kind="cat", animal=True)
+   == srv.kontext_hero_prompt("cat with grey fur", "sword", True, False, photo_kind="cat"),
+   "a photo of an animal keeps the photo wording")
+ck(srv.kontext_hero_prompt(srv._picture_form_look(car), "sword", True, True, form=car, animal=True)
+   == hero_car, "an object made a character outranks the animal wording")
+ck(srv.kontext_hero_prompt("cat", "sword", False, True, animal=True)
+   == srv.kontext_hero_prompt("cat", "sword", False, True), "no player picture, no animal wording")
+ck(srv._picture_animal_kind("cat") and srv._picture_animal_kind("grey rabbits")
+   and not srv._picture_animal_kind("man") and not srv._picture_animal_kind("knight")
+   and not srv._picture_animal_kind("car") and not srv._picture_animal_kind(None),
+   "which KINDs are animals")
+ck(srv._picture_legged_kind("cat") and srv._picture_legged_kind("knight")
+   and srv._picture_legged_kind("old woman") and not srv._picture_legged_kind("pendant"),
+   "animals, characters and people all still have legs")
+ck("animal=_picture_animal_kind(hero_pic.get(\"kind\"))" in inspect.getsource(srv.generate_krea2_posed_bundle),
+   "the animal reading no longer reaches the hero's drawing")
+ck(srv._picture_prompt("player") == srv._picture_prompt("player", look=None)
+   and srv._PICTURE_ROLES["player"][1] in srv._picture_prompt("player")
+   and srv._PICTURE_ANIMAL_LOOK not in srv._picture_prompt("player"),
+   "the player's own brief must not change")
 _saved = (srv._vlm_one_word, srv.COMFY_INPUT_DIR)
 _hair_dir = tempfile.mkdtemp()
 try:
